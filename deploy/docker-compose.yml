@@ -3,16 +3,18 @@ services:
     build:
       context: ..
       dockerfile: deploy/server.Dockerfile
-    container_name: moaworks-server
     env_file:
-      - ../.env.example
+      - ../.env
+    environment:
+      - POSTGRES_HOST=host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ../backend:/app
       - ../data:/app/data
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8510}:8000"
     depends_on:
-      - postgres
       - mail-layer
       - storage
 
@@ -20,40 +22,22 @@ services:
     build:
       context: ..
       dockerfile: deploy/admin-web.Dockerfile
-    container_name: moaworks-admin-web
     environment:
-      VITE_API_BASE_URL: http://localhost:8000/api/v1
-    volumes:
-      - ../frontend/admin-web:/app
+      VITE_API_BASE_URL: http://localhost:${BACKEND_PORT:-8510}/api/v1
     ports:
-      - "3000:3000"
+      - "${FRONTEND_PORT:-3510}:3000"
     depends_on:
       - server
 
-  postgres:
-    image: postgres:15-alpine
-    container_name: moaworks-postgres
-    environment:
-      POSTGRES_DB: moaworks
-      POSTGRES_USER: moaworks
-      POSTGRES_PASSWORD: change-me
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-
   mail-layer:
     image: alpine:3.20
-    container_name: moaworks-mail-layer
     command: ["sh", "-c", "echo 'mail-layer placeholder'; tail -f /dev/null"]
 
   storage:
     image: alpine:3.20
-    container_name: moaworks-storage
     command: ["sh", "-c", "mkdir -p /storage/runtime /storage/files && tail -f /dev/null"]
     volumes:
       - storage-data:/storage
 
 volumes:
-  postgres-data:
   storage-data:
