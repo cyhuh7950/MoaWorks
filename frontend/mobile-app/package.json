@@ -1,0 +1,14 @@
+{
+  "name": "moaworks-mobile-app",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "start": "react-native start",
+    "build": "node ./scripts/mobile-app-build-smoke.js",
+    "build:android": "node ./scripts/mobile-app-build-smoke.js"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-native": "0.75.4"
+  }
+}

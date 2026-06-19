@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MoaWorks Desktop Client</title>
+    <style>
+      body {
+        font-family: "Segoe UI", "Noto Sans KR", sans-serif;
+        margin: 0;
+        padding: 24px;
+        background: #f5f7f6;
+        color: #16222d;
+      }
+
+      main {
+        max-width: 1024px;
+      }
+
+      input,
+      button,
+      textarea {
+        font: inherit;
+        margin: 4px 0;
+      }
+
+      table {
+        border-collapse: collapse;
+        width: 100%;
+      }
+
+      th,
+      td {
+        border: 1px solid #d2dbe2;
+        padding: 8px;
+        text-align: left;
+      }
+
+      .row {
+        margin-bottom: 12px;
+      }
+
+      .muted {
+        color: #64748b;
+      }
+
+      .error {
+        color: #b91c1c;
+      }
+
+      .inline {
+        display: inline-flex;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .notification-row-actions {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>MoaWorks Desktop Client - 결재 1차</h1>
+      <p class="muted">일반 사용자용 클라이언트 API 진입점: <code>/api/v1/approvals/*</code></p>
+
+      <section class="row">
+        <h2>표시/조회 언어 · 시간대</h2>
+        <div class="inline">
+          <label>
+            언어
+            <select id="localeSelect" onchange="saveLocale(event.target.value)">
+              <option value="ko-KR">한국어</option>
+              <option value="en-US">English</option>
+              <option value="ja-JP">日本語</option>
+              <option value="zh-CN">中文</option>
+              <option value="es-ES">Español</option>
+              <option value="fr-FR">Français</option>
+              <option value="de-DE">Deutsch</option>
+            </select>
+          </label>
+          <label>
+            시간대
+            <select id="timezoneSelect" onchange="saveTimezone(event.target.value)">
+              <option value="Asia/Seoul">Asia/Seoul</option>
+              <option value="Asia/Tokyo">Asia/Tokyo</option>
+              <option value="America/New_York">America/New_York</option>
+              <option value="America/Chicago">America/Chicago</option>
+              <option value="Europe/Paris">Europe/Paris</option>
+              <option value="Europe/Berlin">Europe/Berlin</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <section class="row">
+        <h2>로그인</h2>
+        <div>
+          <label>API Base</label>
+          <input id="apiBase" value="http://127.0.0.1:8010/api/v1" style="width: 320px" />
+        </div>
+        <div>
+          <label>이메일</label>
+          <input id="email" value="admin@example.com" />
+          <label>비밀번호</label>
+          <input id="password" type="password" value="password1234" />
+          <button onclick="login()">로그인</button>
+        </div>
+        <p id="authState" class="muted"></p>
+      </section>
+
+      <section class="row">
+        <h2>내 결재 문서</h2>
+        <button onclick="loadApprovals()">목록 새로고침</button>
+        <table>
+          <thead>
+            <tr>
+              <th>문서명</th>
+              <th>상태</th>
+              <th>작성자</th>
+              <th>현재 결재</th>
+              <th>작업</th>
+            </tr>
+          </thead>
+          <tbody id="documentRows"></tbody>
+        </table>
+      </section>
+
+      <section class="row">
+        <h2>결재 로그</h2>
+        <button onclick="loadLogs()">감사 로그 조회</button>
+        <pre id="logBox" style="background: #fff; padding: 8px; border: 1px solid #d2dbe2; min-height: 100px"></pre>
+      </section>
+
+      <section class="row">
+        <h2>알림 조회</h2>
+        <p id="notificationSummary" class="muted">요약 없음</p>
+        <div class="notification-row-actions">
+          <button onclick="loadNotificationsWithRetry()">알림 조회</button>
+          <button onclick="ackAllUnreadDummy()" id="ackAllDummyBtn" type="button">미확인 모두 읽음 처리</button>
+        </div>
+        <p id="notificationError" class="error"></p>
+        <p id="notificationFallback" class="muted">실시간 채널 미구현: 폴링 기반으로 동작</p>
+        <table>
+          <thead>
+            <tr>
+              <th>구분</th>
+              <th>제목</th>
+              <th>메시지</th>
+              <th>상태</th>
+              <th>동작</th>
+            </tr>
+          </thead>
+          <tbody id="notificationRows"></tbody>
+        </table>
+      </section>
+    </main>
+
+    <script>
+      const FALLBACK_API_BASE = "http://127.0.0.1:8010/api/v1";
+      let token = localStorage.getItem("moaworks.userToken") || "";
+      let me = null;
+      let permissions = [];
+      const localeState = {
+        locale: resolveLocale(localStorage.getItem("moaworks.locale")),
+        timezone: localStorage.getItem("moaworks.timezone") || "Asia/Seoul",
+      };
+      const notificationPolicy = {
+        retryMax: 3,
+        retryDelayMs: 400,
+        streamRetryMax: 2,
+        streamRetryDelayMs: 600,
+      };
+      const notificationStatus = {
+        mode: "polling",
+        streamRetryCount: 0,
+        streamCursor: "",
+        streamRetryTimer: null,
+        streamSource: null,
+      };
+      const notificationRetryMax = 3;
+      const notificationRetryDelayMs = 400;
+
+      function resolveLocale(value) {
+        return ["ko-KR", "en-US", "ja-JP", "zh-CN", "es-ES", "fr-FR", "de-DE"].includes(value) ? value : "ko-KR";
+      }
+
+      function saveLocale(value) {
+        localeState.locale = resolveLocale(value);
+        localStorage.setItem("moaworks.locale", localeState.locale);
+      }
+
+      function saveTimezone(value) {
+        localeState.timezone = value;
+        localStorage.setItem("moaworks.timezone", value);
+      }
+
+      function getApiBase() {
+        return document.getElementById("apiBase").value.trim() || FALLBACK_API_BASE;
+      }
+
+      function authHeaders() {
+        return token ? { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } : { "Content-Type": "application/json" };
+      }
+
+      async function request(path, init = {}) {
+        const response = await fetch(`${getApiBase()}${path}`, {
+          headers: authHeaders(),
+          ...init,
+        });
+        const text = await response.text();
+        const body = text ? JSON.parse(text) : {};
+        if (!response.ok) {
+          throw new Error((body && body.userMessage) || "요청 실패");
+        }
+        return body;
+      }
+
+      async function sleep(ms) {
+        await new Promise((resolve) => setTimeout(resolve, ms));
+      }
+
+      async function withRetry(task, attempt = 1) {
+        try {
+          return await task();
+        } catch (error) {
+          if (attempt >= notificationRetryMax) {
+            throw error;
+          }
+          await sleep(notificationRetryDelayMs * attempt);
+          return withRetry(task, attempt + 1);
+        }
+      }
+
+      function setNotificationError(message) {
+        document.getElementById("notificationError").textContent = message || "";
+      }
+
+      function setNotificationMode(mode) {
+        notificationStatus.mode = mode;
+        const fallbackText = document.getElementById("notificationFallback");
+        if (!fallbackText) return;
+        if (mode === "streaming") {
+          fallbackText.textContent = "실시간 채널 연결됨 (SSE)";
+        } else if (mode === "fallback") {
+          fallbackText.textContent = "SSE 오류 감지로 폴링 폴백 동작 중";
+        } else {
+          fallbackText.textContent = "실시간 채널 미구현: 폴링 기반으로 동작";
+        }
+      }
+
+      function stopNotificationStream() {
+        if (notificationStatus.streamSource) {
+          notificationStatus.streamSource.close();
+          notificationStatus.streamSource = null;
+        }
+        notificationStatus.streamRetryCount = 0;
+      }
+
+      function connectNotificationStream() {
+        const streamBase = getApiBase();
+        if (typeof EventSource === "undefined") {
+          setNotificationMode("polling");
+          return;
+        }
+        if (!token) {
+          setNotificationMode("polling");
+          return;
+        }
+        stopNotificationStream();
+        const cursorQuery = notificationStatus.streamCursor ? `&cursor=${encodeURIComponent(notificationStatus.streamCursor)}` : "";
+        const streamUrl = `${streamBase}/notifications/stream?token=${encodeURIComponent(token)}${cursorQuery}`;
+        const source = new EventSource(streamUrl);
+        notificationStatus.streamSource = source;
+        setNotificationMode("streaming");
+
+        source.addEventListener("notification", (event) => {
+          try {
+            const payload = JSON.parse(event.data || "{}");
+            if (payload && payload.notificationId) {
+              notificationStatus.streamCursor = payload.notificationId;
+              loadNotifications().catch(() => {});
+            }
+          } catch {}
+        });
+
+        source.addEventListener("streammeta", (event) => {
+          try {
+            const payload = JSON.parse(event.data || "{}");
+            if (payload && payload.value) {
+              notificationStatus.streamCursor = payload.value;
+            }
+          } catch {}
+        });
+
+        source.addEventListener("heartbeat", (event) => {
+          try {
+            const payload = JSON.parse(event.data || "{}");
+            if (payload && payload.type === "fallback") {
+              throw new Error("stream fallback");
+            }
+          } catch (error) {
+            if (error instanceof Error && error.message === "stream fallback") {
+              if (source) {
+                source.close();
+                notificationStatus.streamSource = null;
+              }
+              setNotificationMode("fallback");
+              void loadNotificationsWithRetry().catch((reason) => {
+                setNotificationError(String(reason?.message || reason));
+              });
+              return;
+            }
+          }
+        });
+
+        source.onerror = () => {
+          source.close();
+          notificationStatus.streamSource = null;
+          if (notificationStatus.streamRetryCount < notificationPolicy.streamRetryMax) {
+            notificationStatus.streamRetryCount += 1;
+            clearTimeout(notificationStatus.streamRetryTimer);
+            notificationStatus.streamRetryTimer = setTimeout(() => {
+              connectNotificationStream();
+            }, notificationPolicy.streamRetryDelayMs * notificationStatus.streamRetryCount);
+            return;
+          }
+          setNotificationMode("fallback");
+          loadNotificationsWithRetry().catch((error) => setNotificationError(String(error.message || error)));
+        };
+      }
+
+      function setNotificationSummary(text) {
+        document.getElementById("notificationSummary").textContent = text;
+      }
+
+      async function login() {
+        const email = document.getElementById("email").value.trim();
+        const password = document.getElementById("password").value;
+        const authState = document.getElementById("authState");
+        authState.textContent = "로그인 시도 중...";
+        try {
+          const loginBody = await request("/auth/login", {
+            method: "POST",
+            body: JSON.stringify({ email, password }),
+          });
+          token = loginBody.accessToken;
+          localStorage.setItem("moaworks.userToken", token);
+          const meBody = await request("/auth/me");
+          me = meBody.user;
+          permissions = me.permissions || [];
+          authState.textContent = `${me.userName} / ${me.roleName}`;
+          await loadApprovals();
+          await loadNotificationsWithRetry().catch(() => {});
+          connectNotificationStream();
+        } catch (error) {
+          authState.textContent = String(error.message);
+          token = "";
+          localStorage.removeItem("moaworks.userToken");
+          stopNotificationStream();
+          setNotificationMode("polling");
+        }
+      }
+
+      function syncLocaleControls() {
+        const localeSelect = document.getElementById("localeSelect");
+        const timezoneSelect = document.getElementById("timezoneSelect");
+        if (localeSelect) {
+          localeSelect.value = localeState.locale;
+        }
+        if (timezoneSelect) {
+          timezoneSelect.value = localeState.timezone;
+        }
+      }
+
+      function can(permission) {
+        return permissions.includes(permission);
+      }
+
+      async function act(documentId, action, reason = "") {
+        const body = reason ? JSON.stringify({ reason }) : undefined;
+        await request(`/approvals/${documentId}/${action}`, {
+          method: "POST",
+          ...(body ? { body } : {}),
+        });
+        await loadApprovals();
+      }
+
+      function renderLineAction(doc) {
+        const current = doc.lines?.find((line) => line.sequence === doc.currentLineIndex);
+        if (!current) return "-";
+        return `${current.approverUserName} / ${current.status}`;
+      }
+
+      function actionButtons(doc) {
+        const buttons = [];
+        if (doc.status === "draft" && doc.creatorUserId === me?.userId && can("approval:submit")) {
+          buttons.push(`<button onclick=act('${doc.id}','submit')>상신</button>`);
+        }
+        if (doc.status === "submitted" && doc.creatorUserId === me?.userId && can("approval:withdraw")) {
+          buttons.push(`<button onclick=act('${doc.id}','withdraw')>회수</button>`);
+        }
+        if (doc.status === "rejected" && doc.creatorUserId === me?.userId && can("approval:rework")) {
+          buttons.push(`<button onclick=act('${doc.id}','redraft')>재기안</button>`);
+        }
+        const current = doc.lines?.find((line) => line.sequence === doc.currentLineIndex);
+        if (doc.status === "submitted" && can("approval:act") && current && current.approverUserId === me?.userId) {
+          const reason = window.prompt("사유를 입력하세요", "동의");
+          const safeReason = (reason || "동의").slice(0, 500);
+          buttons.push(`<button onclick="act('${doc.id}','approve', '${safeReason.replaceAll("'", "\\'")}')">승인</button>`);
+          buttons.push(`<button onclick="act('${doc.id}','reject', '${safeReason.replaceAll("'", "\\'")}')">반려</button>`);
+        }
+        return buttons.join(" ");
+      }
+
+      async function loadApprovals() {
+        const tbody = document.getElementById("documentRows");
+        if (!token) {
+          tbody.innerHTML = "";
+          return;
+        }
+        try {
+          const body = await request("/approvals");
+          const rows = body.documents || [];
+          tbody.innerHTML = rows
+            .map(
+              (item) => `
+              <tr>
+                <td>${item.title}</td>
+                <td>${item.status}</td>
+                <td>${item.creatorUserName || "-"}</td>
+                <td>${renderLineAction(item)}</td>
+                <td>${actionButtons(item)}</td>
+              </tr>
+            `,
+            )
+            .join("");
+        } catch (error) {
+          tbody.innerHTML = `<tr><td colspan="5">${String(error.message)}</td></tr>`;
+        }
+      }
+
+      async function loadLogs() {
+        const logBox = document.getElementById("logBox");
+        if (!token) {
+          logBox.textContent = "로그인이 필요합니다.";
+          return;
+        }
+        try {
+          const body = await request("/approvals/audit-logs");
+          logBox.textContent = JSON.stringify(body.logs || [], null, 2);
+        } catch (error) {
+          logBox.textContent = String(error.message);
+        }
+      }
+
+      async function loadNotifications() {
+        if (!token) {
+          document.getElementById("notificationRows").innerHTML = "";
+          setNotificationSummary("로그인이 필요합니다.");
+          setNotificationMode("polling");
+          return;
+        }
+        const [summaryBody, listBody] = await Promise.all([
+          request("/notifications/summary"),
+          request("/notifications?limit=20"),
+        ]);
+        const summary = summaryBody || {};
+        setNotificationSummary(
+          `미읽음 ${summary.unreadCount || 0}건 / 긴급 ${summary.severityCount?.CRITICAL || 0} / 경고 ${summary.severityCount?.WARN || 0}`,
+        );
+
+        const notifications = Array.isArray(listBody.notifications) ? listBody.notifications : [];
+        const rows = notifications
+          .map((item) => {
+            const disabled = item.status === "read" ? "disabled" : "";
+            const escapedTitle = String(item.title).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+            const escapedMessage = String(item.message).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+            return `
+              <tr>
+                <td>${item.category}</td>
+                <td>${escapedTitle}</td>
+                <td>${escapedMessage}</td>
+                <td>${item.status}</td>
+                <td><button onclick="ackNotification('${item.notificationId}')" ${disabled}>읽음 처리</button></td>
+              </tr>
+            `;
+          })
+          .join("");
+        document.getElementById("notificationRows").innerHTML = rows || '<tr><td colspan="5">알림이 없습니다.</td></tr>';
+        document.getElementById("ackAllDummyBtn").style.display = notifications.some((item) => item.status === "unread") ? "inline-block" : "none";
+      }
+
+      async function loadNotificationsWithRetry() {
+        setNotificationError("");
+        try {
+          await withRetry(loadNotifications);
+          setNotificationMode("polling");
+        } catch (error) {
+          setNotificationError(String(error.message));
+          if (withRetry) {
+            setNotificationMode("fallback");
+          }
+          throw error;
+        }
+      }
+
+      async function ackNotification(notificationId) {
+        if (!token || !notificationId) return;
+        try {
+          await withRetry(() => request(`/notifications/${notificationId}/ack`, { method: "POST", headers: authHeaders() }));
+          await loadNotificationsWithRetry();
+        } catch (error) {
+          setNotificationError(String(error.message));
+        }
+      }
+
+      function ackAllUnreadDummy() {
+        const rows = document.querySelectorAll("#notificationRows tr");
+        if (!rows.length) {
+          setNotificationError("읽을 수 있는 알림이 없습니다.");
+          return;
+        }
+        setNotificationError("미확인 알림 일괄 읽음은 데모 동작이므로 각 항목 읽음 처리 버튼을 이용하세요.");
+      }
+
+      window.addEventListener("DOMContentLoaded", async () => {
+        syncLocaleControls();
+        if (token) {
+          try {
+            const meBody = await request("/auth/me");
+            me = meBody.user;
+            permissions = me.permissions || [];
+            document.getElementById("authState").textContent = `${me.userName} / ${me.roleName}`;
+          } catch {
+            token = "";
+            localStorage.removeItem("moaworks.userToken");
+          }
+        }
+        if (token) {
+          await loadApprovals();
+          await loadNotificationsWithRetry().catch(() => {});
+          connectNotificationStream();
+        }
+      });
+    </script>
+  </body>
+</html>
