@@ -1,19 +1,17 @@
 from __future__ import annotations
 
-import contextlib
-import json
-import os
-import logging
-import threading
-import tempfile
 from datetime import UTC, datetime
-from pathlib import Path
-from collections.abc import Callable
+import json
 from uuid import uuid4
 
-from app.core.config import settings
-from app.schemas.observability import EventEnvelope, MonitoringCategory, SeverityLevel, Visibility
 from app.schemas.directory import (
+    ApprovalActionReason,
+    ApprovalCreateResponse,
+    ApprovalDocumentCreateRequest,
+    ApprovalDocumentResponse,
+    ApprovalLineRecord,
+    ApprovalLineActionRequest,
+    ApprovalListResponse,
     AuditLogListResponse,
     AuditLogRecord,
     AuditLogView,
@@ -21,1171 +19,1371 @@ from app.schemas.directory import (
     CompanyRecord,
     DepartmentRecord,
     DirectoryOverviewResponse,
-    DirectoryState,
-    ApprovalActionReason,
-    ApprovalCreateResponse,
-    ApprovalDocumentCreateRequest,
-    ApprovalDocumentRecord,
-    ApprovalDocumentResponse,
-    ApprovalLineActionRequest,
-    ApprovalLineRecord,
-    ApprovalListResponse,
     MailAccountRecord,
     MailProviderConfigRecord,
+    MailProviderConfigView,
     RoleRecord,
+    RoleUpdateRequest,
     UserCreateRequest,
-    UserRecord,
     UserStatusIssue,
     UserUpdateRequest,
     UserView,
 )
+from app.schemas.setup import SetupInitializeRequest
+from app.services.postgres_service import PostgresService
 from app.services.security_service import SecurityService
-from app.services.settings_store import SettingsStore
-from app.services.observability_service import ObservabilityService
-
-logger = logging.getLogger(__name__)
 
 
 class DirectoryStore:
-    _state_lock = threading.RLock()
-
-    def __init__(self, state_file: Path | None = None) -> None:
-        self.state_file = state_file or settings.directory_state_file
-        self.settings_store = SettingsStore()
+    def __init__(self) -> None:
+        self.db = PostgresService()
         self.security = SecurityService()
-        self._state_cache: DirectoryState | None = None
-        self._state_cache_mtime: float | None = None
 
-    def _with_mutation(self, action: Callable[[DirectoryState], object]) -> object:
-        with self._state_lock:
-            with self._process_state_lock():
-                state = self._load_state(mutable=True)
-                result = action(state)
-                self.save(state)
-                return result
+    def is_initialized(self) -> bool:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) AS count FROM companies")
+                company_count = int(cursor.fetchone()["count"])
+                cursor.execute("SELECT COUNT(*) AS count FROM users WHERE user_type = 'admin'")
+                admin_count = int(cursor.fetchone()["count"])
+        return company_count > 0 and admin_count > 0
 
-    def ensure_parent(self) -> None:
-        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+    def initialize_installation(self, payload: SetupInitializeRequest) -> None:
+        self.db.ensure_migrations_applied(payload.dbConfig)
+        with self.db.connect(payload.dbConfig) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) AS count FROM companies")
+                if int(cursor.fetchone()["count"]) > 0:
+                    raise ValueError("이미 초기 설정이 완료된 시스템입니다.")
 
-    def load(self) -> DirectoryState:
-        with self._state_lock:
-            return self._load_state().model_copy(deep=True)
+                now = self._now()
+                company_id = self._new_id("company")
+                department_id = self._new_id("dept")
+                admin_role_id = self._new_id("role")
+                user_role_id = self._new_id("role")
+                provider_id = self._new_id("provider")
+                admin_user_id = self._new_id("user")
+                admin_mail_account_id = self._new_id("mail")
 
-    def _load_state(self, mutable: bool = False) -> DirectoryState:
-        state_file_exists = self.state_file.exists()
-        current_mtime = self.state_file.stat().st_mtime if state_file_exists else None
-
-        if self._state_cache is None or self._state_cache_mtime != current_mtime:
-            if state_file_exists:
-                data = json.loads(self.state_file.read_text(encoding="utf-8"))
-                data = self._migrate_state(data)
-                state = DirectoryState.model_validate(data)
-            else:
-                state = self._bootstrap_from_setup()
-            self._state_cache = state
-            self._state_cache_mtime = current_mtime
-
-        if mutable:
-            return self._state_cache
-        return self._state_cache.model_copy(deep=True)
-
-    def save(self, state: DirectoryState) -> None:
-        if state is None:
-            return
-        self.ensure_parent()
-        data = state.model_dump_json(indent=2)
-        self.state_file.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=str(self.state_file.parent),
-            prefix=".moaworks-state-",
-            suffix=".tmp",
-            delete=False,
-        ) as temp_file:
-            temp_file.write(data)
-            tmp_path = Path(temp_file.name)
-        tmp_path.replace(self.state_file)
-        self._state_cache = state.model_copy(deep=True)
-        self._state_cache_mtime = self.state_file.stat().st_mtime
+                cursor.execute(
+                    """
+                    INSERT INTO companies (id, name, domain, status, created_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (company_id, payload.company.name, payload.company.domain, "active", now),
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO departments (id, company_id, name, parent_id, status, sort_order, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (department_id, company_id, "본사", None, "active", 100, now),
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO roles (id, company_id, name, permissions, status, created_at)
+                    VALUES (%s, %s, %s, %s::jsonb, %s, %s)
+                    """,
+                    (
+                        admin_role_id,
+                        company_id,
+                        "관리자",
+                        json.dumps(
+                            [
+                                "admin:*",
+                                "approval:read",
+                                "approval:create",
+                                "approval:submit",
+                                "approval:act",
+                                "approval:withdraw",
+                                "approval:rework",
+                                "approval:force",
+                                "directory:write",
+                                "relay:test",
+                                "domain:verify",
+                            ]
+                        ),
+                        "active",
+                        now,
+                    ),
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO roles (id, company_id, name, permissions, status, created_at)
+                    VALUES (%s, %s, %s, %s::jsonb, %s, %s)
+                    """,
+                    (
+                        user_role_id,
+                        company_id,
+                        "일반사용자",
+                        json.dumps(
+                            [
+                                "mail:read",
+                                "approval:read",
+                                "approval:create",
+                                "approval:submit",
+                                "approval:act",
+                                "approval:withdraw",
+                                "approval:rework",
+                                "profile:read",
+                            ]
+                        ),
+                        "active",
+                        now,
+                    ),
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO mail_provider_configs (
+                        id, company_id, provider_type, relay_host, relay_port, username,
+                        encrypted_password, active, last_test_status, last_test_message, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        provider_id,
+                        company_id,
+                        payload.mailProvider.provider_type,
+                        payload.mailProvider.relay_host,
+                        payload.mailProvider.relay_port,
+                        payload.mailProvider.username,
+                        self.security.encrypt_secret(payload.mailProvider.password),
+                        True,
+                        "not_tested",
+                        "단계 2 Relay 테스트 전",
+                        now,
+                    ),
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO users (
+                        id, company_id, email, name, password_hash, department_id, role_id,
+                        status, user_type, created_at, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        admin_user_id,
+                        company_id,
+                        payload.adminUser.email,
+                        payload.adminUser.name,
+                        self.security.hash_password(payload.adminUser.password),
+                        department_id,
+                        admin_role_id,
+                        "active",
+                        "admin",
+                        now,
+                        now,
+                    ),
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO mail_accounts (
+                        id, user_id, email, quota_mb, status, provider_config_id, created_at, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        admin_mail_account_id,
+                        admin_user_id,
+                        payload.adminUser.email,
+                        4096,
+                        "active",
+                        provider_id,
+                        now,
+                        now,
+                    ),
+                )
+                self._insert_audit(
+                    cursor=cursor,
+                    company_id=company_id,
+                    actor_user_id=admin_user_id,
+                    actor_user_name=payload.adminUser.name,
+                    target_type="system",
+                    target_id=company_id,
+                    event="setup.initialized",
+                    status_before=None,
+                    status_after="initialized",
+                    reason="단계 2 PostgreSQL 초기 설치 완료",
+                )
+            connection.commit()
 
     def get_overview(self) -> DirectoryOverviewResponse:
-        state = self.load()
-        company = state.companies[0]
-        provider = state.mailProviderConfigs[0]
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                company_row = self._fetch_company_row(cursor)
+                provider_row = self._fetch_provider_row(cursor)
+                cursor.execute(
+                    """
+                    SELECT id, company_id, name, parent_id, status, sort_order, created_at
+                    FROM departments
+                    ORDER BY sort_order ASC, created_at ASC
+                    """
+                )
+                departments = [self._to_department_record(row) for row in cursor.fetchall()]
+                cursor.execute(
+                    """
+                    SELECT id, company_id, name, permissions, status, created_at
+                    FROM roles
+                    ORDER BY created_at ASC
+                    """
+                )
+                roles = [self._to_role_record(row) for row in cursor.fetchall()]
+                cursor.execute(
+                    """
+                    SELECT
+                        u.id AS user_id,
+                        u.company_id,
+                        u.name AS user_name,
+                        u.email AS user_email,
+                        u.status AS user_status,
+                        u.user_type,
+                        d.id AS department_id,
+                        d.name AS department_name,
+                        r.id AS role_id,
+                        r.name AS role_name,
+                        r.permissions,
+                        r.status AS role_status,
+                        ma.email AS mail_account_email,
+                        ma.status AS mail_account_status
+                    FROM users u
+                    JOIN departments d ON d.id = u.department_id
+                    JOIN roles r ON r.id = u.role_id
+                    JOIN mail_accounts ma ON ma.user_id = u.id
+                    ORDER BY u.created_at ASC
+                    """
+                )
+                user_rows = cursor.fetchall()
+
+        users = [self._row_to_user_view(row) for row in user_rows]
         return DirectoryOverviewResponse(
-            company=company,
-            departments=state.departments,
-            roles=state.roles,
-            users=[self._build_user_view(state, user) for user in state.users],
-            mailProvider=provider,
+            company=self._to_company_record(company_row),
+            departments=departments,
+            roles=roles,
+            users=users,
+            mailProvider=self._to_mail_provider_view(provider_row),
         )
 
     def authenticate(self, email: str, password: str) -> AuthUserSummary:
-        state = self.load()
-        normalized = email.strip().lower()
-        user = next((item for item in state.users if item.email.lower() == normalized), None)
-        if user is None:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                row = self._fetch_user_access_row(cursor, "u.email = %s", (email.strip().lower(),))
+
+        if row is None:
+            if not self.is_initialized():
+                raise ValueError("초기 설정이 완료되지 않았습니다.")
             raise ValueError("로그인 정보가 올바르지 않습니다.")
-        if user.status != "active":
-            raise PermissionError("비활성화된 계정입니다.")
-        if not self.security.verify_password(password, user.passwordHash):
+        if not self.security.verify_password(password, row["password_hash"]):
             raise ValueError("로그인 정보가 올바르지 않습니다.")
 
-        self._assert_user_accessible(state, user)
-        return self._to_auth_summary(state, user)
+        self._assert_user_accessible(row)
+        return self._row_to_auth_summary(row)
 
     def get_user_summary(self, user_id: str) -> AuthUserSummary:
-        state = self.load()
-        user = next((item for item in state.users if item.id == user_id), None)
-        if user is None:
-            raise ValueError("대상 사용자를 찾을 수 없습니다.")
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                row = self._fetch_user_access_row(cursor, "u.id = %s", (user_id,))
 
-        self._assert_user_accessible(state, user)
-        return self._to_auth_summary(state, user)
+        if row is None:
+            raise ValueError("대상 사용자를 찾을 수 없습니다.")
+        self._assert_user_accessible(row)
+        return self._row_to_auth_summary(row)
 
     def create_department(self, name: str, parent_id: str | None, sort_order: int) -> DepartmentRecord:
-        def _create_department(state: DirectoryState) -> DepartmentRecord:
-            company = state.companies[0]
-            department = DepartmentRecord(
-                id=self._new_id("dept"),
-                companyId=company.id,
-                name=name.strip(),
-                parentId=parent_id,
-                status="active",
-                sortOrder=sort_order,
-                createdAt=self._now(),
-            )
-            state.departments.append(department)
-            return department
+        self.db.ensure_migrations_applied()
+        company = self._require_company()
+        department_id = self._new_id("dept")
+        now = self._now()
 
-        return self._with_mutation(_create_department)
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                if parent_id is not None:
+                    cursor.execute("SELECT 1 FROM departments WHERE id = %s", (parent_id,))
+                    if cursor.fetchone() is None:
+                        raise ValueError("대상 부서를 찾을 수 없습니다.")
+                cursor.execute(
+                    """
+                    INSERT INTO departments (id, company_id, name, parent_id, status, sort_order, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id, company_id, name, parent_id, status, sort_order, created_at
+                    """,
+                    (department_id, company.id, name.strip(), parent_id, "active", sort_order, now),
+                )
+                row = cursor.fetchone()
+            connection.commit()
+        return self._to_department_record(row)
 
     def create_role(self, name: str, permissions: list[str]) -> RoleRecord:
-        def _create_role(state: DirectoryState) -> RoleRecord:
-            company = state.companies[0]
-            role = RoleRecord(
-                id=self._new_id("role"),
-                companyId=company.id,
-                name=name.strip(),
-                permissions=permissions or ["mail:read", "approval:read", "approval:create"],
-                status="active",
-                createdAt=self._now(),
-            )
-            state.roles.append(role)
-            return role
+        self.db.ensure_migrations_applied()
+        company = self._require_company()
+        role_id = self._new_id("role")
+        now = self._now()
+        role_permissions = permissions or ["mail:read", "approval:read", "approval:create"]
 
-        return self._with_mutation(_create_role)
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO roles (id, company_id, name, permissions, status, created_at)
+                    VALUES (%s, %s, %s, %s::jsonb, %s, %s)
+                    RETURNING id, company_id, name, permissions, status, created_at
+                    """,
+                    (role_id, company.id, name.strip(), json.dumps(role_permissions), "active", now),
+                )
+                row = cursor.fetchone()
+            connection.commit()
+        return self._to_role_record(row)
+
+    def update_role(self, role_id: str, payload: RoleUpdateRequest) -> RoleRecord:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                current = self._fetch_required_role(cursor, role_id)
+                next_name = payload.name.strip() if payload.name is not None else current["name"]
+                next_permissions = payload.permissions if payload.permissions is not None else self._permissions(current["permissions"])
+                next_status = payload.status or current["status"]
+
+                cursor.execute(
+                    """
+                    UPDATE roles
+                    SET name = %s,
+                        permissions = %s::jsonb,
+                        status = %s
+                    WHERE id = %s
+                    RETURNING id, company_id, name, permissions, status, created_at
+                    """,
+                    (next_name, json.dumps(next_permissions), next_status, role_id),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise ValueError("대상 권한을 찾을 수 없습니다.")
+                self._insert_audit(
+                    cursor=cursor,
+                    company_id=current["company_id"],
+                    actor_user_id=None,
+                    actor_user_name="system",
+                    target_type="role",
+                    target_id=role_id,
+                    event="directory.role_updated",
+                    status_before=current["status"],
+                    status_after=next_status,
+                    reason=None,
+                )
+            connection.commit()
+        return self._to_role_record(row)
 
     def create_user(self, payload: UserCreateRequest) -> UserView:
-        def _create_user(state: DirectoryState) -> UserView:
-            company = state.companies[0]
-            normalized_email = payload.email.lower()
-            if any(user.email.lower() == normalized_email for user in state.users):
-                raise ValueError("이미 존재하는 이메일입니다.")
+        self.db.ensure_migrations_applied()
+        company = self._require_company()
+        normalized_email = payload.email.lower()
+        now = self._now()
+        user_id = self._new_id("user")
+        mail_account_id = self._new_id("mail")
 
-            department = self._get_department(state, payload.departmentId)
-            role = self._get_role(state, payload.roleId)
-            now = self._now()
-            user = UserRecord(
-                id=self._new_id("user"),
-                companyId=company.id,
-                email=normalized_email,
-                name=payload.name.strip(),
-                passwordHash=self.security.hash_password(payload.password),
-                departmentId=department.id,
-                roleId=role.id,
-                status=payload.status,
-                userType=payload.userType,
-                createdAt=now,
-                updatedAt=now,
-            )
-            provider = state.mailProviderConfigs[0]
-            mail_account = MailAccountRecord(
-                id=self._new_id("mail"),
-                userId=user.id,
-                email=normalized_email,
-                quotaMb=2048,
-                status="active" if payload.status == "active" else "inactive",
-                providerConfigId=provider.id,
-                createdAt=now,
-                updatedAt=now,
-            )
-            self._append_audit(
-                state=state,
-                event="directory.user_created",
-                actor=user,
-                target_type="user",
-                target_id=user.id,
-                status_before=None,
-                status_after="active",
-            )
-            state.users.append(user)
-            state.mailAccounts.append(mail_account)
-            return self._build_user_view(state, user)
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                department = self._fetch_required_department(cursor, payload.departmentId)
+                role = self._fetch_required_role(cursor, payload.roleId)
+                provider = self._fetch_provider_row(cursor)
+                cursor.execute("SELECT 1 FROM users WHERE email = %s", (normalized_email,))
+                if cursor.fetchone() is not None:
+                    raise ValueError("이미 존재하는 이메일입니다.")
 
-        return self._with_mutation(_create_user)
+                cursor.execute(
+                    """
+                    INSERT INTO users (
+                        id, company_id, email, name, password_hash, department_id, role_id,
+                        status, user_type, created_at, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        user_id,
+                        company.id,
+                        normalized_email,
+                        payload.name.strip(),
+                        self.security.hash_password(payload.password),
+                        department["id"],
+                        role["id"],
+                        payload.status,
+                        payload.userType,
+                        now,
+                        now,
+                    ),
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO mail_accounts (
+                        id, user_id, email, quota_mb, status, provider_config_id, created_at, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        mail_account_id,
+                        user_id,
+                        normalized_email,
+                        2048,
+                        "active" if payload.status == "active" else "inactive",
+                        provider["id"],
+                        now,
+                        now,
+                    ),
+                )
+                self._insert_audit(
+                    cursor=cursor,
+                    company_id=company.id,
+                    actor_user_id=user_id,
+                    actor_user_name=payload.name.strip(),
+                    target_type="user",
+                    target_id=user_id,
+                    event="directory.user_created",
+                    status_before=None,
+                    status_after=payload.status,
+                    reason=None,
+                )
+                row = self._fetch_user_view_row(cursor, user_id)
+            connection.commit()
+        return self._row_to_user_view(row)
 
     def update_user(self, user_id: str, payload: UserUpdateRequest) -> UserView:
-        def _update_user(state: DirectoryState) -> UserView:
-            user = next((item for item in state.users if item.id == user_id), None)
-            if user is None:
-                raise ValueError("대상 사용자를 찾을 수 없습니다.")
-            previous_status = user.status
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                current = self._fetch_user_access_row(cursor, "u.id = %s", (user_id,))
+                if current is None:
+                    raise ValueError("대상 사용자를 찾을 수 없습니다.")
 
-            if payload.name is not None:
-                user.name = payload.name.strip()
-            if payload.password is not None:
-                user.passwordHash = self.security.hash_password(payload.password)
-            if payload.departmentId is not None:
-                self._get_department(state, payload.departmentId)
-                user.departmentId = payload.departmentId
-            if payload.roleId is not None:
-                self._get_role(state, payload.roleId)
-                user.roleId = payload.roleId
-            if payload.status is not None:
-                user.status = payload.status
-                account = self._get_mail_account(state, user.id)
-                account.status = "active" if payload.status == "active" else "inactive"
-                account.updatedAt = self._now()
+                next_name = payload.name.strip() if payload.name is not None else current["user_name"]
+                next_department_id = payload.departmentId or current["department_id"]
+                next_role_id = payload.roleId or current["role_id"]
+                next_status = payload.status or current["user_status"]
+                next_password_hash = (
+                    self.security.hash_password(payload.password)
+                    if payload.password is not None
+                    else current["password_hash"]
+                )
 
-            user.updatedAt = self._now()
-            self._append_audit(
-                state=state,
-                event="directory.user_updated",
-                actor=user,
-                target_type="user",
-                target_id=user.id,
-                status_before=previous_status,
-                status_after=user.status,
-            )
-            return self._build_user_view(state, user)
+                self._fetch_required_department(cursor, next_department_id)
+                self._fetch_required_role(cursor, next_role_id)
 
-        return self._with_mutation(_update_user)
-
-    def update_relay_test_status(self, provider_config_id: str, status_value: str, message: str) -> MailProviderConfigRecord:
-        def _update_relay(state: DirectoryState) -> MailProviderConfigRecord:
-            provider = next((item for item in state.mailProviderConfigs if item.id == provider_config_id), None)
-            if provider is None:
-                raise ValueError("대상 Relay 설정을 찾을 수 없습니다.")
-            provider.lastTestStatus = status_value
-            provider.lastTestMessage = message
-            provider.updatedAt = self._now()
-            return provider
-
-        return self._with_mutation(_update_relay)
+                cursor.execute(
+                    """
+                    UPDATE users
+                    SET name = %s,
+                        password_hash = %s,
+                        department_id = %s,
+                        role_id = %s,
+                        status = %s,
+                        updated_at = %s
+                    WHERE id = %s
+                    """,
+                    (next_name, next_password_hash, next_department_id, next_role_id, next_status, self._now(), user_id),
+                )
+                cursor.execute(
+                    """
+                    UPDATE mail_accounts
+                    SET status = %s,
+                        updated_at = %s
+                    WHERE user_id = %s
+                    """,
+                    ("active" if next_status == "active" else "inactive", self._now(), user_id),
+                )
+                self._insert_audit(
+                    cursor=cursor,
+                    company_id=current["company_id"],
+                    actor_user_id=user_id,
+                    actor_user_name=next_name,
+                    target_type="user",
+                    target_id=user_id,
+                    event="directory.user_updated",
+                    status_before=current["user_status"],
+                    status_after=next_status,
+                    reason=None,
+                )
+                row = self._fetch_user_view_row(cursor, user_id)
+            connection.commit()
+        return self._row_to_user_view(row)
 
     def get_provider(self, provider_config_id: str | None = None) -> MailProviderConfigRecord:
-        state = self.load()
-        if provider_config_id is None:
-            return state.mailProviderConfigs[0]
-        provider = next((item for item in state.mailProviderConfigs if item.id == provider_config_id), None)
-        if provider is None:
-            raise ValueError("대상 Relay 설정을 찾을 수 없습니다.")
-        return provider
-
-    def create_approval_document(self, actor_id: str, payload: ApprovalDocumentCreateRequest) -> ApprovalCreateResponse:
-        def _create(state: DirectoryState) -> ApprovalCreateResponse:
-            actor = self._get_user_by_id(state, actor_id)
-            self._assert_user_accessible(state, actor)
-
-            approver_ids = self._normalize_unique_ids(payload.approverUserIds)
-            if not approver_ids:
-                raise ValueError("결재자는 최소 1명 이상 지정해야 합니다.")
-
-            for approver_id in approver_ids:
-                self._get_user_by_id(state, approver_id)
-                if approver_id == actor_id:
-                    raise ValueError("작성자는 결재선에서 제외해야 합니다.")
-
-            now = self._now()
-            document_id = self._new_id("doc")
-            document = ApprovalDocumentRecord(
-                id=document_id,
-                title=payload.title.strip(),
-                content=payload.content.strip(),
-                creatorUserId=actor.id,
-                companyId=actor.companyId,
-                status="draft",
-                createdAt=now,
-                updatedAt=now,
-                currentLineIndex=None,
-                submittedByUserId=None,
-                submittedAt=None,
-            )
-            state.approvalDocuments.append(document)
-
-            for sequence, approver_id in enumerate(approver_ids):
-                approver = self._get_user_by_id(state, approver_id)
-                state.approvalLines.append(
-                    ApprovalLineRecord(
-                        id=self._new_id("line"),
-                        documentId=document_id,
-                        approverUserId=approver_id,
-                        approverUserName=approver.name,
-                        sequence=sequence,
-                        status="pending",
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                if provider_config_id is None:
+                    row = self._fetch_provider_row(cursor)
+                else:
+                    cursor.execute(
+                        """
+                        SELECT id, company_id, provider_type, relay_host, relay_port, username,
+                               encrypted_password, active, last_test_status, last_test_message, updated_at
+                        FROM mail_provider_configs
+                        WHERE id = %s
+                        """,
+                        (provider_config_id,),
                     )
-                )
-            self._append_audit(
-                state=state,
-                event="approval.document_created",
-                actor=actor,
-                target_type="approval_document",
-                target_id=document_id,
-                status_before=None,
-                status_after="draft",
-            )
-            self._emit_observability_async(
-                event_type="approval.status.changed",
-                category=MonitoringCategory.APPROVAL,
-                severity=SeverityLevel.INFO,
-                actor_user_id=actor.id,
-                resource_type="approval_document",
-                resource_id=document_id,
-                title="결재 문서 작성됨",
-                message=f"문서가 작성되어 대기 상태입니다. : {payload.title}",
-                targets=[actor.id, *approver_ids],
-                dedup_key=f"approval:{document_id}:status:draft",
-                payload={
-                    "statusBefore": None,
-                    "statusAfter": "draft",
-                    "title": payload.title,
-                    "creatorUserId": actor.id,
-                    "lineUsers": approver_ids,
-                },
-                visibility=Visibility.BOTH,
-                source="directory-service",
-            )
-            return ApprovalCreateResponse(documentId=document_id)
+                    row = cursor.fetchone()
+                    if row is None:
+                        raise ValueError("대상 Relay 설정을 찾을 수 없습니다.")
+        return self._to_mail_provider_record(row)
 
-        return self._with_mutation(_create)
+    def update_relay_test_status(self, provider_config_id: str, status_value: str, message: str) -> MailProviderConfigRecord:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE mail_provider_configs
+                    SET last_test_status = %s,
+                        last_test_message = %s,
+                        updated_at = %s
+                    WHERE id = %s
+                    RETURNING id, company_id, provider_type, relay_host, relay_port, username,
+                              encrypted_password, active, last_test_status, last_test_message, updated_at
+                    """,
+                    (status_value, message, self._now(), provider_config_id),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise ValueError("대상 Relay 설정을 찾을 수 없습니다.")
+            connection.commit()
+        return self._to_mail_provider_record(row)
 
     def list_approval_documents(self, actor_id: str) -> ApprovalListResponse:
-        state = self.load()
-        actor = self._get_user_by_id(state, actor_id)
-        self._assert_user_accessible(state, actor)
-
-        documents: list = []
-        for doc in sorted(state.approvalDocuments, key=lambda item: item.createdAt, reverse=True):
-            if self._can_view_document(state, actor, doc):
-                documents.append(self._build_document_response(state, doc))
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                actor = self._fetch_actor_summary(cursor, actor_id)
+                rows = self._fetch_visible_approval_rows(cursor, actor)
+                documents = [self._to_approval_document_response(cursor, row) for row in rows]
         return ApprovalListResponse(documents=documents)
 
+    def get_audit_logs(self, actor_id: str, target_id: str | None = None) -> AuditLogListResponse:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                actor = self._fetch_actor_summary(cursor, actor_id)
+                if target_id:
+                    document = self._fetch_required_approval_document(cursor, target_id)
+                    self._assert_approval_visible(cursor, actor, document)
+                    cursor.execute(
+                        """
+                        SELECT id, event, actor_user_id, actor_user_name, target_type, target_id,
+                               status_before, status_after, reason, created_at
+                        FROM audit_logs
+                        WHERE company_id = %s AND target_type = 'approval_document' AND target_id = %s
+                        ORDER BY created_at DESC
+                        """,
+                        (actor.companyId, target_id),
+                    )
+                else:
+                    if self._can_view_all_approvals(actor):
+                        cursor.execute(
+                            """
+                            SELECT id, event, actor_user_id, actor_user_name, target_type, target_id,
+                                   status_before, status_after, reason, created_at
+                            FROM audit_logs
+                            WHERE company_id = %s AND target_type = 'approval_document'
+                            ORDER BY created_at DESC
+                            """,
+                            (actor.companyId,),
+                        )
+                    else:
+                        cursor.execute(
+                            """
+                            SELECT DISTINCT al.id, al.event, al.actor_user_id, al.actor_user_name, al.target_type, al.target_id,
+                                            al.status_before, al.status_after, al.reason, al.created_at
+                            FROM audit_logs al
+                            JOIN approval_documents ad ON ad.id = al.target_id
+                            LEFT JOIN approval_lines apl ON apl.document_id = ad.id
+                            WHERE al.company_id = %s
+                              AND al.target_type = 'approval_document'
+                              AND (
+                                  ad.creator_user_id = %s
+                                  OR apl.approver_user_id = %s
+                              )
+                            ORDER BY al.created_at DESC
+                            """,
+                            (actor.companyId, actor.userId, actor.userId),
+                        )
+                rows = cursor.fetchall()
+        return AuditLogListResponse(logs=[self._to_audit_view(row) for row in rows])
+
     def get_approval_document(self, actor_id: str, document_id: str) -> ApprovalDocumentResponse:
-        state = self.load()
-        actor = self._get_user_by_id(state, actor_id)
-        self._assert_user_accessible(state, actor)
-        document = self._get_approval_document(state, document_id)
-        if not self._can_view_document(state, actor, document):
-            raise PermissionError("해당 문서를 조회할 권한이 없습니다.")
-        return self._build_document_response(state, document)
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                actor = self._fetch_actor_summary(cursor, actor_id)
+                row = self._fetch_required_approval_document(cursor, document_id)
+                self._assert_approval_visible(cursor, actor, row)
+                return self._to_approval_document_response(cursor, row)
+
+    def create_approval_document(self, actor_id: str, payload: ApprovalDocumentCreateRequest) -> ApprovalCreateResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        document_id = self._new_id("doc")
+
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                actor = self._fetch_actor_summary(cursor, actor_id)
+                cursor.execute(
+                    """
+                    INSERT INTO approval_documents (
+                        id, company_id, title, content, creator_user_id, status,
+                        current_line_index, submitted_by_user_id, submitted_at, created_at, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        document_id,
+                        actor.companyId,
+                        payload.title.strip(),
+                        payload.content.strip(),
+                        actor.userId,
+                        "draft",
+                        None,
+                        None,
+                        None,
+                        now,
+                        now,
+                    ),
+                )
+                for sequence, approver_user_id in enumerate(payload.approverUserIds, start=1):
+                    approver = self._fetch_actor_summary(cursor, approver_user_id)
+                    cursor.execute(
+                        """
+                        INSERT INTO approval_lines (
+                            id, document_id, approver_user_id, approver_user_name,
+                            sequence, status, comment, decided_by_user_id, decided_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            self._new_id("aline"),
+                            document_id,
+                            approver.userId,
+                            approver.userName,
+                            sequence,
+                            "pending",
+                            None,
+                            None,
+                            None,
+                        ),
+                    )
+                self._insert_audit(
+                    cursor=cursor,
+                    company_id=actor.companyId,
+                    actor_user_id=actor.userId,
+                    actor_user_name=actor.userName,
+                    target_type="approval_document",
+                    target_id=document_id,
+                    event="approval.created",
+                    status_before=None,
+                    status_after="draft",
+                    reason=None,
+                )
+            connection.commit()
+        return ApprovalCreateResponse(documentId=document_id)
 
     def submit_approval_document(self, actor_id: str, document_id: str) -> ApprovalDocumentResponse:
-        def _submit(state: DirectoryState) -> ApprovalDocumentResponse:
-            actor = self._get_user_by_id(state, actor_id)
-            self._assert_user_accessible(state, actor)
-            document = self._get_approval_document(state, document_id)
-            if actor.id != document.creatorUserId:
-                raise PermissionError("작성자만 상신할 수 있습니다.")
-            if document.status != "draft":
-                raise ValueError("작성 중 상태만 상신할 수 있습니다.")
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                actor = self._fetch_actor_summary(cursor, actor_id)
+                document = self._fetch_required_approval_document(cursor, document_id, for_update=True)
+                self._assert_creator(actor, document)
+                self._assert_document_status(document, allowed={"draft"}, action_label="상신")
+                lines = self._fetch_approval_lines(cursor, document_id, for_update=True)
+                if not lines:
+                    raise ValueError("상신하려면 결재선을 최소 1명 이상 지정해야 합니다.")
+                for line in lines:
+                    self._fetch_actor_summary(cursor, line["approver_user_id"])
 
-            lines = self._get_document_lines(state, document.id)
-            if not lines:
-                raise ValueError("결재선을 지정하지 않아 상신할 수 없습니다.")
-
-            self._assert_no_immutable_document(document)
-            previous = document.status
-            document.status = "submitted"
-            document.submittedByUserId = actor.id
-            document.submittedAt = self._now()
-            document.currentLineIndex = 0
-            document.updatedAt = self._now()
-            self._append_audit(
-                state=state,
-                event="approval.submitted",
-                actor=actor,
-                target_type="approval_document",
-                target_id=document.id,
-                status_before=previous,
-                status_after=document.status,
-            )
-            approver_ids = [item.approverUserId for item in lines]
-            self._emit_observability_async(
-                event_type="approval.submit",
-                category=MonitoringCategory.APPROVAL,
-                severity=SeverityLevel.INFO,
-                actor_user_id=actor.id,
-                resource_type="approval_document",
-                resource_id=document.id,
-                title="결재 상신됨",
-                message=f"문서가 상신 상태로 변경되었습니다. ({document.title})",
-                targets=[actor.id, *approver_ids],
-                dedup_key=f"approval:{document.id}:submit",
-                payload={
-                    "statusBefore": previous,
-                    "statusAfter": document.status,
-                    "title": document.title,
-                    "approverCount": len(approver_ids),
-                },
-                visibility=Visibility.BOTH,
-                source="directory-service",
-            )
-            self._emit_observability_async(
-                event_type="approval.status.changed",
-                category=MonitoringCategory.APPROVAL,
-                severity=SeverityLevel.WARN,
-                actor_user_id=actor.id,
-                resource_type="approval_document",
-                resource_id=document.id,
-                title="결재 상태 변경",
-                message=f"문서 상태가 {previous}에서 {document.status}로 변경되었습니다.",
-                targets=[actor.id, *approver_ids],
-                dedup_key=f"approval:{document.id}:status:{document.status}",
-                payload={
-                    "statusBefore": previous,
-                    "statusAfter": document.status,
-                    "title": document.title,
-                },
-                visibility=Visibility.BOTH,
-                source="directory-service",
-            )
-            return self._build_document_response(state, document)
-
-        return self._with_mutation(_submit)
+                cursor.execute(
+                    """
+                    UPDATE approval_documents
+                    SET status = 'submitted',
+                        current_line_index = %s,
+                        submitted_by_user_id = %s,
+                        submitted_at = %s,
+                        updated_at = %s
+                    WHERE id = %s
+                    """,
+                    (lines[0]["sequence"], actor.userId, now, now, document_id),
+                )
+                self._insert_audit(
+                    cursor=cursor,
+                    company_id=actor.companyId,
+                    actor_user_id=actor.userId,
+                    actor_user_name=actor.userName,
+                    target_type="approval_document",
+                    target_id=document_id,
+                    event="approval.submitted",
+                    status_before="draft",
+                    status_after="submitted",
+                    reason=None,
+                )
+                response = self._to_approval_document_response(cursor, self._fetch_required_approval_document(cursor, document_id))
+            connection.commit()
+        return response
 
     def approve_approval_document(self, actor_id: str, document_id: str, payload: ApprovalLineActionRequest) -> ApprovalDocumentResponse:
-        def _approve(state: DirectoryState) -> ApprovalDocumentResponse:
-            actor = self._get_user_by_id(state, actor_id)
-            self._assert_user_accessible(state, actor)
-            document = self._get_approval_document(state, document_id)
-            if document.status != "submitted":
-                raise ValueError("제출된 상태에서만 승인할 수 있습니다.")
-
-            lines = self._get_document_lines(state, document.id)
-            if not lines:
-                raise ValueError("결재선 정보가 없습니다.")
-
-            self._assert_no_immutable_document(document)
-            current_line = self._get_current_line(document, lines)
-            if current_line.approverUserId != actor.id:
-                raise PermissionError("현재 결재자만 승인할 수 있습니다.")
-            if current_line.status != "pending":
-                raise ValueError("이미 처리된 결재 단계입니다.")
-
-            current_line.status = "approved"
-            current_line.decidedByUserId = actor.id
-            current_line.decidedAt = self._now()
-            current_line.comment = payload.reason
-
-            self._move_next_step(document, lines)
-            previous = document.status
-            document.updatedAt = self._now()
-            self._append_audit(
-                state=state,
-                event="approval.approved",
-                actor=actor,
-                target_type="approval_document",
-                target_id=document.id,
-                status_before=previous,
-                status_after=document.status,
-                reason=payload.reason,
-            )
-            approver_ids = [item.approverUserId for item in lines if item.approverUserId != actor.id]
-            self._emit_observability_async(
-                event_type="approval.status.changed",
-                category=MonitoringCategory.APPROVAL,
-                severity=SeverityLevel.INFO,
-                actor_user_id=actor.id,
-                resource_type="approval_document",
-                resource_id=document.id,
-                title="결재 상태 변경",
-                message=f"문서가 승인 처리되어 '{document.status}' 상태입니다.",
-                targets=[actor.id, *approver_ids],
-                dedup_key=f"approval:{document.id}:status:{document.status}",
-                payload={
-                    "statusBefore": previous,
-                    "statusAfter": document.status,
-                    "action": "approve",
-                    "reason": payload.reason,
-                    "title": document.title,
-                    "stepIndex": current_line.sequence,
-                },
-                visibility=Visibility.BOTH,
-                source="directory-service",
-            )
-            return self._build_document_response(state, document)
-
-        return self._with_mutation(_approve)
+        return self._process_approval_decision(actor_id, document_id, payload.reason, accepted=True, forced=False)
 
     def reject_approval_document(self, actor_id: str, document_id: str, payload: ApprovalLineActionRequest) -> ApprovalDocumentResponse:
-        def _reject(state: DirectoryState) -> ApprovalDocumentResponse:
-            actor = self._get_user_by_id(state, actor_id)
-            self._assert_user_accessible(state, actor)
-            document = self._get_approval_document(state, document_id)
-            if document.status != "submitted":
-                raise ValueError("제출된 상태에서만 반려할 수 있습니다.")
-
-            lines = self._get_document_lines(state, document.id)
-            if not lines:
-                raise ValueError("결재선 정보가 없습니다.")
-
-            self._assert_no_immutable_document(document)
-            current_line = self._get_current_line(document, lines)
-            if current_line.approverUserId != actor.id:
-                raise PermissionError("현재 결재자만 반려할 수 있습니다.")
-            if current_line.status != "pending":
-                raise ValueError("이미 처리된 결재 단계입니다.")
-
-            previous = document.status
-            current_line.status = "rejected"
-            current_line.decidedByUserId = actor.id
-            current_line.decidedAt = self._now()
-            current_line.comment = payload.reason
-            document.status = "rejected"
-            document.currentLineIndex = None
-            document.updatedAt = self._now()
-            self._append_audit(
-                state=state,
-                event="approval.rejected",
-                actor=actor,
-                target_type="approval_document",
-                target_id=document.id,
-                status_before=previous,
-                status_after=document.status,
-                reason=payload.reason,
-            )
-            approver_ids = [item.approverUserId for item in lines if item.approverUserId != actor.id]
-            self._emit_observability_async(
-                event_type="approval.status.changed",
-                category=MonitoringCategory.APPROVAL,
-                severity=SeverityLevel.WARN,
-                actor_user_id=actor.id,
-                resource_type="approval_document",
-                resource_id=document.id,
-                title="결재 반려",
-                message=f"결재가 반려되어 문서가 '{document.status}' 상태가 되었습니다.",
-                targets=[actor.id, *approver_ids],
-                dedup_key=f"approval:{document.id}:status:{document.status}",
-                payload={
-                    "statusBefore": previous,
-                    "statusAfter": document.status,
-                    "action": "reject",
-                    "reason": payload.reason,
-                    "title": document.title,
-                    "stepIndex": current_line.sequence,
-                },
-                visibility=Visibility.BOTH,
-                source="directory-service",
-            )
-            return self._build_document_response(state, document)
-
-        return self._with_mutation(_reject)
+        return self._process_approval_decision(actor_id, document_id, payload.reason, accepted=False, forced=False)
 
     def withdraw_approval_document(self, actor_id: str, document_id: str) -> ApprovalDocumentResponse:
-        def _withdraw(state: DirectoryState) -> ApprovalDocumentResponse:
-            actor = self._get_user_by_id(state, actor_id)
-            self._assert_user_accessible(state, actor)
-            document = self._get_approval_document(state, document_id)
-            if actor.id != document.creatorUserId:
-                raise PermissionError("작성자만 회수할 수 있습니다.")
-            if document.status != "submitted":
-                raise ValueError("상신 중 문서만 회수할 수 있습니다.")
-
-            previous = document.status
-            document.status = "withdrawn"
-            document.currentLineIndex = None
-            document.updatedAt = self._now()
-            self._append_audit(
-                state=state,
-                event="approval.withdrawn",
-                actor=actor,
-                target_type="approval_document",
-                target_id=document.id,
-                status_before=previous,
-                status_after=document.status,
-            )
-            lines = self._get_document_lines(state, document.id)
-            approver_ids = [item.approverUserId for item in lines]
-            self._emit_observability_async(
-                event_type="approval.withdraw",
-                category=MonitoringCategory.APPROVAL,
-                severity=SeverityLevel.INFO,
-                actor_user_id=actor.id,
-                resource_type="approval_document",
-                resource_id=document.id,
-                title="결재 회수",
-                message=f"문서가 회수되어 작성자 수정이 가능합니다. ({document.title})",
-                targets=[actor.id, *approver_ids],
-                dedup_key=f"approval:{document.id}:withdrawn",
-                payload={
-                    "statusBefore": previous,
-                    "statusAfter": document.status,
-                    "title": document.title,
-                },
-                visibility=Visibility.BOTH,
-                source="directory-service",
-            )
-            return self._build_document_response(state, document)
-
-        return self._with_mutation(_withdraw)
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                actor = self._fetch_actor_summary(cursor, actor_id)
+                document = self._fetch_required_approval_document(cursor, document_id, for_update=True)
+                self._assert_creator(actor, document)
+                self._assert_document_status(document, allowed={"submitted"}, action_label="회수")
+                cursor.execute(
+                    """
+                    UPDATE approval_documents
+                    SET status = 'withdrawn',
+                        current_line_index = NULL,
+                        updated_at = %s
+                    WHERE id = %s
+                    """,
+                    (now, document_id),
+                )
+                self._insert_audit(
+                    cursor=cursor,
+                    company_id=actor.companyId,
+                    actor_user_id=actor.userId,
+                    actor_user_name=actor.userName,
+                    target_type="approval_document",
+                    target_id=document_id,
+                    event="approval.withdrawn",
+                    status_before="submitted",
+                    status_after="withdrawn",
+                    reason=None,
+                )
+                response = self._to_approval_document_response(cursor, self._fetch_required_approval_document(cursor, document_id))
+            connection.commit()
+        return response
 
     def rework_approval_document(self, actor_id: str, document_id: str) -> ApprovalDocumentResponse:
-        def _rework(state: DirectoryState) -> ApprovalDocumentResponse:
-            actor = self._get_user_by_id(state, actor_id)
-            self._assert_user_accessible(state, actor)
-            document = self._get_approval_document(state, document_id)
-            if actor.id != document.creatorUserId:
-                raise PermissionError("작성자만 재기안할 수 있습니다.")
-            if document.status not in {"rejected", "withdrawn"}:
-                raise ValueError("반려/회수 상태에서만 재기안할 수 있습니다.")
-
-            lines = self._get_document_lines(state, document.id)
-            for line in lines:
-                line.status = "pending"
-                line.decidedAt = None
-                line.decidedByUserId = None
-                line.comment = None
-
-            self._assert_no_immutable_document(document)
-            previous = document.status
-            document.status = "draft"
-            document.currentLineIndex = None
-            document.submittedByUserId = None
-            document.submittedAt = None
-            document.updatedAt = self._now()
-            self._append_audit(
-                state=state,
-                event="approval.redrafted",
-                actor=actor,
-                target_type="approval_document",
-                target_id=document.id,
-                status_before=previous,
-                status_after=document.status,
-            )
-            approver_ids = [item.approverUserId for item in lines]
-            self._emit_observability_async(
-                event_type="approval.status.changed",
-                category=MonitoringCategory.APPROVAL,
-                severity=SeverityLevel.INFO,
-                actor_user_id=actor.id,
-                resource_type="approval_document",
-                resource_id=document.id,
-                title="결재 재기안",
-                message=f"문서가 재기안되어 'draft' 상태로 되돌아갔습니다. ({document.title})",
-                targets=[actor.id, *approver_ids],
-                dedup_key=f"approval:{document.id}:status:draft",
-                payload={
-                    "statusBefore": previous,
-                    "statusAfter": document.status,
-                    "title": document.title,
-                },
-                visibility=Visibility.BOTH,
-                source="directory-service",
-            )
-            return self._build_document_response(state, document)
-
-        return self._with_mutation(_rework)
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                actor = self._fetch_actor_summary(cursor, actor_id)
+                document = self._fetch_required_approval_document(cursor, document_id, for_update=True)
+                self._assert_creator(actor, document)
+                self._assert_document_status(document, allowed={"rejected", "withdrawn"}, action_label="재기안")
+                cursor.execute(
+                    """
+                    UPDATE approval_documents
+                    SET status = 'draft',
+                        current_line_index = NULL,
+                        submitted_by_user_id = NULL,
+                        submitted_at = NULL,
+                        updated_at = %s
+                    WHERE id = %s
+                    """,
+                    (now, document_id),
+                )
+                cursor.execute(
+                    """
+                    UPDATE approval_lines
+                    SET status = 'pending',
+                        comment = NULL,
+                        decided_by_user_id = NULL,
+                        decided_at = NULL
+                    WHERE document_id = %s
+                    """,
+                    (document_id,),
+                )
+                self._insert_audit(
+                    cursor=cursor,
+                    company_id=actor.companyId,
+                    actor_user_id=actor.userId,
+                    actor_user_name=actor.userName,
+                    target_type="approval_document",
+                    target_id=document_id,
+                    event="approval.redrafted",
+                    status_before=document["status"],
+                    status_after="draft",
+                    reason=None,
+                )
+                response = self._to_approval_document_response(cursor, self._fetch_required_approval_document(cursor, document_id))
+            connection.commit()
+        return response
 
     def admin_force_approve(self, actor_id: str, document_id: str, reason: ApprovalActionReason) -> ApprovalDocumentResponse:
-        return self._admin_force(actor_id, document_id, reason, event="approval.admin_approved", final_status="approved")
+        return self._process_approval_decision(actor_id, document_id, reason.reason, accepted=True, forced=True)
 
     def admin_force_reject(self, actor_id: str, document_id: str, reason: ApprovalActionReason) -> ApprovalDocumentResponse:
-        return self._admin_force(actor_id, document_id, reason, event="approval.admin_rejected", final_status="rejected")
+        return self._process_approval_decision(actor_id, document_id, reason.reason, accepted=False, forced=True)
 
-    def get_audit_logs(self, actor_id: str, target_id: str | None = None) -> AuditLogListResponse:
-        state = self.load()
-        actor = self._get_user_by_id(state, actor_id)
-        self._assert_user_accessible(state, actor)
-        actor_role = self._get_role(state, actor.roleId)
-        logs = [self._to_audit_view(item) for item in state.auditLogs]
-        if "admin:*" not in actor_role.permissions:
-            accessible_document_ids = self._collect_accessible_document_ids(state, actor)
-            logs = [item for item in logs if item.targetType != "approval_document" or item.targetId in accessible_document_ids]
-        if target_id:
-            logs = [item for item in logs if item.targetId == target_id]
-        return AuditLogListResponse(logs=list(reversed(logs)))
+    def _fetch_company_row(self, cursor) -> dict:
+        cursor.execute("SELECT id, name, domain, status, created_at FROM companies ORDER BY created_at ASC LIMIT 1")
+        row = cursor.fetchone()
+        if row is None:
+            raise ValueError("초기 설정이 완료되지 않았습니다.")
+        return row
 
-    def _admin_force(self, actor_id: str, document_id: str, reason: ApprovalActionReason, event: str, final_status: str) -> ApprovalDocumentResponse:
-        def _force(state: DirectoryState) -> ApprovalDocumentResponse:
-            actor = self._get_user_by_id(state, actor_id)
-            self._assert_user_accessible(state, actor)
-            document = self._get_approval_document(state, document_id)
-            if document.status != "submitted":
-                raise ValueError("직권 처리는 제출된 문서에서만 가능합니다.")
-            self._assert_no_immutable_document(document)
-
-            lines = self._get_document_lines(state, document.id)
-            now = self._now()
-            for line in lines:
-                if final_status == "approved":
-                    line.status = "approved"
-                else:
-                    line.status = "rejected"
-                line.decidedByUserId = actor.id
-                line.decidedAt = now
-                line.comment = reason.reason
-
-            previous = document.status
-            document.status = final_status
-            document.currentLineIndex = None
-            if final_status == "approved":
-                document.submittedAt = document.submittedAt or now
-            document.updatedAt = now
-            self._append_audit(
-                state=state,
-                event=event,
-                actor=actor,
-                target_type="approval_document",
-                target_id=document.id,
-                status_before=previous,
-                status_after=document.status,
-                reason=reason.reason,
-            )
-            approver_ids = self._collect_approver_ids(lines)
-            self._emit_observability_async(
-                event_type=f"approval.force.{final_status}",
-                category=MonitoringCategory.APPROVAL,
-                severity=SeverityLevel.ERROR if final_status == "rejected" else SeverityLevel.WARN,
-                actor_user_id=actor.id,
-                resource_type="approval_document",
-                resource_id=document.id,
-                title="결재 직권 처리",
-                message=(
-                    f"관리자 직권 처리로 문서가 '{document.status}'로 변경되었습니다. "
-                    f"사유: {reason.reason}"
-                ),
-                targets=[actor.id, *approver_ids, document.creatorUserId],
-                dedup_key=f"approval:{document.id}:force:{final_status}",
-                payload={
-                    "statusBefore": previous,
-                    "statusAfter": document.status,
-                    "reason": reason.reason,
-                    "title": document.title,
-                    "action": "admin_force",
-                    "finalStatus": final_status,
-                },
-                visibility=Visibility.BOTH,
-                source="directory-service",
-            )
-            return self._build_document_response(state, document)
-
-        return self._with_mutation(_force)
-
-    def _build_user_view(self, state: DirectoryState, user: UserRecord) -> UserView:
-        department = self._get_department(state, user.departmentId)
-        role = self._get_role(state, user.roleId)
-        account = self._get_mail_account(state, user.id)
-        return UserView(
-            userId=user.id,
-            companyId=user.companyId,
-            userName=user.name,
-            userEmail=user.email,
-            departmentId=department.id,
-            departmentName=department.name,
-            roleId=role.id,
-            roleName=role.name,
-            status=user.status,
-            userType=user.userType,
-            mailAccountEmail=account.email,
-            mailAccountStatus=account.status,
-            permissions=role.permissions,
-            consistencyIssues=self._validate_user_consistency(state, user),
+    def _fetch_provider_row(self, cursor) -> dict:
+        cursor.execute(
+            """
+            SELECT id, company_id, provider_type, relay_host, relay_port, username,
+                   encrypted_password, active, last_test_status, last_test_message, updated_at
+            FROM mail_provider_configs
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """
         )
+        row = cursor.fetchone()
+        if row is None:
+            raise ValueError("메일 설정이 존재하지 않습니다.")
+        return row
 
-    def _validate_user_consistency(self, state: DirectoryState, user: UserRecord) -> list[UserStatusIssue]:
-        issues: list[UserStatusIssue] = []
-        role = self._get_role(state, user.roleId)
-        account = self._get_mail_account(state, user.id)
-
-        if role.status != "active":
-            issues.append(UserStatusIssue(code="ROLE_INACTIVE", message="연결된 권한 역할이 비활성화 상태입니다."))
-        if user.status == "active" and account.status != "active":
-            issues.append(UserStatusIssue(code="MAIL_ACCOUNT_MISMATCH", message="활성 사용자이지만 메일 계정이 활성 상태가 아닙니다."))
-        if user.status != "active" and account.status == "active":
-            issues.append(UserStatusIssue(code="USER_INACTIVE_MAIL_ACTIVE", message="비활성 사용자이지만 메일 계정이 활성 상태입니다."))
-        return issues
-
-    def _get_department(self, state: DirectoryState, department_id: str) -> DepartmentRecord:
-        department = next((item for item in state.departments if item.id == department_id), None)
-        if department is None:
+    def _fetch_required_department(self, cursor, department_id: str) -> dict:
+        cursor.execute(
+            "SELECT id, company_id, name, parent_id, status, sort_order, created_at FROM departments WHERE id = %s",
+            (department_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
             raise ValueError("대상 부서를 찾을 수 없습니다.")
-        return department
+        return row
 
-    def _get_role(self, state: DirectoryState, role_id: str) -> RoleRecord:
-        role = next((item for item in state.roles if item.id == role_id), None)
-        if role is None:
+    def _fetch_required_role(self, cursor, role_id: str) -> dict:
+        cursor.execute(
+            "SELECT id, company_id, name, permissions, status, created_at FROM roles WHERE id = %s",
+            (role_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
             raise ValueError("대상 권한을 찾을 수 없습니다.")
-        return role
+        return row
 
-    def _get_mail_account(self, state: DirectoryState, user_id: str) -> MailAccountRecord:
-        account = next((item for item in state.mailAccounts if item.userId == user_id), None)
-        if account is None:
-            raise ValueError("사용자 메일 계정을 찾을 수 없습니다.")
-        return account
+    def _fetch_user_access_row(self, cursor, where_clause: str, params: tuple) -> dict | None:
+        cursor.execute(
+            f"""
+            SELECT
+                u.id AS user_id,
+                u.company_id,
+                u.name AS user_name,
+                u.email AS user_email,
+                u.password_hash,
+                u.department_id,
+                u.role_id,
+                u.status AS user_status,
+                u.user_type,
+                d.name AS department_name,
+                r.name AS role_name,
+                r.permissions,
+                r.status AS role_status,
+                ma.email AS mail_account_email,
+                ma.status AS mail_account_status
+            FROM users u
+            JOIN departments d ON d.id = u.department_id
+            JOIN roles r ON r.id = u.role_id
+            JOIN mail_accounts ma ON ma.user_id = u.id
+            WHERE {where_clause}
+            """,
+            params,
+        )
+        return cursor.fetchone()
 
-    def _get_user_by_id(self, state: DirectoryState, user_id: str) -> UserRecord:
-        user = next((item for item in state.users if item.id == user_id), None)
-        if user is None:
+    def _fetch_actor_summary(self, cursor, user_id: str) -> AuthUserSummary:
+        row = self._fetch_user_access_row(cursor, "u.id = %s", (user_id,))
+        if row is None:
             raise ValueError("대상 사용자를 찾을 수 없습니다.")
-        return user
+        self._assert_user_accessible(row)
+        return self._row_to_auth_summary(row)
 
-    def _to_auth_summary(self, state: DirectoryState, user: UserRecord) -> AuthUserSummary:
-        role = self._get_role(state, user.roleId)
-        return AuthUserSummary(
-            userId=user.id,
-            companyId=user.companyId,
-            userName=user.name,
-            userEmail=user.email,
-            roleId=role.id,
-            roleName=role.name,
-            userType=user.userType,
-            status=user.status,
-            permissions=role.permissions,
+    def _fetch_required_approval_document(self, cursor, document_id: str, *, for_update: bool = False) -> dict:
+        query = """
+            SELECT
+                ad.id,
+                ad.company_id,
+                ad.title,
+                ad.content,
+                ad.creator_user_id,
+                ad.status,
+                ad.current_line_index,
+                ad.submitted_by_user_id,
+                ad.submitted_at,
+                ad.created_at,
+                ad.updated_at,
+                u.name AS creator_user_name
+            FROM approval_documents ad
+            JOIN users u ON u.id = ad.creator_user_id
+            WHERE ad.id = %s
+        """
+        if for_update:
+            query += " FOR UPDATE"
+        cursor.execute(query, (document_id,))
+        row = cursor.fetchone()
+        if row is None:
+            raise ValueError("대상 결재 문서를 찾을 수 없습니다.")
+        return row
+
+    def _fetch_approval_lines(self, cursor, document_id: str, *, for_update: bool = False) -> list[dict]:
+        query = """
+            SELECT
+                id,
+                document_id,
+                approver_user_id,
+                approver_user_name,
+                sequence,
+                status,
+                comment,
+                decided_by_user_id,
+                decided_at
+            FROM approval_lines
+            WHERE document_id = %s
+            ORDER BY sequence ASC
+        """
+        if for_update:
+            query += " FOR UPDATE"
+        cursor.execute(query, (document_id,))
+        return list(cursor.fetchall())
+
+    def _fetch_visible_approval_rows(self, cursor, actor: AuthUserSummary) -> list[dict]:
+        if self._can_view_all_approvals(actor):
+            cursor.execute(
+                """
+                SELECT
+                    ad.id,
+                    ad.company_id,
+                    ad.title,
+                    ad.content,
+                    ad.creator_user_id,
+                    ad.status,
+                    ad.current_line_index,
+                    ad.submitted_by_user_id,
+                    ad.submitted_at,
+                    ad.created_at,
+                    ad.updated_at,
+                    u.name AS creator_user_name
+                FROM approval_documents ad
+                JOIN users u ON u.id = ad.creator_user_id
+                WHERE ad.company_id = %s
+                ORDER BY ad.updated_at DESC, ad.created_at DESC
+                """,
+                (actor.companyId,),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT DISTINCT
+                    ad.id,
+                    ad.company_id,
+                    ad.title,
+                    ad.content,
+                    ad.creator_user_id,
+                    ad.status,
+                    ad.current_line_index,
+                    ad.submitted_by_user_id,
+                    ad.submitted_at,
+                    ad.created_at,
+                    ad.updated_at,
+                    u.name AS creator_user_name
+                FROM approval_documents ad
+                JOIN users u ON u.id = ad.creator_user_id
+                LEFT JOIN approval_lines apl ON apl.document_id = ad.id
+                WHERE ad.company_id = %s
+                  AND (
+                      ad.creator_user_id = %s
+                      OR apl.approver_user_id = %s
+                  )
+                ORDER BY ad.updated_at DESC, ad.created_at DESC
+                """,
+                (actor.companyId, actor.userId, actor.userId),
+            )
+        return list(cursor.fetchall())
+
+    def _assert_approval_visible(self, cursor, actor: AuthUserSummary, document: dict) -> None:
+        if self._can_view_all_approvals(actor):
+            return
+        if document["creator_user_id"] == actor.userId:
+            return
+        cursor.execute(
+            "SELECT 1 FROM approval_lines WHERE document_id = %s AND approver_user_id = %s",
+            (document["id"], actor.userId),
+        )
+        if cursor.fetchone() is not None:
+            return
+        raise PermissionError("대상 결재 문서에 접근할 수 없습니다.")
+
+    def _to_approval_document_response(self, cursor, row: dict) -> ApprovalDocumentResponse:
+        lines = [
+            ApprovalLineRecord(
+                id=line["id"],
+                documentId=line["document_id"],
+                approverUserId=line["approver_user_id"],
+                approverUserName=line["approver_user_name"],
+                sequence=line["sequence"],
+                status=line["status"],
+                comment=line["comment"],
+                decidedByUserId=line["decided_by_user_id"],
+                decidedAt=line["decided_at"],
+            )
+            for line in self._fetch_approval_lines(cursor, row["id"])
+        ]
+        return ApprovalDocumentResponse(
+            id=row["id"],
+            title=row["title"],
+            content=row["content"],
+            creatorUserId=row["creator_user_id"],
+            creatorUserName=row["creator_user_name"],
+            status=row["status"],
+            createdAt=row["created_at"],
+            updatedAt=row["updated_at"],
+            submittedByUserId=row["submitted_by_user_id"],
+            submittedAt=row["submitted_at"],
+            currentLineIndex=row["current_line_index"],
+            lines=lines,
         )
 
-    def _get_approval_document(self, state: DirectoryState, document_id: str) -> ApprovalDocumentRecord:
-        document = next((item for item in state.approvalDocuments if item.id == document_id), None)
-        if document is None:
-            raise ValueError("결재 문서를 찾을 수 없습니다.")
-        return document
+    def _assert_creator(self, actor: AuthUserSummary, document: dict) -> None:
+        if document["creator_user_id"] != actor.userId:
+            raise PermissionError("작성자만 수행할 수 있는 작업입니다.")
 
-    def _get_document_lines(self, state: DirectoryState, document_id: str) -> list[ApprovalLineRecord]:
-        return sorted((item for item in state.approvalLines if item.documentId == document_id), key=lambda item: item.sequence)
+    def _assert_document_status(self, document: dict, *, allowed: set[str], action_label: str) -> None:
+        current_status = str(document["status"])
+        if current_status not in allowed:
+            allowed_text = ", ".join(sorted(allowed))
+            raise ValueError(f"{action_label}은(는) {allowed_text} 상태에서만 가능합니다.")
 
-    def _get_current_line(self, document: ApprovalDocumentRecord, lines: list[ApprovalLineRecord]) -> ApprovalLineRecord:
-        if document.currentLineIndex is None:
-            raise ValueError("현재 결재 단계가 없습니다.")
-        for line in lines:
-            if line.sequence == document.currentLineIndex:
-                return line
-        raise ValueError("현재 결재선을 찾을 수 없습니다.")
+    def _can_view_all_approvals(self, actor: AuthUserSummary) -> bool:
+        permissions = set(actor.permissions)
+        return "admin:*" in permissions or "approval:force" in permissions
 
-    def _move_next_step(self, document: ApprovalDocumentRecord, lines: list[ApprovalLineRecord]) -> None:
-        if not lines:
-            raise ValueError("결재선이 없습니다.")
+    def _process_approval_decision(
+        self,
+        actor_id: str,
+        document_id: str,
+        reason: str,
+        *,
+        accepted: bool,
+        forced: bool,
+    ) -> ApprovalDocumentResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        normalized_reason = reason.strip()
+        if not normalized_reason:
+            raise ValueError("사유를 입력해야 합니다.")
 
-        if all(item.status == "approved" for item in lines):
-            document.status = "approved"
-            document.currentLineIndex = None
-            return
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                actor = self._fetch_actor_summary(cursor, actor_id)
+                document = self._fetch_required_approval_document(cursor, document_id, for_update=True)
+                self._assert_document_status(document, allowed={"submitted"}, action_label="결재 처리")
+                lines = self._fetch_approval_lines(cursor, document_id, for_update=True)
+                if not lines:
+                    raise ValueError("결재선이 없는 문서입니다.")
 
-        for item in lines:
-            if item.sequence <= (document.currentLineIndex or 0):
-                continue
-            if item.status == "pending":
-                document.currentLineIndex = item.sequence
-                return
+                status_before = document["status"]
+                target_line = None
+                if forced:
+                    pending_lines = [line for line in lines if line["status"] == "pending"]
+                    if not pending_lines:
+                        raise ValueError("직권 처리할 대기 결재선이 없습니다.")
+                    target_line = pending_lines[0]
+                else:
+                    current_sequence = document["current_line_index"]
+                    target_line = next((line for line in lines if line["sequence"] == current_sequence), None)
+                    if target_line is None or target_line["status"] != "pending":
+                        raise ValueError("현재 처리 가능한 결재선이 없습니다.")
+                    if target_line["approver_user_id"] != actor.userId:
+                        raise PermissionError("현재 결재선의 담당자만 처리할 수 있습니다.")
 
-        document.status = "approved"
-        document.currentLineIndex = None
+                if accepted:
+                    if forced:
+                        cursor.execute(
+                            """
+                            UPDATE approval_lines
+                            SET status = 'approved',
+                                comment = COALESCE(comment, %s),
+                                decided_by_user_id = COALESCE(decided_by_user_id, %s),
+                                decided_at = COALESCE(decided_at, %s)
+                            WHERE document_id = %s AND status = 'pending'
+                            """,
+                            (normalized_reason, actor.userId, now, document_id),
+                        )
+                        next_status = "approved"
+                        next_line_index = None
+                        event_name = "approval.force_approved"
+                    else:
+                        cursor.execute(
+                            """
+                            UPDATE approval_lines
+                            SET status = 'approved',
+                                comment = %s,
+                                decided_by_user_id = %s,
+                                decided_at = %s
+                            WHERE id = %s
+                            """,
+                            (normalized_reason, actor.userId, now, target_line["id"]),
+                        )
+                        remaining_pending = [line for line in lines if line["sequence"] > target_line["sequence"] and line["status"] == "pending"]
+                        next_status = "approved" if not remaining_pending else "submitted"
+                        next_line_index = None if next_status == "approved" else remaining_pending[0]["sequence"]
+                        event_name = "approval.approved"
+                else:
+                    if forced:
+                        cursor.execute(
+                            """
+                            UPDATE approval_lines
+                            SET status = CASE WHEN status = 'approved' THEN status ELSE 'rejected' END,
+                                comment = CASE WHEN status = 'approved' THEN comment ELSE %s END,
+                                decided_by_user_id = CASE WHEN status = 'approved' THEN decided_by_user_id ELSE %s END,
+                                decided_at = CASE WHEN status = 'approved' THEN decided_at ELSE %s END
+                            WHERE document_id = %s
+                            """,
+                            (normalized_reason, actor.userId, now, document_id),
+                        )
+                        event_name = "approval.force_rejected"
+                    else:
+                        cursor.execute(
+                            """
+                            UPDATE approval_lines
+                            SET status = 'rejected',
+                                comment = %s,
+                                decided_by_user_id = %s,
+                                decided_at = %s
+                            WHERE id = %s
+                            """,
+                            (normalized_reason, actor.userId, now, target_line["id"]),
+                        )
+                        event_name = "approval.rejected"
+                    next_status = "rejected"
+                    next_line_index = None
 
-    def _can_view_document(self, state: DirectoryState, actor: UserRecord, document: ApprovalDocumentRecord) -> bool:
-        actor_summary = self._to_auth_summary(state, actor)
-        if "admin:*" in actor_summary.permissions:
-            return True
-        if document.creatorUserId == actor.id:
-            return True
-        lines = self._get_document_lines(state, document.id)
-        return any(item.approverUserId == actor.id for item in lines)
+                cursor.execute(
+                    """
+                    UPDATE approval_documents
+                    SET status = %s,
+                        current_line_index = %s,
+                        updated_at = %s
+                    WHERE id = %s
+                    """,
+                    (next_status, next_line_index, now, document_id),
+                )
+                self._insert_audit(
+                    cursor=cursor,
+                    company_id=actor.companyId,
+                    actor_user_id=actor.userId,
+                    actor_user_name=actor.userName,
+                    target_type="approval_document",
+                    target_id=document_id,
+                    event=event_name,
+                    status_before=status_before,
+                    status_after=next_status,
+                    reason=normalized_reason,
+                )
+                response = self._to_approval_document_response(cursor, self._fetch_required_approval_document(cursor, document_id))
+            connection.commit()
+        return response
 
-    def _assert_user_accessible(self, state: DirectoryState, user: UserRecord) -> None:
-        if user.status != "active":
+    def _fetch_user_view_row(self, cursor, user_id: str) -> dict:
+        row = self._fetch_user_access_row(cursor, "u.id = %s", (user_id,))
+        if row is None:
+            raise ValueError("대상 사용자를 찾을 수 없습니다.")
+        return row
+
+    def _require_company(self) -> CompanyRecord:
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                return self._to_company_record(self._fetch_company_row(cursor))
+
+    def _assert_user_accessible(self, row: dict) -> None:
+        if row["user_status"] != "active":
             raise PermissionError("비활성화된 사용자 계정입니다.")
-        role = self._get_role(state, user.roleId)
-        if role.status != "active":
+        if row["role_status"] != "active":
             raise PermissionError("사용자 권한이 비활성화된 상태입니다.")
-        if self._get_mail_account(state, user.id).status != "active":
+        if row["mail_account_status"] != "active":
             raise PermissionError("사용자 계정 상태와 메일/권한 상태가 일치하지 않습니다.")
 
-    def _build_document_response(self, state: DirectoryState, document: ApprovalDocumentRecord) -> ApprovalDocumentResponse:
-        creator = self._get_user_by_id(state, document.creatorUserId)
-        return ApprovalDocumentResponse(
-            id=document.id,
-            title=document.title,
-            content=document.content,
-            creatorUserId=document.creatorUserId,
-            creatorUserName=creator.name,
-            status=document.status,
-            createdAt=document.createdAt,
-            updatedAt=document.updatedAt,
-            submittedByUserId=document.submittedByUserId,
-            submittedAt=document.submittedAt,
-            currentLineIndex=document.currentLineIndex,
-            lines=self._get_document_lines(state, document.id),
+    def _permissions(self, raw: object) -> list[str]:
+        if isinstance(raw, list):
+            return [str(item) for item in raw]
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    return [str(item) for item in parsed]
+            except json.JSONDecodeError:
+                return [item.strip() for item in raw.split(",") if item.strip()]
+        return []
+
+    def _row_to_auth_summary(self, row: dict) -> AuthUserSummary:
+        return AuthUserSummary(
+            userId=row["user_id"],
+            companyId=row["company_id"],
+            userName=row["user_name"],
+            userEmail=row["user_email"],
+            roleId=row["role_id"],
+            roleName=row["role_name"],
+            userType=row["user_type"],
+            status=row["user_status"],
+            permissions=self._permissions(row["permissions"]),
         )
 
-    def _to_audit_view(self, item: AuditLogRecord) -> AuditLogView:
+    def _row_to_user_view(self, row: dict) -> UserView:
+        permissions = self._permissions(row["permissions"])
+        consistency_issues: list[UserStatusIssue] = []
+        if row["role_status"] != "active":
+            consistency_issues.append(UserStatusIssue(code="ROLE_INACTIVE", message="연결된 권한 역할이 비활성화 상태입니다."))
+        if row["user_status"] == "active" and row["mail_account_status"] != "active":
+            consistency_issues.append(UserStatusIssue(code="MAIL_ACCOUNT_MISMATCH", message="활성 사용자이지만 메일 계정이 활성 상태가 아닙니다."))
+        if row["user_status"] != "active" and row["mail_account_status"] == "active":
+            consistency_issues.append(UserStatusIssue(code="USER_INACTIVE_MAIL_ACTIVE", message="비활성 사용자이지만 메일 계정이 활성 상태입니다."))
+
+        return UserView(
+            userId=row["user_id"],
+            companyId=row["company_id"],
+            userName=row["user_name"],
+            userEmail=row["user_email"],
+            departmentId=row["department_id"],
+            departmentName=row["department_name"],
+            roleId=row["role_id"],
+            roleName=row["role_name"],
+            status=row["user_status"],
+            userType=row["user_type"],
+            mailAccountEmail=row["mail_account_email"],
+            mailAccountStatus=row["mail_account_status"],
+            permissions=permissions,
+            consistencyIssues=consistency_issues,
+        )
+
+    def _to_company_record(self, row: dict) -> CompanyRecord:
+        return CompanyRecord(
+            id=row["id"],
+            name=row["name"],
+            domain=row["domain"],
+            status=row["status"],
+            createdAt=row["created_at"],
+        )
+
+    def _to_department_record(self, row: dict) -> DepartmentRecord:
+        return DepartmentRecord(
+            id=row["id"],
+            companyId=row["company_id"],
+            name=row["name"],
+            parentId=row["parent_id"],
+            status=row["status"],
+            sortOrder=row["sort_order"],
+            createdAt=row["created_at"],
+        )
+
+    def _to_role_record(self, row: dict) -> RoleRecord:
+        return RoleRecord(
+            id=row["id"],
+            companyId=row["company_id"],
+            name=row["name"],
+            permissions=self._permissions(row["permissions"]),
+            status=row["status"],
+            createdAt=row["created_at"],
+        )
+
+    def _to_mail_provider_record(self, row: dict) -> MailProviderConfigRecord:
+        return MailProviderConfigRecord(
+            id=row["id"],
+            companyId=row["company_id"],
+            providerType=row["provider_type"],
+            relayHost=row["relay_host"],
+            relayPort=row["relay_port"],
+            username=row["username"],
+            encryptedPassword=row["encrypted_password"],
+            active=row["active"],
+            lastTestStatus=row["last_test_status"],
+            lastTestMessage=row["last_test_message"],
+            updatedAt=row["updated_at"],
+        )
+
+    def _to_mail_provider_view(self, row: dict) -> MailProviderConfigView:
+        return MailProviderConfigView(
+            id=row["id"],
+            companyId=row["company_id"],
+            providerType=row["provider_type"],
+            relayHost=row["relay_host"],
+            relayPort=row["relay_port"],
+            username=row["username"],
+            active=row["active"],
+            lastTestStatus=row["last_test_status"],
+            lastTestMessage=row["last_test_message"],
+            updatedAt=row["updated_at"],
+        )
+
+    def _to_audit_view(self, row: dict) -> AuditLogView:
         return AuditLogView(
-            id=item.id,
-            event=item.event,
-            actorUserId=item.actorUserId,
-            actorUserName=item.actorUserName,
-            targetType=item.targetType,
-            targetId=item.targetId,
-            statusBefore=item.statusBefore,
-            statusAfter=item.statusAfter,
-            reason=item.reason,
-            createdAt=item.createdAt,
+            id=row["id"],
+            event=row["event"],
+            actorUserId=row["actor_user_id"],
+            actorUserName=row["actor_user_name"],
+            targetType=row["target_type"],
+            targetId=row["target_id"],
+            statusBefore=row["status_before"],
+            statusAfter=row["status_after"],
+            reason=row["reason"],
+            createdAt=row["created_at"],
         )
 
-    def _collect_accessible_document_ids(self, state: DirectoryState, actor: UserRecord) -> set[str]:
-        return {item.id for item in self._list_accessible_documents(state, actor)}
-
-    def _list_accessible_documents(self, state: DirectoryState, actor: UserRecord) -> list[ApprovalDocumentRecord]:
-        return [
-            document
-            for document in state.approvalDocuments
-            if self._can_view_document(state, actor, document)
-        ]
-
-    def _collect_approver_ids(self, lines: list[ApprovalLineRecord]) -> list[str]:
-        return [item.approverUserId for item in lines]
-
-    def _append_audit(
+    def _insert_audit(
         self,
         *,
-        state: DirectoryState,
-        event: str,
-        actor: UserRecord,
+        cursor,
+        company_id: str,
+        actor_user_id: str | None,
+        actor_user_name: str,
         target_type: str,
         target_id: str,
+        event: str,
         status_before: str | None,
         status_after: str | None,
-        reason: str | None = None,
+        reason: str | None,
     ) -> None:
-        state.auditLogs.append(
-            AuditLogRecord(
-                id=self._new_id("log"),
-                event=event,
-                actorUserId=actor.id,
-                actorUserName=actor.name,
-                targetType=target_type,
-                targetId=target_id,
-                statusBefore=status_before,
-                statusAfter=status_after,
-                reason=reason,
-                createdAt=self._now(),
-            )
-        )
-
-    def _emit_observability_async(
-        self,
-        *,
-        event_type: str,
-        category: MonitoringCategory,
-        severity: SeverityLevel,
-        actor_user_id: str,
-        resource_type: str,
-        resource_id: str,
-        title: str,
-        message: str,
-        targets: list[str] | None = None,
-        dedup_key: str | None = None,
-        request_id: str | None = None,
-        payload: dict[str, object] | None = None,
-        visibility: Visibility = Visibility.ADMIN,
-        source: str = "directory-service",
-    ) -> None:
-        request_id = request_id or f"req_{uuid4().hex}"
-        event = EventEnvelope(
-            eventId=f"evt_{uuid4().hex}",
-            eventType=event_type,
-            category=category,
-            severity=severity,
-            resourceType=resource_type,
-            resourceId=resource_id,
-            requestId=request_id,
-            dedupKey=dedup_key or f"{event_type}:{resource_type}:{resource_id}",
-            title=title,
-            message=message,
-            source=source,
-            companyId="cmp_default",
+        record = AuditLogRecord(
+            id=self._new_id("log"),
+            event=event,
             actorUserId=actor_user_id,
-            occurredAt=datetime.now(UTC),
-            createdAt=datetime.now(UTC),
-            targets=targets or [],
-            visibility=visibility,
-            payload=payload or {},
+            actorUserName=actor_user_name,
+            targetType=target_type,
+            targetId=target_id,
+            statusBefore=status_before,
+            statusAfter=status_after,
+            reason=reason,
+            createdAt=self._now(),
         )
-
-        def _runner() -> None:
-            try:
-                ObservabilityService().emit_event(event)
-            except Exception as exc:
-                logger.warning(
-                    "observability.emit_failed",
-                    extra={"event_type": event.eventType, "resource_id": resource_id, "error": str(exc)},
-                )
-
-        threading.Thread(target=_runner, daemon=True).start()
-
-    def _assert_no_immutable_document(self, document: ApprovalDocumentRecord) -> None:
-        if document.status == "approved":
-            raise ValueError("승인 완료 문서는 수정할 수 없습니다.")
-
-    @staticmethod
-    def _normalize_unique_ids(values: list[str]) -> list[str]:
-        deduped: list[str] = []
-        for value in values:
-            item = value.strip()
-            if not item or item in deduped:
-                continue
-            deduped.append(item)
-        return deduped
-
-    @staticmethod
-    def _migrate_state(data: dict) -> dict:
-        changed = False
-        if "approvalDocuments" not in data:
-            data["approvalDocuments"] = []
-            changed = True
-        if "approvalLines" not in data:
-            data["approvalLines"] = []
-            changed = True
-        if "auditLogs" not in data:
-            data["auditLogs"] = []
-            changed = True
-        if changed:
-            pass
-        return data
-
-    def _bootstrap_from_setup(self) -> DirectoryState:
-        setup = self.settings_store.load()
-        if setup is None or not setup.initialized:
-            raise ValueError("초기 설정이 완료되지 않았습니다.")
-
-        now = self._now()
-        company = CompanyRecord(
-            id=self._new_id("company"),
-            name=setup.company.name,
-            domain=setup.company.domain,
-            status="active",
-            createdAt=now,
+        cursor.execute(
+            """
+            INSERT INTO audit_logs (
+                id, company_id, actor_user_id, actor_user_name, target_type, target_id,
+                event, status_before, status_after, reason, created_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                record.id,
+                company_id,
+                record.actorUserId,
+                record.actorUserName,
+                record.targetType,
+                record.targetId,
+                record.event,
+                record.statusBefore,
+                record.statusAfter,
+                record.reason,
+                record.createdAt,
+            ),
         )
-        department = DepartmentRecord(
-            id=self._new_id("dept"),
-            companyId=company.id,
-            name="본사",
-            parentId=None,
-            status="active",
-            sortOrder=100,
-            createdAt=now,
-        )
-        admin_role = RoleRecord(
-            id=self._new_id("role"),
-            companyId=company.id,
-            name="관리자",
-            permissions=[
-                "admin:*",
-                "approval:read",
-                "approval:create",
-                "approval:submit",
-                "approval:act",
-                "approval:withdraw",
-                "approval:rework",
-                "approval:force",
-                "directory:write",
-                "relay:test",
-                "domain:verify",
-            ],
-            status="active",
-            createdAt=now,
-        )
-        user_role = RoleRecord(
-            id=self._new_id("role"),
-            companyId=company.id,
-            name="일반사용자",
-            permissions=[
-                "mail:read",
-                "approval:read",
-                "approval:create",
-                "approval:submit",
-                "approval:act",
-                "approval:withdraw",
-                "approval:rework",
-                "profile:read",
-            ],
-            status="active",
-            createdAt=now,
-        )
-        provider = MailProviderConfigRecord(
-            id=self._new_id("provider"),
-            companyId=company.id,
-            providerType=setup.mail_provider.provider_type,
-            relayHost=setup.mail_provider.relay_host,
-            relayPort=setup.mail_provider.relay_port,
-            username=setup.mail_provider.username,
-            encryptedPassword=setup.mail_provider.encrypted_password,
-            active=True,
-            lastTestStatus="not_tested",
-            lastTestMessage="단계 2 Relay 테스트 전",
-            updatedAt=now,
-        )
-        admin_user = UserRecord(
-            id=self._new_id("user"),
-            companyId=company.id,
-            email=setup.admin_user.email.lower(),
-            name=setup.admin_user.name,
-            passwordHash=setup.admin_user.password_hash,
-            departmentId=department.id,
-            roleId=admin_role.id,
-            status="active",
-            userType="admin",
-            createdAt=now,
-            updatedAt=now,
-        )
-        admin_account = MailAccountRecord(
-            id=self._new_id("mail"),
-            userId=admin_user.id,
-            email=admin_user.email,
-            quotaMb=4096,
-            status="active",
-            providerConfigId=provider.id,
-            createdAt=now,
-            updatedAt=now,
-        )
-        state = DirectoryState(
-            companies=[company],
-            departments=[department],
-            roles=[admin_role, user_role],
-            users=[admin_user],
-            mailAccounts=[admin_account],
-            mailProviderConfigs=[provider],
-            approvalDocuments=[],
-            approvalLines=[],
-            auditLogs=[],
-        )
-        self.save(state)
-        return state
 
     def _new_id(self, prefix: str) -> str:
         return f"{prefix}_{uuid4().hex[:12]}"
 
     def _now(self) -> datetime:
         return datetime.now(UTC)
-
-    @contextlib.contextmanager
-    def _process_state_lock(self):
-        lock_path = self.state_file.with_suffix(".lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(lock_path, "a+") as lock_file:
-            if os.name == "nt":
-                import msvcrt
-
-                lock_file.seek(0)
-                try:
-                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
-                    yield
-                finally:
-                    lock_file.seek(0)
-                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-                try:
-                    yield
-                finally:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)

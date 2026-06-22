@@ -29,7 +29,7 @@ import {
   type TranslationRequest,
   type TranslationResponse,
 } from "./api";
-import { resolveLocale, supportedLocales, supportedTimezones, t, type AppLocale } from "./i18n";
+import { resolveLocale, supportedLocales, supportedTimezones, t, tf, type AppLocale } from "./i18n";
 
 const NOTIFICATION_POLICY = {
   retryMaxAttempts: 3,
@@ -528,10 +528,10 @@ export default function App() {
               {translationResult.map((item) => (
                 <div key={`${item.sourceLocale}-${item.targetLocale}-${item.originalText}`} style={{ border: "1px solid #d2dbe2", padding: 8, marginTop: 8 }}>
                   <p>
-                    [{item.sourceLocale} → {item.targetLocale}] {item.translated ? `${t(locale, "translationResult")}` : "원문 그대로"}
+                    [{item.sourceLocale} → {item.targetLocale}] {item.translated ? `${t(locale, "translationResult")}` : t(locale, "translationOriginalOnly")}
                   </p>
-                  <p style={{ marginTop: 4 }}>원문: {item.originalText}</p>
-                  <p style={{ marginTop: 4, color: "#0f766e" }}>번역문: {item.translatedText}</p>
+                  <p style={{ marginTop: 4 }}>{t(locale, "translationOriginalLabel")}: {item.originalText}</p>
+                  <p style={{ marginTop: 4, color: "#0f766e" }}>{t(locale, "translationTranslatedLabel")}: {item.translatedText}</p>
                 </div>
               ))}
             </div>
@@ -541,12 +541,18 @@ export default function App() {
         <section>
             <h2>{t(locale, "notifications")}</h2>
             <p style={{ color: "#64748b", fontSize: "12px", marginTop: "4px" }}>
-              {t(locale, "notificationsMode")}: {notificationMode === "streaming" ? "SSE" : "폴링"}
-              {notificationMode === "fallback" ? " (폴백 적용)" : ""}
+              {t(locale, "notificationsMode")}: {notificationMode === "streaming" ? t(locale, "notificationModeStreaming") : t(locale, "notificationModePolling")}
+              {notificationMode === "fallback" ? ` (${t(locale, "notificationModeFallback")})` : ""}
             </p>
             {notificationSummary && (
               <p>
-                미읽음 {notificationSummary.unreadCount}건 / 긴급 {notificationSummary.severityCount.CRITICAL} / 경고 {notificationSummary.severityCount.WARN}
+                {tf(
+                  locale,
+                  "notificationSummaryDetail",
+                  String(notificationSummary.unreadCount),
+                  String(notificationSummary.severityCount.CRITICAL),
+                  String(notificationSummary.severityCount.WARN),
+                )}
               </p>
             )}
             <button type="button" onClick={() => void refreshNotifications(token)} disabled={loading}>
@@ -557,11 +563,11 @@ export default function App() {
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
-                    <th style={{ textAlign: "left" }}>구분</th>
-                    <th style={{ textAlign: "left" }}>제목</th>
-                    <th style={{ textAlign: "left" }}>메시지</th>
-                    <th style={{ textAlign: "left" }}>상태</th>
-                    <th style={{ textAlign: "left" }}>동작</th>
+                    <th style={{ textAlign: "left" }}>{t(locale, "notificationCategory")}</th>
+                    <th style={{ textAlign: "left" }}>{t(locale, "notificationTitle")}</th>
+                    <th style={{ textAlign: "left" }}>{t(locale, "notificationMessage")}</th>
+                    <th style={{ textAlign: "left" }}>{t(locale, "notificationStatus")}</th>
+                    <th style={{ textAlign: "left" }}>{t(locale, "notificationAction")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -573,31 +579,31 @@ export default function App() {
                       <td>{item.status}</td>
                       <td>
                         <button type="button" onClick={() => void executeAck(item.notificationId)} disabled={loading || item.status !== "unread"}>
-                          읽음 처리
+                          {t(locale, "notificationAck")}
                         </button>
                       </td>
                     </tr>
                   ))}
-                  {notifications.length === 0 && <tr><td colSpan={5}>알림이 없습니다.</td></tr>}
+                  {notifications.length === 0 && <tr><td colSpan={5}>{t(locale, "notificationListEmpty")}</td></tr>}
                 </tbody>
               </table>
             </div>
             {notificationError && (
               <div>
                 <button type="button" onClick={() => void refreshNotifications(token)} disabled={loading}>
-                  수동 재조회
+                  {t(locale, "manualRefresh")}
                 </button>
               </div>
             )}
           </section>
 
           <section>
-                    <h2>현재 사용자</h2>
+            <h2>{t(locale, "currentUser")}</h2>
             <p>
-              {me?.userName} ({me?.roleName || "역할 미확인"}) / 권한 {canAct.create ? "결재 가능" : "읽기 위주"}
+              {me?.userName} ({me?.roleName || t(locale, "currentRoleMissing")}) / 권한 {canAct.create ? t(locale, "currentCapabilityCreate") : t(locale, "currentCapabilityReadOnly")}
             </p>
-            <p>토큰 소유: {me?.userEmail}</p>
-            <p>감사 로그 누적: {logsCount}건</p>
+            <p>{t(locale, "tokenOwner")}: {me?.userEmail}</p>
+            <p>{t(locale, "auditLogCount")}: {logsCount}</p>
             <button
               onClick={() => {
                 clearUserToken();
@@ -611,28 +617,28 @@ export default function App() {
 
           {canAct.create && (
             <section>
-              <h2>결재문서 작성</h2>
+              <h2>{t(locale, "approvalWrite")}</h2>
               <form onSubmit={handleCreate}>
                 <div>
-                  <label>제목</label>
+                  <label>{t(locale, "approvalTitle")}</label>
                   <input value={createForm.title} onChange={(event) => setCreateForm((current) => ({ ...current, title: event.target.value }))} />
                 </div>
                 <div>
-                  <label>내용</label>
+                  <label>{t(locale, "approvalContent")}</label>
                   <textarea
                     value={createForm.content}
                     onChange={(event) => setCreateForm((current) => ({ ...current, content: event.target.value }))}
                   />
                 </div>
                 <div>
-                  <label>결재자 사용자ID (콤마 구분)</label>
+                  <label>{t(locale, "approvalApprovers")}</label>
                   <input
                     value={createForm.approverUserIds}
                     onChange={(event) => setCreateForm((current) => ({ ...current, approverUserIds: event.target.value }))}
                     placeholder="user_123456,user_abcdef"
                   />
                 </div>
-                <button disabled={loading}>작성하기</button>
+                <button disabled={loading}>{t(locale, "approvalCreateAction")}</button>
               </form>
             </section>
           )}
@@ -643,11 +649,11 @@ export default function App() {
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
-                    <th style={{ textAlign: "left" }}>문서명</th>
-                    <th style={{ textAlign: "left" }}>상태</th>
-                    <th style={{ textAlign: "left" }}>작성자</th>
-                    <th style={{ textAlign: "left" }}>현재 결재</th>
-                    <th style={{ textAlign: "left" }}>작업</th>
+                    <th style={{ textAlign: "left" }}>{t(locale, "approvalDocumentTitle")}</th>
+                    <th style={{ textAlign: "left" }}>{t(locale, "approvalDocumentStatus")}</th>
+                    <th style={{ textAlign: "left" }}>{t(locale, "approvalDocumentCreator")}</th>
+                    <th style={{ textAlign: "left" }}>{t(locale, "approvalDocumentCurrent")}</th>
+                    <th style={{ textAlign: "left" }}>{t(locale, "approvalDocumentActions")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -682,7 +688,7 @@ export default function App() {
                             <>
                               <input
                                 value={doc.id === reasonAction.documentId ? reasonAction.reason : ""}
-                                placeholder="사유"
+                                placeholder={t(locale, "approvalReason")}
                                 onChange={(event) => setReasonAction({ documentId: doc.id, reason: event.target.value })}
                                 style={{ minWidth: 140 }}
                               />

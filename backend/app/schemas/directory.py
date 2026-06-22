@@ -72,6 +72,19 @@ class MailProviderConfigRecord(BaseModel):
     updatedAt: datetime
 
 
+class MailProviderConfigView(BaseModel):
+    id: str
+    companyId: str
+    providerType: str
+    relayHost: str
+    relayPort: int
+    username: str
+    active: bool
+    lastTestStatus: str
+    lastTestMessage: str
+    updatedAt: datetime
+
+
 class DirectoryState(BaseModel):
     companies: list[CompanyRecord]
     departments: list[DepartmentRecord]
@@ -143,7 +156,7 @@ class ApprovalLineRecord(BaseModel):
 class AuditLogRecord(BaseModel):
     id: str
     event: str
-    actorUserId: str
+    actorUserId: str | None = None
     actorUserName: str
     targetType: str
     targetId: str
@@ -198,7 +211,7 @@ class ApprovalListResponse(BaseModel):
 class AuditLogView(BaseModel):
     id: str
     event: str
-    actorUserId: str
+    actorUserId: str | None = None
     actorUserName: str
     targetType: str
     targetId: str
@@ -226,6 +239,12 @@ class DepartmentCreateRequest(BaseModel):
 class RoleCreateRequest(BaseModel):
     name: str = Field(min_length=1)
     permissions: list[str] = Field(default_factory=list)
+
+
+class RoleUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1)
+    permissions: list[str] | None = None
+    status: str | None = None
 
 
 class UserCreateRequest(BaseModel):
@@ -276,7 +295,7 @@ class DirectoryOverviewResponse(BaseModel):
     departments: list[DepartmentRecord]
     roles: list[RoleRecord]
     users: list[UserView]
-    mailProvider: MailProviderConfigRecord
+    mailProvider: MailProviderConfigView
 
 
 class DomainVerifyRequest(BaseModel):
