@@ -54,9 +54,41 @@ type ReasonAction = {
   reason: string;
 };
 
+const userCopy: Record<AppLocale, Record<string, string>> = {
+  "ko-KR": {
+    approvalListTitle: "결재 목록",
+    noDocuments: "문서가 없습니다.",
+  },
+  "en-US": {
+    approvalListTitle: "Approval List",
+    noDocuments: "No documents.",
+  },
+  "ja-JP": {
+    approvalListTitle: "承認一覧",
+    noDocuments: "文書がありません。",
+  },
+  "zh-CN": {
+    approvalListTitle: "审批列表",
+    noDocuments: "暂无文档。",
+  },
+  "es-ES": {
+    approvalListTitle: "Lista de aprobaciones",
+    noDocuments: "No hay documentos.",
+  },
+  "fr-FR": {
+    approvalListTitle: "Liste d'approbation",
+    noDocuments: "Aucun document.",
+  },
+  "de-DE": {
+    approvalListTitle: "Freigabeliste",
+    noDocuments: "Keine Dokumente.",
+  },
+};
+
 export default function App() {
   const [token, setToken] = useState("");
   const [locale, setLocale] = useState<AppLocale>(resolveLocale(window.localStorage.getItem("moaworks.locale")));
+  const copy = userCopy[locale];
   const [timezone, setTimezone] = useState(window.localStorage.getItem("moaworks.timezone") || "Asia/Seoul");
   const [loginForm, setLoginForm] = useState<LoginForm>({ email: "", password: "" });
   const [createForm, setCreateForm] = useState<CreateForm>({
@@ -611,7 +643,7 @@ export default function App() {
                 setMe(null);
               }}
             >
-              로그아웃
+              {t(locale, "logout")}
             </button>
           </section>
 
@@ -644,7 +676,7 @@ export default function App() {
           )}
 
           <section>
-            <h2>결재 목록</h2>
+            <h2>{copy.approvalListTitle}</h2>
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
@@ -671,17 +703,17 @@ export default function App() {
                         <td style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                           {doc.status === "draft" && canAct.submit && doc.creatorUserId === me?.userId && (
                             <button onClick={() => void executeSubmit(doc.id, "submit")} disabled={loading}>
-                              상신
+                              {t(locale, "submit")}
                             </button>
                           )}
                           {doc.status === "submitted" && doc.creatorUserId === me?.userId && canAct.withdraw && (
                             <button onClick={() => void executeSubmit(doc.id, "withdraw")} disabled={loading}>
-                              회수
+                              {t(locale, "withdraw")}
                             </button>
                           )}
                           {doc.status === "rejected" && doc.creatorUserId === me?.userId && canAct.rework && (
                             <button onClick={() => void executeSubmit(doc.id, "redraft")} disabled={loading}>
-                              재기안
+                              {t(locale, "redraft")}
                             </button>
                           )}
                           {doc.status === "submitted" && canAct.act && isCurrentApprover(doc) && (
@@ -698,7 +730,7 @@ export default function App() {
                                 }}
                                 disabled={loading}
                               >
-                                승인
+                                {t(locale, "approve")}
                               </button>
                               <button
                                 onClick={() => {
@@ -706,7 +738,7 @@ export default function App() {
                                 }}
                                 disabled={loading}
                               >
-                                반려
+                                {t(locale, "reject")}
                               </button>
                             </>
                           )}
@@ -717,7 +749,7 @@ export default function App() {
                 </tbody>
               </table>
             </div>
-            {documents.length === 0 && <p>문서가 없습니다.</p>}
+            {documents.length === 0 && <p>{copy.noDocuments}</p>}
           </section>
         </>
       )}

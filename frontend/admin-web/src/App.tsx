@@ -104,8 +104,187 @@ const initialUserForm: UserForm = {
   userType: "user",
 };
 
+const adminCopy: Record<AppLocale, Record<string, string>> = {
+  "ko-KR": {
+    adminEmail: "관리자 이메일",
+    adminPassword: "비밀번호",
+    overviewTitle: "운영 개요",
+    approvalAuditTitle: "결재 감사 로그",
+    refreshOps: "운영 데이터 새로고침",
+    refreshMonitoring: "감시 데이터 새로고침",
+    refreshApprovalLogs: "결재 로그 새로고침",
+    newUser: "새 사용자 입력",
+    editUser: "사용자 수정",
+    createUser: "사용자 생성",
+    addDepartment: "부서 추가",
+    addRole: "권한 역할 추가",
+    roleStatus: "권한 역할 현황",
+    verifyDomain: "도메인 검증",
+    relayTest: "Relay 테스트",
+    authContract: "공통 인증 계약 요약",
+    createDepartment: "부서 생성",
+    createRole: "권한 생성",
+    verifyDomainAction: "도메인 검증 실행",
+    relayTestAction: "Relay 테스트 실행",
+    edit: "수정",
+    deactivate: "비활성화",
+    activate: "활성화",
+  },
+  "en-US": {
+    adminEmail: "Admin email",
+    adminPassword: "Password",
+    overviewTitle: "Operations Overview",
+    approvalAuditTitle: "Approval Audit Logs",
+    refreshOps: "Refresh operations",
+    refreshMonitoring: "Refresh monitoring",
+    refreshApprovalLogs: "Refresh audit logs",
+    newUser: "New user form",
+    editUser: "Update user",
+    createUser: "Create user",
+    addDepartment: "Add department",
+    addRole: "Add role",
+    roleStatus: "Role Status",
+    verifyDomain: "Domain Verification",
+    relayTest: "Relay Test",
+    authContract: "Shared Auth Contract",
+    createDepartment: "Create department",
+    createRole: "Create role",
+    verifyDomainAction: "Run domain verification",
+    relayTestAction: "Run relay test",
+    edit: "Edit",
+    deactivate: "Deactivate",
+    activate: "Activate",
+  },
+  "ja-JP": {
+    adminEmail: "管理者メール",
+    adminPassword: "パスワード",
+    overviewTitle: "運用概要",
+    approvalAuditTitle: "承認監査ログ",
+    refreshOps: "運用データ更新",
+    refreshMonitoring: "監視データ更新",
+    refreshApprovalLogs: "監査ログ更新",
+    newUser: "新規ユーザー入力",
+    editUser: "ユーザー更新",
+    createUser: "ユーザー作成",
+    addDepartment: "部門追加",
+    addRole: "権限ロール追加",
+    roleStatus: "ロール状況",
+    verifyDomain: "ドメイン検証",
+    relayTest: "Relay テスト",
+    authContract: "共通認証契約",
+    createDepartment: "部門作成",
+    createRole: "ロール作成",
+    verifyDomainAction: "ドメイン検証実行",
+    relayTestAction: "Relay テスト実行",
+    edit: "編集",
+    deactivate: "無効化",
+    activate: "有効化",
+  },
+  "zh-CN": {
+    adminEmail: "管理员邮箱",
+    adminPassword: "密码",
+    overviewTitle: "运维概览",
+    approvalAuditTitle: "审批审计日志",
+    refreshOps: "刷新运维数据",
+    refreshMonitoring: "刷新监控数据",
+    refreshApprovalLogs: "刷新审计日志",
+    newUser: "新建用户表单",
+    editUser: "更新用户",
+    createUser: "创建用户",
+    addDepartment: "新增部门",
+    addRole: "新增角色",
+    roleStatus: "角色状态",
+    verifyDomain: "域名校验",
+    relayTest: "Relay 测试",
+    authContract: "统一认证契约",
+    createDepartment: "创建部门",
+    createRole: "创建角色",
+    verifyDomainAction: "执行域名校验",
+    relayTestAction: "执行 Relay 测试",
+    edit: "编辑",
+    deactivate: "停用",
+    activate: "启用",
+  },
+  "es-ES": {
+    adminEmail: "Correo admin",
+    adminPassword: "Contraseña",
+    overviewTitle: "Resumen operativo",
+    approvalAuditTitle: "Auditoría de aprobaciones",
+    refreshOps: "Actualizar operaciones",
+    refreshMonitoring: "Actualizar monitoreo",
+    refreshApprovalLogs: "Actualizar auditoría",
+    newUser: "Nuevo usuario",
+    editUser: "Actualizar usuario",
+    createUser: "Crear usuario",
+    addDepartment: "Agregar departamento",
+    addRole: "Agregar rol",
+    roleStatus: "Estado de roles",
+    verifyDomain: "Validación de dominio",
+    relayTest: "Prueba de relay",
+    authContract: "Contrato de autenticación",
+    createDepartment: "Crear departamento",
+    createRole: "Crear rol",
+    verifyDomainAction: "Ejecutar validación",
+    relayTestAction: "Ejecutar prueba relay",
+    edit: "Editar",
+    deactivate: "Desactivar",
+    activate: "Activar",
+  },
+  "fr-FR": {
+    adminEmail: "Email admin",
+    adminPassword: "Mot de passe",
+    overviewTitle: "Vue d'exploitation",
+    approvalAuditTitle: "Journaux d'audit",
+    refreshOps: "Actualiser l'exploitation",
+    refreshMonitoring: "Actualiser la supervision",
+    refreshApprovalLogs: "Actualiser l'audit",
+    newUser: "Nouvel utilisateur",
+    editUser: "Mettre à jour",
+    createUser: "Créer l'utilisateur",
+    addDepartment: "Ajouter un département",
+    addRole: "Ajouter un rôle",
+    roleStatus: "État des rôles",
+    verifyDomain: "Vérification du domaine",
+    relayTest: "Test Relay",
+    authContract: "Contrat d'authentification",
+    createDepartment: "Créer le département",
+    createRole: "Créer le rôle",
+    verifyDomainAction: "Lancer la vérification",
+    relayTestAction: "Lancer le test Relay",
+    edit: "Modifier",
+    deactivate: "Désactiver",
+    activate: "Activer",
+  },
+  "de-DE": {
+    adminEmail: "Admin-E-Mail",
+    adminPassword: "Passwort",
+    overviewTitle: "Betriebsübersicht",
+    approvalAuditTitle: "Freigabe-Audit-Logs",
+    refreshOps: "Betriebsdaten aktualisieren",
+    refreshMonitoring: "Monitoring aktualisieren",
+    refreshApprovalLogs: "Audit-Logs aktualisieren",
+    newUser: "Neuer Benutzer",
+    editUser: "Benutzer aktualisieren",
+    createUser: "Benutzer erstellen",
+    addDepartment: "Abteilung hinzufügen",
+    addRole: "Rolle hinzufügen",
+    roleStatus: "Rollenstatus",
+    verifyDomain: "Domain-Prüfung",
+    relayTest: "Relay-Test",
+    authContract: "Gemeinsamer Auth-Vertrag",
+    createDepartment: "Abteilung erstellen",
+    createRole: "Rolle erstellen",
+    verifyDomainAction: "Domain-Prüfung starten",
+    relayTestAction: "Relay-Test starten",
+    edit: "Bearbeiten",
+    deactivate: "Deaktivieren",
+    activate: "Aktivieren",
+  },
+};
+
 export default function App() {
   const [locale, setLocale] = useState<AppLocale>(resolveLocale(window.localStorage.getItem("moaworks.locale")));
+  const copy = adminCopy[locale];
   const [timezone, setTimezone] = useState(window.localStorage.getItem("moaworks.timezone") || "Asia/Seoul");
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [overview, setOverview] = useState<DirectoryOverview | null>(null);
@@ -828,11 +1007,11 @@ export default function App() {
           )}
           <form className="compact-form" onSubmit={handleLogin}>
             <label>
-              관리자 이메일
+              {copy.adminEmail}
               <input type="email" value={loginForm.email} onChange={(e) => setLoginForm({ ...loginForm, email: e.target.value })} />
             </label>
             <label>
-              비밀번호
+              {copy.adminPassword}
               <input type="password" value={loginForm.password} onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })} />
             </label>
             <button type="submit" disabled={loading}>로그인</button>
@@ -845,15 +1024,15 @@ export default function App() {
           <section className="panel">
             <div className="panel-head">
               <div>
-                <h2>운영 개요</h2>
+                <h2>{copy.overviewTitle}</h2>
                 <p className="muted">관리자 API와 일반 사용자 인증 API를 분리한 단계 3 기준 운영 화면입니다.</p>
               </div>
               <div className="actions">
                 <button type="button" className="secondary" onClick={() => void refreshDirectory()}>
-                  운영 데이터 새로고침
+                  {copy.refreshOps}
                 </button>
                 <button type="button" className="secondary" onClick={() => void refreshMonitoring()}>
-                  감시 데이터 새로고침
+                  {copy.refreshMonitoring}
                 </button>
                 <button
                   type="button"
@@ -870,7 +1049,7 @@ export default function App() {
                     setApprovalAuditLogs([]);
                   }}
                 >
-                  로그아웃
+                  {t(locale, "logout")}
                 </button>
               </div>
             </div>
@@ -931,12 +1110,12 @@ export default function App() {
           <section className="panel">
             <div className="panel-head">
               <div>
-                <h2>결재 감사 로그</h2>
+                <h2>{copy.approvalAuditTitle}</h2>
                 <p className="muted">직권 승인/반려 포함 결재 상태 전이 결과를 운영자가 확인합니다.</p>
               </div>
               <div className="actions">
                 <button type="button" className="secondary" onClick={() => void refreshApprovalAuditLogs()}>
-                  결재 로그 새로고침
+                  {copy.refreshApprovalLogs}
                 </button>
               </div>
             </div>
@@ -1027,7 +1206,7 @@ export default function App() {
                 </label>
               </div>
               <div className="actions">
-                <button type="submit" disabled={loading}>{userForm.userId ? "사용자 수정" : "사용자 생성"}</button>
+                <button type="submit" disabled={loading}>{userForm.userId ? copy.editUser : copy.createUser}</button>
                 <button
                   type="button"
                   className="secondary"
@@ -1037,7 +1216,7 @@ export default function App() {
                     roleId: overview.roles[0]?.id || "",
                   })}
                 >
-                  새 사용자 입력
+                  {copy.newUser}
                 </button>
               </div>
             </form>
@@ -1081,11 +1260,11 @@ export default function App() {
                               userType: item.userType,
                             })}
                           >
-                            수정
+                            {copy.edit}
                           </button>
                           {item.userType !== "admin" && item.status === "active" && (
                             <button type="button" className="secondary" onClick={() => void handleDeactivateUser(item.userId)}>
-                              비활성화
+                              {copy.deactivate}
                             </button>
                           )}
                         </div>
@@ -1101,7 +1280,7 @@ export default function App() {
             <article>
               <div className="panel-head">
                 <div>
-                  <h2>부서 추가</h2>
+                  <h2>{copy.addDepartment}</h2>
                   <p className="muted">운영자 관리 화면에서 조직 단위를 확장합니다.</p>
                 </div>
               </div>
@@ -1110,14 +1289,14 @@ export default function App() {
                   부서명
                   <input value={departmentName} onChange={(e) => setDepartmentName(e.target.value)} />
                 </label>
-                <button type="submit" disabled={loading}>부서 생성</button>
+                <button type="submit" disabled={loading}>{copy.createDepartment}</button>
               </form>
             </article>
 
             <article>
               <div className="panel-head">
                 <div>
-                  <h2>권한 역할 추가</h2>
+                  <h2>{copy.addRole}</h2>
                   <p className="muted">콤마 구분 권한 문자열로 서버 역할을 정의합니다.</p>
                 </div>
               </div>
@@ -1130,7 +1309,7 @@ export default function App() {
                   권한 목록
                   <input value={rolePermissions} onChange={(e) => setRolePermissions(e.target.value)} />
                 </label>
-                <button type="submit" disabled={loading}>권한 생성</button>
+                <button type="submit" disabled={loading}>{copy.createRole}</button>
               </form>
             </article>
           </section>
@@ -1138,7 +1317,7 @@ export default function App() {
           <section className="panel">
             <div className="panel-head">
               <div>
-                <h2>권한 역할 현황</h2>
+                <h2>{copy.roleStatus}</h2>
                 <p className="muted">역할을 비활성화하면 연결된 사용자는 다음 요청부터 즉시 차단됩니다.</p>
               </div>
             </div>
@@ -1167,7 +1346,7 @@ export default function App() {
                               disabled={loading || item.name === "관리자"}
                               onClick={() => void handleRoleStatus(item.id, "inactive")}
                             >
-                              비활성화
+                              {copy.deactivate}
                             </button>
                           ) : (
                             <button
@@ -1176,7 +1355,7 @@ export default function App() {
                               disabled={loading}
                               onClick={() => void handleRoleStatus(item.id, "active")}
                             >
-                              활성화
+                              {copy.activate}
                             </button>
                           )}
                         </div>
@@ -1192,7 +1371,7 @@ export default function App() {
             <article>
               <div className="panel-head">
                 <div>
-                  <h2>도메인 검증</h2>
+                  <h2>{copy.verifyDomain}</h2>
                   <p className="muted">회사 도메인 기준 MX/SPF/DKIM/DMARC 안내를 고정된 응답 구조로 반환합니다.</p>
                 </div>
               </div>
@@ -1201,7 +1380,7 @@ export default function App() {
                   검증 도메인
                   <input value={domainInput} onChange={(e) => setDomainInput(e.target.value)} />
                 </label>
-                <button type="submit" disabled={loading}>도메인 검증 실행</button>
+                <button type="submit" disabled={loading}>{copy.verifyDomainAction}</button>
               </form>
               {domainResult && (
                 <div className="stack-list">
@@ -1224,7 +1403,7 @@ export default function App() {
             <article>
               <div className="panel-head">
                 <div>
-                  <h2>Relay 테스트</h2>
+                  <h2>{copy.relayTest}</h2>
                   <p className="muted">단계 3에서는 local `mail-layer` 경로 성공 여부를 최소 1회 검증합니다.</p>
                 </div>
               </div>
@@ -1233,7 +1412,7 @@ export default function App() {
                   테스트 수신자
                   <input type="email" value={relayRecipient} onChange={(e) => setRelayRecipient(e.target.value)} />
                 </label>
-                <button type="submit" disabled={loading}>Relay 테스트 실행</button>
+                <button type="submit" disabled={loading}>{copy.relayTestAction}</button>
               </form>
               <article className="status-card">
                 <strong>현재 Relay</strong>
@@ -1256,7 +1435,7 @@ export default function App() {
           <section className="panel">
             <div className="panel-head">
               <div>
-                <h2>공통 인증 계약 요약</h2>
+                <h2>{copy.authContract}</h2>
                 <p className="muted">user-web, desktop-client, mobile-app은 같은 로그인 응답 구조를 사용합니다.</p>
               </div>
             </div>
