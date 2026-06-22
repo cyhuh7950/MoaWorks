@@ -33,7 +33,12 @@ def request(method: str, path: str, payload: dict | None = None, token: str | No
     try:
         with urllib.request.urlopen(req, timeout=15) as response:
             raw = response.read().decode("utf-8")
-            return ApiResponse(response.status, json.loads(raw) if raw else {})
+            if not raw:
+                return ApiResponse(response.status, {})
+            try:
+                return ApiResponse(response.status, json.loads(raw))
+            except json.JSONDecodeError:
+                return ApiResponse(response.status, {"rawText": raw})
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8")
         body = json.loads(raw) if raw else {}
