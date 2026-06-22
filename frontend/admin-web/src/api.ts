@@ -197,7 +197,24 @@ export type MonitoringEventListResponse = {
   total: number;
 };
 
-const fallbackApiBase = `${window.location.protocol}//${window.location.hostname}:8000/api/v1`;
+export type ApprovalAuditLog = {
+  id: string;
+  event: string;
+  actorUserId: string | null;
+  actorUserName: string;
+  targetType: string;
+  targetId: string;
+  statusBefore?: string;
+  statusAfter?: string;
+  reason?: string;
+  createdAt: string;
+};
+
+export type ApprovalAuditLogListResponse = {
+  logs: ApprovalAuditLog[];
+};
+
+const fallbackApiBase = `${window.location.protocol}//${window.location.hostname}:8510/api/v1`;
 export const apiBase =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
   window.localStorage.getItem("moaworks.apiBase") ??
@@ -283,6 +300,18 @@ export async function createRole(token: string, payload: { name: string; permiss
   });
 }
 
+export async function updateRole(
+  token: string,
+  roleId: string,
+  payload: { name?: string; permissions?: string[]; status?: string },
+) {
+  return request<Role>(`/admin/roles/${roleId}`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function createUser(
   token: string,
   payload: { name: string; email: string; password: string; departmentId: string; roleId: string; status: string; userType: string },
@@ -340,6 +369,13 @@ export async function fetchMonitoringEvents(token: string, options?: { from?: st
   });
 }
 
+export async function fetchApprovalAuditLogs(token: string, documentId?: string) {
+  const suffix = documentId ? `?documentId=${encodeURIComponent(documentId)}` : "";
+  return request<ApprovalAuditLogListResponse>(`/approvals/audit-logs${suffix}`, {
+    headers: authHeaders(token),
+  });
+}
+
 export async function fetchTranslationStatus(): Promise<TranslationStatus> {
   return request<TranslationStatus>("/translation/status");
 }
@@ -356,7 +392,7 @@ export async function requestTranslation(payload: TranslationRequest, token: str
 }
 
 export async function fetchTranslationPolicy(token: string): Promise<TranslationPolicy> {
-  return request<TranslationPolicy>("/admin/translation/admin", {
+  return request<TranslationPolicy>("/translation/admin", {
     headers: authHeaders(token),
   });
 }
@@ -365,7 +401,7 @@ export async function updateTranslationPolicy(
   token: string,
   payload: Partial<{ enabled: boolean; provider: string; cacheEnabled: boolean }>,
 ): Promise<TranslationPolicy> {
-  return request<TranslationPolicy>("/admin/translation/admin", {
+  return request<TranslationPolicy>("/translation/admin", {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",

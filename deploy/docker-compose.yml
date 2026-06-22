@@ -1,20 +1,28 @@
 services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-moaworks}
+      POSTGRES_USER: ${POSTGRES_USER:-moaworks}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PUBLIC_PORT:-5432}:5432"
+
   server:
     build:
       context: ..
       dockerfile: deploy/server.Dockerfile
     env_file:
       - ../.env
-    environment:
-      - POSTGRES_HOST=host.docker.internal
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - ../backend:/app
       - ../data:/app/data
     ports:
       - "${BACKEND_PORT:-8510}:8000"
     depends_on:
+      - postgres
       - mail-layer
       - storage
 
@@ -23,9 +31,20 @@ services:
       context: ..
       dockerfile: deploy/admin-web.Dockerfile
     environment:
-      VITE_API_BASE_URL: http://localhost:${BACKEND_PORT:-8510}/api/v1
+      VITE_API_BASE_URL: http://127.0.0.1:${BACKEND_PORT:-8510}/api/v1
     ports:
-      - "${FRONTEND_PORT:-3510}:3000"
+      - "${FRONTEND_PORT:-3510}:3510"
+    depends_on:
+      - server
+
+  user-web:
+    build:
+      context: ..
+      dockerfile: deploy/user-web.Dockerfile
+    environment:
+      VITE_API_BASE_URL: http://127.0.0.1:${BACKEND_PORT:-8510}/api/v1
+    ports:
+      - "${USER_WEB_PORT:-3520}:3520"
     depends_on:
       - server
 
@@ -40,4 +59,5 @@ services:
       - storage-data:/storage
 
 volumes:
+  postgres-data:
   storage-data:
