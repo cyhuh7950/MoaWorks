@@ -1155,7 +1155,7 @@ export default function App() {
           <section className="panel">
             <div className="panel-head">
               <div>
-                <h2>사용자 관리</h2>
+                <h2>{t(locale, "userManagement")}</h2>
                 <p className="muted">사용자 생성 시 서버에서 메일 계정을 자동 생성합니다.</p>
               </div>
             </div>
