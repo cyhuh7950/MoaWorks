@@ -10,6 +10,7 @@ import {
   fetchHealth,
   fetchMonitoringEvents,
   fetchMonitoringOverview,
+  fetchApprovalAuditLogs,
   getStoredToken,
   initializeSetup,
   login,
@@ -29,7 +30,9 @@ import {
   type HealthResponse,
   type MonitoringEvent,
   type MonitoringOverview,
+  type ApprovalAuditLog,
   type RelayTestResponse,
+  updateRole,
   updateUser,
   validateSetup,
   verifyDomain,
@@ -108,6 +111,7 @@ export default function App() {
   const [overview, setOverview] = useState<DirectoryOverview | null>(null);
   const [monitoringOverview, setMonitoringOverview] = useState<MonitoringOverview | null>(null);
   const [monitoringEvents, setMonitoringEvents] = useState<MonitoringEvent[]>([]);
+  const [approvalAuditLogs, setApprovalAuditLogs] = useState<ApprovalAuditLog[]>([]);
   const [domainResult, setDomainResult] = useState<DomainVerifyResponse | null>(null);
   const [relayResult, setRelayResult] = useState<RelayTestResponse | null>(null);
   const [translationStatus, setTranslationStatus] = useState<TranslationStatus | null>(null);
@@ -130,6 +134,19 @@ export default function App() {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [token, setToken] = useState(getStoredToken());
+
+  function resetAdminSession(nextMessage?: string) {
+    clearToken();
+    setToken("");
+    setOverview(null);
+    setMonitoringOverview(null);
+    setMonitoringEvents([]);
+    setApprovalAuditLogs([]);
+    setTranslationPolicy(null);
+    if (nextMessage) {
+      setErrors([nextMessage]);
+    }
+  }
 
   async function refreshHealth() {
     const data = await fetchHealth();
@@ -161,6 +178,12 @@ export default function App() {
     setMonitoringOverview(nextMonitoring);
     const events = await fetchMonitoringEvents(nextToken);
     setMonitoringEvents(events.events ?? []);
+  }
+
+  async function refreshApprovalAuditLogs(nextToken = token) {
+    if (!nextToken) return;
+    const response = await fetchApprovalAuditLogs(nextToken);
+    setApprovalAuditLogs(response.logs ?? []);
   }
 
   function normalizeTranslationLocale(value: string) {
@@ -262,10 +285,13 @@ export default function App() {
   useEffect(() => {
     if (token && health?.initialized) {
       void refreshDirectory(token).catch((error) => {
-        setErrors([error instanceof Error ? error.message : "관리 데이터 조회 실패"]);
+        resetAdminSession(error instanceof Error ? error.message : "관리 데이터 조회 실패");
       });
       void refreshMonitoring(token).catch((error) => {
         setErrors((current) => [...current, error instanceof Error ? error.message : "운영 모니터링 조회 실패"]);
+      });
+      void refreshApprovalAuditLogs(token).catch((error) => {
+        setErrors((current) => [...current, error instanceof Error ? error.message : "결재 감사 로그 조회 실패"]);
       });
       void refreshTranslationState(token).catch((error) => {
         setTranslationError(error instanceof Error ? error.message : "번역 상태 조회 실패");
@@ -458,6 +484,21 @@ export default function App() {
     }
   }
 
+  async function handleRoleStatus(roleId: string, nextStatus: "active" | "inactive") {
+    if (!token) return;
+    setLoading(true);
+    setErrors([]);
+    try {
+      await updateRole(token, roleId, { status: nextStatus });
+      setMessage(`권한 역할 상태를 ${nextStatus}로 변경했습니다.`);
+      await refreshDirectory();
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "권한 상태 변경 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handleDomainVerify(event: FormEvent) {
     event.preventDefault();
     if (!token) return;
@@ -494,7 +535,11 @@ export default function App() {
     }
   }
 
-  const initialized = health?.initialized ?? false;
+  const isHealthPending = health === null;
+  const initialized = health?.initialized === true;
+  const showSetupWizard = health?.initialized === false;
+  const showLoginPanel = initialized && (!token || !overview);
+  const hasStoredSessionButNoOverview = initialized && Boolean(token) && !overview;
   const supportedTranslationTargets = translationPolicy?.supportedTargetLocales?.length ? translationPolicy.supportedTargetLocales : (translationStatus?.supportedTargetLocales ?? ["en"]);
 
   return (
@@ -643,21 +688,47 @@ export default function App() {
         )}
       </section>
 
-      <section className="panel">
-        <div className="panel-head">
-          <div>
-            <h2>초기 설정 Wizard</h2>
-            <p className="muted">검증 통과 후에만 저장하도록 운영 흐름을 고정합니다.</p>
-          </div>
-        </div>
+      {(message || errors.length > 0 || warnings.length > 0) && (
+        <section className="panel">
+          {message && <p className="result">{message}</p>}
+          {errors.length > 0 && (
+            <div className="notice danger">
+              <strong>확인 필요</strong>
+              <ul>{errors.map((item) => <li key={item}>{item}</li>)}</ul>
+            </div>
+          )}
+          {warnings.length > 0 && (
+            <div className="notice warning">
+              <strong>확인 필요</strong>
+              <ul>{warnings.map((item) => <li key={item}>{item}</li>)}</ul>
+            </div>
+          )}
+        </section>
+      )}
 
-        {initialized && (
-          <div className="notice success">
-            초기 설정이 이미 완료되었습니다. 단계 1에서는 관리자 로그인과 운영 기능 진입만 허용해야 합니다.
+      {isHealthPending && (
+        <section className="panel">
+          <div className="panel-head">
+            <div>
+              <h2>시스템 상태 확인 중</h2>
+              <p className="muted">초기 설치 여부를 확인하는 동안에는 설치 화면과 로그인 화면을 노출하지 않습니다.</p>
+            </div>
           </div>
-        )}
+          <div className="notice warning">
+            시스템 상태를 불러오는 중입니다. 잠시 후 초기 설치 또는 로그인 화면으로 전환됩니다.
+          </div>
+        </section>
+      )}
 
-        {!initialized && (
+      {showSetupWizard && (
+        <section className="panel">
+          <div className="panel-head">
+            <div>
+              <h2>초기 설정 Wizard</h2>
+              <p className="muted">검증 통과 후에만 저장하도록 운영 흐름을 고정합니다.</p>
+            </div>
+          </div>
+
           <form className="wizard" onSubmit={handleValidate}>
             <div className="field-grid">
               <label>
@@ -739,31 +810,22 @@ export default function App() {
               </button>
             </div>
           </form>
-        )}
+        </section>
+      )}
 
-        {message && <p className="result">{message}</p>}
-        {errors.length > 0 && (
-          <div className="notice danger">
-            <strong>검증 오류</strong>
-            <ul>{errors.map((item) => <li key={item}>{item}</li>)}</ul>
-          </div>
-        )}
-        {warnings.length > 0 && (
-          <div className="notice warning">
-            <strong>확인 필요</strong>
-            <ul>{warnings.map((item) => <li key={item}>{item}</li>)}</ul>
-          </div>
-        )}
-      </section>
-
-      {initialized && !token && (
+      {showLoginPanel && (
         <section className="panel">
           <div className="panel-head">
             <div>
               <h2>관리자 로그인</h2>
-              <p className="muted">관리자 전용 운영 API는 로그인 후 Bearer 토큰으로만 접근합니다.</p>
+              <p className="muted">초기 설정이 완료된 상태입니다. 관리자 전용 운영 API는 로그인 후 Bearer 토큰으로만 접근합니다.</p>
             </div>
           </div>
+          {hasStoredSessionButNoOverview && (
+            <div className="notice warning">
+              저장된 관리자 세션을 확인하지 못했습니다. 다시 로그인해 운영 화면을 복구하세요.
+            </div>
+          )}
           <form className="compact-form" onSubmit={handleLogin}>
             <label>
               관리자 이메일
@@ -784,7 +846,7 @@ export default function App() {
             <div className="panel-head">
               <div>
                 <h2>운영 개요</h2>
-                <p className="muted">관리자 API와 일반 사용자 인증 API를 분리한 단계 2 기준 운영 화면입니다.</p>
+                <p className="muted">관리자 API와 일반 사용자 인증 API를 분리한 단계 3 기준 운영 화면입니다.</p>
               </div>
               <div className="actions">
                 <button type="button" className="secondary" onClick={() => void refreshDirectory()}>
@@ -805,6 +867,7 @@ export default function App() {
                     setOverview(null);
                     setMonitoringOverview(null);
                     setMonitoringEvents([]);
+                    setApprovalAuditLogs([]);
                   }}
                 >
                   로그아웃
@@ -862,6 +925,51 @@ export default function App() {
                   {overview.mailProvider.relayHost}:{overview.mailProvider.relayPort} / 마지막 상태 {overview.mailProvider.lastTestStatus}
                 </p>
               </article>
+            </div>
+          </section>
+
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <h2>결재 감사 로그</h2>
+                <p className="muted">직권 승인/반려 포함 결재 상태 전이 결과를 운영자가 확인합니다.</p>
+              </div>
+              <div className="actions">
+                <button type="button" className="secondary" onClick={() => void refreshApprovalAuditLogs()}>
+                  결재 로그 새로고침
+                </button>
+              </div>
+            </div>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>시각</th>
+                    <th>이벤트</th>
+                    <th>문서</th>
+                    <th>처리자</th>
+                    <th>상태 전이</th>
+                    <th>사유</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {approvalAuditLogs.slice(0, 20).map((item) => (
+                    <tr key={item.id}>
+                      <td>{new Date(item.createdAt).toLocaleString()}</td>
+                      <td>{item.event}</td>
+                      <td>{item.targetId}</td>
+                      <td>{item.actorUserName}</td>
+                      <td>{`${item.statusBefore ?? "-"} -> ${item.statusAfter ?? "-"}`}</td>
+                      <td>{item.reason ?? "-"}</td>
+                    </tr>
+                  ))}
+                  {approvalAuditLogs.length === 0 && (
+                    <tr>
+                      <td colSpan={6}>결재 감사 로그가 없습니다.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </section>
 
@@ -1027,6 +1135,59 @@ export default function App() {
             </article>
           </section>
 
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <h2>권한 역할 현황</h2>
+                <p className="muted">역할을 비활성화하면 연결된 사용자는 다음 요청부터 즉시 차단됩니다.</p>
+              </div>
+            </div>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>역할명</th>
+                    <th>상태</th>
+                    <th>권한 수</th>
+                    <th>작업</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {overview.roles.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.name}</td>
+                      <td>{item.status}</td>
+                      <td>{item.permissions.length}</td>
+                      <td>
+                        <div className="row-actions">
+                          {item.status === "active" ? (
+                            <button
+                              type="button"
+                              className="secondary"
+                              disabled={loading || item.name === "관리자"}
+                              onClick={() => void handleRoleStatus(item.id, "inactive")}
+                            >
+                              비활성화
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="secondary"
+                              disabled={loading}
+                              onClick={() => void handleRoleStatus(item.id, "active")}
+                            >
+                              활성화
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
           <section className="panel split-panel">
             <article>
               <div className="panel-head">
@@ -1064,7 +1225,7 @@ export default function App() {
               <div className="panel-head">
                 <div>
                   <h2>Relay 테스트</h2>
-                  <p className="muted">단계 2에서는 local `mail-layer` 경로 성공 여부를 최소 1회 검증합니다.</p>
+                  <p className="muted">단계 3에서는 local `mail-layer` 경로 성공 여부를 최소 1회 검증합니다.</p>
                 </div>
               </div>
               <form className="compact-form" onSubmit={handleRelayTest}>

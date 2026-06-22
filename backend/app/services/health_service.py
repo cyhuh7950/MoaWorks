@@ -1,23 +1,27 @@
 from pathlib import Path
+import socket
 import threading
 from uuid import uuid4
 
 from app.core.config import settings
 from app.schemas.observability import EventEnvelope, MonitoringCategory, SeverityLevel, Visibility
 from app.schemas.health import ComponentHealth, HealthResponse
+from app.services.directory_store import DirectoryStore
 from app.services.observability_service import ObservabilityService
-from app.services.settings_store import SettingsStore
 
 
 class HealthService:
     def __init__(self) -> None:
-        self.store = SettingsStore()
+        self.directory_store = DirectoryStore()
 
     def build(self) -> HealthResponse:
-        initialized = self.store.is_initialized()
+        try:
+            initialized = self.directory_store.is_initialized()
+        except Exception:  # noqa: BLE001
+            initialized = False
         components = {
             "app": ComponentHealth(status="ok", message="Core API 응답 가능"),
-            "db": self._build_db(initialized),
+            "db": self._build_db(),
             "mail": self._build_mail(initialized),
             "storage": self._build_storage(initialized),
         }
@@ -82,42 +86,42 @@ class HealthService:
 
         threading.Thread(target=_runner, daemon=True).start()
 
-    def _build_db(self, initialized: bool) -> ComponentHealth:
-        if not initialized:
-            return ComponentHealth(status="not_configured", message="초기 설정 전입니다.")
-        config = self.store.load()
-        assert config is not None
-        return ComponentHealth(
-            status="ok",
-            message="DB 설정이 저장되었습니다.",
-            details={
-                "host": config.db_config.host,
-                "port": str(config.db_config.port),
-                "database": config.db_config.database,
-            },
-        )
+    def _build_db(self) -> ComponentHealth:
+        details = {
+            "host": settings.postgres_host,
+            "port": str(settings.postgres_port),
+            "database": settings.postgres_db,
+        }
+        try:
+            with socket.create_connection((settings.postgres_host, settings.postgres_port), timeout=2):
+                return ComponentHealth(
+                    status="ok",
+                    message="DB 연결 확인 완료",
+                    details=details,
+                )
+        except OSError as exc:
+            return ComponentHealth(
+                status="error",
+                message="DB 연결을 확인할 수 없습니다.",
+                details={**details, "reason": str(exc)},
+            )
 
     def _build_mail(self, initialized: bool) -> ComponentHealth:
         if not initialized:
             return ComponentHealth(status="not_configured", message="초기 설정 전입니다.")
-        config = self.store.load()
-        assert config is not None
+        overview = self.directory_store.get_overview()
         return ComponentHealth(
             status="ok",
-            message="메일 Relay 설정이 저장되었습니다.",
+            message="메일 Relay 설정이 PostgreSQL에서 확인되었습니다.",
             details={
-                "provider": config.mail_provider.provider_type,
-                "relay_host": config.mail_provider.relay_host,
-                "relay_port": str(config.mail_provider.relay_port),
+                "provider": overview.mailProvider.providerType,
+                "relay_host": overview.mailProvider.relayHost,
+                "relay_port": str(overview.mailProvider.relayPort),
             },
         )
 
     def _build_storage(self, initialized: bool) -> ComponentHealth:
         path = settings.storage_path
-        if initialized:
-            config = self.store.load()
-            assert config is not None
-            path = Path(config.storage.local_path).resolve()
         try:
             path.mkdir(parents=True, exist_ok=True)
             probe = path / ".health-test"
