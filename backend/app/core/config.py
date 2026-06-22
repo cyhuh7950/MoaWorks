@@ -10,8 +10,8 @@ class Settings(BaseSettings):
     app_timezone: str = "Asia/Seoul"
 
     backend_host: str = "0.0.0.0"
-    backend_port: int = 8000
-    frontend_port: int = 3000
+    backend_port: int = 8510
+    frontend_port: int = 3510
 
     postgres_host: str = "postgres"
     postgres_db: str = "moaworks"
@@ -37,7 +37,12 @@ class Settings(BaseSettings):
     setup_state_path: str = "./data/runtime/setup-state.json"
     directory_state_path: str = "./data/runtime/directory-state.json"
     setup_secret_key: str = "change-this-stage1-secret-key"
-    cors_allowed_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    cors_allowed_origins: list[str] = [
+        "http://localhost:3510",
+        "http://127.0.0.1:3510",
+        "http://localhost:3520",
+        "http://127.0.0.1:3520",
+    ]
     observability_state_path: str = "./data/runtime/observability-state.json"
 
     model_config = SettingsConfigDict(
