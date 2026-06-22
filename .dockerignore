@@ -1,0 +1,7 @@
+data/
+.git/
+frontend/admin-web/node_modules/
+frontend/user-web/node_modules/
+backend/__pycache__/
+frontend/admin-web/dist/
+frontend/user-web/dist/
