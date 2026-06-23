@@ -660,10 +660,10 @@
             <div class="label-kicker">상태 메시지</div>
             <h3>오류 / 경고 / 차단 / 빈 상태</h3>
             <div class="stack" style="margin-top: 18px">
-              <div class="policy-card"><strong>빈 상태</strong><div style="margin-top: 8px" class="muted">표시할 로컬 보관 메일이 없습니다.</div></div>
-              <div class="policy-card"><strong>오류</strong><div style="margin-top: 8px" class="muted">메일 동기화에 실패했습니다. 다시 시도해 주세요.</div></div>
-              <div class="policy-card"><strong>경고</strong><div style="margin-top: 8px" class="muted">로컬 보관 폴더 연결을 확인하세요.</div></div>
-              <div class="policy-card"><strong>차단</strong><div style="margin-top: 8px" class="muted">권한이 없거나 세션이 만료되어 업무를 계속할 수 없습니다.</div></div>
+              <div class="policy-card"><strong>빈 상태</strong><div style="margin-top: 8px" class="muted" id="statusMessageEmpty">표시할 로컬 보관 메일이 없습니다.</div></div>
+              <div class="policy-card"><strong>오류</strong><div style="margin-top: 8px" class="muted" id="statusMessageError">메일 동기화에 실패했습니다. 다시 시도해 주세요.</div></div>
+              <div class="policy-card"><strong>경고</strong><div style="margin-top: 8px" class="muted" id="statusMessageWarning">로컬 보관 폴더 연결을 확인하세요.</div></div>
+              <div class="policy-card"><strong>차단</strong><div style="margin-top: 8px" class="muted" id="statusMessageBlocked">권한이 없거나 세션이 만료되어 업무를 계속할 수 없습니다.</div></div>
             </div>
           </article>
         </section>
@@ -850,9 +850,17 @@
         const sidebarHelp = document.getElementById("helpPathSidebar");
         const contractHelp = document.getElementById("helpPathContract");
         const footerHelp = document.getElementById("helpPathFooter");
+        const emptyMessage = document.getElementById("statusMessageEmpty");
+        const errorMessage = document.getElementById("statusMessageError");
+        const warningMessage = document.getElementById("statusMessageWarning");
+        const blockedMessage = document.getElementById("statusMessageBlocked");
         if (sidebarHelp) sidebarHelp.textContent = `확인 위치: ${contract.helpText || DEFAULT_UI_CONTRACT.helpText}`;
         if (contractHelp) contractHelp.textContent = `${contract.helpText || DEFAULT_UI_CONTRACT.helpText} 문구를 관리자 설정 계약과 연결`;
         if (footerHelp) footerHelp.textContent = contract.helpText || DEFAULT_UI_CONTRACT.helpText;
+        if (emptyMessage) emptyMessage.textContent = contract.messages?.empty || DEFAULT_UI_CONTRACT.messages.empty;
+        if (errorMessage) errorMessage.textContent = contract.messages?.error || DEFAULT_UI_CONTRACT.messages.error;
+        if (warningMessage) warningMessage.textContent = contract.messages?.warning || DEFAULT_UI_CONTRACT.messages.warning;
+        if (blockedMessage) blockedMessage.textContent = contract.messages?.blocked || DEFAULT_UI_CONTRACT.messages.blocked;
       }
 
       function saveLocale(value) {
