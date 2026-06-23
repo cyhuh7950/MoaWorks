@@ -86,7 +86,7 @@ const report = {
   blockerMessage: "",
 };
 
-appendLog("Phase-5 mobile build smoke start");
+appendLog("Phase-7 mobile build smoke start");
 appendLog(`projectRoot=${projectRoot}`);
 appendLog(`platform=${process.platform} node=${process.version}`);
 
@@ -101,6 +101,7 @@ if (!fs.existsSync(packageJsonPath)) {
 const nodeModulesPath = path.join(projectRoot, "node_modules");
 const appTsxPath = path.join(projectRoot, "App.tsx");
 const indexJsPath = path.join(projectRoot, "index.js");
+const appJsonPath = path.join(projectRoot, "app.json");
 const metroConfigPath = path.join(projectRoot, "metro.config.js");
 const gradleProjectPath = path.join(projectRoot, "android");
 const rnBinary = findExecutable("react-native");
@@ -111,6 +112,7 @@ report.checks.push({ key: "node", status: !!nodeExecutable, path: nodeExecutable
 report.checks.push({ key: "npm", status: !!npmExecutable, path: npmExecutable ?? "" });
 report.checks.push({ key: "app_entry_file", status: fs.existsSync(appTsxPath), path: "App.tsx" });
 report.checks.push({ key: "android_entry_file", status: fs.existsSync(indexJsPath), path: "index.js" });
+report.checks.push({ key: "app_registry_config", status: fs.existsSync(appJsonPath), path: "app.json" });
 report.checks.push({ key: "node_modules", status: fs.existsSync(nodeModulesPath), path: "node_modules" });
 report.checks.push({ key: "react_native_binary", status: !!rnBinary, path: rnBinary ?? "" });
 report.checks.push({ key: "android_project", status: fs.existsSync(gradleProjectPath), path: "android" });
@@ -126,6 +128,7 @@ appendLog(`check node_modules=${fs.existsSync(nodeModulesPath)}`);
 appendLog(`check react_native_binary=${!!rnBinary}`);
 appendLog(`check app_entry_file=${fs.existsSync(appTsxPath)}`);
 appendLog(`check android_entry_file=${fs.existsSync(indexJsPath)}`);
+appendLog(`check app_registry_config=${fs.existsSync(appJsonPath)}`);
 appendLog(`check android_project=${fs.existsSync(gradleProjectPath)}`);
 
 const missingCritical = report.checks.filter((item) => item.key !== "metro_config_or_default" && !item.status);
