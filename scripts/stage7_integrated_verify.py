@@ -349,6 +349,12 @@ def main() -> int:
         "auditCountForDocument": psql_value(f"SELECT COUNT(*) FROM audit_logs WHERE target_id = '{document_id}';"),
         "notificationsTable": psql_value("SELECT COALESCE(to_regclass('public.notifications')::text, '');"),
         "monitoringEventsTable": psql_value("SELECT COALESCE(to_regclass('public.monitoring_events')::text, '');"),
+        "notificationsCount": psql_value("SELECT COUNT(*) FROM notifications;"),
+        "monitoringEventsCount": psql_value("SELECT COUNT(*) FROM monitoring_events;"),
+        "latestNotificationStatus": psql_value("SELECT status FROM notifications ORDER BY created_at DESC LIMIT 1;"),
+        "latestNotificationTitle": psql_value("SELECT title FROM notifications ORDER BY created_at DESC LIMIT 1;"),
+        "latestMonitoringEventType": psql_value("SELECT event_type FROM monitoring_events ORDER BY occurred_at DESC LIMIT 1;"),
+        "latestMonitoringSeverity": psql_value("SELECT severity FROM monitoring_events ORDER BY occurred_at DESC LIMIT 1;"),
     }
     report["postgres"] = postgres_checks
 

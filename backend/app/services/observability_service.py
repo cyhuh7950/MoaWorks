@@ -10,6 +10,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from psycopg.types.json import Jsonb
+
 from app.core.config import settings
 from app.schemas.observability import (
     AlertStatus,
@@ -28,6 +30,7 @@ from app.schemas.observability import (
     SeverityLevel,
     Visibility,
 )
+from app.services.postgres_service import PostgresService
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +46,16 @@ def _now() -> datetime:
 class ObservabilityService:
     _state_lock = threading.RLock()
 
-    def __init__(self, state_file: Path | None = None) -> None:
+    def __init__(self, state_file: Path | None = None, db_service: PostgresService | None = None) -> None:
         self.state_file = state_file or settings.observability_state_file
+        self.db = db_service or PostgresService()
+        self._use_file_backend = state_file is not None
         self._state_cache: dict[str, Any] | None = None
         self._state_cache_mtime: float | None = None
 
     def emit_event(self, event: EventEnvelope) -> NotificationEnvelope:
+        if not self._use_file_backend:
+            return self._emit_event_db(event)
         with self._state_lock:
             with self._process_state_lock():
                 state = self._load_state()
@@ -74,6 +81,16 @@ class ObservabilityService:
         cursor: str | None = None,
         limit: int = 30,
     ) -> NotificationListResponse:
+        if not self._use_file_backend:
+            return self._list_notifications_db(
+                user_id=user_id,
+                include_admin=include_admin,
+                unread_only=unread_only,
+                severities=severities,
+                category=category,
+                cursor=cursor,
+                limit=limit,
+            )
         state = self._load_state()
         cursor_time = datetime.fromisoformat(cursor) if cursor else None
         candidate_items = []
@@ -102,6 +119,8 @@ class ObservabilityService:
         )
 
     def get_notification(self, user_id: str, notification_id: str, include_admin: bool) -> NotificationEnvelope:
+        if not self._use_file_backend:
+            return self._get_notification_db(user_id=user_id, notification_id=notification_id, include_admin=include_admin)
         state = self._load_state()
         for item in state["notifications"]:
             if item["notificationId"] != notification_id:
@@ -112,6 +131,12 @@ class ObservabilityService:
         raise ValueError("대상 알림을 찾을 수 없습니다.")
 
     def ack_notification(self, notification_id: str, actor_user_id: str, include_admin: bool) -> NotificationEnvelope:
+        if not self._use_file_backend:
+            return self._ack_notification_db(
+                notification_id=notification_id,
+                actor_user_id=actor_user_id,
+                include_admin=include_admin,
+            )
         with self._state_lock:
             with self._process_state_lock():
                 state = self._load_state()
@@ -129,6 +154,8 @@ class ObservabilityService:
                 raise ValueError("대상 알림을 찾을 수 없습니다.")
 
     def get_notification_summary(self, user_id: str, include_admin: bool) -> NotificationSummary:
+        if not self._use_file_backend:
+            return self._get_notification_summary_db(user_id=user_id, include_admin=include_admin)
         state = self._load_state()
         unread_count = 0
         latest_critical: datetime | None = None
@@ -168,6 +195,14 @@ class ObservabilityService:
         category: str | None = None,
         resolved: bool | None = None,
     ) -> MonitoringEventListResponse:
+        if not self._use_file_backend:
+            return self._list_monitoring_events_db(
+                from_dt=from_dt,
+                to_dt=to_dt,
+                severities=severities,
+                category=category,
+                resolved=resolved,
+            )
         state = self._load_state()
         events: list[dict[str, Any]] = []
         for item in state["events"]:
@@ -193,7 +228,10 @@ class ObservabilityService:
         _ = user_is_admin
         state = self._load_state()
         now = _now()
-        events = [item for item in state["events"] if self._is_not_expired(item)]
+        if self._use_file_backend:
+            events = [item for item in state["events"] if self._is_not_expired(item)]
+        else:
+            events = self._fetch_events_for_window(window_seconds=72 * 60 * 60)
         mail_events_24h = [
             item
             for item in events
@@ -332,6 +370,164 @@ class ObservabilityService:
             "lastNotifiedAt": _now().isoformat(),
         }
 
+    def _emit_event_db(self, event: EventEnvelope) -> NotificationEnvelope:
+        self.db.ensure_migrations_applied()
+        payload = event.model_dump(mode="json")
+        payload["resolved"] = bool(payload.get("resolved", False))
+        notification = self._build_notification_record(event)
+        now = _now()
+
+        with self._state_lock:
+            with self.db.connect() as connection:
+                with connection.cursor() as cursor:
+                    merged = self._find_recent_notification_row(cursor, notification, now)
+                    if merged is not None:
+                        merged["occurrenceCount"] = int(merged.get("occurrenceCount", 1)) + 1
+                        merged["payload"] = self._merge_payload(merged.get("payload", {}), notification.get("payload", {}))
+                        merged["lastNotifiedAt"] = now.isoformat()
+                        self._update_notification_row(cursor, merged)
+                        stored_notification = merged
+                    else:
+                        self._insert_notification_row(cursor, notification)
+                        stored_notification = notification
+                    self._insert_monitoring_event_row(cursor, payload)
+                connection.commit()
+
+            with self._process_state_lock():
+                state = self._load_state()
+                self._upsert_rules_and_alerts(state, event)
+                self._store_state(state)
+
+        return self._inflate_notification(stored_notification)
+
+    def _list_notifications_db(
+        self,
+        *,
+        user_id: str,
+        include_admin: bool,
+        unread_only: bool,
+        severities: list[str] | None,
+        category: str | None,
+        cursor: str | None,
+        limit: int,
+    ) -> NotificationListResponse:
+        self.db.ensure_migrations_applied()
+        rows = self._fetch_notification_rows(cursor=cursor, unread_only=unread_only, severities=severities, category=category)
+        filtered: list[dict[str, Any]] = []
+        for row in rows:
+            record = self._notification_row_to_record(row)
+            if not self._is_visible(record, user_id=user_id, include_admin=include_admin):
+                continue
+            filtered.append(record)
+        page = filtered[:limit]
+        has_more = len(filtered) > len(page)
+        next_cursor = page[-1]["createdAt"] if page else None
+        return NotificationListResponse(
+            notifications=[self._inflate_notification(item) for item in page],
+            nextCursor=next_cursor,
+            hasMore=has_more,
+        )
+
+    def _get_notification_db(self, *, user_id: str, notification_id: str, include_admin: bool) -> NotificationEnvelope:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT * FROM notifications WHERE notification_id = %s", (notification_id,))
+                row = cursor.fetchone()
+        if row is None:
+            raise ValueError("대상 알림을 찾을 수 없습니다.")
+        record = self._notification_row_to_record(row)
+        if not self._is_visible(record, user_id=user_id, include_admin=include_admin):
+            raise PermissionError("해당 알림에 접근할 권한이 없습니다.")
+        return self._inflate_notification(record)
+
+    def _ack_notification_db(self, *, notification_id: str, actor_user_id: str, include_admin: bool) -> NotificationEnvelope:
+        self.db.ensure_migrations_applied()
+        with self._state_lock:
+            with self.db.connect() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT * FROM notifications WHERE notification_id = %s", (notification_id,))
+                    row = cursor.fetchone()
+                    if row is None:
+                        raise ValueError("대상 알림을 찾을 수 없습니다.")
+                    record = self._notification_row_to_record(row)
+                    if not self._is_visible(record, user_id=actor_user_id, include_admin=include_admin):
+                        raise PermissionError("해당 알림을 읽음 처리할 권한이 없습니다.")
+                    now = _now().isoformat()
+                    record["status"] = "read"
+                    record["readAt"] = now
+                    record["acknowledgedAt"] = now
+                    self._update_notification_row(cursor, record)
+                connection.commit()
+        return self._inflate_notification(record)
+
+    def _get_notification_summary_db(self, *, user_id: str, include_admin: bool) -> NotificationSummary:
+        result = self._list_notifications_db(
+            user_id=user_id,
+            include_admin=include_admin,
+            unread_only=False,
+            severities=None,
+            category=None,
+            cursor=None,
+            limit=1000,
+        )
+        unread_count = 0
+        latest_critical: datetime | None = None
+        latest_warn: datetime | None = None
+        severity_count = {item.value: 0 for item in SeverityLevel}
+        for item in result.notifications:
+            severity_count[item.severity.value] = severity_count.get(item.severity.value, 0) + 1
+            if item.status == "unread":
+                unread_count += 1
+            occurred_at = item.occurredAt
+            if item.severity == SeverityLevel.CRITICAL:
+                latest_critical = occurred_at if latest_critical is None else max(latest_critical, occurred_at)
+            if item.severity == SeverityLevel.WARN:
+                latest_warn = occurred_at if latest_warn is None else max(latest_warn, occurred_at)
+        return NotificationSummary(
+            unreadCount=unread_count,
+            severityCount=severity_count,
+            latestCriticalAt=latest_critical,
+            latestWarnAt=latest_warn,
+        )
+
+    def _list_monitoring_events_db(
+        self,
+        *,
+        from_dt: datetime | None,
+        to_dt: datetime | None,
+        severities: list[str] | None,
+        category: str | None,
+        resolved: bool | None,
+    ) -> MonitoringEventListResponse:
+        self.db.ensure_migrations_applied()
+        clauses: list[str] = []
+        params: list[Any] = []
+        if from_dt is not None:
+            clauses.append("occurred_at >= %s")
+            params.append(from_dt)
+        if to_dt is not None:
+            clauses.append("occurred_at <= %s")
+            params.append(to_dt)
+        if severities:
+            clauses.append("severity = ANY(%s)")
+            params.append(severities)
+        if category:
+            clauses.append("category = %s")
+            params.append(category)
+        if resolved is not None:
+            clauses.append("resolved = %s")
+            params.append(resolved)
+
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        query = f"SELECT * FROM monitoring_events {where_sql} ORDER BY occurred_at DESC LIMIT 1000"
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+        events = [self._monitoring_event_from_row(row) for row in rows]
+        return MonitoringEventListResponse(events=events, total=len(events))
+
     def _merge_duplicate_notification(
         self,
         notifications: list[dict[str, Any]],
@@ -363,6 +559,289 @@ class ObservabilityService:
             merged["lastMergedAt"] = _now().isoformat()
         return merged
 
+    def _fetch_notification_rows(
+        self,
+        *,
+        cursor: str | None,
+        unread_only: bool,
+        severities: list[str] | None,
+        category: str | None,
+        limit_scan: int = 1000,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if cursor:
+            clauses.append("created_at < %s")
+            params.append(datetime.fromisoformat(cursor))
+        if unread_only:
+            clauses.append("status = 'unread'")
+        if severities:
+            clauses.append("severity = ANY(%s)")
+            params.append(severities)
+        if category:
+            clauses.append("category = %s")
+            params.append(category)
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        query = f"SELECT * FROM notifications {where_sql} ORDER BY created_at DESC LIMIT %s"
+        params.append(limit_scan)
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor_db:
+                cursor_db.execute(query, params)
+                return cursor_db.fetchall()
+
+    def _find_recent_notification_row(self, cursor, notification: dict[str, Any], now: datetime) -> dict[str, Any] | None:
+        cursor.execute(
+            """
+            SELECT *
+            FROM notifications
+            WHERE dedup_key = %s
+              AND resource_type = %s
+              AND resource_id = %s
+            ORDER BY last_notified_at DESC
+            LIMIT 1
+            """,
+            (notification["dedupKey"], notification["resourceType"], notification["resourceId"]),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        record = self._notification_row_to_record(row)
+        last_notified = datetime.fromisoformat(record["lastNotifiedAt"])
+        if now - last_notified > _DUP_WINDOW:
+            return None
+        return record
+
+    def _insert_notification_row(self, cursor, record: dict[str, Any]) -> None:
+        cursor.execute(
+            """
+            INSERT INTO notifications (
+                notification_id, event_id, schema_version, event_type, category, severity,
+                resource_type, resource_id, request_id, dedup_key, title, message, source,
+                company_id, actor_user_id, occurrence_count, occurred_at, created_at, ttl_minutes,
+                payload, status, read_at, acknowledged_at, archived_at, delivery_channels,
+                delivery, links, auditing, visibility, recipient_user_ids, target_audience,
+                last_notified_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s,
+                %s
+            )
+            """,
+            self._notification_sql_values(record),
+        )
+
+    def _update_notification_row(self, cursor, record: dict[str, Any]) -> None:
+        cursor.execute(
+            """
+            UPDATE notifications
+            SET event_id = %s,
+                schema_version = %s,
+                event_type = %s,
+                category = %s,
+                severity = %s,
+                resource_type = %s,
+                resource_id = %s,
+                request_id = %s,
+                dedup_key = %s,
+                title = %s,
+                message = %s,
+                source = %s,
+                company_id = %s,
+                actor_user_id = %s,
+                occurrence_count = %s,
+                occurred_at = %s,
+                created_at = %s,
+                ttl_minutes = %s,
+                payload = %s,
+                status = %s,
+                read_at = %s,
+                acknowledged_at = %s,
+                archived_at = %s,
+                delivery_channels = %s,
+                delivery = %s,
+                links = %s,
+                auditing = %s,
+                visibility = %s,
+                recipient_user_ids = %s,
+                target_audience = %s,
+                last_notified_at = %s
+            WHERE notification_id = %s
+            """,
+            self._notification_sql_values(record, include_primary_key=False) + [record["notificationId"]],
+        )
+
+    def _insert_monitoring_event_row(self, cursor, payload: dict[str, Any]) -> None:
+        cursor.execute(
+            """
+            INSERT INTO monitoring_events (
+                event_id, schema_version, event_type, category, severity, resource_type,
+                resource_id, request_id, dedup_key, title, message, source, company_id,
+                actor_user_id, occurrence_count, occurred_at, created_at, ttl_minutes,
+                payload, resolved, visibility, targets, links, delivery, auditing, target_audience
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            ON CONFLICT (event_id) DO NOTHING
+            """,
+            [
+                payload["eventId"],
+                payload["schemaVersion"],
+                payload["eventType"],
+                payload["category"],
+                payload["severity"],
+                payload["resourceType"],
+                payload["resourceId"],
+                payload["requestId"],
+                payload["dedupKey"],
+                payload["title"],
+                payload["message"],
+                payload.get("source", "backend"),
+                payload["companyId"],
+                payload.get("actorUserId"),
+                payload.get("occurrenceCount", 1),
+                payload["occurredAt"],
+                payload["createdAt"],
+                payload.get("ttlMinutes", 4320),
+                Jsonb(payload.get("payload", {})),
+                bool(payload.get("resolved", False)),
+                payload.get("visibility", Visibility.BOTH.value),
+                Jsonb(payload.get("targets", [])),
+                Jsonb(payload.get("links", {})),
+                Jsonb(payload.get("delivery", {})),
+                Jsonb(payload.get("auditing", {})),
+                payload.get("targetAudience", "both"),
+            ],
+        )
+
+    def _notification_sql_values(self, record: dict[str, Any], include_primary_key: bool = True) -> list[Any]:
+        values = [
+            record["notificationId"],
+            record["eventId"],
+            record["schemaVersion"],
+            record["eventType"],
+            record["category"],
+            record["severity"],
+            record["resourceType"],
+            record["resourceId"],
+            record["requestId"],
+            record["dedupKey"],
+            record["title"],
+            record["message"],
+            record.get("source", "backend"),
+            record["companyId"],
+            record.get("actorUserId"),
+            record.get("occurrenceCount", 1),
+            datetime.fromisoformat(record["occurredAt"]),
+            datetime.fromisoformat(record["createdAt"]),
+            record.get("ttlMinutes", 4320),
+            Jsonb(record.get("payload", {})),
+            record.get("status", "unread"),
+            datetime.fromisoformat(record["readAt"]) if record.get("readAt") else None,
+            datetime.fromisoformat(record["acknowledgedAt"]) if record.get("acknowledgedAt") else None,
+            datetime.fromisoformat(record["archivedAt"]) if record.get("archivedAt") else None,
+            Jsonb(record.get("deliveryChannels", ["inbox"])),
+            Jsonb(record.get("delivery", {})),
+            Jsonb(record.get("links", {})),
+            Jsonb(record.get("auditing", {})),
+            record.get("visibility", Visibility.BOTH.value),
+            Jsonb(record.get("recipientUserIds", [])),
+            record.get("targetAudience", "both"),
+            datetime.fromisoformat(record["lastNotifiedAt"]),
+        ]
+        if include_primary_key:
+            return values
+        return values[1:]
+
+    def _notification_row_to_record(self, row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "schemaVersion": row["schema_version"],
+            "eventId": row["event_id"],
+            "notificationId": row["notification_id"],
+            "eventType": row["event_type"],
+            "category": row["category"],
+            "severity": row["severity"],
+            "resourceType": row["resource_type"],
+            "resourceId": row["resource_id"],
+            "requestId": row["request_id"],
+            "dedupKey": row["dedup_key"],
+            "title": row["title"],
+            "message": row["message"],
+            "source": row["source"],
+            "companyId": row["company_id"],
+            "actorUserId": row["actor_user_id"],
+            "occurrenceCount": row["occurrence_count"],
+            "occurredAt": row["occurred_at"].isoformat(),
+            "createdAt": row["created_at"].isoformat(),
+            "ttlMinutes": row["ttl_minutes"],
+            "payload": row.get("payload") or {},
+            "status": row["status"],
+            "readAt": row["read_at"].isoformat() if row.get("read_at") else None,
+            "acknowledgedAt": row["acknowledged_at"].isoformat() if row.get("acknowledged_at") else None,
+            "archivedAt": row["archived_at"].isoformat() if row.get("archived_at") else None,
+            "deliveryChannels": row.get("delivery_channels") or ["inbox"],
+            "delivery": row.get("delivery") or {},
+            "links": row.get("links") or {},
+            "auditing": row.get("auditing") or {},
+            "visibility": row["visibility"],
+            "recipientUserIds": row.get("recipient_user_ids") or [],
+            "targetAudience": row.get("target_audience") or "both",
+            "lastNotifiedAt": row["last_notified_at"].isoformat(),
+        }
+
+    def _monitoring_event_from_row(self, row: dict[str, Any]) -> MonitoringEvent:
+        return MonitoringEvent(
+            schemaVersion=row["schema_version"],
+            eventId=row["event_id"],
+            eventType=row["event_type"],
+            category=row["category"],
+            severity=row["severity"],
+            resourceType=row["resource_type"],
+            resourceId=row["resource_id"],
+            requestId=row["request_id"],
+            dedupKey=row["dedup_key"],
+            title=row["title"],
+            message=row["message"],
+            source=row["source"],
+            companyId=row["company_id"],
+            actorUserId=row["actor_user_id"],
+            occurrenceCount=row["occurrence_count"],
+            occurredAt=row["occurred_at"],
+            createdAt=row["created_at"],
+            ttlMinutes=row["ttl_minutes"],
+            payload=row.get("payload") or {},
+            resolved=bool(row.get("resolved", False)),
+        )
+
+    def _fetch_events_for_window(self, *, window_seconds: int) -> list[dict[str, Any]]:
+        self.db.ensure_migrations_applied()
+        threshold = _now() - timedelta(seconds=window_seconds)
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM monitoring_events WHERE occurred_at >= %s ORDER BY occurred_at DESC LIMIT 1000",
+                    (threshold,),
+                )
+                rows = cursor.fetchall()
+        return [
+            {
+                "eventType": row["event_type"],
+                "category": row["category"],
+                "severity": row["severity"],
+                "resourceType": row["resource_type"],
+                "resourceId": row["resource_id"],
+                "occurredAt": row["occurred_at"].isoformat(),
+                "payload": row.get("payload") or {},
+                "resolved": bool(row.get("resolved", False)),
+            }
+            for row in rows
+        ]
+
     def _is_visible(self, item: dict[str, Any], user_id: str, include_admin: bool) -> bool:
         visibility = item.get("visibility", Visibility.BOTH.value)
         recipients = item.get("recipientUserIds") or []
@@ -377,6 +856,7 @@ class ObservabilityService:
         return user_id in recipients
 
     def _upsert_rules_and_alerts(self, state: dict[str, Any], event: EventEnvelope) -> None:
+        recent_events = state["events"] if self._use_file_backend else self._fetch_events_for_window(window_seconds=72 * 60 * 60)
         for rule in state["rules"]:
             if not rule.get("enabled", True):
                 continue
@@ -385,6 +865,7 @@ class ObservabilityService:
                     state=state,
                     rule=rule,
                     metric="approval_stale_count_72h",
+                    recent_events=recent_events,
                     event_predicate=lambda item: item.get("category") == MonitoringCategory.APPROVAL.value,
                 )
             elif rule["ruleId"] == "rule_mail_relay_fail_count_1h":
@@ -392,6 +873,7 @@ class ObservabilityService:
                     state=state,
                     rule=rule,
                     metric="mail_relay_fail_count_1h",
+                    recent_events=recent_events,
                     event_predicate=lambda item: item.get("category") == MonitoringCategory.MAIL.value
                     and (
                         str(item.get("eventType", "")).endswith("fail")
@@ -406,6 +888,7 @@ class ObservabilityService:
         state: dict[str, Any],
         rule: dict[str, Any],
         metric: str,
+        recent_events: list[dict[str, Any]],
         event_predicate,
     ) -> None:
         window = int(rule["windowSec"])
@@ -413,7 +896,7 @@ class ObservabilityService:
         now = _now()
         recent = [
             item
-            for item in state["events"]
+            for item in recent_events
             if datetime.fromisoformat(item["occurredAt"]) >= now - timedelta(seconds=window)
         ]
         current_value = float(sum(1 for item in recent if event_predicate(item)))
