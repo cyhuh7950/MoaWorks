@@ -358,12 +358,30 @@ def main() -> int:
         capture_output=True,
         text=True,
     )
-    time.sleep(5)
+    time.sleep(3)
 
-    restart_health_status, restart_health_body = request("GET", "/health")
-    restart_admin_login_status, _restart_admin_login = request("POST", "/auth/login", {"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
-    restart_user_web_status = http_status("http://127.0.0.1:3520")
-    restart_admin_web_status = http_status("http://127.0.0.1:3510")
+    restart_health = poll(
+        lambda: request("GET", "/health"),
+        timeout_sec=20.0,
+        interval_sec=1.0,
+    )
+    restart_admin_login = poll(
+        lambda: request("POST", "/auth/login", {"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}),
+        timeout_sec=20.0,
+        interval_sec=1.0,
+    )
+    restart_user_web_status = poll(
+        lambda: http_status("http://127.0.0.1:3520"),
+        timeout_sec=20.0,
+        interval_sec=1.0,
+    )
+    restart_admin_web_status = poll(
+        lambda: http_status("http://127.0.0.1:3510"),
+        timeout_sec=20.0,
+        interval_sec=1.0,
+    )
+    restart_health_status, restart_health_body = restart_health if restart_health else (0, {})
+    restart_admin_login_status = restart_admin_login[0] if restart_admin_login else 0
     report["restart"] = {
         "healthStatus": restart_health_status,
         "healthOverall": restart_health_body.get("status"),
