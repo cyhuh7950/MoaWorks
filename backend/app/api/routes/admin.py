@@ -12,6 +12,7 @@ from app.schemas.directory import (
     RelayTestResponse,
     RoleCreateRequest,
     RoleRecord,
+    RoleUpdateRequest,
     UserCreateRequest,
     UserUpdateRequest,
     UserView,
@@ -43,6 +44,15 @@ def create_role(
     _: AuthUserSummary = Depends(require_admin),
 ) -> RoleRecord:
     return DirectoryStore().create_role(payload.name, payload.permissions)
+
+
+@router.patch("/roles/{role_id}", response_model=RoleRecord)
+def update_role(
+    role_id: str,
+    payload: RoleUpdateRequest,
+    _: AuthUserSummary = Depends(require_admin),
+) -> RoleRecord:
+    return DirectoryStore().update_role(role_id, payload)
 
 
 @router.post("/users", response_model=UserView)
