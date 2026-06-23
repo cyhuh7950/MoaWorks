@@ -1,4 +1,4 @@
-const fallbackApiBase = `${window.location.protocol}//${window.location.hostname}:8010/api/v1`;
+const fallbackApiBase = `${window.location.protocol}//${window.location.hostname}:8510/api/v1`;
 export const apiBase =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
   window.localStorage.getItem("moaworks.apiBase") ??
@@ -61,6 +61,29 @@ export type TranslationResponse = {
   fallbackUsed: boolean;
   items: TranslationItem[];
   executedAt: string;
+};
+
+export type UiContract = {
+  brand: {
+    primary: string;
+    secondary: string;
+    accent: string;
+    blocked: string;
+  };
+  menuOrder: string[];
+  homeCardOrder: string[];
+  quickComposeVisible: boolean;
+  helpText: string;
+  messages: {
+    error: string;
+    warning: string;
+    blocked: string;
+    empty: string;
+    success: string;
+    sessionExpired: string;
+    permissionDenied: string;
+  };
+  source?: string;
 };
 
 export type ApprovalLine = {
@@ -313,4 +336,8 @@ export async function requestTranslation(payload: TranslationRequest, token: str
 
 export async function fetchTranslationStatus(): Promise<{ available: boolean; enabled: boolean; provider: string }> {
   return request<{ available: boolean; enabled: boolean; provider: string }>("/translation/status");
+}
+
+export async function fetchUiContract(): Promise<UiContract> {
+  return request<UiContract>("/ui-contract");
 }

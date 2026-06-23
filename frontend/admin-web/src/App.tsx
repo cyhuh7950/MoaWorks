@@ -12,6 +12,7 @@ import {
   fetchMonitoringOverview,
   fetchApprovalAuditLogs,
   getStoredToken,
+  fetchUiContract,
   initializeSetup,
   login,
   storeToken,
@@ -24,7 +25,9 @@ import {
   type TranslationPolicy,
   type TranslationResponse,
   type TranslationStatus,
+  type UiContract as ServerUiContract,
   updateTranslationPolicy,
+  updateUiContract,
   type DirectoryOverview,
   type DomainVerifyResponse,
   type HealthResponse,
@@ -103,6 +106,67 @@ const initialUserForm: UserForm = {
   status: "active",
   userType: "user",
 };
+
+type UiContract = {
+  brand: {
+    primary: string;
+    secondary: string;
+    accent: string;
+    blocked: string;
+  };
+  menuOrder: string[];
+  homeCardOrder: string[];
+  quickComposeVisible: boolean;
+  helpText: string;
+  messages: {
+    error: string;
+    warning: string;
+    blocked: string;
+    empty: string;
+    success: string;
+    sessionExpired: string;
+    permissionDenied: string;
+  };
+};
+
+const defaultUiContract: UiContract = {
+  brand: {
+    primary: "#0f766e",
+    secondary: "#111827",
+    accent: "#9a6b2f",
+    blocked: "#9f1239",
+  },
+  menuOrder: ["메일", "결재", "메신저", "일정", "주소록", "조직도", "파일", "설정"],
+  homeCardOrder: ["alerts", "approval", "chat", "mail"],
+  quickComposeVisible: true,
+  helpText: "Help / 정책 안내 / 설정 > 보관 정책",
+  messages: {
+    error: "요청 처리 중 오류가 발생했습니다. 다시 시도해 주세요.",
+    warning: "설정값 검토가 필요합니다.",
+    blocked: "권한이 없거나 세션이 만료되었습니다.",
+    empty: "표시할 데이터가 없습니다.",
+    success: "설정이 저장되었습니다.",
+    sessionExpired: "다시 로그인 후 업무를 계속하세요.",
+    permissionDenied: "권한이 없어 현재 작업을 수행할 수 없습니다.",
+  },
+};
+
+function mergeUiContract(raw: Partial<UiContract> | null | undefined): UiContract {
+  return {
+    brand: {
+      ...defaultUiContract.brand,
+      ...(raw?.brand ?? {}),
+    },
+    menuOrder: raw?.menuOrder?.length ? raw.menuOrder : defaultUiContract.menuOrder,
+    homeCardOrder: raw?.homeCardOrder?.length ? raw.homeCardOrder : defaultUiContract.homeCardOrder,
+    quickComposeVisible: raw?.quickComposeVisible ?? defaultUiContract.quickComposeVisible,
+    helpText: raw?.helpText || defaultUiContract.helpText,
+    messages: {
+      ...defaultUiContract.messages,
+      ...(raw?.messages ?? {}),
+    },
+  };
+}
 
 const adminCopy: Record<AppLocale, Record<string, string>> = {
   "ko-KR": {
@@ -313,6 +377,41 @@ export default function App() {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [token, setToken] = useState(getStoredToken());
+  const [uiContractDraft, setUiContractDraft] = useState<UiContract>(() => defaultUiContract);
+  const brandGuide = [
+    { title: "대표 색상", value: "#0f766e", target: "주요 버튼, 활성 탭, 핵심 승인/저장 액션" },
+    { title: "보조 색상", value: "#111827", target: "헤더, 운영 개요, 기본 제품 톤" },
+    { title: "강조 색상", value: "#9a6b2f", target: "메일/메신저 보조 카드, 안내 포인트" },
+    { title: "차단 색상", value: "#9f1239", target: "긴급 경고, 차단, 가장 강한 제한 상태" },
+  ];
+  const componentGuide = [
+    { title: "카드", body: "4개 프로그램 모두 둥근 카드 + 얕은 그림자 + 상단 킥커 구조를 유지" },
+    { title: "버튼", body: "주요 액션은 대표 색상, 보조 액션은 흰 배경 + 회색 경계선으로 통일" },
+    { title: "배지", body: "상태 배지는 pill 형태와 굵은 텍스트로 제품군 공통 규칙을 유지" },
+    { title: "탭", body: "활성은 채움, 비활성은 외곽선 기준으로 통일해 모바일/웹 모두 같은 감각을 유지" },
+  ];
+  const settingsContracts = [
+    {
+      title: "브랜드 설정값 묶음",
+      values: "대표 / 보조 / 강조 / 차단 색상",
+      targets: "user-web 상단 바 · mobile-app 긴급 카드 · desktop-client 로컬 패널",
+    },
+    {
+      title: "메뉴 구성 설정 묶음",
+      values: "좌측 메뉴 순서 / 홈 카드 우선순위 / 빠른 작성 노출",
+      targets: "user-web 좌측 메뉴 · mobile-app 홈 카드 · desktop-client 진입 보드",
+    },
+    {
+      title: "메시지 설정 묶음",
+      values: "오류 / 경고 / 차단 / 빈 상태 / 성공 / 세션 만료",
+      targets: "4개 프로그램 공통 상태 박스와 도움말 안내",
+    },
+    {
+      title: "Help / 정책 안내 묶음",
+      values: "정책 본문 직접 노출 금지 / 경로 안내 문구",
+      targets: "user-web · mobile-app · desktop-client 동일 경로 문구",
+    },
+  ];
 
   function resetAdminSession(nextMessage?: string) {
     clearToken();
@@ -400,6 +499,27 @@ export default function App() {
     window.localStorage.setItem("moaworks.timezone", nextTimezone);
   }
 
+  async function handleUiContractSave() {
+    if (!token) {
+      setErrors(["관리자 로그인 후 설정을 저장할 수 있습니다."]);
+      return;
+    }
+    try {
+      const saved = await updateUiContract(token, uiContractDraft as ServerUiContract);
+      setUiContractDraft(mergeUiContract(saved));
+      setMessage(saved.messages.success);
+      setErrors([]);
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "설정 저장 실패"]);
+    }
+  }
+
+  async function reloadUiContract(nextToken = token) {
+    if (!nextToken) return;
+    const contract = await fetchUiContract(nextToken);
+    setUiContractDraft(mergeUiContract(contract));
+  }
+
   function toTranslationLocale(code: string): string {
     const normalized = code.trim().replace("_", "-").toLowerCase();
     if (normalized === "zh-cn") {
@@ -474,6 +594,9 @@ export default function App() {
       });
       void refreshTranslationState(token).catch((error) => {
         setTranslationError(error instanceof Error ? error.message : "번역 상태 조회 실패");
+      });
+      void reloadUiContract(token).catch((error) => {
+        setErrors((current) => [...current, error instanceof Error ? error.message : "UI 계약 조회 실패"]);
       });
       return;
     }
@@ -564,6 +687,7 @@ export default function App() {
       setMessage(`관리자 로그인 완료: ${response.user.userName}`);
       await refreshDirectory(response.accessToken);
       await refreshTranslationState(response.accessToken);
+      await reloadUiContract(response.accessToken);
     } catch (error) {
       setErrors([error instanceof Error ? error.message : "로그인 실패"]);
     } finally {
@@ -1456,6 +1580,281 @@ export default function App() {
     "permissions": ["mail:read", "approval:read", "profile:read"]
   }
 }`}</pre>
+          </section>
+
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <h2>브랜드 / 메뉴 / 보관 정책 설정</h2>
+                <p className="muted">관리자 웹은 운영 콘솔이자 회사별 커스터마이징과 정책 기준을 고정하는 화면이어야 합니다.</p>
+              </div>
+            </div>
+            <div className="overview-grid">
+              <article className="status-card">
+                <strong>브랜드 설정</strong>
+                <p>{overview.company.name} 기준 회사명, 로고, 대표 색상, 보조 색상, 버튼 스타일을 설정 대상으로 고정합니다.</p>
+                <p className="muted">로그인 배경/문구, 상단 바, 사이드바, 조직 명칭까지 회사별 커스터마이징 범위에 포함합니다.</p>
+              </article>
+              <article className="status-card">
+                <strong>메뉴 구성 설정</strong>
+                <p>운영자는 메일, 결재, 메신저, 일정, 주소록, 조직도, 파일, 설정 메뉴의 노출 여부를 제어합니다.</p>
+                <p className="muted">보관 정책은 메인 업무 카드가 아니라 Help, 정책 안내, 설정 &gt; 보관 정책으로 분리합니다.</p>
+              </article>
+              <article className="status-card">
+                <strong>보관 정책 기본값</strong>
+                <p>메일: 서버 1개월 + 설치형 로컬 아카이브 무기한</p>
+                <p>메신저: 서버 2주 + 설치형 대화 파일(JSON/HTML) 보관</p>
+              </article>
+              <article className="status-card">
+                <strong>다국어 메시지 범위</strong>
+                <p>메뉴 번역뿐 아니라 에러, 검증, 경고, 성공, 상태, 알림, 세션 만료, 권한 없음, 차단 사유 문구를 포함합니다.</p>
+                <p className="muted">메일/메신저 시스템 문구와 관리자 운영 경고 문구도 같은 메시지 계약으로 관리합니다.</p>
+              </article>
+            </div>
+          </section>
+
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <h2>공통 브랜드 / 컴포넌트 기준</h2>
+                <p className="muted">운영자는 색상값만 보는 것이 아니라, 그 색상이 실제 어떤 화면 요소와 상태 규칙에 연결되는지 이해해야 합니다.</p>
+              </div>
+            </div>
+            <div className="overview-grid">
+              {brandGuide.map((item) => (
+                <article key={item.title} className="status-card">
+                  <div style={{ width: "48px", height: "48px", borderRadius: "16px", background: item.value }} />
+                  <strong style={{ display: "block", marginTop: "12px" }}>{item.title}</strong>
+                  <p>{item.value}</p>
+                  <p className="muted">{item.target}</p>
+                </article>
+              ))}
+            </div>
+            <div className="overview-grid" style={{ marginTop: "16px" }}>
+              {componentGuide.map((item) => (
+                <article key={item.title} className="status-card">
+                  <strong>{item.title}</strong>
+                  <p>{item.body}</p>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <h2>설정 편집 / 저장 / 반영 확인</h2>
+                <p className="muted">운영자가 실제 값을 바꾸고 저장하면 user-web, mobile-app, desktop-client가 같은 계약을 읽는 구조를 고정합니다.</p>
+              </div>
+            </div>
+            <div className="split-panel">
+              <article>
+                <form className="wizard" onSubmit={(event) => event.preventDefault()}>
+                  <div className="field-grid">
+                    <label>
+                      대표 색상
+                      <input value={uiContractDraft.brand.primary} onChange={(e) => setUiContractDraft((current) => ({ ...current, brand: { ...current.brand, primary: e.target.value } }))} />
+                    </label>
+                    <label>
+                      보조 색상
+                      <input value={uiContractDraft.brand.secondary} onChange={(e) => setUiContractDraft((current) => ({ ...current, brand: { ...current.brand, secondary: e.target.value } }))} />
+                    </label>
+                    <label>
+                      강조 색상
+                      <input value={uiContractDraft.brand.accent} onChange={(e) => setUiContractDraft((current) => ({ ...current, brand: { ...current.brand, accent: e.target.value } }))} />
+                    </label>
+                    <label>
+                      차단 색상
+                      <input value={uiContractDraft.brand.blocked} onChange={(e) => setUiContractDraft((current) => ({ ...current, brand: { ...current.brand, blocked: e.target.value } }))} />
+                    </label>
+                    <label>
+                      좌측 메뉴 순서
+                      <input value={uiContractDraft.menuOrder.join(", ")} onChange={(e) => setUiContractDraft((current) => ({ ...current, menuOrder: e.target.value.split(",").map((item) => item.trim()).filter(Boolean) }))} />
+                    </label>
+                    <label>
+                      홈 카드 우선순위
+                      <input value={uiContractDraft.homeCardOrder.join(", ")} onChange={(e) => setUiContractDraft((current) => ({ ...current, homeCardOrder: e.target.value.split(",").map((item) => item.trim()).filter(Boolean) }))} />
+                    </label>
+                    <label>
+                      Help / 정책 안내 문구
+                      <input value={uiContractDraft.helpText} onChange={(e) => setUiContractDraft((current) => ({ ...current, helpText: e.target.value }))} />
+                    </label>
+                    <label>
+                      빠른 작성 노출
+                      <select value={uiContractDraft.quickComposeVisible ? "true" : "false"} onChange={(e) => setUiContractDraft((current) => ({ ...current, quickComposeVisible: e.target.value === "true" }))}>
+                        <option value="true">표시</option>
+                        <option value="false">숨김</option>
+                      </select>
+                    </label>
+                    <label>
+                      오류 메시지
+                      <input value={uiContractDraft.messages.error} onChange={(e) => setUiContractDraft((current) => ({ ...current, messages: { ...current.messages, error: e.target.value } }))} />
+                    </label>
+                    <label>
+                      경고 메시지
+                      <input value={uiContractDraft.messages.warning} onChange={(e) => setUiContractDraft((current) => ({ ...current, messages: { ...current.messages, warning: e.target.value } }))} />
+                    </label>
+                    <label>
+                      차단 메시지
+                      <input value={uiContractDraft.messages.blocked} onChange={(e) => setUiContractDraft((current) => ({ ...current, messages: { ...current.messages, blocked: e.target.value } }))} />
+                    </label>
+                    <label>
+                      빈 상태 메시지
+                      <input value={uiContractDraft.messages.empty} onChange={(e) => setUiContractDraft((current) => ({ ...current, messages: { ...current.messages, empty: e.target.value } }))} />
+                    </label>
+                    <label>
+                      성공 메시지
+                      <input value={uiContractDraft.messages.success} onChange={(e) => setUiContractDraft((current) => ({ ...current, messages: { ...current.messages, success: e.target.value } }))} />
+                    </label>
+                    <label>
+                      세션 만료 메시지
+                      <input value={uiContractDraft.messages.sessionExpired} onChange={(e) => setUiContractDraft((current) => ({ ...current, messages: { ...current.messages, sessionExpired: e.target.value } }))} />
+                    </label>
+                    <label>
+                      권한 없음 메시지
+                      <input value={uiContractDraft.messages.permissionDenied} onChange={(e) => setUiContractDraft((current) => ({ ...current, messages: { ...current.messages, permissionDenied: e.target.value } }))} />
+                    </label>
+                  </div>
+                  <div className="actions">
+                    <button type="button" onClick={handleUiContractSave}>설정 저장</button>
+                    <button type="button" className="secondary" onClick={() => void reloadUiContract()}>저장값 다시 불러오기</button>
+                  </div>
+                </form>
+              </article>
+
+              <article>
+                <div className="status-card">
+                  <strong>user-web 반영 요약</strong>
+                  <p>상단 바 / 좌측 메뉴 / 빠른 작성 버튼 / 상태 박스 / Help 경로가 저장값 기준으로 반영됩니다.</p>
+                  <p className="muted">빠른 작성: {uiContractDraft.quickComposeVisible ? "표시" : "숨김"} / 메뉴 순서: {uiContractDraft.menuOrder.join(" > ")}</p>
+                </div>
+                <div className="status-card">
+                  <strong>mobile-app 반영 요약</strong>
+                  <p>홈 카드 우선순위, 상태 메시지 문구, Help 경로가 같은 계약을 사용합니다.</p>
+                  <p className="muted">홈 카드 우선순위: {uiContractDraft.homeCardOrder.join(" > ")}</p>
+                </div>
+                <div className="status-card">
+                  <strong>desktop-client 반영 요약</strong>
+                  <p>로컬 아카이브 / 대화 파일 저장 / 오프라인 보기 패널과 상태 메시지가 저장값 기준으로 반영됩니다.</p>
+                  <p className="muted">정책 안내 문구: {uiContractDraft.helpText}</p>
+                </div>
+                <div className="status-card">
+                  <strong>메시지 샘플</strong>
+                  <p>오류: {uiContractDraft.messages.error}</p>
+                  <p>경고: {uiContractDraft.messages.warning}</p>
+                  <p>차단: {uiContractDraft.messages.blocked}</p>
+                  <p>빈 상태: {uiContractDraft.messages.empty}</p>
+                  <p>성공: {uiContractDraft.messages.success}</p>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <h2>운영형 설정 계약</h2>
+                <p className="muted">설정 화면에서 끝나는 것이 아니라, 운영자가 값 묶음과 실제 반영 위치를 같은 화면에서 확인할 수 있어야 합니다.</p>
+              </div>
+            </div>
+            <div className="overview-grid">
+              {settingsContracts.map((item) => (
+                <article key={item.title} className="status-card">
+                  <strong>{item.title}</strong>
+                  <p>{item.values}</p>
+                  <p className="muted">반영 대상: {item.targets}</p>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="panel split-panel">
+            <article>
+              <div className="panel-head">
+                <div>
+                  <h2>회사별 미리보기 기준</h2>
+                  <p className="muted">다음 구현 단계에서는 브랜드 설정 변경 결과를 관리자 화면에서 즉시 미리보게 해야 합니다.</p>
+                </div>
+              </div>
+              <div className="status-card">
+                <strong>{overview.company.name}</strong>
+                <p>{overview.company.domain}</p>
+                <p className="muted">대표 색상, 보조 색상, 버튼 스타일, 로그인 화면 문구/배경, 사이드바 스타일을 프리뷰 대상으로 고정합니다.</p>
+              </div>
+            </article>
+
+            <article>
+              <div className="panel-head">
+                <div>
+                  <h2>후속 구현 우선순위</h2>
+                  <p className="muted">1단계 이후 실제 구현은 사용자용 화면부터 순차적으로 진행합니다.</p>
+                </div>
+              </div>
+              <div className="status-card">
+                <ol style={{ margin: 0, paddingLeft: "20px", lineHeight: 1.9 }}>
+                  <li>user-web 메인 업무 홈</li>
+                  <li>admin-web 설정/브랜드/메뉴 구성</li>
+                  <li>desktop-client 로컬 아카이브/대화 파일 흐름</li>
+                  <li>mobile-app 빠른 확인 화면</li>
+                </ol>
+              </div>
+            </article>
+          </section>
+
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <h2>사용자 화면 반영 연결 보드</h2>
+                <p className="muted">관리자 설정이 사용자 웹, 모바일, 설치형에 어떻게 연결되는지 운영자가 한 화면에서 이해할 수 있어야 합니다.</p>
+              </div>
+            </div>
+            <div className="overview-grid">
+              <article className="status-card">
+                <strong>브랜드 설정 → user-web</strong>
+                <p>로그인 화면 톤, 상단 바, 사이드바, 빠른 작성 버튼, 공지 카드, 메일/메신저 작업면 헤더에 반영</p>
+                <p className="muted">운영자는 브랜드 색상 변경이 메일 폴더, 결재 배지, 메신저 타임라인 헤더 어디에 보이는지 바로 이해할 수 있어야 합니다.</p>
+              </article>
+              <article className="status-card">
+                <strong>메뉴 구성 → mobile-app</strong>
+                <p>홈/메일/결재/메신저 우선순위와 하단 이동 구조, 빠른 처리 카드 순서에 반영</p>
+                <p className="muted">긴급 승인, 안 읽은 메일, 최근 대화 카드 노출 우선순위를 같은 설정 묶음으로 설명합니다.</p>
+              </article>
+              <article className="status-card">
+                <strong>보관 정책 설정 → desktop-client</strong>
+                <p>메일 로컬 아카이브, 대화 파일 저장 흐름, Help/설정 진입 문구, 오프라인 보기 패널에 반영</p>
+                <p className="muted">설치형은 서버 정책 설명이 아니라 로컬 보관 진입 버튼과 경로 안내 문구에 연결됩니다.</p>
+              </article>
+              <article className="status-card">
+                <strong>기본 언어 / 시간대</strong>
+                <p>사용자 웹, 모바일, 설치형 로그인 직후 기본 표시 언어와 시간대에 공통 적용</p>
+                <p className="muted">세션 만료, 차단, 오류, 빈 상태 메시지도 같은 언어 기준으로 노출됩니다.</p>
+              </article>
+            </div>
+          </section>
+
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <h2>다국어 메시지 제어판</h2>
+                <p className="muted">메뉴 번역만이 아니라 오류, 경고, 차단, 빈 상태, 성공 메시지까지 운영 대상이라는 점이 화면에서 보여야 합니다.</p>
+              </div>
+            </div>
+            <div className="overview-grid">
+              {[
+                { title: "빈 상태 메시지", body: "표시할 데이터가 없습니다 / 아직 생성된 문서가 없습니다", target: "user-web 메일/결재 빈 화면" },
+                { title: "오류 메시지", body: translationError || errors[0] || "요청 처리 중 오류가 발생했습니다.", target: "user-web / mobile-app API 오류" },
+                { title: "차단 메시지", body: "권한이 없거나 세션이 만료되었습니다.", target: "mobile-app / desktop-client 세션 차단" },
+                { title: "경고 메시지", body: warnings[0] || "설정값 검토가 필요합니다.", target: "admin-web 운영 경고, desktop-client 보관 경로 확인" },
+                { title: "성공 메시지", body: message || "설정이 저장되었습니다.", target: "관리자 저장 완료, 사용자 처리 완료 알림" },
+                { title: "세션 만료 메시지", body: "다시 로그인 후 업무를 계속하세요.", target: "모든 클라이언트 공통 세션 만료 안내" },
+              ].map((item) => (
+                <article key={item.title} className="status-card">
+                  <strong>{item.title}</strong>
+                  <p>{item.body}</p>
+                  <p className="muted">대상: {item.target}</p>
+                </article>
+              ))}
+            </div>
           </section>
         </>
       )}

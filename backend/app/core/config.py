@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     translation_provider: str = "disabled"
     translation_state_path: str = "./data/runtime/translation-state.json"
     translation_cache_path: str = "./data/runtime/translation-cache.json"
+    ui_contract_state_path: str = "./data/runtime/ui-contract-state.json"
 
     setup_state_path: str = "./data/runtime/setup-state.json"
     directory_state_path: str = "./data/runtime/directory-state.json"
@@ -70,6 +71,10 @@ class Settings(BaseSettings):
     @property
     def translation_cache_file(self) -> Path:
         return Path(self.translation_cache_path).resolve()
+
+    @property
+    def ui_contract_state_file(self) -> Path:
+        return Path(self.ui_contract_state_path).resolve()
 
     @property
     def storage_path(self) -> Path:

@@ -192,6 +192,29 @@ export type TranslationPolicy = {
   supportedTargetLocales: string[];
 };
 
+export type UiContract = {
+  brand: {
+    primary: string;
+    secondary: string;
+    accent: string;
+    blocked: string;
+  };
+  menuOrder: string[];
+  homeCardOrder: string[];
+  quickComposeVisible: boolean;
+  helpText: string;
+  messages: {
+    error: string;
+    warning: string;
+    blocked: string;
+    empty: string;
+    success: string;
+    sessionExpired: string;
+    permissionDenied: string;
+  };
+  source?: string;
+};
+
 export type MonitoringEventListResponse = {
   events: MonitoringEvent[];
   total: number;
@@ -407,6 +430,20 @@ export async function updateTranslationPolicy(
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchUiContract(token: string): Promise<UiContract> {
+  return request<UiContract>("/ui-contract/admin", {
+    headers: authHeaders(token),
+  });
+}
+
+export async function updateUiContract(token: string, payload: UiContract): Promise<UiContract> {
+  return request<UiContract>("/ui-contract/admin", {
+    method: "PUT",
+    headers: authHeaders(token),
     body: JSON.stringify(payload),
   });
 }

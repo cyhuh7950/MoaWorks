@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from app.api.dependencies import require_admin
-from app.api.routes import admin, approvals, auth, health, monitoring, notifications, setup, translation
+from app.api.routes import admin, approvals, auth, health, monitoring, notifications, setup, translation, ui_contract
 
 
 api_router = APIRouter()
@@ -15,6 +15,8 @@ api_router.include_router(notifications.router, prefix="/notifications", tags=["
 api_router.include_router(monitoring.router, prefix="/admin/monitoring", tags=["monitoring"])
 api_router.include_router(translation.router, tags=["translation"])
 api_router.include_router(translation.admin_router, tags=["translation-admin"])
+api_router.include_router(ui_contract.router, tags=["ui-contract"])
+api_router.include_router(ui_contract.admin_router, tags=["ui-contract-admin"])
 api_router.add_api_route(
     "/internal/observability/events",
     notifications.emit_internal_event,
