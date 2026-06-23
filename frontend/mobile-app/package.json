@@ -5,8 +5,8 @@
   "scripts": {
     "start": "react-native start",
     "build": "node ./scripts/mobile-app-build-smoke.js",
-    "build:android": "cd android && ./gradlew assembleDebug",
-    "android": "react-native run-android"
+    "build:android": "node ./scripts/mobile-android-command.js build",
+    "android": "node ./scripts/mobile-android-command.js run"
   },
   "dependencies": {
     "react": "18.3.1",
