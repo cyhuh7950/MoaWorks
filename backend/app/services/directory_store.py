@@ -29,6 +29,8 @@ from app.schemas.directory import (
     UserUpdateRequest,
     UserView,
 )
+from app.schemas.observability import EventEnvelope, MonitoringCategory, SeverityLevel, Visibility
+from app.services.observability_service import ObservabilityService
 from app.schemas.setup import SetupInitializeRequest
 from app.services.postgres_service import PostgresService
 from app.services.security_service import SecurityService
@@ -728,6 +730,17 @@ class DirectoryStore:
                 )
                 response = self._to_approval_document_response(cursor, self._fetch_required_approval_document(cursor, document_id))
             connection.commit()
+        self._emit_approval_event(
+            actor=actor,
+            document=response,
+            event_type="approval.submit",
+            title="결재 문서가 상신되었습니다.",
+            message=f"{actor.userName} 사용자가 '{response.title}' 문서를 상신했습니다.",
+            severity=SeverityLevel.INFO,
+            status_before="draft",
+            status_after="submitted",
+            recipients=self._approval_recipients(response, include_creator=True, include_current=True),
+        )
         return response
 
     def approve_approval_document(self, actor_id: str, document_id: str, payload: ApprovalLineActionRequest) -> ApprovalDocumentResponse:
@@ -769,6 +782,17 @@ class DirectoryStore:
                 )
                 response = self._to_approval_document_response(cursor, self._fetch_required_approval_document(cursor, document_id))
             connection.commit()
+        self._emit_approval_event(
+            actor=actor,
+            document=response,
+            event_type="approval.withdraw",
+            title="결재 문서가 회수되었습니다.",
+            message=f"{actor.userName} 사용자가 '{response.title}' 문서를 회수했습니다.",
+            severity=SeverityLevel.WARN,
+            status_before="submitted",
+            status_after="withdrawn",
+            recipients=self._approval_recipients(response, include_creator=True),
+        )
         return response
 
     def rework_approval_document(self, actor_id: str, document_id: str) -> ApprovalDocumentResponse:
@@ -817,6 +841,17 @@ class DirectoryStore:
                 )
                 response = self._to_approval_document_response(cursor, self._fetch_required_approval_document(cursor, document_id))
             connection.commit()
+        self._emit_approval_event(
+            actor=actor,
+            document=response,
+            event_type="approval.redraft",
+            title="결재 문서가 재기안되었습니다.",
+            message=f"{actor.userName} 사용자가 '{response.title}' 문서를 재기안했습니다.",
+            severity=SeverityLevel.INFO,
+            status_before=document["status"],
+            status_after="draft",
+            recipients=self._approval_recipients(response, include_creator=True),
+        )
         return response
 
     def admin_force_approve(self, actor_id: str, document_id: str, reason: ApprovalActionReason) -> ApprovalDocumentResponse:
@@ -1187,6 +1222,16 @@ class DirectoryStore:
                 )
                 response = self._to_approval_document_response(cursor, self._fetch_required_approval_document(cursor, document_id))
             connection.commit()
+        self._emit_approval_status_event(
+            actor=actor,
+            document=response,
+            event_name=event_name,
+            status_before=status_before,
+            status_after=next_status,
+            reason=normalized_reason,
+            forced=forced,
+            accepted=accepted,
+        )
         return response
 
     def _fetch_user_view_row(self, cursor, user_id: str) -> dict:
@@ -1387,3 +1432,124 @@ class DirectoryStore:
 
     def _now(self) -> datetime:
         return datetime.now(UTC)
+
+    def _approval_recipients(
+        self,
+        document: ApprovalDocumentResponse,
+        *,
+        include_creator: bool = False,
+        include_current: bool = False,
+    ) -> list[str]:
+        recipients: list[str] = []
+        if include_creator:
+            recipients.append(document.creatorUserId)
+        if include_current and document.currentLineIndex is not None:
+            current_line = next((item for item in document.lines if item.sequence == document.currentLineIndex), None)
+            if current_line is not None:
+                recipients.append(current_line.approverUserId)
+        deduped: list[str] = []
+        for user_id in recipients:
+            if user_id and user_id not in deduped:
+                deduped.append(user_id)
+        return deduped
+
+    def _emit_approval_status_event(
+        self,
+        *,
+        actor: AuthUserSummary,
+        document: ApprovalDocumentResponse,
+        event_name: str,
+        status_before: str,
+        status_after: str,
+        reason: str | None,
+        forced: bool,
+        accepted: bool,
+    ) -> None:
+        if forced and accepted:
+            event_type = "approval.force.approved"
+            title = "관리자가 결재를 직권 승인했습니다."
+            message = f"{actor.userName} 관리자가 '{document.title}' 문서를 직권 승인했습니다."
+            severity = SeverityLevel.WARN
+        elif forced and not accepted:
+            event_type = "approval.force.rejected"
+            title = "관리자가 결재를 직권 반려했습니다."
+            message = f"{actor.userName} 관리자가 '{document.title}' 문서를 직권 반려했습니다."
+            severity = SeverityLevel.WARN
+        elif accepted:
+            event_type = "approval.status.changed"
+            title = "결재 문서가 승인 처리되었습니다."
+            message = f"{actor.userName} 사용자가 '{document.title}' 문서를 승인했습니다."
+            severity = SeverityLevel.INFO
+        else:
+            event_type = "approval.status.changed"
+            title = "결재 문서가 반려 처리되었습니다."
+            message = f"{actor.userName} 사용자가 '{document.title}' 문서를 반려했습니다."
+            severity = SeverityLevel.WARN
+
+        recipients = self._approval_recipients(document, include_creator=True, include_current=True)
+        self._emit_approval_event(
+            actor=actor,
+            document=document,
+            event_type=event_type,
+            title=title,
+            message=message,
+            severity=severity,
+            status_before=status_before,
+            status_after=status_after,
+            recipients=recipients,
+            extra_payload={
+                "auditEvent": event_name,
+                "reason": reason,
+                "forced": forced,
+                "accepted": accepted,
+            },
+        )
+
+    def _emit_approval_event(
+        self,
+        *,
+        actor: AuthUserSummary,
+        document: ApprovalDocumentResponse,
+        event_type: str,
+        title: str,
+        message: str,
+        severity: SeverityLevel,
+        status_before: str | None,
+        status_after: str,
+        recipients: list[str],
+        extra_payload: dict | None = None,
+    ) -> None:
+        try:
+            payload = {
+                "documentId": document.id,
+                "title": document.title,
+                "statusBefore": status_before,
+                "statusAfter": status_after,
+                "creatorUserId": document.creatorUserId,
+                "currentLineIndex": document.currentLineIndex,
+                "lineCount": len(document.lines),
+            }
+            if extra_payload:
+                payload.update(extra_payload)
+            ObservabilityService().emit_event(
+                EventEnvelope(
+                    eventId=f"evt_{uuid4().hex}",
+                    eventType=event_type,
+                    category=MonitoringCategory.APPROVAL,
+                    severity=severity,
+                    resourceType="approval_document",
+                    resourceId=document.id,
+                    requestId=f"req_{uuid4().hex}",
+                    dedupKey=f"{event_type}:{document.id}:{status_after}",
+                    title=title,
+                    message=message,
+                    source="directory-store",
+                    companyId=actor.companyId,
+                    actorUserId=actor.userId,
+                    targets=recipients,
+                    visibility=Visibility.BOTH,
+                    payload=payload,
+                )
+            )
+        except Exception:
+            pass
