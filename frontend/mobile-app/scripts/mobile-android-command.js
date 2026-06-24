@@ -36,6 +36,7 @@ function prepareWslAndroidTools() {
     return {};
   }
 
+  const linuxAndroidHome = "/usr/lib/android-sdk";
   const mountedJavaHome = "/mnt/c/Program Files/Android/Android Studio/jbr";
   const mountedAndroidHome = "/mnt/c/Users/cyhuh/AppData/Local/Android/Sdk";
   const javaExe = path.join(mountedJavaHome, "bin", "java.exe");
@@ -49,10 +50,14 @@ function prepareWslAndroidTools() {
     shouldUseWrapperJava = true;
   }
 
-  if (!process.env.ANDROID_HOME && fs.existsSync(mountedAndroidHome)) {
+  if (!process.env.ANDROID_HOME && fs.existsSync(linuxAndroidHome)) {
+    envPatch.ANDROID_HOME = linuxAndroidHome;
+  } else if (!process.env.ANDROID_HOME && fs.existsSync(mountedAndroidHome)) {
     envPatch.ANDROID_HOME = mountedAndroidHome;
   }
-  if (!process.env.ANDROID_SDK_ROOT && fs.existsSync(mountedAndroidHome)) {
+  if (!process.env.ANDROID_SDK_ROOT && fs.existsSync(linuxAndroidHome)) {
+    envPatch.ANDROID_SDK_ROOT = linuxAndroidHome;
+  } else if (!process.env.ANDROID_SDK_ROOT && fs.existsSync(mountedAndroidHome)) {
     envPatch.ANDROID_SDK_ROOT = mountedAndroidHome;
   }
 
