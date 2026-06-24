@@ -132,9 +132,8 @@ if (mode === "run") {
     fail("ADB_MISSING", "adb is not available in PATH");
   }
 
-  const resolvedAdbPath = adbPath.stdout.split(/\r?\n/)[0].trim();
   const mountedWindowsAdb = "/mnt/c/Users/cyhuh/AppData/Local/Android/Sdk/platform-tools/adb.exe";
-  if (!hasConnectedDevice(resolvedAdbPath) && process.platform === "linux" && isExecutable(mountedWindowsAdb) && hasConnectedDevice(mountedWindowsAdb)) {
+  if (process.platform === "linux" && isExecutable(mountedWindowsAdb) && hasConnectedDevice(mountedWindowsAdb)) {
     console.warn("INFO=using_windows_adb_from_wsl");
     const buildResult = runGradleAssembleDebug();
     if ((buildResult.status ?? 1) !== 0) {
