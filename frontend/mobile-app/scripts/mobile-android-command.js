@@ -10,6 +10,7 @@ const gradleCommand = process.platform === "win32" ? "gradlew.bat" : "./gradlew"
 const gradlePath = path.join(androidDir, process.platform === "win32" ? "gradlew.bat" : "gradlew");
 const runtimeDir = path.join(projectRoot, ".runtime", "android-tools");
 const wrapperJdkDir = path.join(runtimeDir, "jdk");
+let shouldUseWrapperJava = false;
 
 function isExecutable(filePath) {
   return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
@@ -45,6 +46,7 @@ function prepareWslAndroidTools() {
   if (!findExecutable("java") && isExecutable(javaExe)) {
     writeUnixWrapper(path.join(wrapperJdkDir, "bin", "java"), javaExe);
     envPatch.JAVA_HOME = wrapperJdkDir;
+    shouldUseWrapperJava = true;
   }
 
   if (!process.env.ANDROID_HOME && fs.existsSync(mountedAndroidHome)) {
@@ -71,7 +73,7 @@ const commandEnv = {
 };
 commandEnv.PATH = [
   path.join(runtimeDir, "bin"),
-  path.join(wrapperJdkDir, "bin"),
+  shouldUseWrapperJava ? path.join(wrapperJdkDir, "bin") : "",
   commandEnv.ANDROID_HOME ? path.join(commandEnv.ANDROID_HOME, "platform-tools") : "",
   commandEnv.ANDROID_HOME ? path.join(commandEnv.ANDROID_HOME, "emulator") : "",
   commandEnv.ANDROID_HOME ? path.join(commandEnv.ANDROID_HOME, "cmdline-tools", "latest", "bin") : "",
