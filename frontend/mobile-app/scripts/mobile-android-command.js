@@ -92,6 +92,27 @@ function fail(code, message) {
   process.exit(2);
 }
 
+function hasConnectedDevice(adbCommand) {
+  const result = spawnSync(adbCommand, ["devices"], {
+    encoding: "utf8",
+    env: commandEnv,
+  });
+  if (result.status !== 0) {
+    return false;
+  }
+  return result.stdout.split(/\r?\n/).some((line) => /\tdevice$/.test(line.trim()));
+}
+
+function runGradleAssembleDebug() {
+  return spawnSync(gradleCommand, ["assembleDebug"], {
+    cwd: androidDir,
+    encoding: "utf8",
+    stdio: "inherit",
+    shell: process.platform === "win32",
+    env: commandEnv,
+  });
+}
+
 if (!fs.existsSync(androidDir)) {
   fail("ANDROID_PROJECT_MISSING", "frontend/mobile-app/android is missing");
 }
@@ -110,6 +131,45 @@ if (mode === "run") {
   if (adbPath.status !== 0) {
     fail("ADB_MISSING", "adb is not available in PATH");
   }
+
+  const resolvedAdbPath = adbPath.stdout.split(/\r?\n/)[0].trim();
+  const mountedWindowsAdb = "/mnt/c/Users/cyhuh/AppData/Local/Android/Sdk/platform-tools/adb.exe";
+  if (!hasConnectedDevice(resolvedAdbPath) && process.platform === "linux" && isExecutable(mountedWindowsAdb) && hasConnectedDevice(mountedWindowsAdb)) {
+    console.warn("INFO=using_windows_adb_from_wsl");
+    const buildResult = runGradleAssembleDebug();
+    if ((buildResult.status ?? 1) !== 0) {
+      process.exit(buildResult.status ?? 1);
+    }
+
+    const apkPath = path.join(androidDir, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
+    if (!fs.existsSync(apkPath)) {
+      fail("APK_MISSING", `${apkPath} is missing after assembleDebug`);
+    }
+
+    const installResult = spawnSync(mountedWindowsAdb, ["install", "-r", apkPath], {
+      cwd: projectRoot,
+      encoding: "utf8",
+      stdio: "inherit",
+      env: commandEnv,
+    });
+    if ((installResult.status ?? 1) !== 0) {
+      process.exit(installResult.status ?? 1);
+    }
+
+    const launchResult = spawnSync(mountedWindowsAdb, ["shell", "am", "start", "-n", "com.moaworks.mobile/.MainActivity"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+      stdio: "inherit",
+      env: commandEnv,
+    });
+    if ((launchResult.status ?? 1) !== 0) {
+      process.exit(launchResult.status ?? 1);
+    }
+    console.log("STATUS=success");
+    console.log("DEVICE_BRIDGE=windows-adb-from-wsl");
+    process.exit(0);
+  }
+
   const reactNativePath = findExecutable("react-native") || path.join(projectRoot, "node_modules", ".bin", process.platform === "win32" ? "react-native.cmd" : "react-native");
   const result = spawnSync(reactNativePath, ["run-android"], {
     cwd: projectRoot,
@@ -121,12 +181,6 @@ if (mode === "run") {
   process.exit(result.status ?? 1);
 }
 
-const result = spawnSync(gradleCommand, ["assembleDebug"], {
-  cwd: androidDir,
-  encoding: "utf8",
-  stdio: "inherit",
-  shell: process.platform === "win32",
-  env: commandEnv,
-});
+const result = runGradleAssembleDebug();
 
 process.exit(result.status ?? 1);
