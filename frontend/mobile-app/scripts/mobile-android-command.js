@@ -8,6 +8,12 @@ const projectRoot = path.resolve(__dirname, "..");
 const androidDir = path.join(projectRoot, "android");
 const gradleCommand = process.platform === "win32" ? "gradlew.bat" : "./gradlew";
 const gradlePath = path.join(androidDir, process.platform === "win32" ? "gradlew.bat" : "gradlew");
+const runtimeDir = path.join(projectRoot, ".runtime", "android-tools");
+const wrapperJdkDir = path.join(runtimeDir, "jdk");
+
+function isExecutable(filePath) {
+  return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+}
 
 function findExecutable(command) {
   const lookup = process.platform === "win32" ? "where" : "which";
@@ -17,6 +23,60 @@ function findExecutable(command) {
   }
   return "";
 }
+
+function writeUnixWrapper(filePath, targetPath) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `#!/usr/bin/env bash\nexec "${targetPath}" "$@"\n`, "utf8");
+  fs.chmodSync(filePath, 0o755);
+}
+
+function prepareWslAndroidTools() {
+  if (process.platform !== "linux") {
+    return {};
+  }
+
+  const mountedJavaHome = "/mnt/c/Program Files/Android/Android Studio/jbr";
+  const mountedAndroidHome = "/mnt/c/Users/cyhuh/AppData/Local/Android/Sdk";
+  const javaExe = path.join(mountedJavaHome, "bin", "java.exe");
+  const adbExe = path.join(mountedAndroidHome, "platform-tools", "adb.exe");
+  const emulatorExe = path.join(mountedAndroidHome, "emulator", "emulator.exe");
+  const envPatch = {};
+
+  if (!findExecutable("java") && isExecutable(javaExe)) {
+    writeUnixWrapper(path.join(wrapperJdkDir, "bin", "java"), javaExe);
+    envPatch.JAVA_HOME = wrapperJdkDir;
+  }
+
+  if (!process.env.ANDROID_HOME && fs.existsSync(mountedAndroidHome)) {
+    envPatch.ANDROID_HOME = mountedAndroidHome;
+  }
+  if (!process.env.ANDROID_SDK_ROOT && fs.existsSync(mountedAndroidHome)) {
+    envPatch.ANDROID_SDK_ROOT = mountedAndroidHome;
+  }
+
+  if (!findExecutable("adb") && isExecutable(adbExe)) {
+    writeUnixWrapper(path.join(runtimeDir, "bin", "adb"), adbExe);
+  }
+  if (!findExecutable("emulator") && isExecutable(emulatorExe)) {
+    writeUnixWrapper(path.join(runtimeDir, "bin", "emulator"), emulatorExe);
+  }
+
+  return envPatch;
+}
+
+const detectedEnv = prepareWslAndroidTools();
+const commandEnv = {
+  ...process.env,
+  ...detectedEnv,
+};
+commandEnv.PATH = [
+  path.join(runtimeDir, "bin"),
+  path.join(wrapperJdkDir, "bin"),
+  commandEnv.ANDROID_HOME ? path.join(commandEnv.ANDROID_HOME, "platform-tools") : "",
+  commandEnv.ANDROID_HOME ? path.join(commandEnv.ANDROID_HOME, "emulator") : "",
+  commandEnv.ANDROID_HOME ? path.join(commandEnv.ANDROID_HOME, "cmdline-tools", "latest", "bin") : "",
+  process.env.PATH,
+].filter(Boolean).join(path.delimiter);
 
 function fail(code, message) {
   console.error(`STATUS=blocked`);
@@ -33,14 +93,14 @@ if (!fs.existsSync(gradlePath)) {
   fail("GRADLE_WRAPPER_MISSING", `${path.relative(projectRoot, gradlePath)} is missing`);
 }
 
-const javaPath = findExecutable("java");
-if (!javaPath && !process.env.JAVA_HOME) {
+const javaPath = spawnSync(process.platform === "win32" ? "where" : "which", ["java"], { encoding: "utf8", env: commandEnv });
+if (javaPath.status !== 0 && !commandEnv.JAVA_HOME) {
   fail("JAVA_RUNTIME_MISSING", "JAVA_HOME is not set and java is not available in PATH");
 }
 
 if (mode === "run") {
-  const adbPath = findExecutable("adb");
-  if (!adbPath) {
+  const adbPath = spawnSync(process.platform === "win32" ? "where" : "which", ["adb"], { encoding: "utf8", env: commandEnv });
+  if (adbPath.status !== 0) {
     fail("ADB_MISSING", "adb is not available in PATH");
   }
   const reactNativePath = findExecutable("react-native") || path.join(projectRoot, "node_modules", ".bin", process.platform === "win32" ? "react-native.cmd" : "react-native");
@@ -49,6 +109,7 @@ if (mode === "run") {
     encoding: "utf8",
     stdio: "inherit",
     shell: process.platform === "win32",
+    env: commandEnv,
   });
   process.exit(result.status ?? 1);
 }
@@ -58,6 +119,7 @@ const result = spawnSync(gradleCommand, ["assembleDebug"], {
   encoding: "utf8",
   stdio: "inherit",
   shell: process.platform === "win32",
+  env: commandEnv,
 });
 
 process.exit(result.status ?? 1);
