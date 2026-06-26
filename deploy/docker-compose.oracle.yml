@@ -1,0 +1,62 @@
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: deploy/server.Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      POSTGRES_HOST: host.docker.internal
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: moaworks
+      POSTGRES_USER: moaworks
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ../backend:/app
+      - ../data:/app/data
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8510}:8000"
+    depends_on:
+      - mail-layer
+      - storage
+    restart: unless-stopped
+
+  admin-web:
+    build:
+      context: ..
+      dockerfile: deploy/admin-web.Dockerfile
+    environment:
+      VITE_API_BASE_URL: https://api.moaworks.sinsan.kr/api/v1
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3510}:3510"
+    depends_on:
+      - server
+    restart: unless-stopped
+
+  user-web:
+    build:
+      context: ..
+      dockerfile: deploy/user-web.Dockerfile
+    environment:
+      VITE_API_BASE_URL: https://api.moaworks.sinsan.kr/api/v1
+    ports:
+      - "127.0.0.1:${USER_WEB_PORT:-3520}:3520"
+    depends_on:
+      - server
+    restart: unless-stopped
+
+  mail-layer:
+    image: alpine:3.20
+    command: ["sh", "-c", "echo 'mail-layer placeholder'; tail -f /dev/null"]
+    restart: unless-stopped
+
+  storage:
+    image: alpine:3.20
+    command: ["sh", "-c", "mkdir -p /storage/runtime /storage/files && tail -f /dev/null"]
+    volumes:
+      - storage-data:/storage
+    restart: unless-stopped
+
+volumes:
+  storage-data:
