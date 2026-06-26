@@ -1,3 +1,5 @@
+name: moaworks
+
 services:
   server:
     build:
