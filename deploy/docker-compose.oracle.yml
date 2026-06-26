@@ -21,6 +21,7 @@ services:
     networks:
       - default
       - pg_net
+      - proxy_net
     restart: unless-stopped
 
   admin-web:
@@ -33,6 +34,9 @@ services:
       - "127.0.0.1:${FRONTEND_PORT:-3510}:3510"
     depends_on:
       - server
+    networks:
+      - default
+      - proxy_net
     restart: unless-stopped
 
   user-web:
@@ -45,6 +49,9 @@ services:
       - "127.0.0.1:${USER_WEB_PORT:-3520}:3520"
     depends_on:
       - server
+    networks:
+      - default
+      - proxy_net
     restart: unless-stopped
 
   mail-layer:
@@ -66,3 +73,6 @@ networks:
   pg_net:
     external: true
     name: common_default
+  proxy_net:
+    external: true
+    name: proxy-network
