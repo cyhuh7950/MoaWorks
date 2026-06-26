@@ -129,6 +129,18 @@ type UiContract = {
   };
 };
 
+type AdminMenuKey = "dashboard" | "organization" | "service" | "approval" | "brand" | "language" | "help";
+
+const adminMenus: Array<{ key: AdminMenuKey; label: string; description: string }> = [
+  { key: "dashboard", label: "대시보드", description: "상태와 빠른 작업" },
+  { key: "organization", label: "조직 관리", description: "사용자, 부서, 권한" },
+  { key: "service", label: "서비스 운영", description: "도메인, Relay, 메일" },
+  { key: "approval", label: "결재/감사", description: "감사 로그와 이벤트" },
+  { key: "brand", label: "브랜드/화면 설정", description: "설정 계약과 반영" },
+  { key: "language", label: "다국어/메시지", description: "번역과 상태 문구" },
+  { key: "help", label: "도움말/정책", description: "정책 경로와 운영 가이드" },
+];
+
 const defaultUiContract: UiContract = {
   brand: {
     primary: "#0f766e",
@@ -377,6 +389,7 @@ export default function App() {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [token, setToken] = useState(getStoredToken());
+  const [activeAdminMenu, setActiveAdminMenu] = useState<AdminMenuKey>("dashboard");
   const [uiContractDraft, setUiContractDraft] = useState<UiContract>(() => defaultUiContract);
   const brandGuide = [
     { title: "대표 색상", value: "#0f766e", target: "주요 버튼, 활성 탭, 핵심 승인/저장 액션" },
@@ -421,6 +434,7 @@ export default function App() {
     setMonitoringEvents([]);
     setApprovalAuditLogs([]);
     setTranslationPolicy(null);
+    setActiveAdminMenu("dashboard");
     if (nextMessage) {
       setErrors([nextMessage]);
     }
@@ -852,6 +866,8 @@ export default function App() {
   const showLoginPanel = initialized && (!token || !overview);
   const hasStoredSessionButNoOverview = initialized && Boolean(token) && !overview;
   const supportedTranslationTargets = translationPolicy?.supportedTargetLocales?.length ? translationPolicy.supportedTargetLocales : (translationStatus?.supportedTargetLocales ?? ["en"]);
+  const activeMenu = adminMenus.find((item) => item.key === activeAdminMenu) ?? adminMenus[0];
+  const showAdminConsole = initialized && Boolean(token) && Boolean(overview);
 
   return (
     <main className="shell">
@@ -864,7 +880,7 @@ export default function App() {
         <p className="api-base">API Base: {apiBase}</p>
       </section>
 
-      <section className="panel">
+      <section className="panel" hidden={showAdminConsole}>
         <div className="panel-head">
           <div>
             <h2>{t(locale, "language")} / {t(locale, "timezone")}</h2>
@@ -960,7 +976,7 @@ export default function App() {
         </div>
       </section>
 
-      <section className="panel">
+      <section className="panel" hidden={showAdminConsole}>
         <div className="panel-head">
           <h2>시스템 상태</h2>
           <button onClick={() => void refreshHealth()}>새로고침</button>
@@ -1152,8 +1168,68 @@ export default function App() {
       )}
 
       {initialized && token && overview && (
-        <>
-          <section className="panel">
+        <section className="console-layout">
+          <aside className="console-sidebar">
+            <div>
+              <p className="eyebrow">MoaWorks Admin</p>
+              <h2>{overview.company.name}</h2>
+              <p className="muted">{overview.company.domain}</p>
+            </div>
+            <nav className="console-menu" aria-label="관리자 메뉴">
+              {adminMenus.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  className={item.key === activeAdminMenu ? "menu-item active" : "menu-item"}
+                  onClick={() => setActiveAdminMenu(item.key)}
+                >
+                  <span>{item.label}</span>
+                  <small>{item.description}</small>
+                </button>
+              ))}
+            </nav>
+            <div className="console-profile">
+              <strong>관리자 세션</strong>
+              <p className="muted">{loginForm.email || "관리자"}</p>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  clearToken();
+                  setToken("");
+                  setTranslationPolicy(null);
+                  setTranslationStatus(null);
+                  setTranslationResult([]);
+                  setOverview(null);
+                  setMonitoringOverview(null);
+                  setMonitoringEvents([]);
+                  setApprovalAuditLogs([]);
+                  setActiveAdminMenu("dashboard");
+                }}
+              >
+                {t(locale, "logout")}
+              </button>
+            </div>
+          </aside>
+
+          <section className="console-main">
+            <div className="console-topbar">
+              <div>
+                <p className="muted">관리자 콘솔 / {activeMenu.label}</p>
+                <h2>{activeMenu.label}</h2>
+                <p className="muted">{activeMenu.description}</p>
+              </div>
+              <div className="topbar-actions">
+                <input aria-label="빠른 이동" placeholder="메뉴 또는 작업 검색" readOnly value={activeMenu.label} />
+                <button type="button" className="secondary" onClick={() => void refreshMonitoring()}>
+                  경고/알림
+                </button>
+                <button type="button" onClick={() => setActiveAdminMenu("organization")}>
+                  사용자 추가
+                </button>
+              </div>
+            </div>
+          <section className="panel" hidden={activeAdminMenu !== "dashboard"}>
             <div className="panel-head">
               <div>
                 <h2>{copy.overviewTitle}</h2>
@@ -1185,6 +1261,27 @@ export default function App() {
                 </button>
               </div>
             </div>
+            {health && (
+              <>
+                <div className="badge-row">
+                  <span className={`badge badge-${health.status}`}>전체 상태: {health.status}</span>
+                  <span className={`badge ${initialized ? "badge-ok" : "badge-warning"}`}>
+                    초기 설정: {initialized ? "완료" : "미완료"}
+                  </span>
+                </div>
+                <div className="status-grid">
+                  {Object.entries(health.components).map(([name, component]) => (
+                    <article key={name} className="status-card">
+                      <div className="status-title">
+                        <strong>{name}</strong>
+                        <span className={`badge badge-${component.status}`}>{component.status}</span>
+                      </div>
+                      <p>{component.message}</p>
+                    </article>
+                  ))}
+                </div>
+              </>
+            )}
             <div className="overview-grid">
               <article className="status-card">
                 <strong>승인 지연</strong>
@@ -1201,6 +1298,12 @@ export default function App() {
                 <p>{monitoringOverview?.diskUsagePercent ?? 0}%</p>
                 <p className="muted">활성 경고 {monitoringOverview?.alertOpenCount ?? 0}건</p>
               </article>
+            </div>
+            <div className="quick-actions">
+              <button type="button" onClick={() => setActiveAdminMenu("organization")}>사용자 추가</button>
+              <button type="button" className="secondary" onClick={() => setActiveAdminMenu("service")}>도메인 검증</button>
+              <button type="button" className="secondary" onClick={() => setActiveAdminMenu("service")}>Relay 테스트</button>
+              <button type="button" className="secondary" onClick={() => void reloadUiContract()}>설정 저장값 다시 불러오기</button>
             </div>
             <div className="status-card">
               <strong>운영 이벤트(최근)</strong>
@@ -1239,7 +1342,7 @@ export default function App() {
             </div>
           </section>
 
-          <section className="panel">
+          <section className="panel" hidden={activeAdminMenu !== "approval"}>
             <div className="panel-head">
               <div>
                 <h2>{copy.approvalAuditTitle}</h2>
@@ -1284,7 +1387,7 @@ export default function App() {
             </div>
           </section>
 
-          <section className="panel">
+          <section className="panel" hidden={activeAdminMenu !== "organization"}>
             <div className="panel-head">
               <div>
                 <h2>{t(locale, "userManagement")}</h2>
@@ -1408,7 +1511,7 @@ export default function App() {
             </div>
           </section>
 
-          <section className="panel split-panel">
+          <section className="panel split-panel" hidden={activeAdminMenu !== "organization"}>
             <article>
               <div className="panel-head">
                 <div>
@@ -1446,7 +1549,7 @@ export default function App() {
             </article>
           </section>
 
-          <section className="panel">
+          <section className="panel" hidden={activeAdminMenu !== "organization"}>
             <div className="panel-head">
               <div>
                 <h2>{copy.roleStatus}</h2>
@@ -1499,7 +1602,7 @@ export default function App() {
             </div>
           </section>
 
-          <section className="panel split-panel">
+          <section className="panel split-panel" hidden={activeAdminMenu !== "service"}>
             <article>
               <div className="panel-head">
                 <div>
@@ -1564,7 +1667,7 @@ export default function App() {
             </article>
           </section>
 
-          <section className="panel">
+          <section className="panel" hidden={activeAdminMenu !== "service"}>
             <div className="panel-head">
               <div>
                 <h2>{copy.authContract}</h2>
@@ -1590,7 +1693,7 @@ export default function App() {
 }`}</pre>
           </section>
 
-          <section className="panel">
+          <section className="panel" hidden={activeAdminMenu !== "help"}>
             <div className="panel-head">
               <div>
                 <h2>브랜드 / 메뉴 / 보관 정책 설정</h2>
@@ -1621,7 +1724,7 @@ export default function App() {
             </div>
           </section>
 
-          <section className="panel">
+          <section className="panel" hidden={activeAdminMenu !== "brand"}>
             <div className="panel-head">
               <div>
                 <h2>공통 브랜드 / 컴포넌트 기준</h2>
@@ -1648,7 +1751,7 @@ export default function App() {
             </div>
           </section>
 
-          <section className="panel">
+          <section className="panel" hidden={activeAdminMenu !== "brand"}>
             <div className="panel-head">
               <div>
                 <h2>설정 편집 / 저장 / 반영 확인</h2>
@@ -1758,7 +1861,7 @@ export default function App() {
             </div>
           </section>
 
-          <section className="panel">
+          <section className="panel" hidden={activeAdminMenu !== "brand"}>
             <div className="panel-head">
               <div>
                 <h2>운영형 설정 계약</h2>
@@ -1776,7 +1879,7 @@ export default function App() {
             </div>
           </section>
 
-          <section className="panel split-panel">
+          <section className="panel split-panel" hidden={activeAdminMenu !== "brand"}>
             <article>
               <div className="panel-head">
                 <div>
@@ -1809,7 +1912,7 @@ export default function App() {
             </article>
           </section>
 
-          <section className="panel">
+          <section className="panel" hidden={activeAdminMenu !== "brand"}>
             <div className="panel-head">
               <div>
                 <h2>사용자 화면 반영 연결 보드</h2>
@@ -1840,7 +1943,7 @@ export default function App() {
             </div>
           </section>
 
-          <section className="panel">
+          <section className="panel" hidden={activeAdminMenu !== "language"}>
             <div className="panel-head">
               <div>
                 <h2>다국어 메시지 제어판</h2>
@@ -1864,7 +1967,8 @@ export default function App() {
               ))}
             </div>
           </section>
-        </>
+          </section>
+        </section>
       )}
     </main>
   );
