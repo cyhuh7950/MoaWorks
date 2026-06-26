@@ -429,6 +429,7 @@ export default function App() {
   async function refreshHealth() {
     const data = await fetchHealth();
     setHealth(data);
+    return data;
   }
 
   async function refreshDirectory(nextToken = token) {
@@ -666,8 +667,15 @@ export default function App() {
         },
       });
       setWarnings([]);
+      setMessage("초기 설정 저장 결과를 확인 중입니다.");
+      if (!response.initialized) {
+        throw new Error("초기 설정 저장 응답이 완료 상태가 아닙니다.");
+      }
+      const nextHealth = await refreshHealth();
+      if (nextHealth.initialized !== true) {
+        throw new Error("초기 설정 저장 후 health.initialized=true 상태를 확인하지 못했습니다.");
+      }
       setMessage(response.message);
-      await refreshHealth();
     } catch (error) {
       setErrors([error instanceof Error ? error.message : "초기 설정 저장 실패"]);
     } finally {

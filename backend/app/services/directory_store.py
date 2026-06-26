@@ -211,6 +211,49 @@ class DirectoryStore:
                 )
             connection.commit()
 
+    def verify_initialization(self, payload: SetupInitializeRequest) -> dict[str, object]:
+        self.db.ensure_migrations_applied(payload.dbConfig)
+        expected_domain = payload.company.domain.strip().lower()
+        expected_admin_email = payload.adminUser.email.strip().lower()
+
+        with self.db.connect(payload.dbConfig) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) AS count FROM companies")
+                company_count = int(cursor.fetchone()["count"])
+                cursor.execute("SELECT COUNT(*) AS count FROM users WHERE user_type = 'admin'")
+                admin_count = int(cursor.fetchone()["count"])
+                cursor.execute(
+                    """
+                    SELECT id, name, domain
+                    FROM companies
+                    WHERE LOWER(domain) = %s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (expected_domain,),
+                )
+                company_row = cursor.fetchone()
+                cursor.execute(
+                    """
+                    SELECT id, email, user_type
+                    FROM users
+                    WHERE user_type = 'admin' AND LOWER(email) = %s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (expected_admin_email,),
+                )
+                admin_row = cursor.fetchone()
+
+        return {
+            "company_count": company_count,
+            "admin_count": admin_count,
+            "domain_matched": company_row is not None,
+            "admin_email_matched": admin_row is not None,
+            "expected_domain": expected_domain,
+            "expected_admin_email": expected_admin_email,
+        }
+
     def get_overview(self) -> DirectoryOverviewResponse:
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection:
