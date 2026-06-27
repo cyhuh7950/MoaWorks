@@ -1602,6 +1602,41 @@ export default function App() {
             </div>
           </section>
 
+          <section className="panel" hidden={activeAdminMenu !== "organization"}>
+            <div className="panel-head">
+              <div>
+                <h2>사용자 파일 업로드</h2>
+                <p className="muted">대량 사용자 등록을 위한 운영 진입점입니다. 실제 업로드 API는 후속 단계에서 연결합니다.</p>
+              </div>
+            </div>
+            <div className="split-panel">
+              <article className="status-card">
+                <strong>업로드 대상</strong>
+                <p>사용자 이름, 이메일, 부서, 권한 역할, 초기 상태를 한 번에 등록하거나 갱신하는 파일을 대상으로 합니다.</p>
+                <p className="muted">서버 반영 시 사용자 생성 규칙과 메일 계정 자동 생성 규칙을 동일하게 적용해야 합니다.</p>
+              </article>
+              <article className="status-card">
+                <strong>허용 파일 형식</strong>
+                <p>CSV, XLSX</p>
+                <p className="muted">필수 열: name, email, department, role, status</p>
+              </article>
+              <article>
+                <form className="compact-form" onSubmit={(event) => event.preventDefault()}>
+                  <label>
+                    사용자 파일
+                    <input type="file" accept=".csv,.xlsx" disabled />
+                  </label>
+                  <button type="button" className="secondary" disabled>업로드 API 연결 대기</button>
+                </form>
+              </article>
+              <article className="status-card">
+                <strong>업로드 후 반영 대상</strong>
+                <p>사용자 목록, 부서 매핑, 권한 역할 매핑, 메일 계정 생성 상태, 정합성 경고에 반영됩니다.</p>
+                <p className="muted">실제 반영 전 미리보기와 오류 행 다운로드가 필요합니다.</p>
+              </article>
+            </div>
+          </section>
+
           <section className="panel split-panel" hidden={activeAdminMenu !== "service"}>
             <article>
               <div className="panel-head">
@@ -1670,8 +1705,42 @@ export default function App() {
           <section className="panel" hidden={activeAdminMenu !== "service"}>
             <div className="panel-head">
               <div>
-                <h2>{copy.authContract}</h2>
-                <p className="muted">user-web, desktop-client, mobile-app은 같은 로그인 응답 구조를 사용합니다.</p>
+                <h2>메일 설정 / 저장소 상태</h2>
+                <p className="muted">서비스 운영 메뉴는 실제 운영 점검 대상만 보여줍니다.</p>
+              </div>
+            </div>
+            <div className="overview-grid">
+              <article className="status-card">
+                <strong>메일 설정 현황</strong>
+                <p>{overview.mailProvider.providerType}</p>
+                <p className="muted">
+                  {overview.mailProvider.relayHost}:{overview.mailProvider.relayPort}
+                </p>
+                <p>활성 여부: {overview.mailProvider.active ? "active" : "inactive"}</p>
+              </article>
+              <article className="status-card">
+                <strong>저장소 상태</strong>
+                <p>{health?.components.storage?.status ?? "unknown"}</p>
+                <p className="muted">{health?.components.storage?.message ?? "저장소 상태를 아직 확인하지 못했습니다."}</p>
+              </article>
+              <article className="status-card">
+                <strong>DB 상태</strong>
+                <p>{health?.components.db?.status ?? "unknown"}</p>
+                <p className="muted">{health?.components.db?.message ?? "DB 상태를 아직 확인하지 못했습니다."}</p>
+              </article>
+              <article className="status-card">
+                <strong>마지막 Relay 테스트</strong>
+                <p>{overview.mailProvider.lastTestStatus}</p>
+                <p className="muted">{overview.mailProvider.lastTestMessage}</p>
+              </article>
+            </div>
+          </section>
+
+          <section className="panel" hidden={activeAdminMenu !== "help"}>
+            <div className="panel-head">
+              <div>
+                <h2>운영 가이드: {copy.authContract}</h2>
+                <p className="muted">서비스 운영 화면에서는 제거하고, 클라이언트 공통 인증 이해가 필요한 운영 가이드로 재배치했습니다.</p>
               </div>
             </div>
             <pre className="contract-block">{`POST /api/v1/auth/login
@@ -1693,7 +1762,7 @@ export default function App() {
 }`}</pre>
           </section>
 
-          <section className="panel" hidden={activeAdminMenu !== "help"}>
+          <section className="panel" hidden={activeAdminMenu !== "brand"}>
             <div className="panel-head">
               <div>
                 <h2>브랜드 / 메뉴 / 보관 정책 설정</h2>
@@ -1717,9 +1786,40 @@ export default function App() {
                 <p>메신저: 서버 2주 + 설치형 대화 파일(JSON/HTML) 보관</p>
               </article>
               <article className="status-card">
-                <strong>다국어 메시지 범위</strong>
-                <p>메뉴 번역뿐 아니라 에러, 검증, 경고, 성공, 상태, 알림, 세션 만료, 권한 없음, 차단 사유 문구를 포함합니다.</p>
-                <p className="muted">메일/메신저 시스템 문구와 관리자 운영 경고 문구도 같은 메시지 계약으로 관리합니다.</p>
+                <strong>사용자 화면 반영 경로</strong>
+                <p>브랜드/메뉴/보관 정책 설정은 user-web, mobile-app, desktop-client의 화면 구조와 Help 경로에 반영됩니다.</p>
+                <p className="muted">운영자는 설정값이 어떤 사용자 화면에 연결되는지 브랜드/화면 설정 메뉴에서 확인합니다.</p>
+              </article>
+            </div>
+          </section>
+
+          <section className="panel" hidden={activeAdminMenu !== "help"}>
+            <div className="panel-head">
+              <div>
+                <h2>도움말 / 정책 안내</h2>
+                <p className="muted">정책 본문을 메인 화면에 직접 노출하지 않고, 운영자가 확인해야 할 경로와 점검 항목만 정리합니다.</p>
+              </div>
+            </div>
+            <div className="overview-grid">
+              <article className="status-card">
+                <strong>보관 정책 안내</strong>
+                <p>메일: 서버 1개월 + 설치형 로컬 아카이브 무기한</p>
+                <p>메신저: 서버 2주 + 설치형 대화 파일(JSON/HTML) 보관</p>
+                <p className="muted">정책 상세 본문은 Help / 정책 안내 / 설정 &gt; 보관 정책 경로에서 확인합니다.</p>
+              </article>
+              <article className="status-card">
+                <strong>운영 가이드</strong>
+                <p>초기 설정, 관리자 로그인, 사용자 생성, 도메인 검증, Relay 테스트 순서로 점검합니다.</p>
+                <p className="muted">실패 시 화면의 오류 메시지와 서버 health 상태를 함께 확인합니다.</p>
+              </article>
+              <article className="status-card">
+                <strong>초기 설치 후 점검 항목</strong>
+                <p>DB 연결, companies/admin_users 생성, health.initialized, Wizard 종료, 로그인 화면 전환을 확인합니다.</p>
+              </article>
+              <article className="status-card">
+                <strong>Help 경로 안내</strong>
+                <p>{uiContractDraft.helpText}</p>
+                <p className="muted">정책 본문은 업무 홈 카드가 아니라 도움말/정책 경로로만 안내합니다.</p>
               </article>
             </div>
           </section>
