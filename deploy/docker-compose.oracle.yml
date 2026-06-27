@@ -1,5 +1,6 @@
 services:
   server:
+    container_name: moaworks-server
     build:
       context: ..
       dockerfile: deploy/server.Dockerfile
@@ -11,7 +12,6 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
     volumes:
-      - ../backend:/app
       - ../data:/app/data
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8510}:8000"
@@ -19,57 +19,65 @@ services:
       - mail-layer
       - storage
     networks:
-      - default
+      - app_net
       - pg_net
       - proxy_net
     restart: unless-stopped
 
   admin-web:
+    container_name: moaworks-admin-web
     build:
       context: ..
       dockerfile: deploy/admin-web.Dockerfile
     environment:
       VITE_API_BASE_URL: https://api.moaworks.sinsan.kr/api/v1
-    ports:
-      - "127.0.0.1:${FRONTEND_PORT:-3510}:3510"
+    expose:
+      - "3510"
     depends_on:
       - server
     networks:
-      - default
       - proxy_net
     restart: unless-stopped
 
   user-web:
+    container_name: moaworks-user-web
     build:
       context: ..
       dockerfile: deploy/user-web.Dockerfile
     environment:
       VITE_API_BASE_URL: https://api.moaworks.sinsan.kr/api/v1
-    ports:
-      - "127.0.0.1:${USER_WEB_PORT:-3520}:3520"
+    expose:
+      - "3520"
     depends_on:
       - server
     networks:
-      - default
       - proxy_net
     restart: unless-stopped
 
   mail-layer:
+    container_name: moaworks-mail-layer
     image: alpine:3.20
     command: ["sh", "-c", "echo 'mail-layer placeholder'; tail -f /dev/null"]
+    networks:
+      - app_net
     restart: unless-stopped
 
   storage:
+    container_name: moaworks-storage
     image: alpine:3.20
     command: ["sh", "-c", "mkdir -p /storage/runtime /storage/files && tail -f /dev/null"]
     volumes:
       - storage-data:/storage
+    networks:
+      - app_net
     restart: unless-stopped
 
 volumes:
   storage-data:
 
 networks:
+  app_net:
+    name: moaworks-app-net
   pg_net:
     external: true
     name: common_default
