@@ -874,8 +874,8 @@ export default function App() {
   const showAdminConsole = initialized && Boolean(token) && Boolean(overview);
 
   return (
-    <main className={`shell ${showAdminConsole ? "console-shell" : ""}`}>
-      <section className="hero" hidden={showAdminConsole}>
+    <main className={`shell ${showAdminConsole ? "console-shell" : ""} ${showLoginPanel ? "login-shell" : ""}`}>
+      <section className="hero" hidden={showAdminConsole || showLoginPanel}>
         <p className="eyebrow">{t(locale, "appTitle")}</p>
         <h1>{t(locale, "appDescription")}</h1>
         <p className="lead">
@@ -980,7 +980,88 @@ export default function App() {
         </div>
       </section>
 
-      <section className="panel" hidden={showAdminConsole}>
+      {showLoginPanel && (
+        <section className="login-landing">
+          <article className="login-brief">
+            <p className="eyebrow">{t(locale, "appTitle")}</p>
+            <h1>MoaWorks 관리자 플랫폼</h1>
+            <p className="lead">운영 상태를 확인하고 관리자 계정으로 운영 콘솔에 진입합니다.</p>
+            <div className="login-summary-grid">
+              <div className="status-card">
+                <strong>서비스 상태</strong>
+                <span className={`badge badge-${health?.status ?? "warning"}`}>전체 상태: {health?.status ?? "확인 중"}</span>
+              </div>
+              <div className="status-card">
+                <strong>초기 설정</strong>
+                <span className={`badge ${initialized ? "badge-ok" : "badge-warning"}`}>
+                  {initialized ? "완료" : "미완료"}
+                </span>
+              </div>
+              <div className="status-card">
+                <strong>API</strong>
+                <p className="muted">{apiBase}</p>
+              </div>
+            </div>
+            <details className="login-details">
+              <summary>상세 상태 보기</summary>
+              {!health ? (
+                <p>상태를 불러오는 중입니다.</p>
+              ) : (
+                <div className="status-grid">
+                  {Object.entries(health.components).map(([name, component]) => (
+                    <article key={name} className="status-card">
+                      <div className="status-title">
+                        <strong>{name}</strong>
+                        <span className={`badge badge-${component.status}`}>{component.status}</span>
+                      </div>
+                      <p>{component.message}</p>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </details>
+          </article>
+
+          <article className="login-card">
+            <div className="panel-head">
+              <div>
+                <h2>관리자 로그인</h2>
+                <p className="muted">관리자 전용 운영 API는 로그인 후 Bearer 토큰으로만 접근합니다.</p>
+              </div>
+            </div>
+            {hasStoredSessionButNoOverview && (
+              <div className="notice warning">
+                저장된 관리자 세션을 확인하지 못했습니다. 다시 로그인해 운영 화면을 복구하세요.
+              </div>
+            )}
+            {errors.length > 0 && (
+              <div className="notice danger">
+                <strong>확인 필요</strong>
+                <ul>{errors.map((item) => <li key={item}>{item}</li>)}</ul>
+              </div>
+            )}
+            {warnings.length > 0 && (
+              <div className="notice warning">
+                <strong>확인 필요</strong>
+                <ul>{warnings.map((item) => <li key={item}>{item}</li>)}</ul>
+              </div>
+            )}
+            <form className="compact-form" onSubmit={handleLogin}>
+              <label>
+                {copy.adminEmail}
+                <input type="email" value={loginForm.email} onChange={(e) => setLoginForm({ ...loginForm, email: e.target.value })} />
+              </label>
+              <label>
+                {copy.adminPassword}
+                <input type="password" value={loginForm.password} onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })} />
+              </label>
+              <button type="submit" disabled={loading}>로그인</button>
+            </form>
+          </article>
+        </section>
+      )}
+
+      <section className="panel" hidden={showAdminConsole || showLoginPanel}>
         <div className="panel-head">
           <h2>시스템 상태</h2>
           <button onClick={() => void refreshHealth()}>새로고침</button>
@@ -1019,7 +1100,7 @@ export default function App() {
         )}
       </section>
 
-      {(message || errors.length > 0 || warnings.length > 0) && !showAdminConsole && (
+      {(message || errors.length > 0 || warnings.length > 0) && !showAdminConsole && !showLoginPanel && (
         <section className="panel">
           {message && <p className="result">{message}</p>}
           {errors.length > 0 && (
@@ -1140,33 +1221,6 @@ export default function App() {
                 초기 설정 저장
               </button>
             </div>
-          </form>
-        </section>
-      )}
-
-      {showLoginPanel && (
-        <section className="panel">
-          <div className="panel-head">
-            <div>
-              <h2>관리자 로그인</h2>
-              <p className="muted">초기 설정이 완료된 상태입니다. 관리자 전용 운영 API는 로그인 후 Bearer 토큰으로만 접근합니다.</p>
-            </div>
-          </div>
-          {hasStoredSessionButNoOverview && (
-            <div className="notice warning">
-              저장된 관리자 세션을 확인하지 못했습니다. 다시 로그인해 운영 화면을 복구하세요.
-            </div>
-          )}
-          <form className="compact-form" onSubmit={handleLogin}>
-            <label>
-              {copy.adminEmail}
-              <input type="email" value={loginForm.email} onChange={(e) => setLoginForm({ ...loginForm, email: e.target.value })} />
-            </label>
-            <label>
-              {copy.adminPassword}
-              <input type="password" value={loginForm.password} onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })} />
-            </label>
-            <button type="submit" disabled={loading}>로그인</button>
           </form>
         </section>
       )}
