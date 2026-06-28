@@ -122,6 +122,9 @@ class DirectoryStore:
                         json.dumps(
                             [
                                 "mail:read",
+                                "mail:send",
+                                "messenger:read",
+                                "messenger:write",
                                 "approval:read",
                                 "approval:create",
                                 "approval:submit",
@@ -367,7 +370,7 @@ class DirectoryStore:
         company = self._require_company()
         role_id = self._new_id("role")
         now = self._now()
-        role_permissions = permissions or ["mail:read", "approval:read", "approval:create"]
+        role_permissions = permissions or ["mail:read", "mail:send", "messenger:read", "messenger:write", "approval:read", "approval:create"]
 
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
