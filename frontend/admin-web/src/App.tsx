@@ -129,12 +129,16 @@ type UiContract = {
   };
 };
 
-type AdminMenuKey = "dashboard" | "organization" | "service" | "approval" | "brand" | "language" | "help";
+type AdminMenuKey = "dashboard" | "users" | "departments" | "roles" | "service" | "mail" | "storage" | "approval" | "brand" | "language" | "help";
 
 const adminMenus: Array<{ key: AdminMenuKey; label: string; description: string }> = [
   { key: "dashboard", label: "대시보드", description: "상태와 빠른 작업" },
-  { key: "organization", label: "조직 관리", description: "사용자, 부서, 권한" },
-  { key: "service", label: "서비스 운영", description: "도메인, Relay, 메일" },
+  { key: "users", label: "사용자 관리", description: "사용자 생성/수정/파일 업로드" },
+  { key: "departments", label: "부서 관리", description: "조직 단위 관리" },
+  { key: "roles", label: "권한 관리", description: "역할과 권한 상태" },
+  { key: "service", label: "서비스 운영", description: "도메인 검증과 Relay 테스트" },
+  { key: "mail", label: "메일 설정", description: "Relay와 메일 제공자" },
+  { key: "storage", label: "저장소/DB 상태", description: "저장소와 DB 점검" },
   { key: "approval", label: "결재/감사", description: "감사 로그와 이벤트" },
   { key: "brand", label: "브랜드/화면 설정", description: "설정 계약과 반영" },
   { key: "language", label: "다국어/메시지", description: "번역과 상태 문구" },
@@ -880,7 +884,7 @@ export default function App() {
         <p className="api-base">API Base: {apiBase}</p>
       </section>
 
-      <section className="panel" hidden={showAdminConsole}>
+      <section className="panel" hidden={!token || showAdminConsole}>
         <div className="panel-head">
           <div>
             <h2>{t(locale, "language")} / {t(locale, "timezone")}</h2>
@@ -1204,7 +1208,7 @@ export default function App() {
                   setMonitoringOverview(null);
                   setMonitoringEvents([]);
                   setApprovalAuditLogs([]);
-                  setActiveAdminMenu("dashboard");
+                    setActiveAdminMenu("dashboard");
                 }}
               >
                 {t(locale, "logout")}
@@ -1224,7 +1228,7 @@ export default function App() {
                 <button type="button" className="secondary" onClick={() => void refreshMonitoring()}>
                   경고/알림
                 </button>
-                <button type="button" onClick={() => setActiveAdminMenu("organization")}>
+                <button type="button" onClick={() => setActiveAdminMenu("users")}>
                   사용자 추가
                 </button>
               </div>
@@ -1300,7 +1304,7 @@ export default function App() {
               </article>
             </div>
             <div className="quick-actions">
-              <button type="button" onClick={() => setActiveAdminMenu("organization")}>사용자 추가</button>
+              <button type="button" onClick={() => setActiveAdminMenu("users")}>사용자 추가</button>
               <button type="button" className="secondary" onClick={() => setActiveAdminMenu("service")}>도메인 검증</button>
               <button type="button" className="secondary" onClick={() => setActiveAdminMenu("service")}>Relay 테스트</button>
               <button type="button" className="secondary" onClick={() => void reloadUiContract()}>설정 저장값 다시 불러오기</button>
@@ -1387,7 +1391,7 @@ export default function App() {
             </div>
           </section>
 
-          <section className="panel" hidden={activeAdminMenu !== "organization"}>
+          <section className="panel" hidden={activeAdminMenu !== "users"}>
             <div className="panel-head">
               <div>
                 <h2>{t(locale, "userManagement")}</h2>
@@ -1511,7 +1515,7 @@ export default function App() {
             </div>
           </section>
 
-          <section className="panel split-panel" hidden={activeAdminMenu !== "organization"}>
+          <section className="panel split-panel" hidden={activeAdminMenu !== "departments" && activeAdminMenu !== "roles"}>
             <article>
               <div className="panel-head">
                 <div>
@@ -1549,7 +1553,7 @@ export default function App() {
             </article>
           </section>
 
-          <section className="panel" hidden={activeAdminMenu !== "organization"}>
+          <section className="panel" hidden={activeAdminMenu !== "roles"}>
             <div className="panel-head">
               <div>
                 <h2>{copy.roleStatus}</h2>
@@ -1602,7 +1606,7 @@ export default function App() {
             </div>
           </section>
 
-          <section className="panel" hidden={activeAdminMenu !== "organization"}>
+          <section className="panel" hidden={activeAdminMenu !== "users"}>
             <div className="panel-head">
               <div>
                 <h2>사용자 파일 업로드</h2>
@@ -1702,7 +1706,7 @@ export default function App() {
             </article>
           </section>
 
-          <section className="panel" hidden={activeAdminMenu !== "service"}>
+          <section className="panel" hidden={activeAdminMenu !== "mail" && activeAdminMenu !== "storage"}>
             <div className="panel-head">
               <div>
                 <h2>메일 설정 / 저장소 상태</h2>

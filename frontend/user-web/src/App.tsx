@@ -128,6 +128,7 @@ type ReasonAction = {
 };
 
 type WorkspaceTab = "mail" | "approval" | "messenger";
+type UserPortalMenu = "home" | "mail" | "approval" | "messenger" | "schedule" | "contacts" | "org" | "files" | "alerts" | "settings" | "help";
 
 type SurfaceCardProps = {
   title: string;
@@ -214,6 +215,7 @@ export default function App() {
   const [logsCount, setLogsCount] = useState(0);
   const [notificationMode, setNotificationMode] = useState<"polling" | "streaming" | "fallback">("polling");
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceTab>("mail");
+  const [activePortalMenu, setActivePortalMenu] = useState<UserPortalMenu>("home");
   const eventSourceRef = useRef<EventSource | null>(null);
   const streamCursorRef = useRef<string>("");
   const streamRetryRef = useRef(0);
@@ -752,6 +754,263 @@ export default function App() {
     { title: "메시지 묶음 반영", body: "오류, 경고, 차단, 빈 상태, 성공, 세션 만료 메시지가 같은 운영 메시지 계약을 따릅니다." },
     { title: "정책 안내 반영", body: "정책 본문은 직접 노출하지 않고 Help / 정책 안내 / 설정 > 보관 정책 경로만 공통 유지합니다." },
   ];
+
+  if (token) {
+    const portalMenus: Array<{ key: UserPortalMenu; label: string; desc: string }> = [
+      { key: "home", label: "홈", desc: "오늘 업무 우선순위" },
+      { key: "mail", label: "메일", desc: `${notificationSummary?.unreadCount ?? 0}건 확인` },
+      { key: "approval", label: "결재", desc: `${dashboardStats.pendingApprovals}건 대기` },
+      { key: "messenger", label: "메신저", desc: "최근 대화" },
+      { key: "schedule", label: "일정", desc: "오늘 일정" },
+      { key: "contacts", label: "주소록", desc: "연락처" },
+      { key: "org", label: "조직도", desc: "부서/역할" },
+      { key: "files", label: "파일", desc: "업무 파일" },
+      { key: "alerts", label: "알림", desc: `${dashboardStats.unreadCount}건` },
+      { key: "settings", label: "설정", desc: "언어/화면" },
+      { key: "help", label: "Help / 정책", desc: "정책 경로" },
+    ];
+
+    const renderWorkPanel = () => {
+      if (activePortalMenu === "mail") {
+        return (
+          <section style={{ display: "grid", gridTemplateColumns: "240px minmax(320px, 0.9fr) minmax(360px, 1.1fr)", gap: 18, minHeight: 0 }}>
+            <aside style={{ display: "grid", gap: 10, alignContent: "start", overflowY: "auto" }}>
+              {mailFolders.map((item) => (
+                <article key={item.title} style={{ borderRadius: 18, padding: 16, border: "1px solid #dbe4ec", background: "#fff" }}>
+                  <strong>{item.title}</strong>
+                  <div style={{ marginTop: 8, color: item.tone, fontWeight: 800 }}>{item.count}</div>
+                </article>
+              ))}
+            </aside>
+            <section style={{ display: "grid", gap: 10, alignContent: "start", overflowY: "auto" }}>
+              {mailListSamples.map((item) => (
+                <article key={`${item.sender}-${item.subject}`} style={{ borderRadius: 20, padding: 16, border: "1px solid #dbe4ec", background: item.unread ? "#f8fafc" : "#fff" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                    <strong>{item.sender}</strong>
+                    <span style={{ color: "#64748b", fontSize: 13 }}>{item.time}</span>
+                  </div>
+                  <h3 style={{ margin: "8px 0 6px", fontSize: 18 }}>{item.subject}</h3>
+                  <p style={{ margin: 0, color: "#475569", lineHeight: 1.55 }}>{item.preview}</p>
+                </article>
+              ))}
+            </section>
+            <article style={{ borderRadius: 24, padding: 22, border: "1px solid #dbe4ec", background: "#fff", overflowY: "auto" }}>
+              <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>메일 상세</div>
+              <h2 style={{ margin: "10px 0 0", fontSize: 28 }}>3분기 계약 검토 요청</h2>
+              <p style={{ color: "#475569", lineHeight: 1.7 }}>오늘 안으로 계약 조항 변경 포인트를 검토해 주세요. 회신, 전달, 중요 표시, 보관 이동을 이 패널에서 처리합니다.</p>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                {["답장", "전달", "중요 표시", "보관 이동"].map((action) => (
+                  <span key={action} style={{ padding: "9px 12px", borderRadius: 999, background: "#ecfeff", color: "#0f766e", fontWeight: 700, fontSize: 13 }}>{action}</span>
+                ))}
+              </div>
+            </article>
+          </section>
+        );
+      }
+
+      if (activePortalMenu === "approval") {
+        return (
+          <section style={{ display: "grid", gridTemplateColumns: "minmax(360px, 0.9fr) minmax(420px, 1.1fr)", gap: 18, minHeight: 0 }}>
+            <div style={{ display: "grid", gap: 12, alignContent: "start", overflowY: "auto" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10 }}>
+                {approvalBuckets.map((item) => (
+                  <article key={item.title} style={{ borderRadius: 18, padding: 16, border: "1px solid #dbe4ec", background: "#fff" }}>
+                    <div style={{ color: item.tone, fontWeight: 800 }}>{item.title}</div>
+                    <div style={{ marginTop: 8, fontSize: 28, fontWeight: 800 }}>{item.count}</div>
+                  </article>
+                ))}
+              </div>
+              {documents.slice(0, 8).map((doc) => (
+                <article key={doc.id} style={{ borderRadius: 20, padding: 16, border: "1px solid #dbe4ec", background: doc.status === "submitted" ? "#f8fafc" : "#fff" }}>
+                  <strong>{doc.title}</strong>
+                  <p style={{ margin: "8px 0 0", color: "#475569" }}>{doc.status} / 작성자 {doc.creatorUserName}</p>
+                </article>
+              ))}
+              {documents.length === 0 ? <article style={{ borderRadius: 20, padding: 18, border: "1px dashed #cbd5e1", color: "#64748b" }}>아직 문서가 없습니다.</article> : null}
+            </div>
+            <article style={{ borderRadius: 24, padding: 22, border: "1px solid #dbe4ec", background: "#fff", overflowY: "auto" }}>
+              <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>결재 처리</div>
+              <h2 style={{ margin: "10px 0 0", fontSize: 28 }}>대기 결재와 빠른 작성</h2>
+              <p style={{ color: "#475569", lineHeight: 1.7 }}>상신, 승인, 반려, 회수, 재기안은 서버 상태 전이 규칙에 따라 처리합니다. 상세 문서가 길면 이 패널 내부에서만 스크롤됩니다.</p>
+              {uiContract.quickComposeVisible ? (
+                <form onSubmit={handleCreate} style={{ display: "grid", gap: 12, marginTop: 18 }}>
+                  <input value={createForm.title} onChange={(event) => setCreateForm((current) => ({ ...current, title: event.target.value }))} placeholder="결재 제목" style={{ height: 46, borderRadius: 14, border: "1px solid #cbd5e1", padding: "0 14px" }} />
+                  <textarea value={createForm.content} onChange={(event) => setCreateForm((current) => ({ ...current, content: event.target.value }))} placeholder="내용" style={{ minHeight: 110, borderRadius: 16, border: "1px solid #cbd5e1", padding: 14 }} />
+                  <input value={createForm.approverUserIds} onChange={(event) => setCreateForm((current) => ({ ...current, approverUserIds: event.target.value }))} placeholder="결재자 사용자 ID" style={{ height: 46, borderRadius: 14, border: "1px solid #cbd5e1", padding: "0 14px" }} />
+                  <button disabled={loading || !canAct.create} style={{ height: 48, borderRadius: 16, border: 0, background: uiContract.brand.primary, color: "#fff", fontWeight: 800 }}>결재 초안 저장</button>
+                </form>
+              ) : null}
+            </article>
+          </section>
+        );
+      }
+
+      if (activePortalMenu === "messenger") {
+        return (
+          <section style={{ display: "grid", gridTemplateColumns: "280px minmax(420px, 1fr) 280px", gap: 18, minHeight: 0 }}>
+            <aside style={{ display: "grid", gap: 12, alignContent: "start", overflowY: "auto" }}>
+              {messengerRooms.map((group) => (
+                <article key={group.title} style={{ borderRadius: 20, padding: 16, border: "1px solid #dbe4ec", background: "#fff" }}>
+                  <strong>{group.title}</strong>
+                  {group.entries.map((entry) => <p key={entry} style={{ margin: "8px 0 0", color: "#475569" }}>{entry}</p>)}
+                </article>
+              ))}
+            </aside>
+            <article style={{ borderRadius: 24, padding: 22, border: "1px solid #dbe4ec", background: "#fff", overflowY: "auto" }}>
+              <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>대화 타임라인</div>
+              <h2 style={{ margin: "10px 0 0", fontSize: 28 }}>최근 대화</h2>
+              {messengerTimeline.map((item) => (
+                <div key={`${item.sender}-${item.time}`} style={{ marginTop: 12, padding: 16, borderRadius: 18, background: "#f8fafc", border: "1px solid #dbe4ec" }}>
+                  <strong>{item.sender}</strong>
+                  <span style={{ marginLeft: 10, color: "#64748b", fontSize: 13 }}>{item.time}</span>
+                  <p style={{ color: "#334155", lineHeight: 1.6 }}>{item.body}</p>
+                  <div style={{ color: "#0f766e", fontSize: 13, fontWeight: 700 }}>{item.meta}</div>
+                </div>
+              ))}
+            </article>
+            <aside style={{ display: "grid", gap: 12, alignContent: "start", overflowY: "auto" }}>
+              {collaborationPanels.map((item) => (
+                <article key={item.title} style={{ borderRadius: 20, padding: 16, border: "1px solid #dbe4ec", background: "#fff" }}>
+                  <strong>{item.title}</strong>
+                  <p style={{ color: "#475569", lineHeight: 1.6 }}>{item.body}</p>
+                </article>
+              ))}
+            </aside>
+          </section>
+        );
+      }
+
+      if (activePortalMenu === "alerts") {
+        return (
+          <section style={{ display: "grid", gridTemplateColumns: "minmax(420px, 1fr) 320px", gap: 18, minHeight: 0 }}>
+            <div style={{ display: "grid", gap: 12, alignContent: "start", overflowY: "auto" }}>
+              {notifications.slice(0, 12).map((item) => (
+                <article key={item.notificationId} style={{ borderRadius: 20, padding: 16, border: "1px solid #dbe4ec", background: item.status === "unread" ? "#f8fafc" : "#fff" }}>
+                  <strong>{item.title}</strong>
+                  <p style={{ color: "#475569", lineHeight: 1.6 }}>{item.message}</p>
+                  <button type="button" onClick={() => void executeAck(item.notificationId)} disabled={loading || item.status !== "unread"} style={{ height: 38, borderRadius: 12, border: "1px solid #cbd5e1", background: "#fff", padding: "0 12px" }}>읽음 처리</button>
+                </article>
+              ))}
+              {notifications.length === 0 ? <article style={{ borderRadius: 20, padding: 18, border: "1px dashed #cbd5e1", color: "#64748b" }}>아직 표시할 알림이 없습니다.</article> : null}
+            </div>
+            <article style={{ borderRadius: 24, padding: 22, border: "1px solid #dbe4ec", background: "#fff" }}>
+              <h2 style={{ marginTop: 0 }}>알림 정책</h2>
+              <p style={{ color: "#475569", lineHeight: 1.7 }}>현재 모드: {notificationMode === "streaming" ? "SSE" : notificationMode === "fallback" ? "Polling Fallback" : "Polling"}</p>
+              {notificationError ? <p style={{ color: "#b91c1c" }}>{notificationError}</p> : null}
+            </article>
+          </section>
+        );
+      }
+
+      if (activePortalMenu === "settings" || activePortalMenu === "help") {
+        return (
+          <section style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 18, minHeight: 0, overflowY: "auto" }}>
+            <article style={{ borderRadius: 24, padding: 22, border: "1px solid #dbe4ec", background: "#fff" }}>
+              <h2 style={{ marginTop: 0 }}>Help / 정책 안내</h2>
+              <p style={{ color: "#475569", lineHeight: 1.7 }}>정책 본문은 업무 홈에 직접 노출하지 않고 {uiContract.helpText} 경로에서 확인합니다.</p>
+              <p style={{ color: "#475569", lineHeight: 1.7 }}>메일: {MAIL_POLICY.serverRetention} / {MAIL_POLICY.localRetention}</p>
+              <p style={{ color: "#475569", lineHeight: 1.7 }}>메신저: {MESSENGER_POLICY.serverRetention} / {MESSENGER_POLICY.localRetention}</p>
+            </article>
+            <article style={{ borderRadius: 24, padding: 22, border: "1px solid #dbe4ec", background: "#fff" }}>
+              <h2 style={{ marginTop: 0 }}>설정 반영</h2>
+              {settingsContractCards.map((item) => (
+                <div key={item.title} style={{ marginTop: 12, padding: 14, borderRadius: 16, background: "#f8fafc", border: "1px solid #dbe4ec" }}>
+                  <strong>{item.title}</strong>
+                  <p style={{ marginBottom: 0, color: "#475569", lineHeight: 1.6 }}>{item.body}</p>
+                </div>
+              ))}
+            </article>
+          </section>
+        );
+      }
+
+      return (
+        <section style={{ display: "grid", gridTemplateRows: "auto minmax(0, 1fr)", gap: 18, minHeight: 0 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 16 }}>
+            {homeSurfaceCards.map((item) => (
+              <SurfaceCard key={item.id} title={item.title} value={item.value} subtext={item.subtext} tone={item.tone} />
+            ))}
+          </div>
+          <section style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 340px", gap: 18, minHeight: 0 }}>
+            <article style={{ borderRadius: 24, padding: 22, border: "1px solid #dbe4ec", background: "#fff", overflowY: "auto" }}>
+              <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>오늘 업무</div>
+              <h2 style={{ margin: "10px 0 0", fontSize: 30 }}>업무 카드에서 바로 처리하세요</h2>
+              <div style={{ marginTop: 18, display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 14 }}>
+                {[
+                  { title: "메일", description: "받은편지함, 중요메일, 임시보관함", key: "mail" as UserPortalMenu },
+                  { title: "결재", description: "대기 결재, 신규 상신, 반려 재기안", key: "approval" as UserPortalMenu },
+                  { title: "메신저", description: "최근 대화, 고정 채널, 파일 링크", key: "messenger" as UserPortalMenu },
+                  { title: "오늘 일정", description: "회의와 마감 확인", key: "schedule" as UserPortalMenu },
+                  { title: "공지", description: "운영 공지와 팀 알림", key: "alerts" as UserPortalMenu },
+                  { title: "즐겨찾기", description: "자주 쓰는 업무 바로가기", key: "files" as UserPortalMenu },
+                ].map((item) => (
+                  <button key={item.title} type="button" onClick={() => setActivePortalMenu(item.key)} style={{ textAlign: "left", borderRadius: 20, border: "1px solid #dbe4ec", background: "#f8fafc", padding: 18, color: "#0f172a", cursor: "pointer" }}>
+                    <strong style={{ fontSize: 18 }}>{item.title}</strong>
+                    <p style={{ margin: "8px 0 0", color: "#475569", lineHeight: 1.55 }}>{item.description}</p>
+                  </button>
+                ))}
+              </div>
+            </article>
+            <aside style={{ display: "grid", gap: 14, alignContent: "start", overflowY: "auto" }}>
+              <article style={{ borderRadius: 24, padding: 20, background: "linear-gradient(135deg, #f0fdfa, #ecfeff)", border: "1px solid #99f6e4" }}>
+                <strong>{me?.userName}</strong>
+                <p style={{ margin: "8px 0 0", color: "#334155" }}>{me?.roleName || "역할 미지정"} / {me?.userEmail}</p>
+              </article>
+              <article style={{ borderRadius: 24, padding: 20, background: "#fff", border: "1px solid #dbe4ec" }}>
+                <strong>알림 센터</strong>
+                <p style={{ color: "#475569" }}>읽지 않은 알림 {dashboardStats.unreadCount}건 / 긴급 {dashboardStats.urgentCount}건</p>
+                <button type="button" onClick={() => setActivePortalMenu("alerts")} style={{ height: 42, borderRadius: 14, border: 0, background: uiContract.brand.primary, color: "#fff", padding: "0 14px", fontWeight: 800 }}>알림 열기</button>
+              </article>
+              <button onClick={() => { clearUserToken(); setToken(""); setMe(null); }} style={{ height: 48, borderRadius: 16, border: 0, background: "#0f172a", color: "#fff", fontWeight: 800 }}>로그아웃</button>
+            </aside>
+          </section>
+        </section>
+      );
+    };
+
+    return (
+      <main
+        style={{
+          height: "100vh",
+          overflow: "hidden",
+          background: "radial-gradient(circle at top left, rgba(15,118,110,0.12), transparent 28%), linear-gradient(180deg, #f7f5ef 0%, #eef4f3 100%)",
+          color: "#0f172a",
+          fontFamily: `"Pretendard Variable", "SUIT", "Noto Sans KR", "Segoe UI", sans-serif`,
+        }}
+      >
+        <div style={{ display: "grid", gridTemplateColumns: "260px minmax(0, 1fr)", gap: 20, height: "100%", padding: 24, overflow: "hidden" }}>
+          <aside style={{ borderRadius: 30, padding: 22, background: "linear-gradient(180deg, #102a43 0%, #0f172a 100%)", color: "#e2e8f0", overflowY: "auto" }}>
+            <div style={{ fontSize: 13, color: "#7dd3fc", letterSpacing: "0.08em", textTransform: "uppercase" }}>MoaWorks Portal</div>
+            <h1 style={{ margin: "14px 0 8px", fontSize: 30, lineHeight: 1.08, letterSpacing: "-0.04em" }}>사용자 업무 홈</h1>
+            <p style={{ margin: 0, color: "rgba(226,232,240,0.72)", lineHeight: 1.65 }}>업무 처리 중심의 그룹웨어 홈입니다.</p>
+            <nav style={{ display: "grid", gap: 8, marginTop: 24 }}>
+              {portalMenus.map((item) => (
+                <button key={item.key} type="button" onClick={() => setActivePortalMenu(item.key)} style={{ borderRadius: 16, padding: "12px 14px", border: activePortalMenu === item.key ? "1px solid #7dd3fc" : "1px solid rgba(255,255,255,0.05)", background: activePortalMenu === item.key ? "rgba(125,211,252,0.18)" : "rgba(255,255,255,0.04)", color: "#e2e8f0", textAlign: "left", cursor: "pointer" }}>
+                  <span style={{ display: "block", fontWeight: 800 }}>{item.label}</span>
+                  <small style={{ color: "rgba(226,232,240,0.64)" }}>{item.desc}</small>
+                </button>
+              ))}
+            </nav>
+          </aside>
+
+          <section style={{ minWidth: 0, height: "100%", display: "grid", gridTemplateRows: "auto minmax(0, 1fr)", gap: 16, overflow: "hidden" }}>
+            <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, padding: "18px 22px", borderRadius: 26, background: "rgba(255,255,255,0.9)", border: "1px solid rgba(148, 163, 184, 0.18)" }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 800, color: uiContract.brand.primary }}>오늘의 업무 허브</div>
+                <div style={{ marginTop: 6, fontSize: 30, fontWeight: 900, letterSpacing: "-0.04em" }}>{me?.userName}님, 우선순위를 확인하세요</div>
+              </div>
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="메일, 결재, 대화, 파일 검색" style={{ width: 300, height: 46, borderRadius: 14, border: "1px solid #d7e0e8", background: "#fff", padding: "0 14px" }} />
+                {uiContract.quickComposeVisible ? <button type="button" onClick={() => setActivePortalMenu("approval")} style={{ height: 46, borderRadius: 14, border: 0, background: uiContract.brand.primary, color: "#fff", padding: "0 16px", fontWeight: 800 }}>빠른 작성</button> : null}
+                <button type="button" onClick={refreshUiContract} style={{ height: 46, borderRadius: 14, border: "1px solid #d7e0e8", background: "#fff", padding: "0 14px", fontWeight: 700 }}>설정 반영</button>
+              </div>
+            </header>
+            <section style={{ minHeight: 0, overflow: "hidden" }}>{renderWorkPanel()}</section>
+          </section>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main
