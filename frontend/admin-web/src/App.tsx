@@ -874,8 +874,8 @@ export default function App() {
   const showAdminConsole = initialized && Boolean(token) && Boolean(overview);
 
   return (
-    <main className="shell">
-      <section className="hero">
+    <main className={`shell ${showAdminConsole ? "console-shell" : ""}`}>
+      <section className="hero" hidden={showAdminConsole}>
         <p className="eyebrow">{t(locale, "appTitle")}</p>
         <h1>{t(locale, "appDescription")}</h1>
         <p className="lead">
@@ -1019,7 +1019,7 @@ export default function App() {
         )}
       </section>
 
-      {(message || errors.length > 0 || warnings.length > 0) && (
+      {(message || errors.length > 0 || warnings.length > 0) && !showAdminConsole && (
         <section className="panel">
           {message && <p className="result">{message}</p>}
           {errors.length > 0 && (
