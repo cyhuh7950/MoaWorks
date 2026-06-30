@@ -903,6 +903,720 @@ export default function App() {
     );
   }) ?? [];
 
+  const renderAdminPanel = () => {
+    if (!overview) {
+      return null;
+    }
+
+    const messageCategories = [
+      { title: "오류", body: translationError || errors[0] || uiContractDraft.messages.error },
+      { title: "경고", body: warnings[0] || uiContractDraft.messages.warning },
+      { title: "차단", body: uiContractDraft.messages.blocked },
+      { title: "빈 상태", body: uiContractDraft.messages.empty },
+      { title: "성공", body: message || uiContractDraft.messages.success },
+      { title: "세션 만료", body: uiContractDraft.messages.sessionExpired },
+    ];
+
+    const sharedStatusCards = [
+      {
+        title: "메일 Relay 실패(1h)",
+        value: `${monitoringOverview?.relayFailureCount1h ?? 0}건`,
+        description: "1시간 내 발생",
+      },
+      {
+        title: "승인 지연",
+        value: `${monitoringOverview?.approvalBacklogCount ?? 0}건`,
+        description: "미완료 결재 문서",
+      },
+      {
+        title: "디스크 사용률",
+        value: `${monitoringOverview?.diskUsagePercent ?? 0}%`,
+        description: `활성 경고 ${monitoringOverview?.alertOpenCount ?? 0}건`,
+      },
+    ];
+
+    switch (activeAdminMenu) {
+      case "dashboard":
+        return (
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <h2>{copy.overviewTitle}</h2>
+                <p className="muted">운영 개요, 경고/알림, 최근 이벤트, 빠른 작업만 표시합니다.</p>
+              </div>
+              <div className="actions">
+                <button type="button" className="secondary" onClick={() => void refreshDirectory()}>
+                  {copy.refreshOps}
+                </button>
+                <button type="button" className="secondary" onClick={() => void refreshMonitoring()}>
+                  {copy.refreshMonitoring}
+                </button>
+                <button type="button" className="secondary" onClick={() => void reloadUiContract()}>
+                  설정 저장값 다시 불러오기
+                </button>
+              </div>
+            </div>
+            {health ? (
+              <>
+                <div className="badge-row">
+                  <span className={`badge badge-${health.status}`}>전체 상태: {health.status}</span>
+                  <span className={`badge ${initialized ? "badge-ok" : "badge-warning"}`}>
+                    초기 설정: {initialized ? "완료" : "미완료"}
+                  </span>
+                </div>
+                <div className="status-grid">
+                  {Object.entries(health.components).map(([name, component]) => (
+                    <article key={name} className="status-card">
+                      <div className="status-title">
+                        <strong>{name}</strong>
+                        <span className={`badge badge-${component.status}`}>{component.status}</span>
+                      </div>
+                      <p>{component.message}</p>
+                    </article>
+                  ))}
+                </div>
+              </>
+            ) : null}
+            <div className="overview-grid">
+              {sharedStatusCards.map((item) => (
+                <article key={item.title} className="status-card">
+                  <strong>{item.title}</strong>
+                  <p>{item.value}</p>
+                  <p className="muted">{item.description}</p>
+                </article>
+              ))}
+            </div>
+            <div className="status-card">
+              <strong>운영 이벤트(최근)</strong>
+              <ul>
+                {monitoringEvents.slice(0, 5).map((item) => (
+                  <li key={item.eventId}>
+                    [{item.severity}] {item.title}
+                  </li>
+                ))}
+                {monitoringEvents.length === 0 ? <li>운영 이벤트가 없습니다.</li> : null}
+              </ul>
+            </div>
+            <div className="overview-grid">
+              <article className="status-card">
+                <strong>회사</strong>
+                <p>{overview.company.name}</p>
+                <p className="muted">{overview.company.domain}</p>
+              </article>
+              <article className="status-card">
+                <strong>사용자</strong>
+                <p>{overview.users.length}명</p>
+                <p className="muted">활성 {overview.users.filter((item) => item.status === "active").length}명</p>
+              </article>
+              <article className="status-card">
+                <strong>부서 / 권한</strong>
+                <p>{overview.departments.length}개 / {overview.roles.length}개</p>
+                <p className="muted">서버에서만 권한 판단</p>
+              </article>
+              <article className="status-card">
+                <strong>빠른 작업</strong>
+                <p>사용자 관리, 서비스 운영, 저장소/DB 상태 점검으로 바로 이동합니다.</p>
+                <div className="row-actions">
+                  <button type="button" className="secondary" onClick={() => setActiveAdminMenu("users")}>사용자 관리</button>
+                  <button type="button" className="secondary" onClick={() => setActiveAdminMenu("service")}>서비스 운영</button>
+                  <button type="button" className="secondary" onClick={() => setActiveAdminMenu("storage")}>저장소/DB 상태</button>
+                </div>
+              </article>
+            </div>
+          </section>
+        );
+      case "users":
+        return (
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <h2>{t(locale, "userManagement")}</h2>
+                <p className="muted">사용자 검색, 목록, 생성/수정, 상태 관리, 파일 업로드 경로를 관리합니다.</p>
+              </div>
+            </div>
+            <div className="overview-grid">
+              <article className="status-card">
+                <strong>파일 업로드</strong>
+                <p>사용자 일괄 등록 파일 업로드 경로는 이 메뉴 안에서만 유지합니다.</p>
+                <p className="muted">현재 단계: 목록/정합성 검토 후 업로드 절차 연결</p>
+              </article>
+              <article className="status-card">
+                <strong>상태 관리</strong>
+                <p>비활성 사용자 차단과 메일 계정 상태 정합성을 함께 확인합니다.</p>
+              </article>
+            </div>
+            <label className="field-label">
+              사용자 검색
+              <input value={userSearch} onChange={(event) => setUserSearch(event.target.value)} placeholder="이름, 이메일, 부서, 권한" />
+            </label>
+            <form className="wizard" onSubmit={handleUserSubmit}>
+              <div className="field-grid">
+                <label>
+                  사용자 이름
+                  <input value={userForm.name} onChange={(e) => setUserForm({ ...userForm, name: e.target.value })} />
+                </label>
+                <label>
+                  이메일
+                  <input type="email" value={userForm.email} disabled={Boolean(userForm.userId)} onChange={(e) => setUserForm({ ...userForm, email: e.target.value })} />
+                </label>
+                <label>
+                  초기/변경 비밀번호
+                  <input type="password" value={userForm.password} onChange={(e) => setUserForm({ ...userForm, password: e.target.value })} />
+                </label>
+                <label>
+                  부서
+                  <select value={userForm.departmentId} onChange={(e) => setUserForm({ ...userForm, departmentId: e.target.value })}>
+                    {overview.departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                  </select>
+                </label>
+                <label>
+                  권한 역할
+                  <select value={userForm.roleId} onChange={(e) => setUserForm({ ...userForm, roleId: e.target.value })}>
+                    {overview.roles.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                  </select>
+                </label>
+                <label>
+                  상태
+                  <select value={userForm.status} onChange={(e) => setUserForm({ ...userForm, status: e.target.value })}>
+                    <option value="active">active</option>
+                    <option value="inactive">inactive</option>
+                  </select>
+                </label>
+                <label>
+                  사용자 유형
+                  <select value={userForm.userType} disabled={Boolean(userForm.userId)} onChange={(e) => setUserForm({ ...userForm, userType: e.target.value })}>
+                    <option value="user">user</option>
+                    <option value="admin">admin</option>
+                  </select>
+                </label>
+              </div>
+              <div className="actions">
+                <button type="submit" disabled={loading}>{userForm.userId ? copy.editUser : copy.createUser}</button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setUserForm({
+                    ...initialUserForm,
+                    departmentId: overview.departments[0]?.id || "",
+                    roleId: overview.roles[0]?.id || "",
+                  })}
+                >
+                  {copy.newUser}
+                </button>
+              </div>
+            </form>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>이름</th>
+                    <th>이메일</th>
+                    <th>부서</th>
+                    <th>권한</th>
+                    <th>사용자 상태</th>
+                    <th>메일 상태</th>
+                    <th>정합성</th>
+                    <th>작업</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredUsers.map((item) => (
+                    <tr key={item.userId}>
+                      <td>{item.userName}</td>
+                      <td>{item.userEmail}</td>
+                      <td>{item.departmentName}</td>
+                      <td>{item.roleName}</td>
+                      <td>{item.status}</td>
+                      <td>{item.mailAccountStatus}</td>
+                      <td>{item.consistencyIssues.length === 0 ? "정상" : item.consistencyIssues.map((issue) => issue.code).join(", ")}</td>
+                      <td>
+                        <div className="row-actions">
+                          <button
+                            type="button"
+                            className="secondary"
+                            onClick={() => setUserForm({
+                              userId: item.userId,
+                              name: item.userName,
+                              email: item.userEmail,
+                              password: "",
+                              departmentId: item.departmentId,
+                              roleId: item.roleId,
+                              status: item.status,
+                              userType: item.userType,
+                            })}
+                          >
+                            {copy.edit}
+                          </button>
+                          {item.userType !== "admin" && item.status === "active" ? (
+                            <button type="button" className="secondary" onClick={() => void handleDeactivateUser(item.userId)}>
+                              {copy.deactivate}
+                            </button>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {filteredUsers.length === 0 ? (
+                    <tr>
+                      <td colSpan={8}>{userSearch ? "조건에 맞는 사용자가 없습니다." : "등록된 사용자가 없습니다."}</td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        );
+      case "departments":
+        return (
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <h2>부서 관리</h2>
+                <p className="muted">부서 목록, 구조, 생성/수정 업무만 표시합니다.</p>
+              </div>
+            </div>
+            <div className="overview-grid">
+              <article className="status-card">
+                <strong>부서 구조</strong>
+                <p>{overview.departments.map((item) => item.name).join(" / ") || "등록된 부서가 없습니다."}</p>
+              </article>
+            </div>
+            <form className="compact-form" onSubmit={handleDepartmentCreate}>
+              <label>
+                부서명
+                <input value={departmentName} onChange={(e) => setDepartmentName(e.target.value)} />
+              </label>
+              <button type="submit" disabled={loading}>{copy.createDepartment}</button>
+            </form>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>부서명</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {overview.departments.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.name}</td>
+                    </tr>
+                  ))}
+                  {overview.departments.length === 0 ? <tr><td>등록된 부서가 없습니다.</td></tr> : null}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        );
+      case "roles":
+        return (
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <h2>권한 관리</h2>
+                <p className="muted">권한 역할 현황, 역할 생성, 권한 편집, 활성/비활성 전환만 표시합니다.</p>
+              </div>
+            </div>
+            <form className="compact-form" onSubmit={handleRoleCreate}>
+              <label>
+                역할명
+                <input value={roleName} onChange={(e) => setRoleName(e.target.value)} />
+              </label>
+              <label>
+                권한 목록
+                <input value={rolePermissions} onChange={(e) => setRolePermissions(e.target.value)} />
+              </label>
+              <button type="submit" disabled={loading}>{copy.createRole}</button>
+            </form>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>역할명</th>
+                    <th>상태</th>
+                    <th>권한 수</th>
+                    <th>권한 편집/전환</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {overview.roles.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.name}</td>
+                      <td>{item.status}</td>
+                      <td>{item.permissions.length}</td>
+                      <td>
+                        <div className="row-actions">
+                          <button
+                            type="button"
+                            className="secondary"
+                            disabled={loading}
+                            onClick={() => {
+                              setRoleName(item.name);
+                              setRolePermissions(item.permissions.join(", "));
+                            }}
+                          >
+                            권한 편집
+                          </button>
+                          {item.status === "active" ? (
+                            <button
+                              type="button"
+                              className="secondary"
+                              disabled={loading || item.name === "관리자"}
+                              onClick={() => void handleRoleStatus(item.id, "inactive")}
+                            >
+                              {copy.deactivate}
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="secondary"
+                              disabled={loading}
+                              onClick={() => void handleRoleStatus(item.id, "active")}
+                            >
+                              {copy.activate}
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        );
+      case "service":
+        return (
+          <section className="panel split-panel">
+            <article>
+              <div className="panel-head">
+                <div>
+                  <h2>{copy.verifyDomain}</h2>
+                  <p className="muted">회사 도메인 기준 MX/SPF/DKIM/DMARC 검증만 이 메뉴에서 수행합니다.</p>
+                </div>
+              </div>
+              <form className="compact-form" onSubmit={handleDomainVerify}>
+                <label>
+                  검증 도메인
+                  <input value={domainInput} onChange={(e) => setDomainInput(e.target.value)} />
+                </label>
+                <button type="submit" disabled={loading}>{copy.verifyDomainAction}</button>
+              </form>
+              {domainResult ? (
+                <div className="stack-list">
+                  <p className="result">전체 상태: {domainResult.overallStatus}</p>
+                  {domainResult.checks.map((item) => (
+                    <article key={`${item.recordType}-${item.host}`} className="status-card">
+                      <div className="status-title">
+                        <strong>{item.recordType}</strong>
+                        <span className={`badge badge-${item.status}`}>{item.status}</span>
+                      </div>
+                      <p>{item.host}</p>
+                      <p className="muted">{item.expectedValue}</p>
+                      <p>{item.message}</p>
+                    </article>
+                  ))}
+                </div>
+              ) : null}
+            </article>
+            <article>
+              <div className="panel-head">
+                <div>
+                  <h2>{copy.relayTest}</h2>
+                  <p className="muted">Relay 테스트와 운영 점검 결과만 이 메뉴에서 다룹니다.</p>
+                </div>
+              </div>
+              <form className="compact-form" onSubmit={handleRelayTest}>
+                <label>
+                  테스트 수신자
+                  <input type="email" value={relayRecipient} onChange={(e) => setRelayRecipient(e.target.value)} />
+                </label>
+                <button type="submit" disabled={loading}>{copy.relayTestAction}</button>
+              </form>
+              <article className="status-card">
+                <strong>운영 점검 결과</strong>
+                <p>열린 경고 {monitoringOverview?.alertOpenCount ?? 0}건</p>
+                <p className="muted">디스크 사용률 {monitoringOverview?.diskUsagePercent ?? 0}% / 승인 지연 {monitoringOverview?.approvalBacklogCount ?? 0}건</p>
+              </article>
+              {relayResult ? (
+                <div className={`notice ${relayResult.status === "success" ? "success" : "warning"}`}>
+                  <strong>{relayResult.status}</strong>
+                  <p>{relayResult.message}</p>
+                </div>
+              ) : null}
+            </article>
+          </section>
+        );
+      case "mail":
+        return (
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <h2>메일 설정</h2>
+                <p className="muted">메일 제공자 상태, Relay 상태, 메일 테스트만 표시합니다.</p>
+              </div>
+            </div>
+            <div className="overview-grid">
+              <article className="status-card">
+                <strong>메일 제공자 상태</strong>
+                <p>{overview.mailProvider.providerType}</p>
+                <p className="muted">활성 여부: {overview.mailProvider.active ? "active" : "inactive"}</p>
+              </article>
+              <article className="status-card">
+                <strong>Relay 상태</strong>
+                <p>{overview.mailProvider.relayHost}:{overview.mailProvider.relayPort}</p>
+                <p className="muted">마지막 테스트: {overview.mailProvider.lastTestStatus}</p>
+              </article>
+            </div>
+            <form className="compact-form" onSubmit={handleRelayTest}>
+              <label>
+                메일 테스트 수신자
+                <input type="email" value={relayRecipient} onChange={(e) => setRelayRecipient(e.target.value)} />
+              </label>
+              <button type="submit" disabled={loading}>{copy.relayTestAction}</button>
+            </form>
+            {relayResult ? (
+              <div className={`notice ${relayResult.status === "success" ? "success" : "warning"}`}>
+                <strong>{relayResult.status}</strong>
+                <p>{relayResult.message}</p>
+              </div>
+            ) : null}
+          </section>
+        );
+      case "storage":
+        return (
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <h2>저장소/DB 상태</h2>
+                <p className="muted">저장소 상태, DB 상태, 백업/복구 요약만 표시합니다.</p>
+              </div>
+            </div>
+            <div className="overview-grid">
+              <article className="status-card">
+                <strong>저장소 상태</strong>
+                <p>{health?.components.storage?.status ?? "unknown"}</p>
+                <p className="muted">{health?.components.storage?.message ?? "저장소 상태를 아직 확인하지 못했습니다."}</p>
+              </article>
+              <article className="status-card">
+                <strong>DB 상태</strong>
+                <p>{health?.components.db?.status ?? "unknown"}</p>
+                <p className="muted">{health?.components.db?.message ?? "DB 상태를 아직 확인하지 못했습니다."}</p>
+              </article>
+              <article className="status-card">
+                <strong>백업/복구 요약</strong>
+                <p>{health?.components.storage?.details?.backup_status || "요약 미수집"}</p>
+                <p className="muted">복구 절차: 운영 저장소 정책 및 DB 스냅샷 기준</p>
+              </article>
+            </div>
+          </section>
+        );
+      case "approval":
+        return (
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <h2>{copy.approvalAuditTitle}</h2>
+                <p className="muted">결재 감사 로그, 상태 전이 이벤트, 필터, 상세 조회만 표시합니다.</p>
+              </div>
+              <div className="actions">
+                <button type="button" className="secondary" onClick={() => void refreshApprovalAuditLogs()}>
+                  {copy.refreshApprovalLogs}
+                </button>
+              </div>
+            </div>
+            <div className="overview-grid">
+              <article className="status-card">
+                <strong>필터</strong>
+                <p>문서 ID 기준 상세 조회와 최근 상태 전이 이벤트 확인</p>
+              </article>
+            </div>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>시각</th>
+                    <th>이벤트</th>
+                    <th>문서</th>
+                    <th>처리자</th>
+                    <th>상태 전이</th>
+                    <th>사유</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {approvalAuditLogs.slice(0, 20).map((item) => (
+                    <tr key={item.id}>
+                      <td>{new Date(item.createdAt).toLocaleString()}</td>
+                      <td>{item.event}</td>
+                      <td>{item.targetId}</td>
+                      <td>{item.actorUserName}</td>
+                      <td>{`${item.statusBefore ?? "-"} -> ${item.statusAfter ?? "-"}`}</td>
+                      <td>{item.reason ?? "-"}</td>
+                    </tr>
+                  ))}
+                  {approvalAuditLogs.length === 0 ? (
+                    <tr>
+                      <td colSpan={6}>결재 감사 로그가 없습니다.</td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        );
+      case "brand":
+        return (
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <h2>브랜드/화면 설정</h2>
+                <p className="muted">브랜드 설정, 메뉴 구성, 설정 계약, 반영 확인, 사용자 화면 연결만 표시합니다.</p>
+              </div>
+            </div>
+            <div className="overview-grid">
+              <article className="status-card">
+                <strong>브랜드 설정</strong>
+                <p>{overview.company.name} 기준 대표/보조/강조/차단 색상을 관리합니다.</p>
+              </article>
+              <article className="status-card">
+                <strong>메뉴 구성</strong>
+                <p>{uiContractDraft.menuOrder.join(" > ")}</p>
+                <p className="muted">홈 카드 우선순위: {uiContractDraft.homeCardOrder.join(" > ")}</p>
+              </article>
+              <article className="status-card">
+                <strong>반영 확인</strong>
+                <p>user-web / mobile-app / desktop-client 상단 바, 메뉴 순서, Help 경로 반영</p>
+              </article>
+            </div>
+            <div className="split-panel">
+              <article>
+                <h3>설정 계약</h3>
+                <form className="wizard" onSubmit={(event) => event.preventDefault()}>
+                  <div className="field-grid">
+                    <label>
+                      대표 색상
+                      <input value={uiContractDraft.brand.primary} onChange={(e) => setUiContractDraft((current) => ({ ...current, brand: { ...current.brand, primary: e.target.value } }))} />
+                    </label>
+                    <label>
+                      보조 색상
+                      <input value={uiContractDraft.brand.secondary} onChange={(e) => setUiContractDraft((current) => ({ ...current, brand: { ...current.brand, secondary: e.target.value } }))} />
+                    </label>
+                    <label>
+                      강조 색상
+                      <input value={uiContractDraft.brand.accent} onChange={(e) => setUiContractDraft((current) => ({ ...current, brand: { ...current.brand, accent: e.target.value } }))} />
+                    </label>
+                    <label>
+                      차단 색상
+                      <input value={uiContractDraft.brand.blocked} onChange={(e) => setUiContractDraft((current) => ({ ...current, brand: { ...current.brand, blocked: e.target.value } }))} />
+                    </label>
+                    <label>
+                      좌측 메뉴 순서
+                      <input value={uiContractDraft.menuOrder.join(", ")} onChange={(e) => setUiContractDraft((current) => ({ ...current, menuOrder: e.target.value.split(",").map((item) => item.trim()).filter(Boolean) }))} />
+                    </label>
+                    <label>
+                      홈 카드 우선순위
+                      <input value={uiContractDraft.homeCardOrder.join(", ")} onChange={(e) => setUiContractDraft((current) => ({ ...current, homeCardOrder: e.target.value.split(",").map((item) => item.trim()).filter(Boolean) }))} />
+                    </label>
+                    <label>
+                      Help / 정책 안내 문구
+                      <input value={uiContractDraft.helpText} onChange={(e) => setUiContractDraft((current) => ({ ...current, helpText: e.target.value }))} />
+                    </label>
+                  </div>
+                  <div className="actions">
+                    <button type="button" onClick={handleUiContractSave}>설정 저장</button>
+                    <button type="button" className="secondary" onClick={() => void reloadUiContract()}>저장값 다시 불러오기</button>
+                  </div>
+                </form>
+              </article>
+              <article>
+                <h3>사용자 화면 연결</h3>
+                <div className="overview-grid">
+                  {settingsContracts.map((item) => (
+                    <article key={item.title} className="status-card">
+                      <strong>{item.title}</strong>
+                      <p>{item.values}</p>
+                      <p className="muted">반영 대상: {item.targets}</p>
+                    </article>
+                  ))}
+                </div>
+              </article>
+            </div>
+          </section>
+        );
+      case "language":
+        return (
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <h2>다국어/메시지</h2>
+                <p className="muted">언어, 시간대, 상태 메시지, 메시지 카테고리만 표시합니다.</p>
+              </div>
+            </div>
+            <div className="status-grid">
+              <article className="status-card">
+                <strong>언어</strong>
+                <select value={locale} onChange={(event) => saveLocale(event.target.value as AppLocale)} style={{ display: "block", width: "100%", marginTop: 8 }}>
+                  {supportedLocales.map((value) => (
+                    <option key={value} value={value}>
+                      {value}
+                    </option>
+                  ))}
+                </select>
+              </article>
+              <article className="status-card">
+                <strong>시간대</strong>
+                <select value={timezone} onChange={(event) => saveTimezone(event.target.value)} style={{ display: "block", width: "100%", marginTop: 8 }}>
+                  {supportedTimezones.map((value) => (
+                    <option key={value} value={value}>
+                      {value}
+                    </option>
+                  ))}
+                </select>
+              </article>
+            </div>
+            <div className="overview-grid">
+              {messageCategories.map((item) => (
+                <article key={item.title} className="status-card">
+                  <strong>{item.title}</strong>
+                  <p>{item.body}</p>
+                </article>
+              ))}
+            </div>
+          </section>
+        );
+      case "help":
+        return (
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <h2>도움말/정책</h2>
+                <p className="muted">운영 가이드, 정책 안내, 공통 인증 계약 요약, 점검 항목만 표시합니다.</p>
+              </div>
+            </div>
+            <div className="overview-grid">
+              <article className="status-card">
+                <strong>운영 가이드</strong>
+                <p>초기 설정, 관리자 로그인, 사용자 생성, 서비스 운영 점검 순서로 확인합니다.</p>
+              </article>
+              <article className="status-card">
+                <strong>정책 안내</strong>
+                <p>정책 본문은 사용자 웹/모바일/설치형의 Help 및 정책 안내 영역에서 확인합니다.</p>
+              </article>
+              <article className="status-card">
+                <strong>공통 인증 계약 요약</strong>
+                <p className="muted">{copy.authContract}</p>
+              </article>
+              <article className="status-card">
+                <strong>점검 항목</strong>
+                <p>DB 연결, health.initialized, 로그인 화면 전환, 관리자 메뉴 진입 확인</p>
+              </article>
+            </div>
+          </section>
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
     <main className={`shell ${showAdminConsole ? "console-shell" : ""} ${showLoginPanel ? "login-shell" : ""}`}>
         <section className="hero" hidden={showAdminConsole || showLoginPanel || showSetupWizard || isHealthPending}>
@@ -1283,763 +1997,7 @@ export default function App() {
                 </button>
               </div>
             </div>
-          <section className="panel" hidden={activeAdminMenu !== "dashboard"}>
-            <div className="panel-head">
-              <div>
-                <h2>{copy.overviewTitle}</h2>
-                <p className="muted">관리자 API와 일반 사용자 인증 API를 분리한 단계 3 기준 운영 화면입니다.</p>
-              </div>
-              <div className="actions">
-                <button type="button" className="secondary" onClick={() => void refreshDirectory()}>
-                  {copy.refreshOps}
-                </button>
-                <button type="button" className="secondary" onClick={() => void refreshMonitoring()}>
-                  {copy.refreshMonitoring}
-                </button>
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => {
-                    clearToken();
-                    setToken("");
-                    setTranslationPolicy(null);
-                    setTranslationStatus(null);
-                    setTranslationResult([]);
-                    setOverview(null);
-                    setMonitoringOverview(null);
-                    setMonitoringEvents([]);
-                    setApprovalAuditLogs([]);
-                  }}
-                >
-                  {t(locale, "logout")}
-                </button>
-              </div>
-            </div>
-            {health && (
-              <>
-                <div className="badge-row">
-                  <span className={`badge badge-${health.status}`}>전체 상태: {health.status}</span>
-                  <span className={`badge ${initialized ? "badge-ok" : "badge-warning"}`}>
-                    초기 설정: {initialized ? "완료" : "미완료"}
-                  </span>
-                </div>
-                <div className="status-grid">
-                  {Object.entries(health.components).map(([name, component]) => (
-                    <article key={name} className="status-card">
-                      <div className="status-title">
-                        <strong>{name}</strong>
-                        <span className={`badge badge-${component.status}`}>{component.status}</span>
-                      </div>
-                      <p>{component.message}</p>
-                    </article>
-                  ))}
-                </div>
-              </>
-            )}
-            <div className="overview-grid">
-              <article className="status-card">
-                <strong>승인 지연</strong>
-                <p>{monitoringOverview?.approvalBacklogCount ?? 0}건</p>
-                <p className="muted">미완료 결재 문서</p>
-              </article>
-              <article className="status-card">
-                <strong>메일 Relay 실패(1h)</strong>
-                <p>{monitoringOverview?.relayFailureCount1h ?? 0}건</p>
-                <p className="muted">1시간 내 발생</p>
-              </article>
-              <article className="status-card">
-                <strong>디스크 사용률</strong>
-                <p>{monitoringOverview?.diskUsagePercent ?? 0}%</p>
-                <p className="muted">활성 경고 {monitoringOverview?.alertOpenCount ?? 0}건</p>
-              </article>
-            </div>
-            <div className="quick-actions">
-              <button type="button" className="secondary" onClick={() => void reloadUiContract()}>설정 저장값 다시 불러오기</button>
-            </div>
-            <div className="status-card">
-              <strong>운영 이벤트(최근)</strong>
-              <ul>
-                {monitoringEvents.slice(0, 3).map((item) => (
-                  <li key={item.eventId}>
-                    [{item.severity}] {item.title}
-                  </li>
-                ))}
-                {monitoringEvents.length === 0 && <li>운영 이벤트가 없습니다.</li>}
-              </ul>
-            </div>
-            <div className="overview-grid">
-              <article className="status-card">
-                <strong>회사</strong>
-                <p>{overview.company.name}</p>
-                <p className="muted">{overview.company.domain}</p>
-              </article>
-              <article className="status-card">
-                <strong>사용자</strong>
-                <p>{overview.users.length}명</p>
-                <p className="muted">활성 {overview.users.filter((item) => item.status === "active").length}명</p>
-              </article>
-              <article className="status-card">
-                <strong>부서 / 권한</strong>
-                <p>{overview.departments.length}개 / {overview.roles.length}개</p>
-                <p className="muted">서버에서만 권한 판단</p>
-              </article>
-              <article className="status-card">
-                <strong>Relay</strong>
-                <p>{overview.mailProvider.providerType}</p>
-                <p className="muted">
-                  {overview.mailProvider.relayHost}:{overview.mailProvider.relayPort} / 마지막 상태 {overview.mailProvider.lastTestStatus}
-                </p>
-              </article>
-            </div>
-          </section>
-
-          <section className="panel" hidden={activeAdminMenu !== "approval"}>
-            <div className="panel-head">
-              <div>
-                <h2>{copy.approvalAuditTitle}</h2>
-                <p className="muted">직권 승인/반려 포함 결재 상태 전이 결과를 운영자가 확인합니다.</p>
-              </div>
-              <div className="actions">
-                <button type="button" className="secondary" onClick={() => void refreshApprovalAuditLogs()}>
-                  {copy.refreshApprovalLogs}
-                </button>
-              </div>
-            </div>
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>시각</th>
-                    <th>이벤트</th>
-                    <th>문서</th>
-                    <th>처리자</th>
-                    <th>상태 전이</th>
-                    <th>사유</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {approvalAuditLogs.slice(0, 20).map((item) => (
-                    <tr key={item.id}>
-                      <td>{new Date(item.createdAt).toLocaleString()}</td>
-                      <td>{item.event}</td>
-                      <td>{item.targetId}</td>
-                      <td>{item.actorUserName}</td>
-                      <td>{`${item.statusBefore ?? "-"} -> ${item.statusAfter ?? "-"}`}</td>
-                      <td>{item.reason ?? "-"}</td>
-                    </tr>
-                  ))}
-                  {approvalAuditLogs.length === 0 && (
-                    <tr>
-                      <td colSpan={6}>결재 감사 로그가 없습니다.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-            <p className="muted">결재 감사 로그/필터/상세 조회는 상세 이벤트 기반 운영 규칙으로 확인합니다.</p>
-          </section>
-
-          <section className="panel" hidden={activeAdminMenu !== "users"}>
-            <div className="panel-head">
-              <div>
-                <h2>{t(locale, "userManagement")}</h2>
-                <p className="muted">사용자 목록, 검색, 생성, 수정, 상태 변경, 파일 업로드를 운영 콘솔에서 수행합니다.</p>
-              </div>
-            </div>
-            <label className="field-label">
-              사용자 검색
-              <input value={userSearch} onChange={(event) => setUserSearch(event.target.value)} placeholder="이름, 이메일, 부서, 권한" />
-            </label>
-            <form className="wizard" onSubmit={handleUserSubmit}>
-              <div className="field-grid">
-                <label>
-                  사용자 이름
-                  <input value={userForm.name} onChange={(e) => setUserForm({ ...userForm, name: e.target.value })} />
-                </label>
-                <label>
-                  이메일
-                  <input
-                    type="email"
-                    value={userForm.email}
-                    disabled={Boolean(userForm.userId)}
-                    onChange={(e) => setUserForm({ ...userForm, email: e.target.value })}
-                  />
-                </label>
-                <label>
-                  초기/변경 비밀번호
-                  <input type="password" value={userForm.password} onChange={(e) => setUserForm({ ...userForm, password: e.target.value })} />
-                </label>
-                <label>
-                  부서
-                  <select value={userForm.departmentId} onChange={(e) => setUserForm({ ...userForm, departmentId: e.target.value })}>
-                    {overview.departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                  </select>
-                </label>
-                <label>
-                  권한 역할
-                  <select value={userForm.roleId} onChange={(e) => setUserForm({ ...userForm, roleId: e.target.value })}>
-                    {overview.roles.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                  </select>
-                </label>
-                <label>
-                  상태
-                  <select value={userForm.status} onChange={(e) => setUserForm({ ...userForm, status: e.target.value })}>
-                    <option value="active">active</option>
-                    <option value="inactive">inactive</option>
-                  </select>
-                </label>
-                <label>
-                  사용자 유형
-                  <select value={userForm.userType} disabled={Boolean(userForm.userId)} onChange={(e) => setUserForm({ ...userForm, userType: e.target.value })}>
-                    <option value="user">user</option>
-                    <option value="admin">admin</option>
-                  </select>
-                </label>
-              </div>
-              <div className="actions">
-                <button type="submit" disabled={loading}>{userForm.userId ? copy.editUser : copy.createUser}</button>
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => setUserForm({
-                    ...initialUserForm,
-                    departmentId: overview.departments[0]?.id || "",
-                    roleId: overview.roles[0]?.id || "",
-                  })}
-                >
-                  {copy.newUser}
-                </button>
-              </div>
-            </form>
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>이름</th>
-                    <th>이메일</th>
-                    <th>부서</th>
-                    <th>권한</th>
-                    <th>사용자 상태</th>
-                    <th>메일 상태</th>
-                    <th>정합성</th>
-                    <th>작업</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredUsers.map((item) => (
-                    <tr key={item.userId}>
-                      <td>{item.userName}</td>
-                      <td>{item.userEmail}</td>
-                      <td>{item.departmentName}</td>
-                      <td>{item.roleName}</td>
-                      <td>{item.status}</td>
-                      <td>{item.mailAccountStatus}</td>
-                      <td>{item.consistencyIssues.length === 0 ? "정상" : item.consistencyIssues.map((issue) => issue.code).join(", ")}</td>
-                      <td>
-                        <div className="row-actions">
-                          <button
-                            type="button"
-                            className="secondary"
-                            onClick={() => setUserForm({
-                              userId: item.userId,
-                              name: item.userName,
-                              email: item.userEmail,
-                              password: "",
-                              departmentId: item.departmentId,
-                              roleId: item.roleId,
-                              status: item.status,
-                              userType: item.userType,
-                            })}
-                          >
-                            {copy.edit}
-                          </button>
-                          {item.userType !== "admin" && item.status === "active" && (
-                            <button type="button" className="secondary" onClick={() => void handleDeactivateUser(item.userId)}>
-                              {copy.deactivate}
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  {filteredUsers.length === 0 && (
-                    <tr>
-                      <td colSpan={8}>{userSearch ? "조건에 맞는 사용자가 없습니다." : "등록된 사용자가 없습니다."}</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          <section className="panel" hidden={activeAdminMenu !== "departments"}>
-            <div className="panel-head">
-              <div>
-                <h2>부서 관리</h2>
-                <p className="muted">부서 목록, 생성, 수정(동일 명칭 업데이트), 구조를 확인합니다.</p>
-              </div>
-            </div>
-            <form className="compact-form" onSubmit={handleDepartmentCreate}>
-              <label>
-                부서명
-                <input value={departmentName} onChange={(e) => setDepartmentName(e.target.value)} />
-              </label>
-              <button type="submit" disabled={loading}>{copy.createDepartment}</button>
-            </form>
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead>
-                <tr>
-                    <th>부서명</th>
-                </tr>
-              </thead>
-                <tbody>
-                  {overview.departments.map((item) => (
-                    <tr key={item.id}>
-                      <td>{item.name}</td>
-                    </tr>
-                  ))}
-                  {overview.departments.length === 0 ? <tr><td>등록된 부서가 없습니다.</td></tr> : null}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          <section className="panel" hidden={activeAdminMenu !== "roles"}>
-            <div className="panel-head">
-              <div>
-                <h2>권한 관리</h2>
-                <p className="muted">권한 역할 생성, 편집, 활성화 전환을 관리합니다.</p>
-              </div>
-            </div>
-            <form className="compact-form" onSubmit={handleRoleCreate}>
-              <label>
-                역할명
-                <input value={roleName} onChange={(e) => setRoleName(e.target.value)} />
-              </label>
-              <label>
-                권한 목록
-                <input value={rolePermissions} onChange={(e) => setRolePermissions(e.target.value)} />
-              </label>
-              <button type="submit" disabled={loading}>{copy.createRole}</button>
-            </form>
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>역할명</th>
-                    <th>상태</th>
-                    <th>권한 수</th>
-                    <th>작업</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {overview.roles.map((item) => (
-                    <tr key={item.id}>
-                      <td>{item.name}</td>
-                      <td>{item.status}</td>
-                      <td>{item.permissions.length}</td>
-                      <td>
-                        <div className="row-actions">
-                          {item.status === "active" ? (
-                            <button
-                              type="button"
-                              className="secondary"
-                              disabled={loading || item.name === "관리자"}
-                              onClick={() => void handleRoleStatus(item.id, "inactive")}
-                            >
-                              {copy.deactivate}
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              className="secondary"
-                              disabled={loading}
-                              onClick={() => void handleRoleStatus(item.id, "active")}
-                            >
-                              {copy.activate}
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          <section className="panel split-panel" hidden={activeAdminMenu !== "service"}>
-            <article>
-              <div className="panel-head">
-                <div>
-                  <h2>{copy.verifyDomain}</h2>
-                  <p className="muted">회사 도메인 기준 MX/SPF/DKIM/DMARC 안내를 고정된 응답 구조로 반환합니다.</p>
-                </div>
-              </div>
-              <form className="compact-form" onSubmit={handleDomainVerify}>
-                <label>
-                  검증 도메인
-                  <input value={domainInput} onChange={(e) => setDomainInput(e.target.value)} />
-                </label>
-                <button type="submit" disabled={loading}>{copy.verifyDomainAction}</button>
-              </form>
-              {domainResult && (
-                <div className="stack-list">
-                  <p className="result">전체 상태: {domainResult.overallStatus}</p>
-                  {domainResult.checks.map((item) => (
-                    <article key={`${item.recordType}-${item.host}`} className="status-card">
-                      <div className="status-title">
-                        <strong>{item.recordType}</strong>
-                        <span className={`badge badge-${item.status}`}>{item.status}</span>
-                      </div>
-                      <p>{item.host}</p>
-                      <p className="muted">{item.expectedValue}</p>
-                      <p>{item.message}</p>
-                    </article>
-                  ))}
-                </div>
-              )}
-            </article>
-
-            <article>
-              <div className="panel-head">
-                <div>
-                  <h2>{copy.relayTest}</h2>
-                  <p className="muted">단계 3에서는 local `mail-layer` 경로 성공 여부를 최소 1회 검증합니다.</p>
-                </div>
-              </div>
-              <form className="compact-form" onSubmit={handleRelayTest}>
-                <label>
-                  테스트 수신자
-                  <input type="email" value={relayRecipient} onChange={(e) => setRelayRecipient(e.target.value)} />
-                </label>
-                <button type="submit" disabled={loading}>{copy.relayTestAction}</button>
-              </form>
-              <article className="status-card">
-                <strong>현재 Relay</strong>
-                <p>{overview.mailProvider.providerType}</p>
-                <p className="muted">
-                  {overview.mailProvider.relayHost}:{overview.mailProvider.relayPort}
-                </p>
-                <p>마지막 테스트: {overview.mailProvider.lastTestStatus}</p>
-                <p className="muted">{overview.mailProvider.lastTestMessage}</p>
-              </article>
-              {relayResult && (
-                <div className={`notice ${relayResult.status === "success" ? "success" : "warning"}`}>
-                  <strong>{relayResult.status}</strong>
-                  <p>{relayResult.message}</p>
-                </div>
-              )}
-              <article className="status-card" style={{ marginTop: "14px" }}>
-                <strong>운영 점검</strong>
-                <p className="muted">경고: {monitoringOverview?.alertOpenCount ?? 0}건</p>
-                <p>디스크 사용률 {monitoringOverview?.diskUsagePercent ?? 0}%</p>
-              </article>
-            </article>
-          </section>
-
-          <section className="panel" hidden={activeAdminMenu !== "mail"}>
-            <div className="panel-head">
-              <div>
-                <h2>메일 설정</h2>
-                <p className="muted">메일 제공자/Relay와 연동 상태를 운영합니다.</p>
-              </div>
-            </div>
-            <div className="overview-grid">
-              <article className="status-card">
-                <strong>메일 제공자</strong>
-                <p>{overview.mailProvider.providerType}</p>
-                <p className="muted">
-                  {overview.mailProvider.relayHost}:{overview.mailProvider.relayPort}
-                </p>
-                <p>활성 여부: {overview.mailProvider.active ? "active" : "inactive"}</p>
-              </article>
-              <article className="status-card">
-                <strong>마지막 Relay 테스트</strong>
-                <p>{overview.mailProvider.lastTestStatus}</p>
-                <p className="muted">{overview.mailProvider.lastTestMessage}</p>
-              </article>
-            </div>
-          </section>
-
-          <section className="panel" hidden={activeAdminMenu !== "storage"}>
-            <div className="panel-head">
-              <div>
-                <h2>저장소/DB 상태</h2>
-                <p className="muted">저장소/DB 상태와 백업·복구 요약을 운영 점검에서 확인합니다.</p>
-              </div>
-            </div>
-            <div className="overview-grid">
-              <article className="status-card">
-                <strong>저장소 상태</strong>
-                <p>{health?.components.storage?.status ?? "unknown"}</p>
-                <p className="muted">{health?.components.storage?.message ?? "저장소 상태를 아직 확인하지 못했습니다."}</p>
-              </article>
-              <article className="status-card">
-                <strong>DB 상태</strong>
-                <p>{health?.components.db?.status ?? "unknown"}</p>
-                <p className="muted">{health?.components.db?.message ?? "DB 상태를 아직 확인하지 못했습니다."}</p>
-              </article>
-              <article className="status-card">
-                <strong>백업/복구 요약</strong>
-                <p>{health?.components.storage?.details?.backup_status || "요약 미수집"}</p>
-                <p className="muted">복구 절차: 운영 저장소 정책 및 DB 스냅샷 기준</p>
-              </article>
-            </div>
-          </section>
-
-          <section className="panel" hidden={activeAdminMenu !== "help"}>
-            <div className="panel-head">
-              <div>
-                <h2>도움말 / 정책 안내</h2>
-                <p className="muted">정책 본문은 메인 카드가 아니라 Help 경로 중심으로만 보여줍니다.</p>
-              </div>
-            </div>
-            <div className="overview-grid">
-              <article className="status-card">
-                <strong>운영 가이드</strong>
-                <p>초기 설정, 관리자 로그인, 사용자 생성, 도메인 검증, Relay 테스트 순서로 점검합니다.</p>
-                <p className="muted">실패 시 화면 메시지와 health 상태를 함께 확인합니다.</p>
-              </article>
-              <article className="status-card">
-                <strong>정책 보기 경로</strong>
-                <p>정책 문구 본문은 사용자 웹/모바일/설치형의 Help 및 정책 안내 영역에서 확인합니다.</p>
-              </article>
-              <article className="status-card">
-                <strong>초기 설치 후 점검 항목</strong>
-                <p>DB 연결, companies/admin_users 생성, health.initialized, Wizard 종료, 로그인 화면 전환 확인</p>
-              </article>
-              <article className="status-card">
-                <strong>인증 계약 안내</strong>
-                <p className="muted">{copy.authContract}</p>
-              </article>
-            </div>
-          </section>
-
-          <section className="panel" hidden={activeAdminMenu !== "brand"}>
-            <div className="panel-head">
-              <div>
-                <h2>브랜드 / 메뉴 / 보관 정책 설정</h2>
-                <p className="muted">운영 콘솔에서 브랜딩·메뉴 구성·보관 정책 설정과 반영 계약을 관리합니다.</p>
-              </div>
-            </div>
-
-            <div className="split-panel" style={{ marginTop: "16px" }}>
-              <article>
-                <h3>기본 설정</h3>
-                <div className="overview-grid">
-                  <article className="status-card">
-                    <strong>브랜드 설정</strong>
-                    <p>{overview.company.name} 기준 회사명, 로고, 대표/보조/강조/차단 색상을 관리합니다.</p>
-                    <p className="muted">로그인 배경/문구, 상단 바, 사이드바 반영도 같은 계약입니다.</p>
-                  </article>
-                  <article className="status-card">
-                    <strong>메뉴 구성 설정</strong>
-                    <p>메인 메뉴 노출/순서를 회사 단위로 관리합니다.</p>
-                    <p className="muted">운영 화면은 메일·결재·메신저·주소록·조직도·파일·설정 중심으로 고정합니다.</p>
-                  </article>
-                  <article className="status-card">
-                    <strong>회사별 미리보기 기준</strong>
-                    <p>브랜드 계약(색상·메시지/아이콘 규칙) 미리보기는 브랜드/화면 설정 메뉴에서만 노출합니다.</p>
-                    <p className="muted">현재 메뉴 프리뷰: {uiContractDraft.menuOrder.join(" > ")}</p>
-                  </article>
-                  <article className="status-card">
-                    <strong>보관 정책 기본값</strong>
-                    <p>메일: 서버 1개월 + 설치형 로컬 아카이브 무기한</p>
-                    <p>메신저: 서버 2주 + 설치형 대화 파일(JSON/HTML) 보관</p>
-                  </article>
-                </div>
-              </article>
-
-              <article>
-                <h3>컴포넌트 기준</h3>
-                <div className="overview-grid">
-                  {brandGuide.map((item) => (
-                    <article key={item.title} className="status-card">
-                      <div style={{ width: "48px", height: "48px", borderRadius: "16px", background: item.value }} />
-                      <strong style={{ display: "block", marginTop: "12px" }}>{item.title}</strong>
-                      <p>{item.value}</p>
-                      <p className="muted">{item.target}</p>
-                    </article>
-                  ))}
-                </div>
-              </article>
-            </div>
-
-            <h3 style={{ marginTop: "20px" }}>설정 편집 / 저장 / 반영 확인</h3>
-            <div className="split-panel">
-              <article>
-                <form className="wizard" onSubmit={(event) => event.preventDefault()}>
-                  <div className="field-grid">
-                    <label>
-                      대표 색상
-                      <input value={uiContractDraft.brand.primary} onChange={(e) => setUiContractDraft((current) => ({ ...current, brand: { ...current.brand, primary: e.target.value } }))} />
-                    </label>
-                    <label>
-                      보조 색상
-                      <input value={uiContractDraft.brand.secondary} onChange={(e) => setUiContractDraft((current) => ({ ...current, brand: { ...current.brand, secondary: e.target.value } }))} />
-                    </label>
-                    <label>
-                      강조 색상
-                      <input value={uiContractDraft.brand.accent} onChange={(e) => setUiContractDraft((current) => ({ ...current, brand: { ...current.brand, accent: e.target.value } }))} />
-                    </label>
-                    <label>
-                      차단 색상
-                      <input value={uiContractDraft.brand.blocked} onChange={(e) => setUiContractDraft((current) => ({ ...current, brand: { ...current.brand, blocked: e.target.value } }))} />
-                    </label>
-                    <label>
-                      좌측 메뉴 순서
-                      <input value={uiContractDraft.menuOrder.join(", ")} onChange={(e) => setUiContractDraft((current) => ({ ...current, menuOrder: e.target.value.split(",").map((item) => item.trim()).filter(Boolean) }))} />
-                    </label>
-                    <label>
-                      홈 카드 우선순위
-                      <input value={uiContractDraft.homeCardOrder.join(", ")} onChange={(e) => setUiContractDraft((current) => ({ ...current, homeCardOrder: e.target.value.split(",").map((item) => item.trim()).filter(Boolean) }))} />
-                    </label>
-                    <label>
-                      Help / 정책 안내 문구
-                      <input value={uiContractDraft.helpText} onChange={(e) => setUiContractDraft((current) => ({ ...current, helpText: e.target.value }))} />
-                    </label>
-                    <label>
-                      빠른 작성 노출
-                      <select value={uiContractDraft.quickComposeVisible ? "true" : "false"} onChange={(e) => setUiContractDraft((current) => ({ ...current, quickComposeVisible: e.target.value === "true" }))}>
-                        <option value="true">표시</option>
-                        <option value="false">숨김</option>
-                      </select>
-                    </label>
-                    <label>
-                      오류 메시지
-                      <input value={uiContractDraft.messages.error} onChange={(e) => setUiContractDraft((current) => ({ ...current, messages: { ...current.messages, error: e.target.value } }))} />
-                    </label>
-                    <label>
-                      경고 메시지
-                      <input value={uiContractDraft.messages.warning} onChange={(e) => setUiContractDraft((current) => ({ ...current, messages: { ...current.messages, warning: e.target.value } }))} />
-                    </label>
-                    <label>
-                      차단 메시지
-                      <input value={uiContractDraft.messages.blocked} onChange={(e) => setUiContractDraft((current) => ({ ...current, messages: { ...current.messages, blocked: e.target.value } }))} />
-                    </label>
-                    <label>
-                      빈 상태 메시지
-                      <input value={uiContractDraft.messages.empty} onChange={(e) => setUiContractDraft((current) => ({ ...current, messages: { ...current.messages, empty: e.target.value } }))} />
-                    </label>
-                    <label>
-                      성공 메시지
-                      <input value={uiContractDraft.messages.success} onChange={(e) => setUiContractDraft((current) => ({ ...current, messages: { ...current.messages, success: e.target.value } }))} />
-                    </label>
-                    <label>
-                      세션 만료 메시지
-                      <input value={uiContractDraft.messages.sessionExpired} onChange={(e) => setUiContractDraft((current) => ({ ...current, messages: { ...current.messages, sessionExpired: e.target.value } }))} />
-                    </label>
-                    <label>
-                      권한 없음 메시지
-                      <input value={uiContractDraft.messages.permissionDenied} onChange={(e) => setUiContractDraft((current) => ({ ...current, messages: { ...current.messages, permissionDenied: e.target.value } }))} />
-                    </label>
-                  </div>
-                  <div className="actions">
-                    <button type="button" onClick={handleUiContractSave}>설정 저장</button>
-                    <button type="button" className="secondary" onClick={() => void reloadUiContract()}>저장값 다시 불러오기</button>
-                  </div>
-                </form>
-              </article>
-
-              <article>
-                <div className="status-card">
-                  <strong>운영 계약 반영</strong>
-                  <p>user-web / mobile-app / desktop-client 반영 항목: 상단 바, 메뉴 순서, 메시지, Help 경로.</p>
-                  <p className="muted">빠른 작성: {uiContractDraft.quickComposeVisible ? "표시" : "숨김"} / 메뉴 순서: {uiContractDraft.menuOrder.join(" > ")}</p>
-                </div>
-                <div className="status-card">
-                  <strong>메시지 샘플</strong>
-                  <p>오류: {uiContractDraft.messages.error}</p>
-                  <p>경고: {uiContractDraft.messages.warning}</p>
-                  <p>차단: {uiContractDraft.messages.blocked}</p>
-                  <p>빈 상태: {uiContractDraft.messages.empty}</p>
-                  <p>성공: {uiContractDraft.messages.success}</p>
-                </div>
-              </article>
-            </div>
-            <div className="overview-grid" style={{ marginTop: "16px" }}>
-              {componentGuide.map((item) => (
-                <article key={item.title} className="status-card">
-                  <strong>{item.title}</strong>
-                  <p>{item.body}</p>
-                </article>
-              ))}
-            </div>
-            <div className="overview-grid">
-              {settingsContracts.map((item) => (
-                <article key={item.title} className="status-card">
-                  <strong>{item.title}</strong>
-                  <p>{item.values}</p>
-                  <p className="muted">반영 대상: {item.targets}</p>
-                </article>
-              ))}
-            </div>
-          </section>
-
-      <section className="panel" hidden={activeAdminMenu !== "language"}>
-        <div className="panel-head">
-          <div>
-            <h2>다국어 메시지 제어판</h2>
-            <p className="muted">메뉴 번역만이 아니라 오류, 경고, 차단, 빈 상태, 성공 메시지까지 운영 대상이라는 점이 화면에서 보여야 합니다.</p>
-          </div>
-        </div>
-        <div className="status-grid">
-          <article className="status-card">
-            <strong>운영 API</strong>
-            <p className="muted">API Base는 배포 기준 값으로 고정됩니다.</p>
-            <p>{apiBase}</p>
-          </article>
-          <article className="status-card">
-            <strong>언어 / 시간대</strong>
-            <label style={{ display: "block", marginTop: 10 }}>
-              <span>언어</span>
-              <select
-                value={locale}
-                onChange={(event) => saveLocale(event.target.value as AppLocale)}
-                style={{ display: "block", width: "100%", marginTop: 8 }}
-              >
-                {supportedLocales.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label style={{ display: "block", marginTop: 12 }}>
-              <span>시간대</span>
-              <select
-                value={timezone}
-                onChange={(event) => saveTimezone(event.target.value)}
-                style={{ display: "block", width: "100%", marginTop: 8 }}
-              >
-                {supportedTimezones.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </article>
-        </div>
-        <div className="overview-grid">
-              {[
-                { title: "빈 상태 메시지", body: "표시할 데이터가 없습니다 / 아직 생성된 문서가 없습니다", target: "user-web 메일/결재 빈 화면" },
-                { title: "오류 메시지", body: translationError || errors[0] || "요청 처리 중 오류가 발생했습니다.", target: "user-web / mobile-app API 오류" },
-                { title: "차단 메시지", body: "권한이 없거나 세션이 만료되었습니다.", target: "mobile-app / desktop-client 세션 차단" },
-                { title: "경고 메시지", body: warnings[0] || "설정값 검토가 필요합니다.", target: "admin-web 운영 경고, desktop-client 보관 경로 확인" },
-                { title: "성공 메시지", body: message || "설정이 저장되었습니다.", target: "관리자 저장 완료, 사용자 처리 완료 알림" },
-                { title: "세션 만료 메시지", body: "다시 로그인 후 업무를 계속하세요.", target: "모든 클라이언트 공통 세션 만료 안내" },
-              ].map((item) => (
-                <article key={item.title} className="status-card">
-                  <strong>{item.title}</strong>
-                  <p>{item.body}</p>
-                  <p className="muted">대상: {item.target}</p>
-                </article>
-              ))}
-            </div>
-          </section>
+            {renderAdminPanel()}
           </section>
         </section>
       )}
