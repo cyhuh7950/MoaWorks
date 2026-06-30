@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
 type AuthUser = {
@@ -45,12 +45,79 @@ type NotificationSummary = {
   };
 };
 
+type MailSummary = {
+  mailId: string;
+  accountId: string;
+  senderEmail: string;
+  subject: string;
+  status: string;
+  isRead: boolean;
+  isStarred: boolean;
+  sentAt: string | null;
+  receivedAt: string | null;
+  retentionExpiresAt: string | null;
+  attachmentCount: number;
+};
+
+type MailDetail = {
+  mailId: string;
+  accountId: string;
+  senderUserId: string;
+  senderEmail: string;
+  subject: string;
+  bodyText: string;
+  bodyHtml: string | null;
+  status: string;
+  sentAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  retentionExpiresAt: string | null;
+  attachmentCount: number;
+  recipients: Array<{
+    recipientEmail: string;
+    recipientUserId: string | null;
+    recipientKind: string;
+    isRead: boolean;
+    isStarred: boolean;
+    receivedAt: string | null;
+    readAt: string | null;
+  }>;
+};
+
+type MessengerRoom = {
+  roomId: string;
+  roomType: string;
+  roomName: string;
+  participantIds: string[];
+  lastMessage: string | null;
+  lastMessageAt: string | null;
+  unreadCount: number;
+  readState: string;
+  createdAt: string;
+  updatedAt: string;
+  retentionExpiresAt: string | null;
+};
+
+type MessengerMessage = {
+  messageId: string;
+  roomId: string;
+  senderUserId: string;
+  senderUserName: string;
+  messageType: string;
+  body: string;
+  attachmentMeta: Array<Record<string, unknown>>;
+  createdAt: string;
+  retentionExpiresAt: string | null;
+  readBy: string[];
+  readState: string;
+};
+
 type AppLocale = "ko-KR" | "en-US" | "ja-JP" | "zh-CN" | "es-ES" | "fr-FR" | "de-DE";
 type MobileTab = "home" | "mail" | "approval" | "chat";
 
 const supportedLocales: AppLocale[] = ["ko-KR", "en-US", "ja-JP", "zh-CN", "es-ES", "fr-FR", "de-DE"];
 const supportedTimezones = ["Asia/Seoul", "Asia/Tokyo", "America/New_York", "America/Chicago", "Europe/Paris", "Europe/Berlin"];
-const fallbackApiBase = "http://127.0.0.1:8510/api/v1";
+const fallbackApiBase = "https://api.moaworks.sinsan.kr/api/v1";
 const notificationPolicy = {
   retryMax: 3,
   retryDelayMs: 400,
@@ -107,7 +174,15 @@ function resolveLocale(value: string | null): AppLocale {
   return supportedLocales.includes(value as AppLocale) ? (value as AppLocale) : "ko-KR";
 }
 
+function formatStamp(value: string | null | undefined): string {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
 export default function App() {
+  const passwordInputRef = useRef<TextInput | null>(null);
   const [apiBase, setApiBase] = useState(fallbackApiBase);
   const [locale, setLocale] = useState<AppLocale>(resolveLocale("ko-KR"));
   const [timezone, setTimezone] = useState("Asia/Seoul");
@@ -129,6 +204,16 @@ export default function App() {
   const [notificationMode] = useState<"polling" | "fallback">("polling");
   const [activeTab, setActiveTab] = useState<MobileTab>("home");
   const [uiContract, setUiContract] = useState<UiContract>(defaultUiContract);
+  const [mailItems, setMailItems] = useState<MailSummary[]>([]);
+  const [selectedMailId, setSelectedMailId] = useState("");
+  const [selectedMailDetail, setSelectedMailDetail] = useState<MailDetail | null>(null);
+  const [mailError, setMailError] = useState("");
+  const [rooms, setRooms] = useState<MessengerRoom[]>([]);
+  const [selectedRoomId, setSelectedRoomId] = useState("");
+  const [roomMessages, setRoomMessages] = useState<MessengerMessage[]>([]);
+  const [chatDraft, setChatDraft] = useState("");
+  const [chatError, setChatError] = useState("");
+  const activeTabError = activeTab === "mail" ? mailError : activeTab === "chat" ? chatError : "";
 
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${apiBase}${path}`, {
@@ -141,7 +226,8 @@ export default function App() {
     const raw = await response.text();
     const data = raw ? (JSON.parse(raw) as T) : ({} as T);
     if (!response.ok) {
-      const errorMessage = (data as { userMessage?: string }).userMessage || "요청 처리 실패";
+      const detail = (data as { detail?: { userMessage?: string } }).detail;
+      const errorMessage = detail?.userMessage || (data as { userMessage?: string }).userMessage || "요청 처리 실패";
       throw new Error(errorMessage);
     }
     return data;
@@ -212,6 +298,8 @@ export default function App() {
       setMe(meBody.user);
       await loadApprovals(login.accessToken);
       await loadNotifications(login.accessToken);
+      await loadMail(login.accessToken);
+      await loadRooms(login.accessToken);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "로그인 실패");
     }
@@ -226,6 +314,146 @@ export default function App() {
       setMessage("");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "조회 실패");
+    }
+  }
+
+  async function loadMail(activeToken: string = token, preferredMailId?: string) {
+    if (!activeToken) return;
+    try {
+      const inbox = await request<{ mails: MailSummary[] }>("/mail/inbox", {
+        headers: { Authorization: `Bearer ${activeToken}` },
+      });
+      const mails = inbox.mails ?? [];
+      setMailItems(mails);
+      const targetMailId = preferredMailId || selectedMailId || mails[0]?.mailId || "";
+      if (targetMailId) {
+        const detail = await request<MailDetail>(`/mail/${targetMailId}`, {
+          headers: { Authorization: `Bearer ${activeToken}` },
+        });
+        setSelectedMailId(targetMailId);
+        setSelectedMailDetail(detail);
+      } else {
+        setSelectedMailId("");
+        setSelectedMailDetail(null);
+      }
+      setMailError("");
+    } catch (error) {
+      const nextError = error instanceof Error ? error.message : "메일 조회 실패";
+      setMailError(nextError);
+      setMessage(nextError);
+    }
+  }
+
+  async function openMail(mailId: string, activeToken: string = token) {
+    if (!activeToken) return;
+    try {
+      await request(`/mail/${mailId}/read`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${activeToken}` },
+      });
+      const detail = await request<MailDetail>(`/mail/${mailId}`, {
+        headers: { Authorization: `Bearer ${activeToken}` },
+      });
+      setSelectedMailId(mailId);
+      setSelectedMailDetail(detail);
+      setMailItems((current) => current.map((item) => (item.mailId === mailId ? { ...item, isRead: true } : item)));
+      setMailError("");
+    } catch (error) {
+      const nextError = error instanceof Error ? error.message : "메일 상세 조회 실패";
+      setMailError(nextError);
+      setMessage(nextError);
+    }
+  }
+
+  async function toggleMailStarState(mailId: string, activeToken: string = token) {
+    if (!activeToken) return;
+    try {
+      await request(`/mail/${mailId}/star`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${activeToken}` },
+      });
+      await loadMail(activeToken, mailId);
+    } catch (error) {
+      const nextError = error instanceof Error ? error.message : "중요 표시 실패";
+      setMailError(nextError);
+      setMessage(nextError);
+    }
+  }
+
+  async function loadRooms(activeToken: string = token, preferredRoomId?: string) {
+    if (!activeToken) return;
+    try {
+      const body = await request<{ rooms: MessengerRoom[] }>("/messenger/rooms", {
+        headers: { Authorization: `Bearer ${activeToken}` },
+      });
+      const nextRooms = body.rooms ?? [];
+      setRooms(nextRooms);
+      const roomId = preferredRoomId || selectedRoomId || nextRooms[0]?.roomId || "";
+      if (roomId) {
+        const messages = await request<{ messages: MessengerMessage[] }>(`/messenger/rooms/${roomId}/messages`, {
+          headers: { Authorization: `Bearer ${activeToken}` },
+        });
+        setSelectedRoomId(roomId);
+        setRoomMessages(messages.messages ?? []);
+      } else {
+        setSelectedRoomId("");
+        setRoomMessages([]);
+      }
+      setChatError("");
+    } catch (error) {
+      const nextError = error instanceof Error ? error.message : "메신저 조회 실패";
+      setChatError(nextError);
+      setMessage(nextError);
+    }
+  }
+
+  async function openRoom(roomId: string, activeToken: string = token) {
+    if (!activeToken) return;
+    try {
+      await request(`/messenger/rooms/${roomId}/read`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${activeToken}` },
+      });
+      const messages = await request<{ messages: MessengerMessage[] }>(`/messenger/rooms/${roomId}/messages`, {
+        headers: { Authorization: `Bearer ${activeToken}` },
+      });
+      setSelectedRoomId(roomId);
+      setRoomMessages(messages.messages ?? []);
+      setRooms((current) => current.map((item) => (item.roomId === roomId ? { ...item, unreadCount: 0 } : item)));
+      setChatError("");
+    } catch (error) {
+      const nextError = error instanceof Error ? error.message : "대화방 조회 실패";
+      setChatError(nextError);
+      setMessage(nextError);
+    }
+  }
+
+  async function sendChatMessage() {
+    if (!token || !selectedRoomId || !chatDraft.trim()) return;
+    try {
+      await request(`/messenger/rooms/${selectedRoomId}/messages`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ body: chatDraft.trim(), messageType: "text", attachmentMeta: [] }),
+      });
+      setChatDraft("");
+      await openRoom(selectedRoomId);
+    } catch (error) {
+      const nextError = error instanceof Error ? error.message : "메시지 전송 실패";
+      setChatError(nextError);
+      setMessage(nextError);
+    }
+  }
+
+  function handleTabPress(nextTab: MobileTab) {
+    setActiveTab(nextTab);
+    if (!token) return;
+    if (nextTab === "mail") {
+      void loadMail(token);
+      return;
+    }
+    if (nextTab === "chat") {
+      void loadRooms(token);
     }
   }
 
@@ -297,7 +525,7 @@ export default function App() {
       },
       {
         title: "최근 대화",
-        value: "빠른 확인",
+        value: `${rooms.length}개`,
         desc: "상세 보관은 설치형, 모바일은 최근 대화와 알림 확인 중심",
         tone: styles.cardSand,
       },
@@ -308,12 +536,14 @@ export default function App() {
         tone: styles.cardRose,
       },
     ],
-    [documents, notificationSummary],
+    [documents, notificationSummary, rooms.length],
   );
 
   useEffect(() => {
     if (token) {
       void loadApprovals();
+      void loadMail();
+      void loadRooms();
     }
   }, [token]);
 
@@ -323,15 +553,7 @@ export default function App() {
       .catch(() => setUiContract(defaultUiContract));
   }, [apiBase]);
 
-  const localeLabel = `언어 ${locale}`;
-  const timezoneLabel = `시간대 ${timezone}`;
   const urgentApprovals = documents.filter((item) => item.status === "submitted").slice(0, 3);
-  const unreadMailSamples = [
-    "대표님 검토 요청 메일",
-    "계약 검토 회신 필요",
-    "회의 일정 변경 안내",
-  ];
-  const chatSamples = ["제품 디자인 TF", "경영지원 공지방", "개발 운영 채널"];
   const quickReplySamples = ["답장", "중요", "나중에 보기"];
   const recentApprovalActions = ["긴급 승인", "반려 사유 입력", "회수 요청 확인"];
   const sessionMessages = [
@@ -352,15 +574,15 @@ export default function App() {
     { title: "오류/차단", body: "요청 실패, 세션 만료, 권한 없음", tone: styles.quickDanger },
   ];
   const mobileContracts = [
-    { title: "홈 카드 우선순위", body: "긴급 알림, 승인 대기, 최근 대화 카드 순서는 관리자 설정 계약 영향을 받습니다." },
-    { title: "상태 메시지 공통 규칙", body: "오류, 차단, 세션 만료 박스는 user-web, desktop-client와 같은 성격으로 노출됩니다." },
-    { title: "정책 안내 경로", body: `${uiContract.helpText} 문구를 다른 프로그램과 같은 계약으로 유지합니다.` },
+    { title: "홈 카드 우선순위", body: "긴급 알림, 승인 대기, 최근 대화 순서를 같은 계약으로 유지합니다." },
+    { title: "상태 메시지", body: "오류, 차단, 세션 만료 문구를 다른 클라이언트와 같은 기준으로 보여줍니다." },
+    { title: "정책 안내 경로", body: `${uiContract.helpText} 경로만 공통으로 유지합니다.` },
   ];
   const homeQuickCards = [
     { id: "alerts", title: "긴급 알림", note: `${notificationSummary?.severityCount.CRITICAL ?? 0}건`, tone: styles.quickDanger },
     { id: "approval", title: "승인 대기", note: `${urgentApprovals.length}건`, tone: styles.quickTeal },
-    { id: "chat", title: "최근 대화", note: "3개 대화방", tone: styles.quickSand },
-    { id: "mail", title: "오늘 일정", note: "다음 단계 연결", tone: styles.quickInk },
+    { id: "chat", title: "최근 대화", note: `${rooms.length}개 대화방`, tone: styles.quickSand },
+    { id: "mail", title: "안 읽은 메일", note: `${mailItems.filter((item) => !item.isRead).length}건`, tone: styles.quickInk },
   ].sort((left, right) => {
     const leftIndex = uiContract.homeCardOrder.indexOf(left.id);
     const rightIndex = uiContract.homeCardOrder.indexOf(right.id);
@@ -374,314 +596,400 @@ export default function App() {
           <Text style={styles.heroKicker}>MoaWorks Mobile</Text>
           <Text style={styles.heroTitle}>사용자 업무 포털 모바일 메인</Text>
           <Text style={styles.heroDesc}>
-            모바일은 알림, 결재, 최근 대화, 오늘 일정 중심으로 빠르게 확인하고, 보관 정책은 Help와 정책 안내로 분리합니다.
+            알림, 결재, 메일, 최근 대화를 빠르게 확인하는 모바일 업무 화면입니다.
           </Text>
 
-          <View style={styles.chipRow}>
-            <View style={styles.chip}><Text style={styles.chipText}>{localeLabel}</Text></View>
-            <View style={styles.chip}><Text style={styles.chipText}>{timezoneLabel}</Text></View>
-          </View>
-
-          <Text style={styles.sectionLabel}>API Base</Text>
-          <TextInput style={styles.input} value={apiBase} onChangeText={setApiBase} />
-          <Text style={styles.sectionLabel}>이메일</Text>
-          <TextInput style={styles.input} value={email} onChangeText={setEmail} autoCapitalize="none" />
-          <Text style={styles.sectionLabel}>비밀번호</Text>
-          <TextInput style={styles.input} value={password} onChangeText={setPassword} secureTextEntry />
-          <View style={styles.buttonBlock}>
-            <Button title="업무 포털 로그인" onPress={doLogin} />
-          </View>
-          {me ? <Text style={styles.userName}>{`${me.userName} (${me.roleName})`}</Text> : null}
+          {!me ? (
+            <>
+              <Text style={styles.sectionLabel}>이메일</Text>
+              <TextInput
+                style={styles.input}
+                value={email}
+                onChangeText={setEmail}
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="off"
+                keyboardType="email-address"
+                returnKeyType="next"
+                blurOnSubmit={false}
+                onSubmitEditing={() => passwordInputRef.current?.focus()}
+              />
+              <Text style={styles.sectionLabel}>비밀번호</Text>
+              <TextInput
+                ref={passwordInputRef}
+                style={styles.input}
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry
+                autoCorrect={false}
+                autoComplete="off"
+                returnKeyType="done"
+                onSubmitEditing={() => {
+                  void doLogin();
+                }}
+              />
+              <View style={styles.buttonBlock}>
+                <Button title="업무 포털 로그인" onPress={doLogin} />
+              </View>
+            </>
+          ) : (
+            <View style={styles.loggedInHeroCard}>
+              <Text style={styles.loggedInHeroTitle}>업무 포털 접속 완료</Text>
+              <Text style={styles.userName}>{`${me.userName} (${me.roleName})`}</Text>
+              <Text style={styles.loggedInHeroText}>{me.userEmail}</Text>
+              <Text style={styles.loggedInHeroText}>
+                알림 {notificationSummary?.unreadCount ?? 0}건 / 대기 결재 {documents.filter((item) => item.status === "submitted").length}건
+              </Text>
+            </View>
+          )}
           {message ? <Text style={styles.message}>{message}</Text> : null}
         </View>
 
-        <View style={styles.metricsGrid}>
-          {summaryCards.map((item) => (
-            <View key={item.title} style={[styles.metricCard, item.tone]}>
-              <Text style={styles.metricLabel}>{item.title}</Text>
-              <Text style={styles.metricValue}>{item.value}</Text>
-              <Text style={styles.metricDesc}>{item.desc}</Text>
-            </View>
-          ))}
-        </View>
-
-        <View style={styles.surfaceCard}>
-          <Text style={styles.surfaceKicker}>빠른 이동</Text>
-          <Text style={styles.surfaceTitle}>모바일 주요 업무 탭</Text>
-          <View style={styles.mobileTabRow}>
-            {[
-              { id: "home", label: "홈" },
-              { id: "mail", label: "메일" },
-              { id: "approval", label: "결재" },
-              { id: "chat", label: "메신저" },
-            ].map((item) => (
-              <Text
-                key={item.id}
-                onPress={() => setActiveTab(item.id as MobileTab)}
-                style={[styles.mobileTab, activeTab === item.id ? styles.mobileTabActive : styles.mobileTabIdle]}
-              >
-                {item.label}
-              </Text>
-            ))}
-          </View>
-          <Text style={styles.surfaceHint}>정책 본문은 메인에 두지 않고 {uiContract.helpText} 경로만 제공합니다.</Text>
-        </View>
-
-        <View style={styles.surfaceCard}>
-          <Text style={styles.surfaceKicker}>공통 제품 규칙</Text>
-          <Text style={styles.surfaceTitle}>브랜드 / 컴포넌트 / 상태 박스</Text>
-          <View style={styles.quickGrid}>
-            {brandTokens.map((item) => (
-              <View key={item.title} style={styles.listCard}>
-                <View style={{ width: 44, height: 44, borderRadius: 16, backgroundColor: item.color }} />
-                <Text style={styles.listKicker}>{item.title}</Text>
-                <Text style={styles.listBody}>{item.body}</Text>
-              </View>
-            ))}
-          </View>
-          <View style={styles.quickGrid}>
-            {statusSignals.map((item) => (
-              <View key={item.title} style={[styles.quickCard, item.tone]}>
-                <Text style={styles.quickCardTitle}>{item.title}</Text>
-                <Text style={styles.quickCardNote}>{item.body}</Text>
-              </View>
-            ))}
-          </View>
-          <View style={styles.quickGrid}>
-            {mobileContracts.map((item) => (
-              <View key={item.title} style={styles.listCard}>
-                <Text style={styles.listKicker}>{item.title}</Text>
-                <Text style={styles.listBody}>{item.body}</Text>
-              </View>
-            ))}
-          </View>
-        </View>
-
-        {activeTab === "home" ? (
-          <View style={styles.surfaceCard}>
-            <Text style={styles.surfaceKicker}>홈</Text>
-            <Text style={styles.surfaceTitle}>알림 / 대기 결재 / 최근 대화 / 오늘 일정</Text>
-            <View style={styles.quickGrid}>
-              {homeQuickCards.map((item) => (
-                <View key={item.title} style={[styles.quickCard, item.tone]}>
-                  <Text style={styles.quickCardTitle}>{item.title}</Text>
-                  <Text style={styles.quickCardNote}>{item.note}</Text>
+        {me ? (
+          <>
+            <View style={styles.metricsGrid}>
+              {summaryCards.map((item) => (
+                <View key={item.title} style={[styles.metricCard, item.tone]}>
+                  <Text style={styles.metricLabel}>{item.title}</Text>
+                  <Text style={styles.metricValue}>{item.value}</Text>
+                  <Text style={styles.metricDesc}>{item.desc}</Text>
                 </View>
               ))}
             </View>
-          </View>
-        ) : null}
 
-        {activeTab === "mail" ? (
-          <View style={styles.surfaceCard}>
-            <Text style={styles.surfaceKicker}>메일</Text>
-            <Text style={styles.surfaceTitle}>중요 메일 / 안 읽은 메일 / 빠른 답장</Text>
-            <View style={styles.quickGrid}>
-              {[
-                { title: "중요 메일", note: "대표 검토 요청 우선", tone: styles.quickSand },
-                { title: "안 읽은 메일", note: `${notificationSummary?.unreadCount ?? 0}건`, tone: styles.quickTeal },
-              ].map((item) => (
-                <View key={item.title} style={[styles.quickCard, item.tone]}>
-                  <Text style={styles.quickCardTitle}>{item.title}</Text>
-                  <Text style={styles.quickCardNote}>{item.note}</Text>
-                </View>
-              ))}
+            <View style={styles.surfaceCard}>
+              <Text style={styles.surfaceKicker}>빠른 이동</Text>
+              <Text style={styles.surfaceTitle}>모바일 주요 업무 탭</Text>
+              <View style={styles.mobileTabRow}>
+                {[
+                  { id: "home", label: "홈" },
+                  { id: "mail", label: "메일" },
+                  { id: "approval", label: "결재" },
+                  { id: "chat", label: "메신저" },
+                ].map((item) => (
+                  <Text
+                    key={item.id}
+                    onPress={() => handleTabPress(item.id as MobileTab)}
+                    style={[styles.mobileTab, activeTab === item.id ? styles.mobileTabActive : styles.mobileTabIdle]}
+                  >
+                    {item.label}
+                  </Text>
+                ))}
+              </View>
+              <Text style={styles.surfaceHint}>정책 본문은 메인에 두지 않고 {uiContract.helpText} 경로만 제공합니다.</Text>
+              {activeTabError ? <Text style={styles.error}>{activeTabError}</Text> : null}
             </View>
-            {unreadMailSamples.map((item) => (
-              <View key={item} style={styles.listCard}>
-                <Text style={styles.listKicker}>중요 메일</Text>
-                <Text style={styles.listTitle}>{item}</Text>
-                <Text style={styles.listBody}>새 메일 작성, 중요 표시, 임시보관 진입을 모바일에서 우선 제공합니다.</Text>
-                <View style={styles.mobileTabRow}>
-                  {quickReplySamples.map((action) => (
-                    <Text key={action} style={[styles.mobileTab, styles.mobileTabIdle]}>{action}</Text>
+
+            <View style={styles.surfaceCard}>
+              <Text style={styles.surfaceKicker}>공통 기준</Text>
+              <Text style={styles.surfaceTitle}>브랜드 / 상태 / Help 경로</Text>
+              <View style={styles.quickGrid}>
+                {brandTokens.map((item) => (
+                  <View key={item.title} style={styles.listCard}>
+                    <View style={{ width: 44, height: 44, borderRadius: 16, backgroundColor: item.color }} />
+                    <Text style={styles.listKicker}>{item.title}</Text>
+                    <Text style={styles.listBody}>{item.body}</Text>
+                  </View>
+                ))}
+              </View>
+              <View style={styles.quickGrid}>
+                {statusSignals.map((item) => (
+                  <View key={item.title} style={[styles.quickCard, item.tone]}>
+                    <Text style={styles.quickCardTitle}>{item.title}</Text>
+                    <Text style={styles.quickCardNote}>{item.body}</Text>
+                  </View>
+                ))}
+              </View>
+              <View style={styles.quickGrid}>
+                {mobileContracts.map((item) => (
+                  <View key={item.title} style={styles.listCard}>
+                    <Text style={styles.listKicker}>{item.title}</Text>
+                    <Text style={styles.listBody}>{item.body}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+
+            {activeTab === "home" ? (
+              <View style={styles.surfaceCard}>
+                <Text style={styles.surfaceKicker}>홈</Text>
+                <Text style={styles.surfaceTitle}>알림 / 대기 결재 / 최근 대화 / 오늘 일정</Text>
+                <View style={styles.quickGrid}>
+                  {homeQuickCards.map((item) => (
+                    <View key={item.title} style={[styles.quickCard, item.tone]}>
+                      <Text style={styles.quickCardTitle}>{item.title}</Text>
+                      <Text style={styles.quickCardNote}>{item.note}</Text>
+                    </View>
                   ))}
                 </View>
               </View>
-            ))}
-            <Text style={styles.emptyState}>장기 보관 메일은 설치형 로컬 아카이브 흐름으로 연결됩니다.</Text>
-          </View>
-        ) : null}
+            ) : null}
 
-        {activeTab === "approval" ? (
-          <View style={styles.surfaceCard}>
-            <Text style={styles.surfaceKicker}>결재</Text>
-            <Text style={styles.surfaceTitle}>긴급 승인 / 대기 문서 / 최근 처리</Text>
-            <View style={styles.quickGrid}>
-              {recentApprovalActions.map((item, index) => (
-                <View key={item} style={[styles.quickCard, index === 0 ? styles.quickDanger : styles.quickInk]}>
-                  <Text style={styles.quickCardTitle}>{item}</Text>
-                  <Text style={styles.quickCardNote}>모바일에서 바로 실행할 수 있는 1차 처리 흐름</Text>
+            {activeTab === "mail" ? (
+              <View style={styles.surfaceCard}>
+                <Text style={styles.surfaceKicker}>메일</Text>
+                <Text style={styles.surfaceTitle}>중요 메일 / 안 읽은 메일 / 빠른 답장</Text>
+                <View style={styles.quickGrid}>
+                  {[
+                    { title: "중요 메일", note: "대표 검토 요청 우선", tone: styles.quickSand },
+                    { title: "안 읽은 메일", note: `${mailItems.filter((item) => !item.isRead).length}건`, tone: styles.quickTeal },
+                  ].map((item) => (
+                    <View key={item.title} style={[styles.quickCard, item.tone]}>
+                      <Text style={styles.quickCardTitle}>{item.title}</Text>
+                      <Text style={styles.quickCardNote}>{item.note}</Text>
+                    </View>
+                  ))}
                 </View>
-              ))}
-            </View>
-            {urgentApprovals.length === 0 ? <Text style={styles.emptyState}>승인 대기 문서가 없습니다.</Text> : null}
-            {urgentApprovals.map((doc) => (
-              <View key={doc.id} style={styles.listCard}>
-                <Text style={styles.listKicker}>{doc.status}</Text>
-                <Text style={styles.listTitle}>{doc.title}</Text>
-                <Text style={styles.listBody}>긴급 문서는 모바일에서 즉시 승인/반려/회수 흐름으로 이동합니다.</Text>
+                {mailItems.map((item) => (
+                  <View key={item.mailId} style={styles.listCard}>
+                    <Text style={styles.listKicker}>중요 메일</Text>
+                    <Text style={styles.listTitle}>{item.subject}</Text>
+                    <Text style={styles.listBody}>{item.senderEmail} · {formatStamp(item.receivedAt || item.sentAt)}</Text>
+                    <View style={styles.mobileTabRow}>
+                      <Text onPress={() => { void openMail(item.mailId); }} style={[styles.mobileTab, styles.mobileTabIdle]}>열기</Text>
+                      <Text onPress={() => { void toggleMailStarState(item.mailId); }} style={[styles.mobileTab, styles.mobileTabIdle]}>
+                        {item.isStarred ? "중요 해제" : "중요"}
+                      </Text>
+                      {quickReplySamples.map((action) => <Text key={`${item.mailId}-${action}`} style={[styles.mobileTab, styles.mobileTabIdle]}>{action}</Text>)}
+                    </View>
+                  </View>
+                ))}
+                {selectedMailDetail ? (
+                  <View style={styles.listCard}>
+                    <Text style={styles.listKicker}>메일 상세</Text>
+                    <Text style={styles.listTitle}>{selectedMailDetail.subject}</Text>
+                    <Text style={styles.listBody}>{selectedMailDetail.bodyText}</Text>
+                    <Text style={styles.listBody}>수신: {selectedMailDetail.recipients.map((item) => item.recipientEmail).join(", ") || "-"}</Text>
+                  </View>
+                ) : null}
+                {mailError ? <Text style={styles.error}>{mailError}</Text> : null}
+                <Text style={styles.emptyState}>장기 보관 메일은 설치형 로컬 아카이브 흐름으로 연결됩니다.</Text>
               </View>
-            ))}
-          </View>
-        ) : null}
+            ) : null}
 
-        {activeTab === "chat" ? (
-          <View style={styles.surfaceCard}>
-            <Text style={styles.surfaceKicker}>메신저</Text>
-            <Text style={styles.surfaceTitle}>최근 대화 / 고정 채널 / 미확인 메시지</Text>
-            <View style={styles.quickGrid}>
-              {[
-                { title: "최근 대화", note: "응답 우선 3개", tone: styles.quickInk },
-                { title: "고정 채널", note: "경영지원 · 제품 TF", tone: styles.quickSand },
-                { title: "미확인 메시지", note: "읽음 전 메시지 우선", tone: styles.quickDanger },
-              ].map((item) => (
-                <View key={item.title} style={[styles.quickCard, item.tone]}>
-                  <Text style={styles.quickCardTitle}>{item.title}</Text>
-                  <Text style={styles.quickCardNote}>{item.note}</Text>
+            {activeTab === "approval" ? (
+              <View style={styles.surfaceCard}>
+                <Text style={styles.surfaceKicker}>결재</Text>
+                <Text style={styles.surfaceTitle}>긴급 승인 / 대기 문서 / 최근 처리</Text>
+                <View style={styles.quickGrid}>
+                  {recentApprovalActions.map((item, index) => (
+                    <View key={item} style={[styles.quickCard, index === 0 ? styles.quickDanger : styles.quickInk]}>
+                      <Text style={styles.quickCardTitle}>{item}</Text>
+                      <Text style={styles.quickCardNote}>모바일에서 바로 실행할 수 있는 1차 처리 흐름</Text>
+                    </View>
+                  ))}
                 </View>
-              ))}
-            </View>
-            {chatSamples.map((item) => (
-              <View key={item} style={styles.listCard}>
-                <Text style={styles.listKicker}>최근 대화</Text>
-                <Text style={styles.listTitle}>{item}</Text>
-                <Text style={styles.listBody}>첨부, 링크, 파일 흐름은 대화 상세에서 확인하고 장기 보관은 설치형으로 연결합니다.</Text>
-              </View>
-            ))}
-          </View>
-        ) : null}
-
-        <View style={styles.surfaceCard}>
-          <Text style={styles.surfaceKicker}>알림</Text>
-          <Text style={styles.surfaceTitle}>빠른 확인과 폴백</Text>
-          <Text style={styles.surfaceHint}>
-            수신 모드: {notificationMode === "polling" ? "Polling" : "Fallback"} / 미읽음 {notificationSummary?.unreadCount ?? 0} / 긴급 {notificationSummary?.severityCount.CRITICAL ?? 0}
-          </Text>
-          <View style={styles.inlineButtons}>
-            <Button title="알림 새로고침" onPress={() => { void refreshNotifications(); }} />
-          </View>
-          {notificationError ? <Text style={styles.error}>{notificationError || uiContract.messages.error}</Text> : null}
-          {notifications.map((item) => (
-            <View key={item.notificationId} style={styles.listCard}>
-              <View style={styles.listHeader}>
-                <View>
-                  <Text style={styles.listKicker}>{item.category}</Text>
-                  <Text style={styles.listTitle}>{item.title}</Text>
-                </View>
-                <View style={[styles.statusPill, item.status === "unread" ? styles.statusUnread : styles.statusRead]}>
-                  <Text style={[styles.statusPillText, item.status === "unread" ? styles.statusUnreadText : styles.statusReadText]}>{item.status}</Text>
-                </View>
-              </View>
-              <Text style={styles.listBody}>{item.message}</Text>
-              <Button
-                title="읽음 처리"
-                disabled={item.status !== "unread"}
-                onPress={() => {
-                  void executeAckNotification(item.notificationId);
-                }}
-              />
-            </View>
-          ))}
-          {notifications.length === 0 ? <Text style={styles.emptyState}>아직 표시할 알림이 없습니다.</Text> : null}
-        </View>
-
-        <View style={styles.surfaceCard}>
-          <Text style={styles.surfaceKicker}>현재 사용자</Text>
-          <Text style={styles.surfaceTitle}>프로필 / 역할 / 업무 권한</Text>
-          <View style={styles.profileCard}>
-            <Text style={styles.profileName}>{me?.userName || "로그인 후 표시"}</Text>
-            <Text style={styles.profileText}>{me?.roleName || "역할 미지정"}</Text>
-            <Text style={styles.profileText}>{me?.userEmail || "이메일 미확인"}</Text>
-            <Text style={styles.profileText}>결재 작성 권한: {can("approval:create") ? "있음" : "없음"}</Text>
-            <Text style={styles.profileText}>정책 확인: {uiContract.helpText}</Text>
-          </View>
-          <View style={styles.policyCard}>
-            {sessionMessages.map((item) => (
-              <Text key={item} style={styles.policyText}>{item}</Text>
-            ))}
-          </View>
-        </View>
-
-        {can("approval:create") ? (
-          <View style={styles.surfaceCard}>
-            <Text style={styles.surfaceKicker}>결재 작성</Text>
-            <Text style={styles.surfaceTitle}>모바일 빠른 상신</Text>
-            <Text style={styles.sectionLabel}>제목</Text>
-            <TextInput
-              style={styles.input}
-              value={createForm.title}
-              onChangeText={(value) => setCreateForm((current) => ({ ...current, title: value }))}
-            />
-            <Text style={styles.sectionLabel}>내용</Text>
-            <TextInput
-              style={[styles.input, styles.textarea]}
-              value={createForm.content}
-              onChangeText={(value) => setCreateForm((current) => ({ ...current, content: value }))}
-              multiline
-            />
-            <Text style={styles.sectionLabel}>결재자 사용자ID (콤마 구분)</Text>
-            <TextInput
-              style={styles.input}
-              value={createForm.approverUserIds}
-              onChangeText={(value) => setCreateForm((current) => ({ ...current, approverUserIds: value }))}
-              autoCapitalize="none"
-            />
-            <View style={styles.buttonBlock}>
-              <Button title="결재 초안 저장" onPress={() => { void createApprovalDocument(); }} />
-            </View>
-          </View>
-        ) : null}
-
-        <View style={styles.surfaceCard}>
-          <Text style={styles.surfaceKicker}>결재 목록</Text>
-          <Text style={styles.surfaceTitle}>상태별 문서 보기</Text>
-          {documents.map((doc) => {
-            const currentLine = currentApprover(doc);
-            return (
-              <View key={doc.id} style={styles.listCard}>
-                <View style={styles.listHeader}>
-                  <View>
+                {urgentApprovals.length === 0 ? <Text style={styles.emptyState}>승인 대기 문서가 없습니다.</Text> : null}
+                {urgentApprovals.map((doc) => (
+                  <View key={doc.id} style={styles.listCard}>
                     <Text style={styles.listKicker}>{doc.status}</Text>
                     <Text style={styles.listTitle}>{doc.title}</Text>
+                    <Text style={styles.listBody}>긴급 문서는 모바일에서 즉시 승인/반려/회수 흐름으로 이동합니다.</Text>
                   </View>
-                  <View style={[styles.statusPill, styles.statusApproval]}>
-                    <Text style={[styles.statusPillText, styles.statusApprovalText]}>{doc.creatorUserName}</Text>
-                  </View>
-                </View>
-                <Text style={styles.listBody}>
-                  현재 결재선: {currentLine ? `${currentLine.approverUserName} / ${currentLine.status}` : "대기 없음"}
-                </Text>
-                {doc.status === "draft" && doc.creatorUserId === me?.userId && can("approval:submit") ? (
-                  <View style={styles.buttonBlock}>
-                    <Button title="상신" onPress={() => action(doc.id, "submit")} />
-                  </View>
-                ) : null}
-                {doc.status === "submitted" && doc.creatorUserId === me?.userId && can("approval:withdraw") ? (
-                  <View style={styles.buttonBlock}>
-                    <Button title="회수" onPress={() => action(doc.id, "withdraw")} />
-                  </View>
-                ) : null}
-                {doc.status === "rejected" && doc.creatorUserId === me?.userId && can("approval:rework") ? (
-                  <View style={styles.buttonBlock}>
-                    <Button title="재기안" onPress={() => action(doc.id, "redraft")} />
-                  </View>
-                ) : null}
-                {doc.status === "submitted" && can("approval:act") && currentApprover(doc)?.approverUserId === me?.userId ? (
-                  <>
-                    <Text style={styles.sectionLabel}>처리 사유</Text>
-                    <TextInput style={styles.input} value={actionReason} onChangeText={setActionReason} />
-                    <View style={styles.buttonPair}>
-                      <View style={styles.buttonHalf}><Button title="승인" onPress={() => actionWithReason(doc.id, "approve")} /></View>
-                      <View style={styles.buttonHalf}><Button title="반려" color="#9f1239" onPress={() => actionWithReason(doc.id, "reject")} /></View>
-                    </View>
-                  </>
-                ) : null}
+                ))}
               </View>
-            );
-          })}
-          {documents.length === 0 ? <Text style={styles.emptyState}>아직 문서가 없습니다.</Text> : null}
-        </View>
+            ) : null}
+
+            {activeTab === "chat" ? (
+              <View style={styles.surfaceCard}>
+                <Text style={styles.surfaceKicker}>메신저</Text>
+                <Text style={styles.surfaceTitle}>최근 대화 / 고정 채널 / 미확인 메시지</Text>
+                <View style={styles.quickGrid}>
+                  {[
+                    { title: "최근 대화", note: `${rooms.length}개`, tone: styles.quickInk },
+                    { title: "고정 채널", note: rooms[0]?.roomName || "대화방 없음", tone: styles.quickSand },
+                    { title: "미확인 메시지", note: `${rooms.reduce((sum, item) => sum + item.unreadCount, 0)}건`, tone: styles.quickDanger },
+                  ].map((item) => (
+                    <View key={item.title} style={[styles.quickCard, item.tone]}>
+                      <Text style={styles.quickCardTitle}>{item.title}</Text>
+                      <Text style={styles.quickCardNote}>{item.note}</Text>
+                    </View>
+                  ))}
+                </View>
+                {rooms.map((item) => (
+                  <View key={item.roomId} style={styles.listCard}>
+                    <Text style={styles.listKicker}>최근 대화</Text>
+                    <Text style={styles.listTitle}>{item.roomName}</Text>
+                    <Text style={styles.listBody}>{item.lastMessage || "최근 메시지 없음"} / 미읽음 {item.unreadCount}</Text>
+                    <View style={styles.mobileTabRow}>
+                      <Text onPress={() => { void openRoom(item.roomId); }} style={[styles.mobileTab, styles.mobileTabIdle]}>열기</Text>
+                    </View>
+                  </View>
+                ))}
+                {roomMessages.map((item) => (
+                  <View key={item.messageId} style={styles.listCard}>
+                    <Text style={styles.listKicker}>{item.senderUserName}</Text>
+                    <Text style={styles.listTitle}>{formatStamp(item.createdAt)}</Text>
+                    <Text style={styles.listBody}>{item.body}</Text>
+                  </View>
+                ))}
+                <TextInput
+                  style={[styles.input, styles.textarea]}
+                  value={chatDraft}
+                  onChangeText={setChatDraft}
+                  placeholder="메시지를 입력하세요."
+                  multiline
+                />
+                <View style={styles.buttonBlock}>
+                  <Button title="메시지 전송" onPress={() => { void sendChatMessage(); }} />
+                </View>
+                {chatError ? <Text style={styles.error}>{chatError}</Text> : null}
+              </View>
+            ) : null}
+
+            <View style={styles.surfaceCard}>
+              <Text style={styles.surfaceKicker}>알림</Text>
+              <Text style={styles.surfaceTitle}>빠른 확인과 폴백</Text>
+              <Text style={styles.surfaceHint}>
+                수신 모드: {notificationMode === "polling" ? "Polling" : "Fallback"} / 미읽음 {notificationSummary?.unreadCount ?? 0} / 긴급 {notificationSummary?.severityCount.CRITICAL ?? 0}
+              </Text>
+              <View style={styles.inlineButtons}>
+                <Button title="알림 새로고침" onPress={() => { void refreshNotifications(); }} />
+              </View>
+              {notificationError ? <Text style={styles.error}>{notificationError || uiContract.messages.error}</Text> : null}
+              {notifications.map((item) => (
+                <View key={item.notificationId} style={styles.listCard}>
+                  <View style={styles.listHeader}>
+                    <View>
+                      <Text style={styles.listKicker}>{item.category}</Text>
+                      <Text style={styles.listTitle}>{item.title}</Text>
+                    </View>
+                    <View style={[styles.statusPill, item.status === "unread" ? styles.statusUnread : styles.statusRead]}>
+                      <Text style={[styles.statusPillText, item.status === "unread" ? styles.statusUnreadText : styles.statusReadText]}>{item.status}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.listBody}>{item.message}</Text>
+                  <Button
+                    title="읽음 처리"
+                    disabled={item.status !== "unread"}
+                    onPress={() => {
+                      void executeAckNotification(item.notificationId);
+                    }}
+                  />
+                </View>
+              ))}
+              {notifications.length === 0 ? <Text style={styles.emptyState}>아직 표시할 알림이 없습니다.</Text> : null}
+            </View>
+
+            <View style={styles.surfaceCard}>
+              <Text style={styles.surfaceKicker}>현재 사용자</Text>
+              <Text style={styles.surfaceTitle}>프로필 / 역할 / 업무 권한</Text>
+              <View style={styles.profileCard}>
+                <Text style={styles.profileName}>{me?.userName || "로그인 후 표시"}</Text>
+                <Text style={styles.profileText}>{me?.roleName || "역할 미지정"}</Text>
+                <Text style={styles.profileText}>{me?.userEmail || "이메일 미확인"}</Text>
+                <Text style={styles.profileText}>결재 작성 권한: {can("approval:create") ? "있음" : "없음"}</Text>
+              </View>
+              <View style={styles.policyCard}>
+                {sessionMessages.map((item) => (
+                  <Text key={item} style={styles.policyText}>{item}</Text>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.surfaceCard}>
+              <Text style={styles.surfaceKicker}>설정 / Help</Text>
+              <Text style={styles.surfaceTitle}>정책 경로와 세션 정리</Text>
+              <View style={styles.policyCard}>
+                <Text style={styles.policyText}>정책 확인 경로: {uiContract.helpText}</Text>
+                <Text style={styles.policyText}>언어, 시간대, 알림 새로고침 기준은 공통 설정 계약을 따릅니다.</Text>
+              </View>
+              <View style={styles.buttonBlock}>
+                <Button
+                  title="로그아웃"
+                  onPress={() => {
+                    setToken("");
+                    setMe(null);
+                    setMessage("로그아웃되었습니다.");
+                    setSelectedMailDetail(null);
+                    setSelectedRoom(null);
+                    setSelectedRoomMessages([]);
+                  }}
+                />
+              </View>
+            </View>
+
+            {can("approval:create") ? (
+              <View style={styles.surfaceCard}>
+                <Text style={styles.surfaceKicker}>결재 작성</Text>
+                <Text style={styles.surfaceTitle}>모바일 빠른 상신</Text>
+                <Text style={styles.sectionLabel}>제목</Text>
+                <TextInput
+                  style={styles.input}
+                  value={createForm.title}
+                  onChangeText={(value) => setCreateForm((current) => ({ ...current, title: value }))}
+                />
+                <Text style={styles.sectionLabel}>내용</Text>
+                <TextInput
+                  style={[styles.input, styles.textarea]}
+                  value={createForm.content}
+                  onChangeText={(value) => setCreateForm((current) => ({ ...current, content: value }))}
+                  multiline
+                />
+                <Text style={styles.sectionLabel}>결재자 사용자ID (콤마 구분)</Text>
+                <TextInput
+                  style={styles.input}
+                  value={createForm.approverUserIds}
+                  onChangeText={(value) => setCreateForm((current) => ({ ...current, approverUserIds: value }))}
+                  autoCapitalize="none"
+                />
+                <View style={styles.buttonBlock}>
+                  <Button title="결재 초안 저장" onPress={() => { void createApprovalDocument(); }} />
+                </View>
+              </View>
+            ) : null}
+
+            <View style={styles.surfaceCard}>
+              <Text style={styles.surfaceKicker}>결재 목록</Text>
+              <Text style={styles.surfaceTitle}>상태별 문서 보기</Text>
+              {documents.map((doc) => {
+                const currentLine = currentApprover(doc);
+                return (
+                  <View key={doc.id} style={styles.listCard}>
+                    <View style={styles.listHeader}>
+                      <View>
+                        <Text style={styles.listKicker}>{doc.status}</Text>
+                        <Text style={styles.listTitle}>{doc.title}</Text>
+                      </View>
+                      <View style={[styles.statusPill, styles.statusApproval]}>
+                        <Text style={[styles.statusPillText, styles.statusApprovalText]}>{doc.creatorUserName}</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.listBody}>
+                      현재 결재선: {currentLine ? `${currentLine.approverUserName} / ${currentLine.status}` : "대기 없음"}
+                    </Text>
+                    {doc.status === "draft" && doc.creatorUserId === me?.userId && can("approval:submit") ? (
+                      <View style={styles.buttonBlock}>
+                        <Button title="상신" onPress={() => action(doc.id, "submit")} />
+                      </View>
+                    ) : null}
+                    {doc.status === "submitted" && doc.creatorUserId === me?.userId && can("approval:withdraw") ? (
+                      <View style={styles.buttonBlock}>
+                        <Button title="회수" onPress={() => action(doc.id, "withdraw")} />
+                      </View>
+                    ) : null}
+                    {doc.status === "rejected" && doc.creatorUserId === me?.userId && can("approval:rework") ? (
+                      <View style={styles.buttonBlock}>
+                        <Button title="재기안" onPress={() => action(doc.id, "redraft")} />
+                      </View>
+                    ) : null}
+                    {doc.status === "submitted" && can("approval:act") && currentApprover(doc)?.approverUserId === me?.userId ? (
+                      <>
+                        <Text style={styles.sectionLabel}>처리 사유</Text>
+                        <TextInput style={styles.input} value={actionReason} onChangeText={setActionReason} />
+                        <View style={styles.buttonPair}>
+                          <View style={styles.buttonHalf}><Button title="승인" onPress={() => actionWithReason(doc.id, "approve")} /></View>
+                          <View style={styles.buttonHalf}><Button title="반려" color="#9f1239" onPress={() => actionWithReason(doc.id, "reject")} /></View>
+                        </View>
+                      </>
+                    ) : null}
+                  </View>
+                );
+              })}
+              {documents.length === 0 ? <Text style={styles.emptyState}>아직 문서가 없습니다.</Text> : null}
+            </View>
+          </>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
@@ -771,6 +1079,26 @@ const styles = StyleSheet.create({
   message: {
     marginTop: 12,
     color: "#99f6e4",
+    lineHeight: 20,
+  },
+  loggedInHeroCard: {
+    marginTop: 18,
+    borderRadius: 22,
+    padding: 18,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    gap: 8,
+  },
+  loggedInHeroTitle: {
+    color: "#67e8f9",
+    fontSize: 13,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+  },
+  loggedInHeroText: {
+    color: "rgba(248,250,252,0.82)",
     lineHeight: 20,
   },
   metricsGrid: {

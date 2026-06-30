@@ -875,45 +875,18 @@ export default function App() {
 
   return (
     <main className={`shell ${showAdminConsole ? "console-shell" : ""} ${showLoginPanel ? "login-shell" : ""}`}>
-      <section className="hero" hidden={showAdminConsole || showLoginPanel}>
+        <section className="hero" hidden={showAdminConsole || showLoginPanel || showSetupWizard || isHealthPending}>
         <p className="eyebrow">{t(locale, "appTitle")}</p>
         <h1>{t(locale, "appDescription")}</h1>
-        <p className="lead">
-          {t(locale, "systemStatus")} / {t(locale, "manual")} / {t(locale, "language")}
-        </p>
-        <p className="api-base">API Base: {apiBase}</p>
+        <p className="lead">운영 콘솔은 사용자 관리 및 서비스 점검을 위한 단일 진입 화면입니다.</p>
       </section>
 
-      <section className="panel" hidden={!token || showAdminConsole}>
+      <section className="panel" hidden={!token || showAdminConsole || !initialized}>
         <div className="panel-head">
           <div>
-            <h2>{t(locale, "language")} / {t(locale, "timezone")}</h2>
-            <p className="muted">
-              언어/시간대는 브라우저 표시 기준 설정이며 핵심 업무 API 계약에는 영향을 주지 않습니다.
-            </p>
+            <h2>시스템 상태 요약</h2>
+            <p className="muted">로그인 화면 진입 후 필요한 설정은 설정 메뉴에서 관리합니다.</p>
           </div>
-        </div>
-        <div className="field-grid">
-          <label>
-            언어
-            <select value={locale} onChange={(event) => saveLocale(event.target.value as AppLocale)}>
-              {supportedLocales.map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            시간대
-            <select value={timezone} onChange={(event) => saveTimezone(event.target.value)}>
-              {supportedTimezones.map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-          </label>
         </div>
         <article className="status-card">
           <strong>{t(locale, "translationPolicy")}</strong>
@@ -985,23 +958,19 @@ export default function App() {
           <article className="login-brief">
             <p className="eyebrow">{t(locale, "appTitle")}</p>
             <h1>MoaWorks 관리자 플랫폼</h1>
-            <p className="lead">운영 상태를 확인하고 관리자 계정으로 운영 콘솔에 진입합니다.</p>
+            <p className="lead">시스템 상태를 확인하고 관리자 계정으로 운영 콘솔에 진입합니다.</p>
             <div className="login-summary-grid">
               <div className="status-card">
                 <strong>서비스 상태</strong>
                 <span className={`badge badge-${health?.status ?? "warning"}`}>전체 상태: {health?.status ?? "확인 중"}</span>
               </div>
-              <div className="status-card">
-                <strong>초기 설정</strong>
-                <span className={`badge ${initialized ? "badge-ok" : "badge-warning"}`}>
-                  {initialized ? "완료" : "미완료"}
-                </span>
+                <div className="status-card">
+                  <strong>초기 설정</strong>
+                  <span className={`badge ${initialized ? "badge-ok" : "badge-warning"}`}>
+                    {initialized ? "완료" : "미완료"}
+                  </span>
+                </div>
               </div>
-              <div className="status-card">
-                <strong>API</strong>
-                <p className="muted">{apiBase}</p>
-              </div>
-            </div>
             <details className="login-details">
               <summary>상세 상태 보기</summary>
               {!health ? (
@@ -1026,7 +995,7 @@ export default function App() {
             <div className="panel-head">
               <div>
                 <h2>관리자 로그인</h2>
-                <p className="muted">관리자 전용 운영 API는 로그인 후 Bearer 토큰으로만 접근합니다.</p>
+                <p className="muted">로그인 후 사용자 관리와 서비스 점검 메뉴를 사용할 수 있습니다.</p>
               </div>
             </div>
             {hasStoredSessionButNoOverview && (
@@ -1061,7 +1030,7 @@ export default function App() {
         </section>
       )}
 
-      <section className="panel" hidden={showAdminConsole || showLoginPanel}>
+      <section className="panel" hidden={showAdminConsole || showLoginPanel || showSetupWizard || isHealthPending}>
         <div className="panel-head">
           <h2>시스템 상태</h2>
           <button onClick={() => void refreshHealth()}>새로고침</button>
@@ -1100,7 +1069,7 @@ export default function App() {
         )}
       </section>
 
-      {(message || errors.length > 0 || warnings.length > 0) && !showAdminConsole && !showLoginPanel && (
+      {(message || errors.length > 0 || warnings.length > 0) && !showAdminConsole && !showLoginPanel && !showSetupWizard && !isHealthPending && (
         <section className="panel">
           {message && <p className="result">{message}</p>}
           {errors.length > 0 && (
@@ -1794,7 +1763,7 @@ export default function App() {
             </div>
           </section>
 
-          <section className="panel" hidden={activeAdminMenu !== "help"}>
+        <section className="panel" hidden={activeAdminMenu !== "help"}>
             <div className="panel-head">
               <div>
                 <h2>운영 가이드: {copy.authContract}</h2>
@@ -2101,14 +2070,52 @@ export default function App() {
             </div>
           </section>
 
-          <section className="panel" hidden={activeAdminMenu !== "language"}>
-            <div className="panel-head">
-              <div>
-                <h2>다국어 메시지 제어판</h2>
-                <p className="muted">메뉴 번역만이 아니라 오류, 경고, 차단, 빈 상태, 성공 메시지까지 운영 대상이라는 점이 화면에서 보여야 합니다.</p>
-              </div>
-            </div>
-            <div className="overview-grid">
+      <section className="panel" hidden={activeAdminMenu !== "language"}>
+        <div className="panel-head">
+          <div>
+            <h2>다국어 메시지 제어판</h2>
+            <p className="muted">메뉴 번역만이 아니라 오류, 경고, 차단, 빈 상태, 성공 메시지까지 운영 대상이라는 점이 화면에서 보여야 합니다.</p>
+          </div>
+        </div>
+        <div className="status-grid">
+          <article className="status-card">
+            <strong>운영 API</strong>
+            <p className="muted">API Base는 배포 기준 값으로 고정됩니다.</p>
+            <p>{apiBase}</p>
+          </article>
+          <article className="status-card">
+            <strong>언어 / 시간대</strong>
+            <label style={{ display: "block", marginTop: 10 }}>
+              <span>언어</span>
+              <select
+                value={locale}
+                onChange={(event) => saveLocale(event.target.value as AppLocale)}
+                style={{ display: "block", width: "100%", marginTop: 8 }}
+              >
+                {supportedLocales.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "block", marginTop: 12 }}>
+              <span>시간대</span>
+              <select
+                value={timezone}
+                onChange={(event) => saveTimezone(event.target.value)}
+                style={{ display: "block", width: "100%", marginTop: 8 }}
+              >
+                {supportedTimezones.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </article>
+        </div>
+        <div className="overview-grid">
               {[
                 { title: "빈 상태 메시지", body: "표시할 데이터가 없습니다 / 아직 생성된 문서가 없습니다", target: "user-web 메일/결재 빈 화면" },
                 { title: "오류 메시지", body: translationError || errors[0] || "요청 처리 중 오류가 발생했습니다.", target: "user-web / mobile-app API 오류" },

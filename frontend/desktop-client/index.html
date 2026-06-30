@@ -45,6 +45,7 @@
         background:
           radial-gradient(circle at top left, rgba(15, 118, 110, 0.12), transparent 28%),
           linear-gradient(180deg, #f7f5ef 0%, var(--bg-main) 100%);
+        overflow: hidden;
       }
 
       button,
@@ -58,20 +59,24 @@
         max-width: 1580px;
         margin: 0 auto;
         padding: 24px;
+        height: 100vh;
         display: grid;
         grid-template-columns: 270px minmax(0, 1fr);
         gap: 24px;
+        overflow: hidden;
       }
 
       .sidebar {
         position: sticky;
         top: 24px;
+        height: calc(100vh - 48px);
         align-self: start;
         padding: 24px;
         border-radius: var(--radius-xl);
         background: var(--bg-sidebar);
         color: #e2e8f0;
         box-shadow: 0 24px 64px rgba(15, 23, 42, 0.24);
+        overflow: auto;
       }
 
       .sidebar-badge {
@@ -110,6 +115,15 @@
         border-radius: 18px;
         background: rgba(255, 255, 255, 0.04);
         border: 1px solid rgba(255, 255, 255, 0.05);
+        width: 100%;
+        text-align: left;
+        color: inherit;
+        cursor: pointer;
+      }
+
+      .nav-item.active {
+        background: rgba(103, 232, 249, 0.12);
+        border-color: rgba(103, 232, 249, 0.32);
       }
 
       .nav-item strong {
@@ -135,6 +149,8 @@
 
       .content {
         min-width: 0;
+        overflow: auto;
+        padding-right: 6px;
       }
 
       .surface {
@@ -165,6 +181,7 @@
         gap: 12px;
         align-items: center;
         flex-wrap: wrap;
+        max-width: 100%;
       }
 
       .hero-tools input,
@@ -175,6 +192,7 @@
         border: 1px solid var(--line-soft);
         background: #fff;
         padding: 0 14px;
+        min-width: 0;
       }
 
       .hero-tools button.primary,
@@ -515,25 +533,22 @@
         <div class="sidebar-badge">MoaWorks Desktop</div>
         <h1>설치형 업무 허브</h1>
         <p>
-          설치형 프로그램은 메일 로컬 아카이브와 메신저 대화 파일 보관을 책임지는
-          그룹웨어의 핵심 사용자 클라이언트입니다.
+          메일 로컬 보관과 대화 파일 저장을 맡는 설치형 사용자 클라이언트입니다.
         </p>
 
         <div class="nav-grid">
-          <div class="nav-item"><strong>메일</strong><span>서버 1개월 · PC 로컬 무기한</span></div>
-          <div class="nav-item"><strong>결재</strong><span>작성, 상신, 승인, 감사 로그</span></div>
-          <div class="nav-item"><strong>메신저</strong><span>서버 2주 · 파일 보관</span></div>
-          <div class="nav-item"><strong>일정</strong><span>오늘 일정, 회의, 마감</span></div>
-          <div class="nav-item"><strong>주소록</strong><span>조직도와 연락처</span></div>
-          <div class="nav-item"><strong>파일</strong><span>로컬 보관함, 공유 문서함</span></div>
-          <div class="nav-item"><strong>설정</strong><span>언어, 시간대, API, 정책</span></div>
+          <button type="button" class="nav-item" data-panel-target="desktopOverviewPanel" onclick="setDesktopPanel('desktopOverviewPanel')"><strong>홈</strong><span>설치형 업무 허브</span></button>
+          <button type="button" class="nav-item" data-panel-target="desktopArchivePanel" onclick="setDesktopPanel('desktopArchivePanel')"><strong>메일</strong><span>로컬 아카이브</span></button>
+          <button type="button" class="nav-item" data-panel-target="desktopConversationPanel" onclick="setDesktopPanel('desktopConversationPanel')"><strong>메신저</strong><span>대화 파일 보관</span></button>
+          <button type="button" class="nav-item" data-panel-target="desktopAlertPanel" onclick="setDesktopPanel('desktopAlertPanel')"><strong>알림/상태</strong><span>알림, 사용자, 로그</span></button>
+          <button type="button" class="nav-item" data-panel-target="desktopApprovalComposePanel" onclick="setDesktopPanel('desktopApprovalComposePanel')"><strong>결재 작성</strong><span>초안, 상신 준비</span></button>
+          <button type="button" class="nav-item" data-panel-target="desktopApprovalListPanel" onclick="setDesktopPanel('desktopApprovalListPanel')"><strong>결재 목록</strong><span>문서, 상태, 작업</span></button>
+          <button type="button" class="nav-item" data-panel-target="desktopSettingsPanel" onclick="setDesktopPanel('desktopSettingsPanel')"><strong>설정/정책</strong><span>API, 메시지, Help</span></button>
         </div>
 
         <div class="policy-box">
           <div class="label-kicker">Help / 정책 안내</div>
-          <div style="margin-top: 10px">
-            정책 본문은 메인 화면에 직접 노출하지 않습니다.
-          </div>
+          <div style="margin-top: 10px">정책 본문은 Help와 설정 경로에서 확인합니다.</div>
           <div style="margin-top: 10px" id="helpPathSidebar">
             확인 위치: Help, 정책 안내, 설정 &gt; 보관 정책
           </div>
@@ -543,57 +558,102 @@
       <main class="content">
         <section class="surface hero">
           <div>
-            <div class="label-kicker">Desktop Workspace</div>
-            <h2>로컬 보관과 실시간 협업을 함께 다루는 메인 화면</h2>
+            <div class="label-kicker">Desktop Client</div>
+            <h2>로컬 보관과 실시간 협업을 함께 다루는 설치형 업무 클라이언트</h2>
           </div>
           <div class="hero-tools">
-            <input id="apiBase" value="http://127.0.0.1:8510/api/v1" style="width: 320px" />
-            <select id="localeSelect" onchange="saveLocale(event.target.value)">
-              <option value="ko-KR">ko-KR</option>
-              <option value="en-US">en-US</option>
-              <option value="ja-JP">ja-JP</option>
-              <option value="zh-CN">zh-CN</option>
-              <option value="es-ES">es-ES</option>
-              <option value="fr-FR">fr-FR</option>
-              <option value="de-DE">de-DE</option>
-            </select>
-            <select id="timezoneSelect" onchange="saveTimezone(event.target.value)">
-              <option value="Asia/Seoul">Asia/Seoul</option>
-              <option value="Asia/Tokyo">Asia/Tokyo</option>
-              <option value="America/New_York">America/New_York</option>
-              <option value="America/Chicago">America/Chicago</option>
-              <option value="Europe/Paris">Europe/Paris</option>
-              <option value="Europe/Berlin">Europe/Berlin</option>
-            </select>
-            <button class="primary" onclick="login()">로그인</button>
+            <div id="heroLoginFields" style="display:flex; gap:12px; flex-wrap:wrap; align-items:center">
+              <input id="heroEmail" placeholder="admin@moaworks.sinsan.kr" style="width: 220px" />
+              <input id="heroPassword" type="password" placeholder="비밀번호" style="width: 150px" />
+              <button class="primary" id="heroLoginBtn" onclick="login()">로그인</button>
+            </div>
+            <div id="heroProfileSummary" style="display:none; min-width:260px">
+              <div style="font-weight:800; color:#0f172a" id="heroProfileName">로그인 사용자</div>
+              <div class="muted" id="heroProfileMeta" style="margin-top:6px">이메일과 역할이 여기에 표시됩니다.</div>
+            </div>
+            <button class="button-ghost" type="button" id="heroLogoutBtn" style="display: none" onclick="logoutDesktop()">로그아웃</button>
             <div class="pill" id="authState">로그인 대기</div>
           </div>
         </section>
 
-        <section class="grid-cards">
-          <article class="metric-card metric-mail">
-            <div class="label-kicker" style="color:#bfdbfe">메일</div>
-            <h3>로컬 보관</h3>
-            <p>설치형 프로그램에서 업무 메일을 로컬 아카이브로 장기 보관하는 화면 구조를 우선 반영합니다.</p>
-          </article>
-          <article class="metric-card metric-approval">
-            <div class="label-kicker" style="color:#99f6e4">결재</div>
-            <h3>실행 가능</h3>
-            <p>현재 API와 연결된 결재 작성, 상신, 승인, 반려 흐름을 메인 업무 동선에 배치합니다.</p>
-          </article>
-          <article class="metric-card metric-chat">
-            <div class="label-kicker" style="color:#fde68a">메신저</div>
-            <h3>파일 보관</h3>
-            <p>대화방과 별개로 JSON/HTML 기반 대화 파일을 PC에 보관하는 정책을 메인 화면에 노출합니다.</p>
-          </article>
-          <article class="metric-card metric-alert">
-            <div class="label-kicker" style="color:#fecdd3">알림</div>
-            <h3 id="notificationSummaryTop">미읽음 0</h3>
-            <p>SSE 우선, 실패 시 폴링 폴백. 사용자에게는 끊기지 않는 업무 경험을 우선 제공합니다.</p>
-          </article>
+        <section class="desktop-panel" id="desktopOverviewPanel">
+          <div id="desktopOverviewPrelogin" class="surface-card" style="display:none">
+            <div class="label-kicker">로그인 전 안내</div>
+            <h3>설치형 업무 허브 시작 준비</h3>
+            <div class="module-grid" style="margin-top:16px">
+              <div class="module">
+                <strong>로컬 보관</strong>
+                <div class="muted">메일 아카이브와 대화 파일 저장은 로그인 후 바로 사용할 수 있습니다.</div>
+              </div>
+              <div class="module">
+                <strong>실시간 업무</strong>
+                <div class="muted">결재, 알림, 메신저 동기화는 로그인 후 작업면에서 이어집니다.</div>
+              </div>
+              <div class="module">
+                <strong>정책 경로</strong>
+                <div class="muted">정책 본문은 Help / 정책 안내 / 설정 &gt; 보관 정책에서만 확인합니다.</div>
+              </div>
+            </div>
+          </div>
+          <div id="desktopOverviewAuthed" class="grid-cards" style="display:grid">
+            <article class="metric-card metric-mail">
+              <div class="label-kicker" style="color:#bfdbfe">메일</div>
+              <h3>로컬 보관</h3>
+              <p>받은 메일을 로컬 아카이브로 정리하고 다시 확인하는 핵심 진입입니다.</p>
+            </article>
+            <article class="metric-card metric-approval">
+              <div class="label-kicker" style="color:#99f6e4">결재</div>
+              <h3>실행 가능</h3>
+              <p>작성, 상신, 승인, 반려 흐름을 설치형 화면에서 바로 처리합니다.</p>
+            </article>
+            <article class="metric-card metric-chat">
+              <div class="label-kicker" style="color:#fde68a">메신저</div>
+              <h3>파일 보관</h3>
+              <p>대화 기록을 JSON/HTML 파일로 저장하는 설치형 전용 동선입니다.</p>
+            </article>
+            <article class="metric-card metric-alert">
+              <div class="label-kicker" style="color:#fecdd3">알림</div>
+              <h3 id="notificationSummaryTop">미읽음 0</h3>
+              <p>새 알림과 차단 상태를 끊기지 않게 확인하는 상태 보드입니다.</p>
+            </article>
+          </div>
         </section>
 
-        <section class="surface-card" style="margin-top: 22px">
+        <section class="surface-card desktop-panel" id="desktopSettingsPanel" style="margin-top: 22px">
+          <div class="field-grid" style="grid-template-columns: 1fr; margin-top: 0">
+            <label>
+              API Base
+              <input
+                id="apiBase"
+                placeholder="https://api.moaworks.sinsan.kr/api/v1"
+                onchange="saveApiBase(event.target.value)"
+              />
+            </label>
+            <label>
+              언어
+              <select id="localeSelect" onchange="saveLocale(event.target.value)">
+                <option value="ko-KR">ko-KR</option>
+                <option value="en-US">en-US</option>
+                <option value="ja-JP">ja-JP</option>
+                <option value="zh-CN">zh-CN</option>
+                <option value="es-ES">es-ES</option>
+                <option value="fr-FR">fr-FR</option>
+                <option value="de-DE">de-DE</option>
+              </select>
+            </label>
+            <label>
+              시간대
+              <select id="timezoneSelect" onchange="saveTimezone(event.target.value)">
+                <option value="Asia/Seoul">Asia/Seoul</option>
+                <option value="Asia/Tokyo">Asia/Tokyo</option>
+                <option value="America/New_York">America/New_York</option>
+                <option value="America/Chicago">America/Chicago</option>
+                <option value="Europe/Paris">Europe/Paris</option>
+                <option value="Europe/Berlin">Europe/Berlin</option>
+              </select>
+            </label>
+            <div class="muted" style="margin-top: 4px">설정은 로그인 후에도 유지되며, 정책은 Help/정책 안내/설정 경로로 이동합니다.</div>
+          </div>
           <div class="label-kicker">공통 제품 규칙</div>
           <h3>브랜드 체계 / 버튼 / 배지 / 상태 박스</h3>
           <div class="swatch-grid">
@@ -616,7 +676,7 @@
           </div>
         </section>
 
-        <section class="two-col">
+        <section class="two-col desktop-panel" id="desktopArchivePanel">
           <article class="surface-card">
             <div class="label-kicker">설치형 강점</div>
             <h3>로컬 보관 진입 보드</h3>
@@ -641,12 +701,13 @@
               <div class="action-tile">
                 <strong>메일 아카이브 바로 열기</strong>
                 <div class="muted">받은편지함에서 장기 보관 메일로 즉시 이동하는 설치형 전용 진입</div>
-                <button class="button-primary" type="button">아카이브 열기</button>
+                <button class="button-primary" type="button" onclick="saveMailArchive()">아카이브 파일 생성</button>
               </div>
               <div class="action-tile">
                 <strong>대화 파일 저장 열기</strong>
                 <div class="muted">채널별 JSON/HTML 저장 화면으로 바로 진입</div>
-                <button class="button-primary" type="button">저장 화면 열기</button>
+                <button class="button-primary" type="button" onclick="saveConversationArchive('json')">JSON 저장</button>
+                <button class="button-ghost" type="button" onclick="saveConversationArchive('html')">HTML 저장</button>
               </div>
               <div class="action-tile">
                 <strong>오프라인 업무 확인</strong>
@@ -654,6 +715,38 @@
                 <button class="button-primary" type="button">오프라인 보기</button>
               </div>
             </div>
+            <div class="module-grid" style="margin-top: 16px">
+              <div class="action-tile">
+                <strong>실서버 메일함 동기화</strong>
+                <div class="muted">받은편지함과 보낸편지함을 운영 API 기준으로 다시 불러옵니다.</div>
+                <button class="button-ghost" type="button" onclick="loadMailWorkspace()">메일 동기화</button>
+              </div>
+              <div class="action-tile">
+                <strong>현재 선택 메일</strong>
+                <div class="muted" id="desktopMailSelection">선택된 메일이 없습니다.</div>
+              </div>
+            </div>
+            <div class="two-col" style="margin-top: 16px">
+              <div class="surface-card" style="padding: 18px">
+                <div class="label-kicker">메일 목록</div>
+                <h3 style="margin-top: 8px">받은편지함 / 보낸편지함</h3>
+                <div class="row-actions" style="margin-top: 12px">
+                  <button class="button-ghost" type="button" onclick="setMailBox('inbox')">받은편지함</button>
+                  <button class="button-ghost" type="button" onclick="setMailBox('sent')">보낸편지함</button>
+                </div>
+                <div id="desktopMailRows" class="stack" style="margin-top: 16px"></div>
+              </div>
+              <div class="surface-card" style="padding: 18px">
+                <div class="label-kicker">메일 상세</div>
+                <h3 id="desktopMailDetailTitle" style="margin-top: 8px">메일을 선택하세요.</h3>
+                <div id="desktopMailDetailBody" class="muted" style="margin-top: 12px">운영 API에서 메일 상세를 조회하면 이 영역에 본문이 표시됩니다.</div>
+                <div class="row-actions" style="margin-top: 16px">
+                  <button class="button-ghost" type="button" onclick="markSelectedMailRead()">읽음 처리</button>
+                  <button class="button-ghost" type="button" onclick="toggleSelectedMailStar()">중요 표시</button>
+                </div>
+              </div>
+            </div>
+            <div class="footer-note" id="localArchiveResult">로컬 파일 생성 결과가 이 영역에 표시됩니다.</div>
           </article>
 
           <article class="surface-card">
@@ -668,7 +761,7 @@
           </article>
         </section>
 
-        <section class="two-col">
+        <section class="two-col desktop-panel" id="desktopConversationPanel">
           <article class="surface-card">
             <div class="label-kicker">로컬 업무 저장소</div>
             <h3>메일/메신저 보관 시안</h3>
@@ -690,45 +783,52 @@
               </div>
             </div>
 
-            <div class="footer-note">
-              정책 상세 본문은 이 메인 화면에 길게 두지 않습니다.
-              <strong id="helpPathFooter">Help, 정책 안내, 설정 &gt; 보관 정책</strong>
-              에서만 확인하도록 고정합니다.
+            <div class="two-col" style="margin-top: 16px">
+              <div class="surface-card" style="padding: 18px">
+                <div class="label-kicker">대화방 목록</div>
+                <h3 style="margin-top: 8px">실서버 메신저</h3>
+                <div class="row-actions" style="margin-top: 12px">
+                  <button class="button-ghost" type="button" onclick="loadMessengerWorkspace()">대화방 새로고침</button>
+                </div>
+                <div id="desktopRoomRows" class="stack" style="margin-top: 16px"></div>
+              </div>
+              <div class="surface-card" style="padding: 18px">
+                <div class="label-kicker">대화 상세</div>
+                <h3 id="desktopRoomTitle" style="margin-top: 8px">대화방을 선택하세요.</h3>
+                <div id="desktopMessageRows" class="stack" style="margin-top: 16px"></div>
+                <textarea id="desktopMessageDraft" placeholder="메시지를 입력하세요." style="margin-top: 16px"></textarea>
+                <div class="row-actions" style="margin-top: 12px">
+                  <button class="button-primary" type="button" onclick="sendDesktopMessage()">메시지 전송</button>
+                  <button class="button-ghost" type="button" onclick="markSelectedRoomRead()">읽음 처리</button>
+                </div>
+              </div>
             </div>
           </article>
 
           <article class="surface-card">
-            <div class="label-kicker">로그인 / 상태</div>
-            <h3>업무 시작</h3>
-            <div class="field-grid">
-              <label>
-                이메일
-                <input id="email" placeholder="user@moaworks.local" />
-              </label>
-              <label>
-                비밀번호
-                <input id="password" type="password" placeholder="비밀번호 입력" />
-              </label>
-            </div>
-            <div class="footer-note">
-              설치형 화면은 단순 로그인 창이 아니라
-              <strong> 메일/메신저 로컬 보관 기능과 업무 흐름을 함께 다루는 입구</strong>
-              가 되어야 하며, 정책 확인은 Help와 설정 영역으로 분리합니다.
-            </div>
+            <div class="label-kicker">로그인 상태</div>
+            <h3>현재 작업 상태</h3>
+            <div id="desktopAuthStatusTitle" style="font-weight: 800; color: #0f172a">미로그인</div>
+            <p id="desktopAuthStatusText" class="muted" style="margin-top: 8px">
+              상단에서 로그인한 뒤 메일/메신저/결재 작업을 사용합니다.
+            </p>
+            <p id="desktopAuthSessionInfo" class="muted" style="margin-top: 6px">
+              상세 정책은 Help / 정책 안내 / 설정 경로에서 확인합니다.
+            </p>
             <div class="stack" style="margin-top: 16px">
               <div class="action-tile">
                 <strong>실시간 처리</strong>
-                <div class="muted">승인 대기, 알림, 최근 대화는 서버와 연결된 상태에서 즉시 반영</div>
+                <div class="muted">승인 대기, 알림, 최근 대화는 연결 상태에서 즉시 반영</div>
               </div>
               <div class="action-tile">
                 <strong>로컬 보관</strong>
-                <div class="muted">완료 메일, 중요 대화, 참고 문서는 설치형 로컬 저장소로 분리 보관</div>
+                <div class="muted">완료 메일·중요 대화는 설치형 로컬 저장소로 분리 보관</div>
               </div>
             </div>
           </article>
         </section>
 
-        <section class="two-col">
+        <section class="two-col desktop-panel" id="desktopAlertPanel">
           <article class="surface-card" style="min-width: 0">
             <div class="label-kicker">알림 센터</div>
             <h3>업무 알림</h3>
@@ -757,7 +857,7 @@
           </article>
         </section>
 
-        <section class="surface-card" style="margin-top: 22px">
+        <section class="surface-card desktop-panel" id="desktopApprovalComposePanel" style="margin-top: 22px">
           <div class="label-kicker">결재 작성</div>
           <h3>실제 업무 중심 작성 화면</h3>
           <div class="field-grid">
@@ -779,7 +879,7 @@
           </div>
         </section>
 
-        <section class="surface-card" style="margin-top: 22px">
+        <section class="surface-card desktop-panel" id="desktopApprovalListPanel" style="margin-top: 22px">
           <div class="label-kicker">결재 리스트</div>
           <h3>문서 / 상태 / 작업</h3>
           <div class="row-actions" style="margin-top: 16px">
@@ -791,7 +891,7 @@
     </div>
 
     <script>
-      const FALLBACK_API_BASE = "http://127.0.0.1:8510/api/v1";
+      const FALLBACK_API_BASE = localStorage.getItem("moaworks.apiBase") || "https://api.moaworks.sinsan.kr/api/v1";
       const DEFAULT_UI_CONTRACT = {
         brand: {
           primary: "#0f766e",
@@ -828,6 +928,310 @@
       };
       const notificationRetryMax = 3;
       const notificationRetryDelayMs = 400;
+      const desktopPanelStorageKey = "moaworks.desktopPanel";
+      let desktopMailBox = "inbox";
+      let desktopInboxMails = [];
+      let desktopSentMails = [];
+      let desktopSelectedMailId = "";
+      let desktopSelectedMailDetail = null;
+      let desktopRooms = [];
+      let desktopSelectedRoomId = "";
+      let desktopSelectedRoomMessages = [];
+
+      function safeFileTimestamp() {
+        return new Date().toISOString().replace(/[:.]/g, "-");
+      }
+
+      function downloadLocalFile(fileName, mimeType, content) {
+        const blob = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = fileName;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
+        return fileName;
+      }
+
+      function showLocalArchiveResult(message) {
+        const resultBox = document.getElementById("localArchiveResult");
+        if (resultBox) {
+          resultBox.textContent = message;
+        }
+      }
+
+      function saveMailArchive() {
+        const sourceMails = desktopMailBox === "sent" ? desktopSentMails : desktopInboxMails;
+        if (!sourceMails.length) {
+          showLocalArchiveResult("저장할 서버 원본 메일이 없습니다. 먼저 메일 동기화를 실행하세요.");
+          return;
+        }
+        const payload = {
+          schemaVersion: "1.0",
+          archiveType: "mail.local-archive",
+          exportedAt: new Date().toISOString(),
+          user: me ? { userId: me.userId, userName: me.userName, userEmail: me.userEmail } : null,
+          apiBase: getApiBase(),
+          retentionPolicy: {
+            server: "1개월",
+            desktopLocal: "무기한",
+          },
+          mailbox: desktopMailBox,
+          mails: sourceMails.map((item) => ({
+            messageId: item.mailId,
+            subject: item.subject,
+            sender: item.senderEmail,
+            receivedAt: item.receivedAt || item.sentAt,
+            flags: [item.isRead ? "read" : "unread", item.isStarred ? "important" : "normal"],
+          })),
+        };
+        const fileName = `moaworks-mail-archive-${safeFileTimestamp()}.json`;
+        downloadLocalFile(fileName, "application/json;charset=utf-8", JSON.stringify(payload, null, 2));
+        showLocalArchiveResult(`메일 로컬 아카이브 파일 생성 요청 완료: ${fileName}`);
+      }
+
+      function saveConversationArchive(format) {
+        if (!desktopSelectedRoomId || !desktopSelectedRoomMessages.length) {
+          showLocalArchiveResult("저장할 서버 원본 대화가 없습니다. 먼저 대화방을 선택하세요.");
+          return;
+        }
+        const exportedAt = new Date().toISOString();
+        const conversation = {
+          schemaVersion: "1.0",
+          archiveType: "messenger.conversation",
+          exportedAt,
+          channelName: document.getElementById("desktopRoomTitle").textContent || desktopSelectedRoomId,
+          retentionPolicy: {
+            server: "2주",
+            desktopLocal: "JSON/HTML 파일 보관",
+          },
+          messages: desktopSelectedRoomMessages.map((item) => ({
+            sender: item.senderUserName,
+            sentAt: item.createdAt,
+            text: item.body,
+          })),
+        };
+        if (format === "html") {
+          const fileName = `moaworks-conversation-${safeFileTimestamp()}.html`;
+          const rows = conversation.messages
+            .map((item) => `<li><strong>${item.sender}</strong> <span>${item.sentAt}</span><p>${item.text}</p></li>`)
+            .join("");
+          const html = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${conversation.channelName}</title></head><body><h1>${conversation.channelName}</h1><p>보관 정책: 서버 ${conversation.retentionPolicy.server}, 설치형 ${conversation.retentionPolicy.desktopLocal}</p><ul>${rows}</ul></body></html>`;
+          downloadLocalFile(fileName, "text/html;charset=utf-8", html);
+          showLocalArchiveResult(`메신저 대화 HTML 파일 생성 요청 완료: ${fileName}`);
+          return;
+        }
+        const fileName = `moaworks-conversation-${safeFileTimestamp()}.json`;
+        downloadLocalFile(fileName, "application/json;charset=utf-8", JSON.stringify(conversation, null, 2));
+        showLocalArchiveResult(`메신저 대화 JSON 파일 생성 요청 완료: ${fileName}`);
+      }
+
+      function formatStamp(value) {
+        if (!value) return "-";
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return "-";
+        return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+      }
+
+      function renderMailDetail(detail) {
+        const title = document.getElementById("desktopMailDetailTitle");
+        const body = document.getElementById("desktopMailDetailBody");
+        const selection = document.getElementById("desktopMailSelection");
+        if (!title || !body || !selection) return;
+        if (!detail) {
+          title.textContent = "메일을 선택하세요.";
+          body.textContent = "운영 API에서 메일 상세를 조회하면 이 영역에 본문이 표시됩니다.";
+          selection.textContent = "선택된 메일이 없습니다.";
+          return;
+        }
+        title.textContent = detail.subject;
+        body.textContent = `${detail.senderEmail} / ${detail.bodyText || detail.subject}`;
+        selection.textContent = `${detail.subject} / 수신 ${detail.recipients.map((item) => item.recipientEmail).join(", ") || "-"}`;
+      }
+
+      function renderMailRows() {
+        const rows = document.getElementById("desktopMailRows");
+        if (!rows) return;
+        const list = desktopMailBox === "sent" ? desktopSentMails : desktopInboxMails;
+        rows.innerHTML = list
+          .map(
+            (item) => `
+              <button type="button" onclick="selectDesktopMail('${item.mailId}')" style="width:100%;text-align:left;border-radius:18px;padding:14px;border:${desktopSelectedMailId === item.mailId ? "1px solid var(--brand)" : "1px solid #dbe4ec"};background:${item.isRead ? "#fff" : "#f8fafc"};cursor:pointer">
+                <strong>${item.subject}</strong>
+                <div class="muted" style="margin-top:8px">${item.senderEmail} / ${formatStamp(item.receivedAt || item.sentAt)}</div>
+                <div class="muted" style="margin-top:6px">중요 ${item.isStarred ? "예" : "아니오"} · 첨부 ${item.attachmentCount}</div>
+              </button>
+            `,
+          )
+          .join("");
+        if (!list.length) {
+          rows.innerHTML = '<div class="policy-card"><div class="muted">표시할 메일이 없습니다.</div></div>';
+        }
+      }
+
+      async function loadMailWorkspace(preferredMailId) {
+        if (!token) return;
+        try {
+          const [inboxBody, sentBody] = await Promise.all([request("/mail/inbox"), request("/mail/sent")]);
+          desktopInboxMails = Array.isArray(inboxBody.mails) ? inboxBody.mails : [];
+          desktopSentMails = Array.isArray(sentBody.mails) ? sentBody.mails : [];
+          renderMailRows();
+          const source = desktopMailBox === "sent" ? desktopSentMails : desktopInboxMails;
+          const targetMailId = preferredMailId || desktopSelectedMailId || source[0]?.mailId || "";
+          if (targetMailId) {
+            await selectDesktopMail(targetMailId, false);
+          } else {
+            desktopSelectedMailId = "";
+            desktopSelectedMailDetail = null;
+            renderMailDetail(null);
+          }
+        } catch (error) {
+          showLocalArchiveResult(String(error.message || error));
+        }
+      }
+
+      function setMailBox(nextBox) {
+        desktopMailBox = nextBox === "sent" ? "sent" : "inbox";
+        renderMailRows();
+        const source = desktopMailBox === "sent" ? desktopSentMails : desktopInboxMails;
+        if (source[0]) {
+          void selectDesktopMail(source[0].mailId, false);
+        } else {
+          renderMailDetail(null);
+        }
+      }
+
+      async function selectDesktopMail(mailId, markRead = true) {
+        if (!token || !mailId) return;
+        try {
+          if (desktopMailBox === "inbox" && markRead) {
+            await request(`/mail/${mailId}/read`, { method: "POST", headers: authHeaders() });
+            desktopInboxMails = desktopInboxMails.map((item) => (item.mailId === mailId ? { ...item, isRead: true } : item));
+          }
+          desktopSelectedMailDetail = await request(`/mail/${mailId}`);
+          desktopSelectedMailId = mailId;
+          renderMailRows();
+          renderMailDetail(desktopSelectedMailDetail);
+        } catch (error) {
+          showLocalArchiveResult(String(error.message || error));
+        }
+      }
+
+      async function markSelectedMailRead() {
+        if (!desktopSelectedMailId) return;
+        await selectDesktopMail(desktopSelectedMailId, true);
+      }
+
+      async function toggleSelectedMailStar() {
+        if (!desktopSelectedMailId) return;
+        try {
+          await request(`/mail/${desktopSelectedMailId}/star`, { method: "POST", headers: authHeaders() });
+          await loadMailWorkspace(desktopSelectedMailId);
+        } catch (error) {
+          showLocalArchiveResult(String(error.message || error));
+        }
+      }
+
+      function renderRooms() {
+        const rows = document.getElementById("desktopRoomRows");
+        if (!rows) return;
+        rows.innerHTML = desktopRooms
+          .map(
+            (item) => `
+              <button type="button" onclick="selectDesktopRoom('${item.roomId}')" style="width:100%;text-align:left;border-radius:18px;padding:14px;border:${desktopSelectedRoomId === item.roomId ? "1px solid var(--brand)" : "1px solid #dbe4ec"};background:#fff;cursor:pointer">
+                <strong>${item.roomName}</strong>
+                <div class="muted" style="margin-top:8px">${item.lastMessage || "최근 메시지 없음"}</div>
+                <div class="muted" style="margin-top:6px">미읽음 ${item.unreadCount} · ${formatStamp(item.lastMessageAt || item.updatedAt)}</div>
+              </button>
+            `,
+          )
+          .join("");
+        if (!desktopRooms.length) {
+          rows.innerHTML = '<div class="policy-card"><div class="muted">표시할 대화방이 없습니다.</div></div>';
+        }
+      }
+
+      function renderMessages() {
+        const title = document.getElementById("desktopRoomTitle");
+        const rows = document.getElementById("desktopMessageRows");
+        if (!title || !rows) return;
+        const room = desktopRooms.find((item) => item.roomId === desktopSelectedRoomId);
+        title.textContent = room ? room.roomName : "대화방을 선택하세요.";
+        rows.innerHTML = desktopSelectedRoomMessages
+          .map(
+            (item) => `
+              <div class="policy-card">
+                <strong>${item.senderUserName}</strong>
+                <div class="muted" style="margin-top:8px">${formatStamp(item.createdAt)} / 읽음 ${item.readBy.length}</div>
+                <div style="margin-top:8px">${item.body}</div>
+              </div>
+            `,
+          )
+          .join("");
+        if (!desktopSelectedRoomMessages.length) {
+          rows.innerHTML = '<div class="policy-card"><div class="muted">표시할 메시지가 없습니다.</div></div>';
+        }
+      }
+
+      async function loadMessengerWorkspace(preferredRoomId) {
+        if (!token) return;
+        try {
+          const body = await request("/messenger/rooms");
+          desktopRooms = Array.isArray(body.rooms) ? body.rooms : [];
+          renderRooms();
+          const roomId = preferredRoomId || desktopSelectedRoomId || desktopRooms[0]?.roomId || "";
+          if (roomId) {
+            await selectDesktopRoom(roomId, false);
+          } else {
+            desktopSelectedRoomId = "";
+            desktopSelectedRoomMessages = [];
+            renderMessages();
+          }
+        } catch (error) {
+          showLocalArchiveResult(String(error.message || error));
+        }
+      }
+
+      async function selectDesktopRoom(roomId, markRead = true) {
+        if (!token || !roomId) return;
+        try {
+          if (markRead) {
+            await request(`/messenger/rooms/${roomId}/read`, { method: "POST", headers: authHeaders() });
+            desktopRooms = desktopRooms.map((item) => (item.roomId === roomId ? { ...item, unreadCount: 0 } : item));
+          }
+          const body = await request(`/messenger/rooms/${roomId}/messages`);
+          desktopSelectedRoomId = roomId;
+          desktopSelectedRoomMessages = Array.isArray(body.messages) ? body.messages : [];
+          renderRooms();
+          renderMessages();
+        } catch (error) {
+          showLocalArchiveResult(String(error.message || error));
+        }
+      }
+
+      async function sendDesktopMessage() {
+        if (!token || !desktopSelectedRoomId) return;
+        const draft = document.getElementById("desktopMessageDraft").value.trim();
+        if (!draft) return;
+        try {
+          await request(`/messenger/rooms/${desktopSelectedRoomId}/messages`, {
+            method: "POST",
+            headers: authHeaders(),
+            body: JSON.stringify({ body: draft, messageType: "text", attachmentMeta: [] }),
+          });
+          document.getElementById("desktopMessageDraft").value = "";
+          await selectDesktopRoom(desktopSelectedRoomId, true);
+        } catch (error) {
+          showLocalArchiveResult(String(error.message || error));
+        }
+      }
+
+      async function markSelectedRoomRead() {
+        if (!desktopSelectedRoomId) return;
+        await selectDesktopRoom(desktopSelectedRoomId, true);
+      }
 
       function resolveLocale(value) {
         return ["ko-KR", "en-US", "ja-JP", "zh-CN", "es-ES", "fr-FR", "de-DE"].includes(value) ? value : "ko-KR";
@@ -873,6 +1277,90 @@
         localStorage.setItem("moaworks.timezone", value);
       }
 
+      function saveApiBase(value) {
+        const nextValue = value.trim() || FALLBACK_API_BASE;
+        localStorage.setItem("moaworks.apiBase", nextValue);
+        document.getElementById("apiBase").value = nextValue;
+      }
+
+      function syncAuthHeroState() {
+        const heroEmail = document.getElementById("heroEmail");
+        const heroPassword = document.getElementById("heroPassword");
+        const heroLoginFields = document.getElementById("heroLoginFields");
+        const heroLoginBtn = document.getElementById("heroLoginBtn");
+        const heroLogoutBtn = document.getElementById("heroLogoutBtn");
+        const heroProfileSummary = document.getElementById("heroProfileSummary");
+        const heroProfileName = document.getElementById("heroProfileName");
+        const heroProfileMeta = document.getElementById("heroProfileMeta");
+        if (!heroEmail || !heroPassword || !heroLoginBtn || !heroLogoutBtn || !heroLoginFields || !heroProfileSummary || !heroProfileName || !heroProfileMeta) {
+          return;
+        }
+        const loggedIn = Boolean(token && me);
+        heroLoginFields.style.display = loggedIn ? "none" : "flex";
+        heroLogoutBtn.style.display = loggedIn ? "inline-block" : "none";
+        heroProfileSummary.style.display = loggedIn ? "block" : "none";
+        const authStatusTitle = document.getElementById("desktopAuthStatusTitle");
+        const authStatusText = document.getElementById("desktopAuthStatusText");
+        const authSessionInfo = document.getElementById("desktopAuthSessionInfo");
+        const overviewPrelogin = document.getElementById("desktopOverviewPrelogin");
+        const overviewAuthed = document.getElementById("desktopOverviewAuthed");
+        if (loggedIn) {
+          heroProfileName.textContent = me?.userName || "계정";
+          heroProfileMeta.textContent = `${me?.roleName || "운영자"} / ${me?.userEmail || "설치형 사용자"}`;
+          if (overviewPrelogin) {
+            overviewPrelogin.style.display = "none";
+          }
+          if (overviewAuthed) {
+            overviewAuthed.style.display = "grid";
+          }
+          if (authStatusTitle) {
+            authStatusTitle.textContent = `로그인 완료: ${me?.userName || "계정"} (${me?.roleName || "운영자"})`;
+          }
+          if (authStatusText) {
+            authStatusText.textContent = `${me?.userEmail || "설치형 사용자"}로 인증된 상태입니다.`;
+          }
+          if (authSessionInfo) {
+            authSessionInfo.textContent = "실시간 작업이 활성화되어 있고, 설정 반영은 변경 즉시 반영됩니다.";
+          }
+        } else {
+          heroProfileName.textContent = "로그인 사용자";
+          heroProfileMeta.textContent = "이메일과 역할이 여기에 표시됩니다.";
+          if (overviewPrelogin) {
+            overviewPrelogin.style.display = "block";
+          }
+          if (overviewAuthed) {
+            overviewAuthed.style.display = "none";
+          }
+          if (authStatusTitle) {
+            authStatusTitle.textContent = "미로그인";
+          }
+          if (authStatusText) {
+            authStatusText.textContent = "상단에서 로그인한 뒤 메일/메신저/결재 작업을 사용합니다.";
+          }
+          if (authSessionInfo) {
+            authSessionInfo.textContent = "상세 정책은 Help / 정책 안내 / 설정 경로에서 확인합니다.";
+          }
+        }
+      }
+
+      function setDesktopPanel(panelId) {
+        const loggedIn = Boolean(token && me);
+        if (!loggedIn && !["desktopOverviewPanel", "desktopSettingsPanel"].includes(panelId)) {
+          panelId = "desktopOverviewPanel";
+        }
+        const panels = document.querySelectorAll(".desktop-panel");
+        panels.forEach((panel) => {
+          panel.style.display = panel.id === panelId ? "" : "none";
+        });
+        const navButtons = document.querySelectorAll("[data-panel-target]");
+        navButtons.forEach((button) => {
+          const isActive = button.getAttribute("data-panel-target") === panelId;
+          button.classList.toggle("active", isActive);
+          button.setAttribute("aria-pressed", isActive ? "true" : "false");
+        });
+        localStorage.setItem(desktopPanelStorageKey, panelId);
+      }
+
       function getApiBase() {
         return document.getElementById("apiBase").value.trim() || FALLBACK_API_BASE;
       }
@@ -889,7 +1377,7 @@
         const text = await response.text();
         const body = text ? JSON.parse(text) : {};
         if (!response.ok) {
-          throw new Error((body && body.userMessage) || "요청 실패");
+          throw new Error((body && body.detail && body.detail.userMessage) || (body && body.userMessage) || "요청 실패");
         }
         return body;
       }
@@ -1107,8 +1595,12 @@
       }
 
       async function login() {
-        const email = document.getElementById("email").value.trim();
-        const password = document.getElementById("password").value;
+        const heroEmail = document.getElementById("heroEmail");
+        const heroPassword = document.getElementById("heroPassword");
+        const emailField = document.getElementById("email");
+        const passwordField = document.getElementById("password");
+        const email = (heroEmail?.value || emailField?.value || "").trim();
+        const password = heroPassword?.value || passwordField?.value || "";
         const authState = document.getElementById("authState");
         authState.textContent = "로그인 시도 중...";
         try {
@@ -1122,9 +1614,16 @@
           me = meBody.user;
           permissions = me.permissions || [];
           authState.textContent = `${me.userName} / ${me.roleName}`;
+          if (emailField) emailField.value = email;
+          if (passwordField) passwordField.value = "";
+          if (heroEmail) heroEmail.value = email;
+          if (heroPassword) heroPassword.value = "";
+          syncAuthHeroState();
           renderCurrentUser();
           await loadApprovals();
           await loadNotificationsWithRetry().catch(() => {});
+          await loadMailWorkspace();
+          await loadMessengerWorkspace();
           connectNotificationStream();
         } catch (error) {
           authState.textContent = String(error.message);
@@ -1132,6 +1631,7 @@
           localStorage.removeItem("moaworks.userToken");
           stopNotificationStream();
           setNotificationMode("polling");
+          syncAuthHeroState();
         }
       }
 
@@ -1143,9 +1643,26 @@
         stopNotificationStream();
         renderCurrentUser();
         document.getElementById("authState").textContent = "로그인 대기";
+        syncAuthHeroState();
+        const heroPassword = document.getElementById("heroPassword");
+        const passwordField = document.getElementById("password");
+        if (heroPassword) heroPassword.value = "";
+        if (passwordField) passwordField.value = "";
         document.getElementById("documentRows").innerHTML = "";
         document.getElementById("notificationRows").innerHTML = "";
+        document.getElementById("desktopMailRows").innerHTML = "";
+        document.getElementById("desktopRoomRows").innerHTML = "";
+        document.getElementById("desktopMessageRows").innerHTML = "";
         setNotificationSummary("미읽음 0");
+        desktopInboxMails = [];
+        desktopSentMails = [];
+        desktopSelectedMailId = "";
+        desktopSelectedMailDetail = null;
+        desktopRooms = [];
+        desktopSelectedRoomId = "";
+        desktopSelectedRoomMessages = [];
+        renderMailDetail(null);
+        renderMessages();
       }
 
       function syncLocaleControls() {
@@ -1287,8 +1804,11 @@
 
       window.addEventListener("DOMContentLoaded", async () => {
         await applyUiContract();
+        document.getElementById("apiBase").value = localStorage.getItem("moaworks.apiBase") || FALLBACK_API_BASE;
+        setDesktopPanel(localStorage.getItem(desktopPanelStorageKey) || "desktopOverviewPanel");
         syncLocaleControls();
         renderCurrentUser();
+        syncAuthHeroState();
         if (token) {
           try {
             const meBody = await request("/auth/me");
@@ -1296,14 +1816,18 @@
             permissions = me.permissions || [];
             document.getElementById("authState").textContent = `${me.userName} / ${me.roleName}`;
             renderCurrentUser();
+            syncAuthHeroState();
           } catch {
             token = "";
             localStorage.removeItem("moaworks.userToken");
+            syncAuthHeroState();
           }
         }
         if (token) {
           await loadApprovals();
           await loadNotificationsWithRetry().catch(() => {});
+          await loadMailWorkspace();
+          await loadMessengerWorkspace();
           connectNotificationStream();
         }
       });
