@@ -184,6 +184,23 @@ function mergeUiContract(raw: Partial<UiContract> | null | undefined): UiContrac
   };
 }
 
+function normalizeWarnings(nextWarnings: string[] | undefined | null): string[] {
+  const seen = new Set<string>();
+  const normalized = new Map<string, string>();
+  for (const rawItem of nextWarnings ?? []) {
+    const trimmed = rawItem.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const key = trimmed.replace(/\s+/g, " ").trim().toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      normalized.set(key, trimmed);
+    }
+  }
+  return Array.from(normalized.values());
+}
+
 const adminCopy: Record<AppLocale, Record<string, string>> = {
   "ko-KR": {
     adminEmail: "관리자 이메일",
@@ -383,6 +400,7 @@ export default function App() {
   const [form, setForm] = useState<SetupForm>(initialForm);
   const [loginForm, setLoginForm] = useState<LoginForm>({ email: "", password: "" });
   const [userForm, setUserForm] = useState<UserForm>(initialUserForm);
+  const [userSearch, setUserSearch] = useState("");
   const [departmentName, setDepartmentName] = useState("");
   const [roleName, setRoleName] = useState("");
   const [rolePermissions, setRolePermissions] = useState("mail:read,approval:read,profile:read");
@@ -642,7 +660,7 @@ export default function App() {
         },
       });
       setErrors(response.errors ?? []);
-      setWarnings(response.warnings ?? []);
+      setWarnings(normalizeWarnings(response.warnings));
       setMessage(response.is_valid ? "검증 통과" : "검증 실패");
     } finally {
       setLoading(false);
@@ -872,6 +890,18 @@ export default function App() {
   const supportedTranslationTargets = translationPolicy?.supportedTargetLocales?.length ? translationPolicy.supportedTargetLocales : (translationStatus?.supportedTargetLocales ?? ["en"]);
   const activeMenu = adminMenus.find((item) => item.key === activeAdminMenu) ?? adminMenus[0];
   const showAdminConsole = initialized && Boolean(token) && Boolean(overview);
+  const filteredUsers = overview?.users.filter((item) => {
+    if (!userSearch.trim()) {
+      return true;
+    }
+    const keyword = userSearch.trim().toLowerCase();
+    return (
+      item.userName.toLowerCase().includes(keyword) ||
+      item.userEmail.toLowerCase().includes(keyword) ||
+      item.departmentName.toLowerCase().includes(keyword) ||
+      item.roleName.toLowerCase().includes(keyword)
+    );
+  }) ?? [];
 
   return (
     <main className={`shell ${showAdminConsole ? "console-shell" : ""} ${showLoginPanel ? "login-shell" : ""}`}>
@@ -1251,9 +1281,6 @@ export default function App() {
                 <button type="button" className="secondary" onClick={() => void refreshMonitoring()}>
                   경고/알림
                 </button>
-                <button type="button" onClick={() => setActiveAdminMenu("users")}>
-                  사용자 추가
-                </button>
               </div>
             </div>
           <section className="panel" hidden={activeAdminMenu !== "dashboard"}>
@@ -1327,9 +1354,6 @@ export default function App() {
               </article>
             </div>
             <div className="quick-actions">
-              <button type="button" onClick={() => setActiveAdminMenu("users")}>사용자 추가</button>
-              <button type="button" className="secondary" onClick={() => setActiveAdminMenu("service")}>도메인 검증</button>
-              <button type="button" className="secondary" onClick={() => setActiveAdminMenu("service")}>Relay 테스트</button>
               <button type="button" className="secondary" onClick={() => void reloadUiContract()}>설정 저장값 다시 불러오기</button>
             </div>
             <div className="status-card">
@@ -1412,15 +1436,20 @@ export default function App() {
                 </tbody>
               </table>
             </div>
+            <p className="muted">결재 감사 로그/필터/상세 조회는 상세 이벤트 기반 운영 규칙으로 확인합니다.</p>
           </section>
 
           <section className="panel" hidden={activeAdminMenu !== "users"}>
             <div className="panel-head">
               <div>
                 <h2>{t(locale, "userManagement")}</h2>
-                <p className="muted">사용자 생성 시 서버에서 메일 계정을 자동 생성합니다.</p>
+                <p className="muted">사용자 목록, 검색, 생성, 수정, 상태 변경, 파일 업로드를 운영 콘솔에서 수행합니다.</p>
               </div>
             </div>
+            <label className="field-label">
+              사용자 검색
+              <input value={userSearch} onChange={(event) => setUserSearch(event.target.value)} placeholder="이름, 이메일, 부서, 권한" />
+            </label>
             <form className="wizard" onSubmit={handleUserSubmit}>
               <div className="field-grid">
                 <label>
@@ -1497,7 +1526,7 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {overview.users.map((item) => (
+                  {filteredUsers.map((item) => (
                     <tr key={item.userId}>
                       <td>{item.userName}</td>
                       <td>{item.userEmail}</td>
@@ -1533,56 +1562,67 @@ export default function App() {
                       </td>
                     </tr>
                   ))}
+                  {filteredUsers.length === 0 && (
+                    <tr>
+                      <td colSpan={8}>{userSearch ? "조건에 맞는 사용자가 없습니다." : "등록된 사용자가 없습니다."}</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
           </section>
 
-          <section className="panel split-panel" hidden={activeAdminMenu !== "departments" && activeAdminMenu !== "roles"}>
-            <article>
-              <div className="panel-head">
-                <div>
-                  <h2>{copy.addDepartment}</h2>
-                  <p className="muted">운영자 관리 화면에서 조직 단위를 확장합니다.</p>
-                </div>
+          <section className="panel" hidden={activeAdminMenu !== "departments"}>
+            <div className="panel-head">
+              <div>
+                <h2>부서 관리</h2>
+                <p className="muted">부서 목록, 생성, 수정(동일 명칭 업데이트), 구조를 확인합니다.</p>
               </div>
-              <form className="compact-form" onSubmit={handleDepartmentCreate}>
-                <label>
-                  부서명
-                  <input value={departmentName} onChange={(e) => setDepartmentName(e.target.value)} />
-                </label>
-                <button type="submit" disabled={loading}>{copy.createDepartment}</button>
-              </form>
-            </article>
-
-            <article>
-              <div className="panel-head">
-                <div>
-                  <h2>{copy.addRole}</h2>
-                  <p className="muted">콤마 구분 권한 문자열로 서버 역할을 정의합니다.</p>
-                </div>
-              </div>
-              <form className="compact-form" onSubmit={handleRoleCreate}>
-                <label>
-                  역할명
-                  <input value={roleName} onChange={(e) => setRoleName(e.target.value)} />
-                </label>
-                <label>
-                  권한 목록
-                  <input value={rolePermissions} onChange={(e) => setRolePermissions(e.target.value)} />
-                </label>
-                <button type="submit" disabled={loading}>{copy.createRole}</button>
-              </form>
-            </article>
+            </div>
+            <form className="compact-form" onSubmit={handleDepartmentCreate}>
+              <label>
+                부서명
+                <input value={departmentName} onChange={(e) => setDepartmentName(e.target.value)} />
+              </label>
+              <button type="submit" disabled={loading}>{copy.createDepartment}</button>
+            </form>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                <tr>
+                    <th>부서명</th>
+                </tr>
+              </thead>
+                <tbody>
+                  {overview.departments.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.name}</td>
+                    </tr>
+                  ))}
+                  {overview.departments.length === 0 ? <tr><td>등록된 부서가 없습니다.</td></tr> : null}
+                </tbody>
+              </table>
+            </div>
           </section>
 
           <section className="panel" hidden={activeAdminMenu !== "roles"}>
             <div className="panel-head">
               <div>
-                <h2>{copy.roleStatus}</h2>
-                <p className="muted">역할을 비활성화하면 연결된 사용자는 다음 요청부터 즉시 차단됩니다.</p>
+                <h2>권한 관리</h2>
+                <p className="muted">권한 역할 생성, 편집, 활성화 전환을 관리합니다.</p>
               </div>
             </div>
+            <form className="compact-form" onSubmit={handleRoleCreate}>
+              <label>
+                역할명
+                <input value={roleName} onChange={(e) => setRoleName(e.target.value)} />
+              </label>
+              <label>
+                권한 목록
+                <input value={rolePermissions} onChange={(e) => setRolePermissions(e.target.value)} />
+              </label>
+              <button type="submit" disabled={loading}>{copy.createRole}</button>
+            </form>
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
@@ -1626,41 +1666,6 @@ export default function App() {
                   ))}
                 </tbody>
               </table>
-            </div>
-          </section>
-
-          <section className="panel" hidden={activeAdminMenu !== "users"}>
-            <div className="panel-head">
-              <div>
-                <h2>사용자 파일 업로드</h2>
-                <p className="muted">대량 사용자 등록을 위한 운영 진입점입니다. 실제 업로드 API는 후속 단계에서 연결합니다.</p>
-              </div>
-            </div>
-            <div className="split-panel">
-              <article className="status-card">
-                <strong>업로드 대상</strong>
-                <p>사용자 이름, 이메일, 부서, 권한 역할, 초기 상태를 한 번에 등록하거나 갱신하는 파일을 대상으로 합니다.</p>
-                <p className="muted">서버 반영 시 사용자 생성 규칙과 메일 계정 자동 생성 규칙을 동일하게 적용해야 합니다.</p>
-              </article>
-              <article className="status-card">
-                <strong>허용 파일 형식</strong>
-                <p>CSV, XLSX</p>
-                <p className="muted">필수 열: name, email, department, role, status</p>
-              </article>
-              <article>
-                <form className="compact-form" onSubmit={(event) => event.preventDefault()}>
-                  <label>
-                    사용자 파일
-                    <input type="file" accept=".csv,.xlsx" disabled />
-                  </label>
-                  <button type="button" className="secondary" disabled>업로드 API 연결 대기</button>
-                </form>
-              </article>
-              <article className="status-card">
-                <strong>업로드 후 반영 대상</strong>
-                <p>사용자 목록, 부서 매핑, 권한 역할 매핑, 메일 계정 생성 상태, 정합성 경고에 반영됩니다.</p>
-                <p className="muted">실제 반영 전 미리보기와 오류 행 다운로드가 필요합니다.</p>
-              </article>
             </div>
           </section>
 
@@ -1726,25 +1731,46 @@ export default function App() {
                   <p>{relayResult.message}</p>
                 </div>
               )}
+              <article className="status-card" style={{ marginTop: "14px" }}>
+                <strong>운영 점검</strong>
+                <p className="muted">경고: {monitoringOverview?.alertOpenCount ?? 0}건</p>
+                <p>디스크 사용률 {monitoringOverview?.diskUsagePercent ?? 0}%</p>
+              </article>
             </article>
           </section>
 
-          <section className="panel" hidden={activeAdminMenu !== "mail" && activeAdminMenu !== "storage"}>
+          <section className="panel" hidden={activeAdminMenu !== "mail"}>
             <div className="panel-head">
               <div>
-                <h2>메일 설정 / 저장소 상태</h2>
-                <p className="muted">서비스 운영 메뉴는 실제 운영 점검 대상만 보여줍니다.</p>
+                <h2>메일 설정</h2>
+                <p className="muted">메일 제공자/Relay와 연동 상태를 운영합니다.</p>
               </div>
             </div>
             <div className="overview-grid">
               <article className="status-card">
-                <strong>메일 설정 현황</strong>
+                <strong>메일 제공자</strong>
                 <p>{overview.mailProvider.providerType}</p>
                 <p className="muted">
                   {overview.mailProvider.relayHost}:{overview.mailProvider.relayPort}
                 </p>
                 <p>활성 여부: {overview.mailProvider.active ? "active" : "inactive"}</p>
               </article>
+              <article className="status-card">
+                <strong>마지막 Relay 테스트</strong>
+                <p>{overview.mailProvider.lastTestStatus}</p>
+                <p className="muted">{overview.mailProvider.lastTestMessage}</p>
+              </article>
+            </div>
+          </section>
+
+          <section className="panel" hidden={activeAdminMenu !== "storage"}>
+            <div className="panel-head">
+              <div>
+                <h2>저장소/DB 상태</h2>
+                <p className="muted">저장소/DB 상태와 백업·복구 요약을 운영 점검에서 확인합니다.</p>
+              </div>
+            </div>
+            <div className="overview-grid">
               <article className="status-card">
                 <strong>저장소 상태</strong>
                 <p>{health?.components.storage?.status ?? "unknown"}</p>
@@ -1756,66 +1782,9 @@ export default function App() {
                 <p className="muted">{health?.components.db?.message ?? "DB 상태를 아직 확인하지 못했습니다."}</p>
               </article>
               <article className="status-card">
-                <strong>마지막 Relay 테스트</strong>
-                <p>{overview.mailProvider.lastTestStatus}</p>
-                <p className="muted">{overview.mailProvider.lastTestMessage}</p>
-              </article>
-            </div>
-          </section>
-
-        <section className="panel" hidden={activeAdminMenu !== "help"}>
-            <div className="panel-head">
-              <div>
-                <h2>운영 가이드: {copy.authContract}</h2>
-                <p className="muted">서비스 운영 화면에서는 제거하고, 클라이언트 공통 인증 이해가 필요한 운영 가이드로 재배치했습니다.</p>
-              </div>
-            </div>
-            <pre className="contract-block">{`POST /api/v1/auth/login
-{
-  "accessToken": "bearer-token",
-  "tokenType": "bearer",
-  "expiresIn": 3600,
-  "user": {
-    "userId": "user_xxx",
-    "companyId": "company_xxx",
-    "userName": "홍길동",
-    "userEmail": "hong@company.com",
-    "roleId": "role_xxx",
-    "roleName": "일반사용자",
-    "userType": "user",
-    "status": "active",
-    "permissions": ["mail:read", "approval:read", "profile:read"]
-  }
-}`}</pre>
-          </section>
-
-          <section className="panel" hidden={activeAdminMenu !== "brand"}>
-            <div className="panel-head">
-              <div>
-                <h2>브랜드 / 메뉴 / 보관 정책 설정</h2>
-                <p className="muted">관리자 웹은 운영 콘솔이자 회사별 커스터마이징과 정책 기준을 고정하는 화면이어야 합니다.</p>
-              </div>
-            </div>
-            <div className="overview-grid">
-              <article className="status-card">
-                <strong>브랜드 설정</strong>
-                <p>{overview.company.name} 기준 회사명, 로고, 대표 색상, 보조 색상, 버튼 스타일을 설정 대상으로 고정합니다.</p>
-                <p className="muted">로그인 배경/문구, 상단 바, 사이드바, 조직 명칭까지 회사별 커스터마이징 범위에 포함합니다.</p>
-              </article>
-              <article className="status-card">
-                <strong>메뉴 구성 설정</strong>
-                <p>운영자는 메일, 결재, 메신저, 일정, 주소록, 조직도, 파일, 설정 메뉴의 노출 여부를 제어합니다.</p>
-                <p className="muted">보관 정책은 메인 업무 카드가 아니라 Help, 정책 안내, 설정 &gt; 보관 정책으로 분리합니다.</p>
-              </article>
-              <article className="status-card">
-                <strong>보관 정책 기본값</strong>
-                <p>메일: 서버 1개월 + 설치형 로컬 아카이브 무기한</p>
-                <p>메신저: 서버 2주 + 설치형 대화 파일(JSON/HTML) 보관</p>
-              </article>
-              <article className="status-card">
-                <strong>사용자 화면 반영 경로</strong>
-                <p>브랜드/메뉴/보관 정책 설정은 user-web, mobile-app, desktop-client의 화면 구조와 Help 경로에 반영됩니다.</p>
-                <p className="muted">운영자는 설정값이 어떤 사용자 화면에 연결되는지 브랜드/화면 설정 메뉴에서 확인합니다.</p>
+                <strong>백업/복구 요약</strong>
+                <p>{health?.components.storage?.details?.backup_status || "요약 미수집"}</p>
+                <p className="muted">복구 절차: 운영 저장소 정책 및 DB 스냅샷 기준</p>
               </article>
             </div>
           </section>
@@ -1824,29 +1793,26 @@ export default function App() {
             <div className="panel-head">
               <div>
                 <h2>도움말 / 정책 안내</h2>
-                <p className="muted">정책 본문을 메인 화면에 직접 노출하지 않고, 운영자가 확인해야 할 경로와 점검 항목만 정리합니다.</p>
+                <p className="muted">정책 본문은 메인 카드가 아니라 Help 경로 중심으로만 보여줍니다.</p>
               </div>
             </div>
             <div className="overview-grid">
-              <article className="status-card">
-                <strong>보관 정책 안내</strong>
-                <p>메일: 서버 1개월 + 설치형 로컬 아카이브 무기한</p>
-                <p>메신저: 서버 2주 + 설치형 대화 파일(JSON/HTML) 보관</p>
-                <p className="muted">정책 상세 본문은 Help / 정책 안내 / 설정 &gt; 보관 정책 경로에서 확인합니다.</p>
-              </article>
               <article className="status-card">
                 <strong>운영 가이드</strong>
                 <p>초기 설정, 관리자 로그인, 사용자 생성, 도메인 검증, Relay 테스트 순서로 점검합니다.</p>
-                <p className="muted">실패 시 화면의 오류 메시지와 서버 health 상태를 함께 확인합니다.</p>
+                <p className="muted">실패 시 화면 메시지와 health 상태를 함께 확인합니다.</p>
+              </article>
+              <article className="status-card">
+                <strong>정책 보기 경로</strong>
+                <p>정책 문구 본문은 사용자 웹/모바일/설치형의 Help 및 정책 안내 영역에서 확인합니다.</p>
               </article>
               <article className="status-card">
                 <strong>초기 설치 후 점검 항목</strong>
-                <p>DB 연결, companies/admin_users 생성, health.initialized, Wizard 종료, 로그인 화면 전환을 확인합니다.</p>
+                <p>DB 연결, companies/admin_users 생성, health.initialized, Wizard 종료, 로그인 화면 전환 확인</p>
               </article>
               <article className="status-card">
-                <strong>Help 경로 안내</strong>
-                <p>{uiContractDraft.helpText}</p>
-                <p className="muted">정책 본문은 업무 홈 카드가 아니라 도움말/정책 경로로만 안내합니다.</p>
+                <strong>인증 계약 안내</strong>
+                <p className="muted">{copy.authContract}</p>
               </article>
             </div>
           </section>
@@ -1854,37 +1820,54 @@ export default function App() {
           <section className="panel" hidden={activeAdminMenu !== "brand"}>
             <div className="panel-head">
               <div>
-                <h2>공통 브랜드 / 컴포넌트 기준</h2>
-                <p className="muted">운영자는 색상값만 보는 것이 아니라, 그 색상이 실제 어떤 화면 요소와 상태 규칙에 연결되는지 이해해야 합니다.</p>
+                <h2>브랜드 / 메뉴 / 보관 정책 설정</h2>
+                <p className="muted">운영 콘솔에서 브랜딩·메뉴 구성·보관 정책 설정과 반영 계약을 관리합니다.</p>
               </div>
             </div>
-            <div className="overview-grid">
-              {brandGuide.map((item) => (
-                <article key={item.title} className="status-card">
-                  <div style={{ width: "48px", height: "48px", borderRadius: "16px", background: item.value }} />
-                  <strong style={{ display: "block", marginTop: "12px" }}>{item.title}</strong>
-                  <p>{item.value}</p>
-                  <p className="muted">{item.target}</p>
-                </article>
-              ))}
-            </div>
-            <div className="overview-grid" style={{ marginTop: "16px" }}>
-              {componentGuide.map((item) => (
-                <article key={item.title} className="status-card">
-                  <strong>{item.title}</strong>
-                  <p>{item.body}</p>
-                </article>
-              ))}
-            </div>
-          </section>
 
-          <section className="panel" hidden={activeAdminMenu !== "brand"}>
-            <div className="panel-head">
-              <div>
-                <h2>설정 편집 / 저장 / 반영 확인</h2>
-                <p className="muted">운영자가 실제 값을 바꾸고 저장하면 user-web, mobile-app, desktop-client가 같은 계약을 읽는 구조를 고정합니다.</p>
-              </div>
+            <div className="split-panel" style={{ marginTop: "16px" }}>
+              <article>
+                <h3>기본 설정</h3>
+                <div className="overview-grid">
+                  <article className="status-card">
+                    <strong>브랜드 설정</strong>
+                    <p>{overview.company.name} 기준 회사명, 로고, 대표/보조/강조/차단 색상을 관리합니다.</p>
+                    <p className="muted">로그인 배경/문구, 상단 바, 사이드바 반영도 같은 계약입니다.</p>
+                  </article>
+                  <article className="status-card">
+                    <strong>메뉴 구성 설정</strong>
+                    <p>메인 메뉴 노출/순서를 회사 단위로 관리합니다.</p>
+                    <p className="muted">운영 화면은 메일·결재·메신저·주소록·조직도·파일·설정 중심으로 고정합니다.</p>
+                  </article>
+                  <article className="status-card">
+                    <strong>회사별 미리보기 기준</strong>
+                    <p>브랜드 계약(색상·메시지/아이콘 규칙) 미리보기는 브랜드/화면 설정 메뉴에서만 노출합니다.</p>
+                    <p className="muted">현재 메뉴 프리뷰: {uiContractDraft.menuOrder.join(" > ")}</p>
+                  </article>
+                  <article className="status-card">
+                    <strong>보관 정책 기본값</strong>
+                    <p>메일: 서버 1개월 + 설치형 로컬 아카이브 무기한</p>
+                    <p>메신저: 서버 2주 + 설치형 대화 파일(JSON/HTML) 보관</p>
+                  </article>
+                </div>
+              </article>
+
+              <article>
+                <h3>컴포넌트 기준</h3>
+                <div className="overview-grid">
+                  {brandGuide.map((item) => (
+                    <article key={item.title} className="status-card">
+                      <div style={{ width: "48px", height: "48px", borderRadius: "16px", background: item.value }} />
+                      <strong style={{ display: "block", marginTop: "12px" }}>{item.title}</strong>
+                      <p>{item.value}</p>
+                      <p className="muted">{item.target}</p>
+                    </article>
+                  ))}
+                </div>
+              </article>
             </div>
+
+            <h3 style={{ marginTop: "20px" }}>설정 편집 / 저장 / 반영 확인</h3>
             <div className="split-panel">
               <article>
                 <form className="wizard" onSubmit={(event) => event.preventDefault()}>
@@ -1962,19 +1945,9 @@ export default function App() {
 
               <article>
                 <div className="status-card">
-                  <strong>user-web 반영 요약</strong>
-                  <p>상단 바 / 좌측 메뉴 / 빠른 작성 버튼 / 상태 박스 / Help 경로가 저장값 기준으로 반영됩니다.</p>
+                  <strong>운영 계약 반영</strong>
+                  <p>user-web / mobile-app / desktop-client 반영 항목: 상단 바, 메뉴 순서, 메시지, Help 경로.</p>
                   <p className="muted">빠른 작성: {uiContractDraft.quickComposeVisible ? "표시" : "숨김"} / 메뉴 순서: {uiContractDraft.menuOrder.join(" > ")}</p>
-                </div>
-                <div className="status-card">
-                  <strong>mobile-app 반영 요약</strong>
-                  <p>홈 카드 우선순위, 상태 메시지 문구, Help 경로가 같은 계약을 사용합니다.</p>
-                  <p className="muted">홈 카드 우선순위: {uiContractDraft.homeCardOrder.join(" > ")}</p>
-                </div>
-                <div className="status-card">
-                  <strong>desktop-client 반영 요약</strong>
-                  <p>로컬 아카이브 / 대화 파일 저장 / 오프라인 보기 패널과 상태 메시지가 저장값 기준으로 반영됩니다.</p>
-                  <p className="muted">정책 안내 문구: {uiContractDraft.helpText}</p>
                 </div>
                 <div className="status-card">
                   <strong>메시지 샘플</strong>
@@ -1986,14 +1959,13 @@ export default function App() {
                 </div>
               </article>
             </div>
-          </section>
-
-          <section className="panel" hidden={activeAdminMenu !== "brand"}>
-            <div className="panel-head">
-              <div>
-                <h2>운영형 설정 계약</h2>
-                <p className="muted">설정 화면에서 끝나는 것이 아니라, 운영자가 값 묶음과 실제 반영 위치를 같은 화면에서 확인할 수 있어야 합니다.</p>
-              </div>
+            <div className="overview-grid" style={{ marginTop: "16px" }}>
+              {componentGuide.map((item) => (
+                <article key={item.title} className="status-card">
+                  <strong>{item.title}</strong>
+                  <p>{item.body}</p>
+                </article>
+              ))}
             </div>
             <div className="overview-grid">
               {settingsContracts.map((item) => (
@@ -2003,70 +1975,6 @@ export default function App() {
                   <p className="muted">반영 대상: {item.targets}</p>
                 </article>
               ))}
-            </div>
-          </section>
-
-          <section className="panel split-panel" hidden={activeAdminMenu !== "brand"}>
-            <article>
-              <div className="panel-head">
-                <div>
-                  <h2>회사별 미리보기 기준</h2>
-                  <p className="muted">다음 구현 단계에서는 브랜드 설정 변경 결과를 관리자 화면에서 즉시 미리보게 해야 합니다.</p>
-                </div>
-              </div>
-              <div className="status-card">
-                <strong>{overview.company.name}</strong>
-                <p>{overview.company.domain}</p>
-                <p className="muted">대표 색상, 보조 색상, 버튼 스타일, 로그인 화면 문구/배경, 사이드바 스타일을 프리뷰 대상으로 고정합니다.</p>
-              </div>
-            </article>
-
-            <article>
-              <div className="panel-head">
-                <div>
-                  <h2>후속 구현 우선순위</h2>
-                  <p className="muted">1단계 이후 실제 구현은 사용자용 화면부터 순차적으로 진행합니다.</p>
-                </div>
-              </div>
-              <div className="status-card">
-                <ol style={{ margin: 0, paddingLeft: "20px", lineHeight: 1.9 }}>
-                  <li>user-web 메인 업무 홈</li>
-                  <li>admin-web 설정/브랜드/메뉴 구성</li>
-                  <li>desktop-client 로컬 아카이브/대화 파일 흐름</li>
-                  <li>mobile-app 빠른 확인 화면</li>
-                </ol>
-              </div>
-            </article>
-          </section>
-
-          <section className="panel" hidden={activeAdminMenu !== "brand"}>
-            <div className="panel-head">
-              <div>
-                <h2>사용자 화면 반영 연결 보드</h2>
-                <p className="muted">관리자 설정이 사용자 웹, 모바일, 설치형에 어떻게 연결되는지 운영자가 한 화면에서 이해할 수 있어야 합니다.</p>
-              </div>
-            </div>
-            <div className="overview-grid">
-              <article className="status-card">
-                <strong>브랜드 설정 → user-web</strong>
-                <p>로그인 화면 톤, 상단 바, 사이드바, 빠른 작성 버튼, 공지 카드, 메일/메신저 작업면 헤더에 반영</p>
-                <p className="muted">운영자는 브랜드 색상 변경이 메일 폴더, 결재 배지, 메신저 타임라인 헤더 어디에 보이는지 바로 이해할 수 있어야 합니다.</p>
-              </article>
-              <article className="status-card">
-                <strong>메뉴 구성 → mobile-app</strong>
-                <p>홈/메일/결재/메신저 우선순위와 하단 이동 구조, 빠른 처리 카드 순서에 반영</p>
-                <p className="muted">긴급 승인, 안 읽은 메일, 최근 대화 카드 노출 우선순위를 같은 설정 묶음으로 설명합니다.</p>
-              </article>
-              <article className="status-card">
-                <strong>보관 정책 설정 → desktop-client</strong>
-                <p>메일 로컬 아카이브, 대화 파일 저장 흐름, Help/설정 진입 문구, 오프라인 보기 패널에 반영</p>
-                <p className="muted">설치형은 서버 정책 설명이 아니라 로컬 보관 진입 버튼과 경로 안내 문구에 연결됩니다.</p>
-              </article>
-              <article className="status-card">
-                <strong>기본 언어 / 시간대</strong>
-                <p>사용자 웹, 모바일, 설치형 로그인 직후 기본 표시 언어와 시간대에 공통 적용</p>
-                <p className="muted">세션 만료, 차단, 오류, 빈 상태 메시지도 같은 언어 기준으로 노출됩니다.</p>
-              </article>
             </div>
           </section>
 
