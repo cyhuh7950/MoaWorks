@@ -136,8 +136,8 @@ const adminMenus: Array<{ key: AdminMenuKey; label: string; description: string 
   { key: "users", label: "사용자 관리", description: "사용자 생성/수정/파일 업로드" },
   { key: "departments", label: "부서 관리", description: "조직 단위 관리" },
   { key: "roles", label: "권한 관리", description: "역할과 권한 상태" },
-  { key: "service", label: "서비스 운영", description: "도메인 검증과 Relay 테스트" },
-  { key: "mail", label: "메일 설정", description: "Relay와 메일 제공자" },
+  { key: "service", label: "서비스 운영", description: "운영 점검과 연결 확인" },
+  { key: "mail", label: "메일 설정", description: "메일 연결 상태와 테스트" },
   { key: "storage", label: "저장소/DB 상태", description: "저장소와 DB 점검" },
   { key: "approval", label: "결재/감사", description: "감사 로그와 이벤트" },
   { key: "brand", label: "브랜드/화면 설정", description: "설정 계약과 반영" },
@@ -890,6 +890,8 @@ export default function App() {
   const supportedTranslationTargets = translationPolicy?.supportedTargetLocales?.length ? translationPolicy.supportedTargetLocales : (translationStatus?.supportedTargetLocales ?? ["en"]);
   const activeMenu = adminMenus.find((item) => item.key === activeAdminMenu) ?? adminMenus[0];
   const showAdminConsole = initialized && Boolean(token) && Boolean(overview);
+  const uniqueErrors = normalizeWarnings(errors);
+  const visibleWarnings = normalizeWarnings(warnings).filter((item) => !uniqueErrors.includes(item));
   const filteredUsers = overview?.users.filter((item) => {
     if (!userSearch.trim()) {
       return true;
@@ -909,8 +911,8 @@ export default function App() {
     }
 
     const messageCategories = [
-      { title: "오류", body: translationError || errors[0] || uiContractDraft.messages.error },
-      { title: "경고", body: warnings[0] || uiContractDraft.messages.warning },
+      { title: "오류", body: translationError || uniqueErrors[0] || uiContractDraft.messages.error },
+      { title: "경고", body: visibleWarnings[0] || uiContractDraft.messages.warning },
       { title: "차단", body: uiContractDraft.messages.blocked },
       { title: "빈 상태", body: uiContractDraft.messages.empty },
       { title: "성공", body: message || uiContractDraft.messages.success },
@@ -1747,16 +1749,16 @@ export default function App() {
                 저장된 관리자 세션을 확인하지 못했습니다. 다시 로그인해 운영 화면을 복구하세요.
               </div>
             )}
-            {errors.length > 0 && (
+            {uniqueErrors.length > 0 && (
               <div className="notice danger">
                 <strong>확인 필요</strong>
-                <ul>{errors.map((item) => <li key={item}>{item}</li>)}</ul>
+                <ul>{uniqueErrors.map((item) => <li key={item}>{item}</li>)}</ul>
               </div>
             )}
-            {warnings.length > 0 && (
+            {visibleWarnings.length > 0 && (
               <div className="notice warning">
                 <strong>확인 필요</strong>
-                <ul>{warnings.map((item) => <li key={item}>{item}</li>)}</ul>
+                <ul>{visibleWarnings.map((item) => <li key={item}>{item}</li>)}</ul>
               </div>
             )}
             <form className="compact-form" onSubmit={handleLogin}>
@@ -1813,19 +1815,19 @@ export default function App() {
         )}
       </section>
 
-      {(message || errors.length > 0 || warnings.length > 0) && !showAdminConsole && !showLoginPanel && !showSetupWizard && !isHealthPending && (
+      {(message || uniqueErrors.length > 0 || visibleWarnings.length > 0) && !showAdminConsole && !showLoginPanel && !showSetupWizard && !isHealthPending && (
         <section className="panel">
           {message && <p className="result">{message}</p>}
-          {errors.length > 0 && (
+          {uniqueErrors.length > 0 && (
             <div className="notice danger">
               <strong>확인 필요</strong>
-              <ul>{errors.map((item) => <li key={item}>{item}</li>)}</ul>
+              <ul>{uniqueErrors.map((item) => <li key={item}>{item}</li>)}</ul>
             </div>
           )}
-          {warnings.length > 0 && (
+          {visibleWarnings.length > 0 && (
             <div className="notice warning">
               <strong>확인 필요</strong>
-              <ul>{warnings.map((item) => <li key={item}>{item}</li>)}</ul>
+              <ul>{visibleWarnings.map((item) => <li key={item}>{item}</li>)}</ul>
             </div>
           )}
         </section>
