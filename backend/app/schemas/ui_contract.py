@@ -18,6 +18,28 @@ class UiContractBrand(BaseModel):
         return cleaned
 
 
+class UiContractCompany(BaseModel):
+    name: str = "MoaWorks"
+    domain: str = "moaworks.local"
+    logoDataUrl: str = ""
+
+    @field_validator("name", "domain")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("company text must not be empty")
+        return cleaned
+
+    @field_validator("logoDataUrl")
+    @classmethod
+    def validate_logo_data_url(cls, value: str) -> str:
+        cleaned = value.strip()
+        if cleaned and not cleaned.startswith("data:image/"):
+            raise ValueError("logoDataUrl must be a data:image payload")
+        return cleaned
+
+
 class UiContractMessages(BaseModel):
     error: str = "요청 처리 중 오류가 발생했습니다. 다시 시도해 주세요."
     warning: str = "설정값 검토가 필요합니다."
@@ -30,6 +52,7 @@ class UiContractMessages(BaseModel):
 
 class UiContract(BaseModel):
     brand: UiContractBrand = Field(default_factory=UiContractBrand)
+    company: UiContractCompany = Field(default_factory=UiContractCompany)
     menuOrder: list[str] = Field(default_factory=lambda: ["메일", "결재", "메신저", "일정", "주소록", "조직도", "파일", "설정"])
     homeCardOrder: list[str] = Field(default_factory=lambda: ["alerts", "approval", "chat", "mail"])
     quickComposeVisible: bool = True
