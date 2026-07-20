@@ -45,7 +45,8 @@ services:
       context: ..
       dockerfile: deploy/user-web.Dockerfile
     environment:
-      VITE_API_BASE_URL: https://api.moaworks.sinsan.kr/api/v1
+      VITE_API_BASE_URL: /api/v1
+      VITE_PROXY_TARGET: http://server:8000
     expose:
       - "3520"
     depends_on:
