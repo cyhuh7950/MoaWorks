@@ -68,6 +68,7 @@ export function NotificationCenter({ token, onChanged, onNavigate }: Props) {
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const [archiveError, setArchiveError] = useState("");
   const settingsFirstRef = useRef<HTMLInputElement>(null);
+  const settingsCloseRequestRef = useRef<(() => void) | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -287,7 +288,7 @@ export function NotificationCenter({ token, onChanged, onNavigate }: Props) {
       </div>
     </CommonPopup>
 
-    <CommonPopup title="알림 설정" open={settingsOpen} onClose={() => setSettingsOpen(false)} dirty={JSON.stringify(settings) !== JSON.stringify(savedSettings)} error={settingsError} saving={settingsSaving} initialFocusRef={settingsFirstRef}>
+    <CommonPopup title="알림 설정" open={settingsOpen} onClose={() => setSettingsOpen(false)} dirty={JSON.stringify(settings) !== JSON.stringify(savedSettings)} error={settingsError} saving={settingsSaving} initialFocusRef={settingsFirstRef} closeRequestRef={settingsCloseRequestRef}>
       <div className="notification-settings-form">
         <label className="notification-settings-master"><input ref={settingsFirstRef} type="checkbox" checked={settings.enabled} onChange={event => setSettings(current => ({ ...current, enabled: event.target.checked }))} /> 앱 내 알림 사용</label>
         <div className="notification-settings-grid">
@@ -295,7 +296,7 @@ export function NotificationCenter({ token, onChanged, onNavigate }: Props) {
         </div>
         <label className="notification-settings-master"><input type="checkbox" checked={settings.quietHoursEnabled} onChange={event => setSettings(current => ({ ...current, quietHoursEnabled: event.target.checked }))} /> 방해 금지 시간 사용</label>
         <div className="notification-settings-times"><label><span>시작</span><input type="time" value={settings.quietHoursStart} onChange={event => setSettings(current => ({ ...current, quietHoursStart: event.target.value }))} /></label><label><span>종료</span><input type="time" value={settings.quietHoursEnd} onChange={event => setSettings(current => ({ ...current, quietHoursEnd: event.target.value }))} /></label></div>
-        <div className="notification-settings-footer"><button type="button" onClick={() => setSettingsOpen(false)}>취소</button><button type="button" className="notification-center-primary" onClick={() => void saveSettings()} disabled={settingsSaving}>저장</button></div>
+        <div className="notification-settings-footer"><button type="button" onClick={() => settingsCloseRequestRef.current?.()}>취소</button><button type="button" className="notification-center-primary" onClick={() => void saveSettings()} disabled={settingsSaving}>저장</button></div>
       </div>
     </CommonPopup>
   </section>;

@@ -1,12 +1,12 @@
-import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useId, useRef, useState, type MutableRefObject, type ReactNode, type RefObject } from "react";
 
 type Mode = "normal" | "minimized" | "maximized";
 type Bounds = { left: number; top: number; width: number; height: number };
-type Props = { title: string; children: ReactNode; open: boolean; onClose: () => void; dirty?: boolean; error?: string; saving?: boolean; floating?: boolean; initialFocusRef?: RefObject<HTMLElement | null>; kind?: "dialog" | "alertdialog" };
+type Props = { title: string; children: ReactNode; open: boolean; onClose: () => void; dirty?: boolean; error?: string; saving?: boolean; floating?: boolean; initialFocusRef?: RefObject<HTMLElement | null>; closeRequestRef?: MutableRefObject<(() => void) | null>; kind?: "dialog" | "alertdialog" };
 const selector = "button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex='-1'])";
 const items = (root: HTMLElement | null) => root ? Array.from(root.querySelectorAll<HTMLElement>(selector)) : [];
 
-export function CommonPopup({ title, children, open, onClose, dirty = false, error = "", saving = false, floating = false, initialFocusRef, kind = "dialog" }: Props) {
+export function CommonPopup({ title, children, open, onClose, dirty = false, error = "", saving = false, floating = false, initialFocusRef, closeRequestRef, kind = "dialog" }: Props) {
   const panel = useRef<HTMLDivElement>(null);
   const close = useRef<HTMLButtonElement>(null);
   const confirmPanel = useRef<HTMLDivElement>(null);
@@ -32,6 +32,12 @@ export function CommonPopup({ title, children, open, onClose, dirty = false, err
     setConfirm(false);
     requestAnimationFrame(() => lastFocus.current?.focus());
   };
+
+  useEffect(() => {
+    if (!closeRequestRef) return;
+    closeRequestRef.current = closeRequest;
+    return () => { closeRequestRef.current = null; };
+  }, [closeRequestRef, dirty, onClose]);
 
   useEffect(() => {
     if (!open) return;
