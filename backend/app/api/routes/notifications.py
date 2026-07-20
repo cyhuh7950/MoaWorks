@@ -131,7 +131,7 @@ def stream_notifications(
             ).notifications
             for item in state:
                 yield f"event: notification\ndata: {item.model_dump_json()}\n\n"
-            latest_cursor = state[0].notificationId if state else cursor
+            latest_cursor = state[0].createdAt.isoformat() if state else cursor
             if latest_cursor:
                 yield f"event: streammeta\ndata: {{\"type\":\"cursor\",\"value\":\"{latest_cursor}\"}}\n\n"
             yield "event: heartbeat\ndata: {\"type\":\"heartbeat\"}\n\n"
