@@ -29,6 +29,10 @@ class Visibility(str, Enum):
 class MonitoringCategory(str, Enum):
     APPROVAL = "approval"
     MAIL = "mail"
+    MESSENGER = "messenger"
+    SCHEDULE = "schedule"
+    FILE = "file"
+    NOTICE = "notice"
     SYSTEM = "system"
 
 

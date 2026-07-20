@@ -2,39 +2,59 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   ackNotification,
+  bulkMailAction,
+  readAllNotifications,
   apiBase,
   approveApproval,
+  changePassword,
   ApiRequestError,
   clearUserToken,
   createApproval,
+  fetchApprovalApprovers,
+  fetchContacts,
   fetchApprovalLogs,
   fetchApprovals,
+  fetchDraftMail,
   fetchInbox,
+  fetchMailDeliveryStatus,
   fetchMailDetail,
   fetchMe,
   fetchMessengerMessages,
   fetchMessengerRoom,
   fetchMessengerRooms,
+  fetchSchedules,
   fetchNotifications,
   fetchNotificationSummary,
   fetchSentMail,
+  fetchWorkspaceDirectory,
+  fetchWorkspaceFiles,
+  fetchWorkspaceNotice,
+  fetchWorkspaceNotices,
   fetchTranslationStatus,
   fetchUiContract,
   getUserToken,
   login,
   markMailRead,
   readMessengerRoom,
+  readWorkspaceNotice,
   redraftApproval,
   rejectApproval,
   requestTranslation,
+  saveMailDraft,
+  sendMail,
   sendMessengerMessage,
   storeUserToken,
   submitApproval,
   toggleMailStar,
+  setMailCategory,
+  updateApproval,
   withdrawApproval,
+  type ApprovalApprover,
   type ApprovalDocument,
+  type AuditLog,
   type AuthUser,
   type LoginResponse,
+  type MailDeliveryStatusResponse,
   type MailDetail,
   type MailSummary,
   type MessengerMessage,
@@ -46,8 +66,16 @@ import {
   type TranslationRequest,
   type TranslationResponse,
   type UiContract as ServerUiContract,
+  type WorkspaceNotice,
+  type WorkspaceSchedule,
 } from "./api";
 import { resolveLocale, supportedLocales, supportedTimezones, type AppLocale } from "./i18n";
+import { MessengerPanel } from "./MessengerPanel";
+import { WorkspacePanels } from "./WorkspacePanels";
+import { SplitView } from "./SplitView";
+import { NotificationCenter } from "./NotificationCenter";
+import { UserHome } from "./UserHome";
+import { CompactWarning, ConfirmModal, FeedbackState, ToastViewport, useFeedbackQueue } from "./components/FeedbackSystem";
 
 const NOTIFICATION_POLICY = {
   retryMaxAttempts: 3,
@@ -73,6 +101,11 @@ type UiContract = {
     accent: string;
     blocked: string;
   };
+  company: {
+    name: string;
+    domain: string;
+    logoDataUrl: string;
+  };
   menuOrder: string[];
   homeCardOrder: string[];
   quickComposeVisible: boolean;
@@ -95,6 +128,11 @@ const defaultUiContract: UiContract = {
     accent: "#9a6b2f",
     blocked: "#9f1239",
   },
+  company: {
+    name: "MoaWorks",
+    domain: "moaworks.local",
+    logoDataUrl: "",
+  },
   menuOrder: ["메일", "결재", "메신저", "일정", "주소록", "조직도", "파일", "설정"],
   homeCardOrder: ["alerts", "approval", "mail", "messenger"],
   quickComposeVisible: true,
@@ -110,11 +148,45 @@ const defaultUiContract: UiContract = {
   },
 };
 
+function buildCompanyInitials(name: string): string {
+  const cleaned = name.replace(/[^0-9A-Za-z가-힣]/g, "").trim();
+  if (!cleaned) return "MW";
+  return Array.from(cleaned).slice(0, 2).join("").toUpperCase();
+}
+
+function buildDefaultCompanyLogo(name: string, primary: string, secondary: string): string {
+  const initials = buildCompanyInitials(name);
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192" role="img" aria-label="${name} logo">
+      <defs>
+        <linearGradient id="portalLogoBg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="${primary}" />
+          <stop offset="100%" stop-color="${secondary}" />
+        </linearGradient>
+      </defs>
+      <rect width="192" height="192" rx="44" fill="url(#portalLogoBg)" />
+      <circle cx="148" cy="48" r="20" fill="rgba(255,255,255,0.14)" />
+      <text x="96" y="108" text-anchor="middle" font-family="Segoe UI, Noto Sans KR, sans-serif" font-size="64" font-weight="800" fill="#ffffff">${initials}</text>
+    </svg>
+  `;
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
 function mergeUiContract(raw: Partial<UiContract> | null | undefined): UiContract {
+  const brand = {
+    ...defaultUiContract.brand,
+    ...(raw?.brand ?? {}),
+  };
+  const company = {
+    ...defaultUiContract.company,
+    ...(raw?.company ?? {}),
+  };
   return {
-    brand: {
-      ...defaultUiContract.brand,
-      ...(raw?.brand ?? {}),
+    brand,
+    company: {
+      name: company.name?.trim() || defaultUiContract.company.name,
+      domain: company.domain?.trim() || defaultUiContract.company.domain,
+      logoDataUrl: company.logoDataUrl?.trim() || buildDefaultCompanyLogo(company.name || defaultUiContract.company.name, brand.primary, brand.secondary),
     },
     menuOrder: raw?.menuOrder?.length ? raw.menuOrder : defaultUiContract.menuOrder,
     homeCardOrder: raw?.homeCardOrder?.length ? raw.homeCardOrder : defaultUiContract.homeCardOrder,
@@ -128,14 +200,28 @@ function mergeUiContract(raw: Partial<UiContract> | null | undefined): UiContrac
 }
 
 type LoginForm = {
-  email: string;
+  loginId: string;
   password: string;
 };
 
 type CreateForm = {
   title: string;
   content: string;
-  approverUserIds: string;
+  approverUserIds: string[];
+};
+
+type ApprovalModalMode = "none" | "create" | "edit" | "submit" | "approve" | "reject" | "withdraw" | "redraft";
+
+type PasswordChangeForm = {
+  currentPassword: string;
+  newPassword: string;
+  confirmPassword: string;
+};
+
+type MailComposeForm = {
+  to: string;
+  subject: string;
+  bodyText: string;
 };
 
 type ReasonAction = {
@@ -144,10 +230,12 @@ type ReasonAction = {
 };
 
 type WorkspaceTab = "mail" | "approval" | "messenger";
-type UserPortalMenu = "home" | "mail" | "approval" | "messenger" | "schedule" | "contacts" | "org" | "files" | "alerts" | "settings" | "help";
+type UserPortalMenu = "home" | "mail" | "approval" | "messenger" | "schedule" | "contacts" | "org" | "files" | "alerts" | "notices" | "settings" | "help";
 type MailboxType = "inbox" | "sent";
 type MailFolderType = MailboxType | "starred" | "unread" | "draft" | "localArchive";
 type QuickComposeMode = "none" | "mail" | "approval" | "messenger";
+type UnifiedSearchType = "mail" | "approval" | "messenger" | "schedule" | "contacts" | "org" | "files";
+type UnifiedSearchResult = { id: string; type: UnifiedSearchType; title: string; detail: string; menu: UserPortalMenu; mailbox?: MailboxType };
 
 type SurfaceCardProps = {
   title: string;
@@ -232,26 +320,84 @@ function normalizeClientError(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
+function normalizeLoginIdInput(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function buildCompanyLoginEmail(loginId: string, companyDomain: string): string {
+  return `${normalizeLoginIdInput(loginId)}@${companyDomain.trim().toLowerCase()}`;
+}
+
+function normalizeMailRecipients(value: string, companyDomain: string): string[] {
+  const domain = companyDomain.trim().toLowerCase();
+  return value
+    .split(/[;,\n]/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean)
+    .map((item) => (item.includes("@") ? item : `${item}@${domain}`));
+}
+
+function hasExternalRecipients(recipients: string[], companyDomain: string): boolean {
+  const suffix = `@${companyDomain.trim().toLowerCase()}`;
+  return recipients.some((item) => !item.endsWith(suffix));
+}
+
 export default function App() {
   const [token, setToken] = useState("");
   const [locale, setLocale] = useState<AppLocale>(resolveLocale(window.localStorage.getItem("moaworks.locale")));
   const [timezone, setTimezone] = useState(window.localStorage.getItem("moaworks.timezone") || "Asia/Seoul");
   const [uiContract, setUiContract] = useState<UiContract>(() => defaultUiContract);
   const [searchText, setSearchText] = useState("");
-  const [loginForm, setLoginForm] = useState<LoginForm>({ email: "", password: "" });
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchFilter, setSearchFilter] = useState<"all" | UnifiedSearchType>("all");
+  const [searchResults, setSearchResults] = useState<UnifiedSearchResult[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const [searchWorkspaceSelection, setSearchWorkspaceSelection] = useState<{ menu: "schedule" | "contacts" | "org" | "files"; id: string } | null>(null);
+  const [loginForm, setLoginForm] = useState<LoginForm>({ loginId: "", password: "" });
+  const [passwordChangeForm, setPasswordChangeForm] = useState<PasswordChangeForm>({ currentPassword: "", newPassword: "", confirmPassword: "" });
   const [createForm, setCreateForm] = useState<CreateForm>({
     title: "",
     content: "",
-    approverUserIds: "",
+    approverUserIds: [],
   });
+  const [approvalModal, setApprovalModal] = useState<ApprovalModalMode>("none");
+  const [selectedApprovalId, setSelectedApprovalId] = useState("");
+  const [approvalStatusFilter, setApprovalStatusFilter] = useState("all");
+  const [approvalSearch, setApprovalSearch] = useState("");
+  const [approverSearch, setApproverSearch] = useState("");
+  const [approvalApprovers, setApprovalApprovers] = useState<ApprovalApprover[]>([]);
+  const [approvalLogs, setApprovalLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(false);
   const [approvalError, setApprovalError] = useState("");
   const [documents, setDocuments] = useState<ApprovalDocument[]>([]);
   const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
   const [notificationSummary, setNotificationSummary] = useState<NotificationSummary | null>(null);
   const [notificationError, setNotificationError] = useState("");
+  const [notificationLoading, setNotificationLoading] = useState(false);
+  const [homeSchedules, setHomeSchedules] = useState<WorkspaceSchedule[]>([]);
+  const [homeNotices, setHomeNotices] = useState<WorkspaceNotice[]>([]);
+  const [selectedNotice, setSelectedNotice] = useState<WorkspaceNotice | null>(null);
+  const [homeLoading, setHomeLoading] = useState(false);
+  const [homeError, setHomeError] = useState("");
+  const [homeScheduleSelectionId, setHomeScheduleSelectionId] = useState("");
   const [reasonAction, setReasonAction] = useState<ReasonAction>({ documentId: "", reason: "" });
-  const [message, setMessage] = useState("");
+  const { items: feedbackItems, push: pushFeedback, dismiss: dismissFeedback, clearTransient: clearTransientFeedback } = useFeedbackQueue();
+  const [mailDeleteConfirmOpen, setMailDeleteConfirmOpen] = useState(false);
+  const [mailComposeCloseConfirmOpen, setMailComposeCloseConfirmOpen] = useState(false);
+  const [mailBulkBusy, setMailBulkBusy] = useState(false);
+  function setMessage(nextMessage: string) {
+    if (!nextMessage) {
+      clearTransientFeedback();
+      return;
+    }
+    pushFeedback({
+      id: `app:${activePortalMenu}:${nextMessage}`,
+      source: activePortalMenu,
+      tone: "success",
+      title: nextMessage,
+    });
+  }
   const [translationStatus, setTranslationStatus] = useState<{ provider: string; enabled: boolean; available: boolean } | null>(null);
   const [translationSource, setTranslationSource] = useState("");
   const [translationTargetLocale, setTranslationTargetLocale] = useState("en");
@@ -261,6 +407,7 @@ export default function App() {
   const [me, setMe] = useState<AuthUser | null>(null);
   const [logsCount, setLogsCount] = useState(0);
   const [notificationMode, setNotificationMode] = useState<"polling" | "streaming" | "fallback">("polling");
+  const [showNotificationPanel, setShowNotificationPanel] = useState(false);
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceTab>("mail");
   const [activePortalMenu, setActivePortalMenu] = useState<UserPortalMenu>("home");
   const [activeMailbox, setActiveMailbox] = useState<MailboxType>("inbox");
@@ -272,8 +419,16 @@ export default function App() {
   const [selectedFileId, setSelectedFileId] = useState("");
   const [inboxMails, setInboxMails] = useState<MailSummary[]>([]);
   const [sentMails, setSentMails] = useState<MailSummary[]>([]);
-  const [selectedMailId, setSelectedMailId] = useState("");
+  const [draftMails, setDraftMails] = useState<MailSummary[]>([]);
+  const [selectedMailId, setSelectedMailId] = useState("");  const [selectedMailIds, setSelectedMailIds] = useState<string[]>([]);
+  const [mailCategory, setMailCategoryFilter] = useState("primary");
+  const [composeWindow, setComposeWindow] = useState<"normal" | "minimized" | "maximized">("normal");
+  const [mailComposeContext, setMailComposeContext] = useState<"new" | "reply" | "forward">("new");
+  const [mailComposePosition, setMailComposePosition] = useState<{ left: number; top: number } | null>(null);
+  const [mailDetailExpanded, setMailDetailExpanded] = useState(false);
   const [selectedMailDetail, setSelectedMailDetail] = useState<MailDetail | null>(null);
+  const [mailDeliveryStatus, setMailDeliveryStatus] = useState<MailDeliveryStatusResponse | null>(null);
+  const [mailComposeForm, setMailComposeForm] = useState<MailComposeForm>({ to: "", subject: "", bodyText: "" });
   const [mailError, setMailError] = useState("");
   const [mailLoading, setMailLoading] = useState(false);
   const [messengerRoomsData, setMessengerRoomsData] = useState<MessengerRoomSummary[]>([]);
@@ -284,14 +439,20 @@ export default function App() {
   const [messengerError, setMessengerError] = useState("");
   const [messengerLoading, setMessengerLoading] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const notificationButtonRef = useRef<HTMLButtonElement>(null);
   const streamCursorRef = useRef<string>("");
   const streamRetryRef = useRef(0);
 
   async function loadNotificationData(targetToken: string): Promise<void> {
-    const summary = await fetchNotificationSummary(targetToken);
-    const response = await fetchNotifications(targetToken, { limit: 20, unreadOnly: false });
-    setNotificationSummary(summary);
-    setNotifications(response.notifications ?? []);
+    setNotificationLoading(true);
+    try {
+      const summary = await fetchNotificationSummary(targetToken);
+      const response = await fetchNotifications(targetToken, { limit: 20, unreadOnly: false });
+      setNotificationSummary(summary);
+      setNotifications([...(response.notifications ?? [])].sort((left, right) => new Date(right.occurredAt).getTime() - new Date(left.occurredAt).getTime()));
+    } finally {
+      setNotificationLoading(false);
+    }
   }
 
   function saveLocale(nextLocale: AppLocale) {
@@ -337,6 +498,7 @@ export default function App() {
     if (nextMode === "mail") {
       setActiveMailFolder(activeMailbox === "sent" ? "sent" : "inbox");
       setActivePortalMenu("mail");
+      setMailError("");
       return;
     }
     if (nextMode === "messenger") {
@@ -351,6 +513,12 @@ export default function App() {
 
   function setPortalMenu(nextMenu: UserPortalMenu) {
     resetQuickComposeMode();
+    setShowNotificationPanel(false);
+    clearTransientFeedback();
+    setApprovalError("");
+    setMailError("");
+    setMessengerError("");
+    setSearchError("");
     setActivePortalMenu(nextMenu);
   }
 
@@ -371,7 +539,7 @@ export default function App() {
   }
 
   function getMailListByFolder(folder: MailFolderType) {
-    const allMail = [...inboxMails, ...sentMails];
+    const allMail = [...inboxMails, ...sentMails, ...draftMails];
     if (folder === "sent") {
       return sentMails;
     }
@@ -382,19 +550,74 @@ export default function App() {
       return inboxMails.filter((item) => !item.isRead);
     }
     if (folder === "draft") {
-      return allMail.filter((item) => item.status === "draft");
+      return draftMails;
     }
     if (folder === "localArchive") {
       return [];
     }
-    return inboxMails;
+    return inboxMails.filter((item) => (item.category || "primary") === mailCategory);
+  }
+
+  function openNewMailCompose() {
+    setMailComposeContext("new");
+    setMailComposePosition(null);
+    setComposeWindow("normal");
+    setMailComposeForm({ to: "", subject: "", bodyText: "" });
+    setMailError("");
+    setQuickComposeMode("mail");
+  }
+
+  function startMailComposeDrag(event: React.MouseEvent<HTMLDivElement>) {
+    if (composeWindow !== "normal") return;
+    const popup = event.currentTarget.closest("form");
+    if (!popup) return;
+    const rect = popup.getBoundingClientRect();
+    const offsetX = event.clientX - rect.left;
+    const offsetY = event.clientY - rect.top;
+    const move = (moveEvent: MouseEvent) => {
+      const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+      const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
+      setMailComposePosition({ left: Math.min(Math.max(8, moveEvent.clientX - offsetX), maxLeft), top: Math.min(Math.max(8, moveEvent.clientY - offsetY), maxTop) });
+    };
+    const stop = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", stop); };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", stop, { once: true });
   }
 
   function inferMailboxFromMailId(mailId: string): MailboxType {
     if (inboxMails.some((item) => item.mailId === mailId)) return "inbox";
+    if (draftMails.some((item) => item.mailId === mailId)) return "sent";
     return "sent";
   }
 
+  async function runBulkMailAction(action: "read" | "unread" | "star" | "unstar" | "delete"): Promise<boolean> {
+    if (!token || selectedMailIds.length === 0 || mailBulkBusy) return false;
+    setMailBulkBusy(true);
+    setMailError("");
+    try {
+      const result = await bulkMailAction(token, selectedMailIds, action, activeMailFolder === "sent" ? "sent" : activeMailFolder === "draft" ? "draft" : "inbox");
+      setMessage(`${result.changedCount}개 메일을 처리했습니다.`);
+      setSelectedMailIds([]);
+      await loadMailWorkspace(token, activeMailbox);
+      return true;
+    } catch (error) {
+      setMailError(error instanceof Error ? error.message : "메일 일괄 처리에 실패했습니다.");
+      return false;
+    } finally {
+      setMailBulkBusy(false);
+    }
+  }
+
+  async function changeSelectedMailCategory(category: string) {
+    if (!token || selectedMailIds.length !== 1) return;
+    try {
+      await setMailCategory(token, selectedMailIds[0], category);
+      setMailCategoryFilter(category);
+      await loadMailWorkspace(token, "inbox");
+    } catch (error) {
+      setMailError(error instanceof Error ? error.message : "메일 분류 변경에 실패했습니다.");
+    }
+  }
   async function refreshUiContract() {
     const contract = await fetchUiContract();
     setUiContract(mergeUiContract(contract as ServerUiContract));
@@ -414,6 +637,19 @@ export default function App() {
       setTranslationStatus(status as { provider: string; enabled: boolean; available: boolean });
     } catch {
       setTranslationStatus(null);
+    }
+  }
+
+  async function refreshMailDeliveryState(targetToken = token) {
+    if (!targetToken) {
+      setMailDeliveryStatus(null);
+      return;
+    }
+    try {
+      const status = await fetchMailDeliveryStatus(targetToken);
+      setMailDeliveryStatus(status);
+    } catch {
+      setMailDeliveryStatus(null);
     }
   }
 
@@ -458,10 +694,10 @@ export default function App() {
   function appendNotification(notification: NotificationRecord) {
     setNotifications((current) => {
       const existed = current.some((item) => item.notificationId === notification.notificationId);
-      if (existed) {
-        return current.map((item) => (item.notificationId === notification.notificationId ? notification : item));
-      }
-      return [notification, ...current];
+      const next = existed
+        ? current.map((item) => (item.notificationId === notification.notificationId ? notification : item))
+        : [notification, ...current];
+      return next.sort((left, right) => new Date(right.occurredAt).getTime() - new Date(left.occurredAt).getTime());
     });
   }
 
@@ -588,7 +824,7 @@ export default function App() {
     }
   }
 
-  async function selectMail(targetToken: string, mailId: string, mailbox: MailboxType, options?: { markRead?: boolean }) {
+  async function selectMail(targetToken: string, mailId: string, mailbox: MailboxType, options?: { markRead?: boolean; propagateError?: boolean }) {
     setMailLoading(true);
     setMailError("");
     try {
@@ -603,6 +839,7 @@ export default function App() {
       }
     } catch (error) {
       setMailError(normalizeClientError(error, "메일 상세 조회 실패"));
+      if (options?.propagateError) throw error;
     } finally {
       setMailLoading(false);
     }
@@ -612,20 +849,25 @@ export default function App() {
     setMailLoading(true);
     setMailError("");
     try {
-      const [inboxResponse, sentResponse] = await Promise.all([fetchInbox(targetToken), fetchSentMail(targetToken)]);
+      const [inboxResponse, sentResponse, draftResponse] = await Promise.all([fetchInbox(targetToken), fetchSentMail(targetToken), fetchDraftMail(targetToken)]);
       const nextInbox = inboxResponse.mails ?? [];
       const nextSent = sentResponse.mails ?? [];
+      const nextDrafts = draftResponse.mails ?? [];
       setInboxMails(nextInbox);
       setSentMails(nextSent);
+      setDraftMails(nextDrafts);
       const mailbox = preferredMailbox ?? activeMailbox;
       const activeList = mailbox === "sent" ? nextSent : nextInbox;
       const fallbackList = activeList.length ? activeList : mailbox === "sent" ? nextInbox : nextSent;
+      const allMailLists = [...nextInbox, ...nextSent, ...nextDrafts];
       const resolvedMailbox = activeList.length ? mailbox : mailbox === "sent" ? "inbox" : "sent";
       const resolvedMailId = preferredMailId ?? selectedMailId;
       const targetMail =
+        allMailLists.find((item) => item.mailId === resolvedMailId) ??
         fallbackList.find((item) => item.mailId === resolvedMailId) ??
         activeList.find((item) => item.mailId === resolvedMailId) ??
         fallbackList[0] ??
+        nextDrafts[0] ??
         null;
       setActiveMailbox(resolvedMailbox);
       if (targetMail) {
@@ -640,6 +882,7 @@ export default function App() {
       setMailError(normalizeClientError(error, "메일 목록 조회 실패"));
       setInboxMails([]);
       setSentMails([]);
+      setDraftMails([]);
       setSelectedMailId("");
       setSelectedMailDetail(null);
     } finally {
@@ -659,13 +902,134 @@ export default function App() {
       setSentMails((current) =>
         current.map((item) => (item.mailId === selectedMailId ? { ...item, isStarred: Boolean(response.isStarred) } : item)),
       );
+      setDraftMails((current) =>
+        current.map((item) => (item.mailId === selectedMailId ? { ...item, isStarred: Boolean(response.isStarred) } : item)),
+      );
       setSelectedMailDetail((current) => (current ? { ...current } : current));
       await selectMail(token, selectedMailId, activeMailbox, { markRead: false });
+      setMessage(response.isStarred ? "메일을 중요 표시했습니다." : "메일 중요 표시를 해제했습니다.");
     } catch (error) {
       setMailError(normalizeClientError(error, "중요 표시 변경 실패"));
     } finally {
       setMailLoading(false);
     }
+  }
+
+  async function handleSelectedMailReadAction() {
+    if (!token || !selectedMailId) return;
+    setMailLoading(true);
+    setMailError("");
+    try {
+      const mailbox = inferMailboxFromMailId(selectedMailId);
+      const shouldMarkRead = mailbox === "inbox" && !selectedMailSummary?.isRead;
+      if (shouldMarkRead) {
+        await markMailRead(token, selectedMailId);
+        setInboxMails((current) => current.map((item) => (item.mailId === selectedMailId ? { ...item, isRead: true } : item)));
+      }
+      const detail = await fetchMailDetail(token, selectedMailId);
+      setSelectedMailDetail(detail);
+      setMessage(shouldMarkRead ? "메일을 읽음 처리했습니다." : "메일 읽음 상태를 확인했습니다.");
+    } catch (error) {
+      setMailError(normalizeClientError(error, "읽음 상태 확인 실패"));
+    } finally {
+      setMailLoading(false);
+    }
+  }
+
+  async function submitMailCompose(action: "draft" | "send") {
+    if (!token) return;
+    const recipients = normalizeMailRecipients(mailComposeForm.to, uiContract.company.domain);
+    const subject = mailComposeForm.subject.trim();
+    const bodyText = mailComposeForm.bodyText.trim();
+    if (!recipients.length) {
+      setMailError("받는 사람을 입력해 주세요.");
+      return;
+    }
+    if (!subject) {
+      setMailError("제목을 입력해 주세요.");
+      return;
+    }
+    if (!bodyText) {
+      setMailError("본문을 입력해 주세요.");
+      return;
+    }
+    const hasExternal = hasExternalRecipients(recipients, uiContract.company.domain);
+    if (hasExternal && !mailDeliveryStatus?.provider.enabled) {
+      setMailError("자체 SMTP 엔진이 비활성화되어 외부 수신자에게 발송할 수 없습니다.");
+      return;
+    }
+    if (hasExternal && !mailDeliveryStatus) {
+      setMailError("외부 발송 상태를 아직 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+      return;
+    }
+    setMailLoading(true);
+    setMailError("");
+    try {
+      const payload = { to: recipients, subject, bodyText };
+      const response = action === "draft" ? await saveMailDraft(token, payload) : await sendMail(token, payload);
+      if (action === "draft") {
+        setMessage("메일을 임시저장했습니다.");
+      } else if (response.deliverySummary?.externalRecipientCount) {
+        setMessage(
+          `메일을 발송했습니다. 외부 ${response.deliverySummary.externalRecipientCount}건 / sent ${response.deliverySummary.sentCount} / retry ${response.deliverySummary.retryPendingCount} / failed ${response.deliverySummary.failedCount}`,
+        );
+      } else {
+        setMessage("메일을 발송했습니다.");
+      }
+      setMailComposeForm({ to: "", subject: "", bodyText: "" });
+      setQuickComposeMode("none");
+      const nextMailbox: MailboxType = action === "draft" ? "inbox" : "sent";
+      setMailFolder(action === "draft" ? "draft" : "sent");
+      await refreshMailDeliveryState(token);
+      await loadMailWorkspace(token, nextMailbox, response.mailId);
+    } catch (error) {
+      setMailError(normalizeClientError(error, action === "draft" ? "메일 임시저장 실패" : "메일 발송 실패"));
+    } finally {
+      setMailLoading(false);
+    }
+  }
+
+  function openMailComposeFromDetail(mode: "reply" | "forward") {
+    if (!selectedMailDetail) return;
+    const subjectPrefix = mode === "reply" ? "Re: " : "Fwd: ";
+    const subject = selectedMailDetail.subject.startsWith(subjectPrefix)
+      ? selectedMailDetail.subject
+      : `${subjectPrefix}${selectedMailDetail.subject}`;
+    const quoted = [
+      "",
+      "--- 원문 ---",
+      `발신자: ${selectedMailDetail.senderEmail}`,
+      `수신자: ${selectedMailDetail.recipients.map((item) => item.recipientEmail).join(", ")}`,
+      `제목: ${selectedMailDetail.subject}`,
+      selectedMailDetail.bodyText,
+    ].join("\n");
+    setMailComposeForm({
+      to: mode === "reply" ? selectedMailDetail.senderEmail : "",
+      subject,
+      bodyText: quoted,
+    });
+    setMailComposeContext(mode);
+    setMailComposePosition(null);
+    setComposeWindow("normal");
+    setQuickComposeMode("mail");
+  }
+
+  function resetMailCompose() {
+    setMailComposeForm({ to: "", subject: "", bodyText: "" });
+    setMailComposeContext("new");
+    setMailComposePosition(null);
+    setComposeWindow("normal");
+    setQuickComposeMode("none");
+    setMailComposeCloseConfirmOpen(false);
+  }
+
+  function closeMailCompose() {
+    const hasDraft = Boolean(mailComposeForm.to || mailComposeForm.subject || mailComposeForm.bodyText);
+    if (hasDraft) {
+      setMailComposeCloseConfirmOpen(true);
+      return;
+    }
+    resetMailCompose();
   }
 
   async function loadMessengerWorkspace(targetToken: string, preferredRoomId?: string) {
@@ -692,6 +1056,7 @@ export default function App() {
     } catch (error) {
       setMessengerError(normalizeClientError(error, "메신저 조회 실패"));
       setMessengerRoomsData([]);
+      setHomeSchedules([]);
       setSelectedRoomId("");
       setSelectedRoomDetail(null);
       setRoomMessages([]);
@@ -739,6 +1104,125 @@ export default function App() {
     }
   }
 
+  async function loadHomeSchedules(targetToken: string) {
+    const response = await fetchSchedules(targetToken);
+    setHomeSchedules(response.items ?? []);
+  }
+
+  async function loadHomeNotices(targetToken: string) {
+    const response = await fetchWorkspaceNotices(targetToken);
+    setHomeNotices(response.items ?? []);
+  }
+
+  async function openHomeItem(target: "mail" | "approval" | "schedule" | "messenger" | "notices", itemId: string) {
+    if (target === "mail") {
+      setPortalMenu("mail");
+      await selectMail(token, itemId, "inbox", { markRead: true });
+      return;
+    }
+    if (target === "approval") {
+      setPortalMenu("approval");
+      await selectApprovalDocument(itemId);
+      return;
+    }
+    if (target === "schedule") {
+      setHomeScheduleSelectionId(itemId);
+      setPortalMenu("schedule");
+      return;
+    }
+    if (target === "messenger") {
+      setPortalMenu("messenger");
+      await selectMessengerRoom(token, itemId, { markRead: true });
+      return;
+    }
+    setPortalMenu("notices");
+    const detail = await fetchWorkspaceNotice(token, itemId);
+    setSelectedNotice(detail);
+    if (!detail.is_read) {
+      const read = await readWorkspaceNotice(token, itemId);
+      setSelectedNotice(read);
+      await loadHomeNotices(token);
+    }
+  }
+
+  function closeUnifiedSearch() {
+    setSearchText("");
+    setSearchOpen(false);
+    setSearchFilter("all");
+    setSearchResults([]);
+    setSearchError("");
+  }
+
+  function openSearchResult(result: UnifiedSearchResult) {
+    if (result.type === "mail") {
+      void selectMail(token, result.id, result.mailbox ?? "inbox", { markRead: false });
+    } else if (result.type === "approval") {
+      void selectApprovalDocument(result.id);
+    } else if (result.type === "messenger") {
+      void selectMessengerRoom(token, result.id, { markRead: false });
+    } else {
+      setSearchWorkspaceSelection({ menu: result.menu as "schedule" | "contacts" | "org" | "files", id: result.id });
+      if (result.type === "schedule") setHomeScheduleSelectionId(result.id);
+    }
+    setPortalMenu(result.menu);
+    closeUnifiedSearch();
+  }
+
+  useEffect(() => {
+    const query = searchText.trim().toLowerCase();
+    if (!token || !me || me.mustChangePassword || !query) {
+      setSearchOpen(false);
+      setSearchResults([]);
+      setSearchError("");
+      setSearchLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setSearchOpen(true);
+      setSearchLoading(true);
+      setSearchError("");
+
+      void Promise.all([fetchSchedules(token), fetchContacts(token), fetchWorkspaceDirectory(token), fetchWorkspaceFiles(token)])
+        .then(([schedules, contacts, directory, files]) => {
+          if (cancelled) return;
+          const includes = (value: string) => value.toLowerCase().includes(query);
+          const rows: UnifiedSearchResult[] = [
+            ...[
+              ...inboxMails.map((item) => ({ item, mailbox: "inbox" as const })),
+              ...sentMails.map((item) => ({ item, mailbox: "sent" as const })),
+              ...draftMails.map((item) => ({ item, mailbox: "inbox" as const })),
+            ].filter(({ item }) => includes(`${item.subject} ${item.senderEmail} ${item.accountId}`)).slice(0, 5).map(({ item, mailbox }) => ({ id: item.mailId, type: "mail" as const, title: item.subject || "(제목 없음)", detail: item.senderEmail, menu: "mail" as const, mailbox })),
+            ...documents.filter((item) => includes(`${item.title} ${item.creatorUserName} ${item.status}`)).slice(0, 5).map((item) => ({ id: item.id, type: "approval" as const, title: item.title, detail: item.status, menu: "approval" as const })),
+            ...messengerRoomsData.filter((item) => includes(`${item.roomName} ${item.lastMessage ?? ""}`)).slice(0, 5).map((item) => ({ id: item.roomId, type: "messenger" as const, title: item.roomName, detail: item.lastMessage ?? "최근 메시지 없음", menu: "messenger" as const })),
+            ...(schedules.items ?? []).filter((item) => includes(`${item.title} ${item.description}`)).slice(0, 5).map((item) => ({ id: item.id, type: "schedule" as const, title: item.title, detail: formatDateLabel(item.starts_at), menu: "schedule" as const })),
+            ...(contacts.items ?? []).filter((item) => includes(`${item.name} ${item.email} ${item.company_name}`)).slice(0, 5).map((item) => ({ id: item.id, type: "contacts" as const, title: item.name, detail: item.email || item.company_name, menu: "contacts" as const })),
+            ...[
+              ...directory.departments.filter((item) => includes(`${item.name} ${item.department_code ?? ""}`)).map((item) => ({ id: item.id, type: "org" as const, title: item.name, detail: "부서", menu: "org" as const })),
+              ...directory.users.filter((item) => includes(`${item.name} ${item.email} ${item.department_name}`)).map((item) => ({ id: item.id, type: "org" as const, title: item.name, detail: item.department_name || item.role_name, menu: "org" as const })),
+            ].slice(0, 5),
+            ...(files.items ?? []).filter((item) => includes(`${item.file_name} ${item.content_type}`)).slice(0, 5).map((item) => ({ id: item.id, type: "files" as const, title: item.file_name, detail: item.content_type || "파일", menu: "files" as const })),
+          ];
+          setSearchResults(rows);
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            setSearchResults([]);
+            setSearchError(normalizeClientError(error, "통합 검색 결과를 불러오지 못했습니다."));
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setSearchLoading(false);
+        });
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [searchText, token, me?.userId, me?.mustChangePassword, inboxMails, sentMails, draftMails, documents, messengerRoomsData]);
+
   useEffect(() => {
     const current = getUserToken();
     if (current) {
@@ -749,16 +1233,25 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token || !me || me.mustChangePassword) {
+      stopNotificationStream();
+      return;
+    }
     void reload().catch((error) => setApprovalError(error instanceof Error ? error.message : "조회 실패"));
     void loadMailWorkspace(token).catch((error) => setMailError(normalizeClientError(error, "메일 조회 실패")));
     void loadMessengerWorkspace(token).catch((error) => setMessengerError(normalizeClientError(error, "메신저 조회 실패")));
+    setHomeLoading(true);
+    setHomeError("");
+    void Promise.all([loadHomeSchedules(token), loadHomeNotices(token)])
+      .catch((error) => setHomeError(normalizeClientError(error, "홈 업무 현황 조회 실패")))
+      .finally(() => setHomeLoading(false));
     void loadTranslationState().catch(() => undefined);
+    void refreshMailDeliveryState(token).catch(() => undefined);
     connectNotificationStream(token);
     return () => {
       stopNotificationStream();
     };
-  }, [token]);
+  }, [token, me?.mustChangePassword, me?.userId]);
 
   useEffect(() => {
     if (!token) {
@@ -768,8 +1261,12 @@ export default function App() {
       setTranslationError("");
       setInboxMails([]);
       setSentMails([]);
+      setDraftMails([]);
       setSelectedMailId("");
       setSelectedMailDetail(null);
+      setMailDeliveryStatus(null);
+      setMailComposeForm({ to: "", subject: "", bodyText: "" });
+      setQuickComposeMode("none");
       setMessengerRoomsData([]);
       setSelectedRoomId("");
       setSelectedRoomDetail(null);
@@ -795,12 +1292,29 @@ export default function App() {
     setApprovalError("");
     setMessage("");
     try {
-      const response = (await login(loginForm)) as LoginResponse;
+      if (loginForm.loginId.includes("@")) {
+        setApprovalError("아이디만 입력하세요. 회사 도메인은 자동으로 적용됩니다.");
+        return;
+      }
+      const response = (await login({
+        email: buildCompanyLoginEmail(loginForm.loginId, uiContract.company.domain),
+        password: loginForm.password,
+      })) as LoginResponse;
       storeUserToken(response.accessToken);
       setToken(response.accessToken);
       setMe(response.user);
+      if (response.user.mustChangePassword) {
+        setPasswordChangeForm({
+          currentPassword: loginForm.password,
+          newPassword: "",
+          confirmPassword: "",
+        });
+        setMessage("최초 로그인입니다. 비밀번호를 변경한 뒤 업무 화면으로 이동합니다.");
+        return;
+      }
       setMessage(`${response.user.userName}님, 업무 포털에 접속했습니다.`);
       await loadTranslationState();
+      await refreshMailDeliveryState(response.accessToken);
       await reload();
     } catch (error) {
       setApprovalError(error instanceof Error ? error.message : "로그인 실패");
@@ -809,26 +1323,115 @@ export default function App() {
     }
   }
 
-  async function handleCreate(event: FormEvent) {
+  async function handleForcedPasswordChange(event: FormEvent) {
     event.preventDefault();
-    if (!token) return;
+    if (!token || !me) return;
+    if (passwordChangeForm.newPassword !== passwordChangeForm.confirmPassword) {
+      setApprovalError("새 비밀번호와 확인 비밀번호가 일치하지 않습니다.");
+      return;
+    }
     setLoading(true);
     setApprovalError("");
     try {
-      const approverUserIds = createForm.approverUserIds
-        .split(",")
-        .map((value) => value.trim())
-        .filter(Boolean);
-      await createApproval(token, {
-        title: createForm.title,
-        content: createForm.content,
-        approverUserIds,
+      const response = await changePassword(token, {
+        currentPassword: passwordChangeForm.currentPassword,
+        newPassword: passwordChangeForm.newPassword,
       });
-      setCreateForm({ title: "", content: "", approverUserIds: "" });
-      setMessage("결재 초안이 저장되었습니다.");
+      setMe(response.user);
+      setLoginForm({ loginId: loginForm.loginId, password: passwordChangeForm.newPassword });
+      setPasswordChangeForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+      setMessage("비밀번호 변경이 완료되어 업무 화면으로 이동합니다.");
+      await loadTranslationState();
+      await refreshMailDeliveryState(token);
       await reload();
     } catch (error) {
-      setApprovalError(error instanceof Error ? error.message : "작성 실패");
+      setApprovalError(error instanceof Error ? error.message : "비밀번호 변경 실패");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function selectApprovalDocument(documentId: string) {
+    setSelectedApprovalId(documentId);
+    if (!token) return;
+    try {
+      const response = await fetchApprovalLogs(token, documentId);
+      setApprovalLogs(response.logs);
+    } catch (error) {
+      setApprovalError(normalizeClientError(error, "결재 이력 조회 실패"));
+      setApprovalLogs([]);
+    }
+  }
+
+  async function openApprovalEditor(mode: "create" | "edit", document?: ApprovalDocument) {
+    if (!token) return;
+    setApprovalError("");
+    try {
+      const response = await fetchApprovalApprovers(token);
+      setApprovalApprovers(response.users);
+      setApproverSearch("");
+      setCreateForm(
+        document
+          ? { title: document.title, content: document.content, approverUserIds: document.lines.map((line) => line.approverUserId) }
+          : { title: "", content: "", approverUserIds: [] },
+      );
+      if (document) {
+        setSelectedApprovalId(document.id);
+      }
+      setApprovalModal(mode);
+    } catch (error) {
+      setApprovalError(normalizeClientError(error, "결재선 사용자 조회 실패"));
+    }
+  }
+
+  function closeApprovalModal() {
+    if ((approvalModal === "create" || approvalModal === "edit") && (createForm.title || createForm.content || createForm.approverUserIds.length)) {
+      if (!window.confirm("작성 중인 내용이 있습니다. 닫으시겠습니까?")) return;
+    }
+    setApprovalModal("none");
+    setReasonAction({ documentId: "", reason: "" });
+  }
+
+  function selectApprovalApprover(userId: string) {
+    setCreateForm((current) => current.approverUserIds.includes(userId) ? current : { ...current, approverUserIds: [...current.approverUserIds, userId] });
+  }
+
+  function moveApprovalApprover(userId: string, direction: -1 | 1) {
+    setCreateForm((current) => {
+      const index = current.approverUserIds.indexOf(userId);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= current.approverUserIds.length) return current;
+      const approverUserIds = [...current.approverUserIds];
+      [approverUserIds[index], approverUserIds[nextIndex]] = [approverUserIds[nextIndex], approverUserIds[index]];
+      return { ...current, approverUserIds };
+    });
+  }
+
+  async function handleCreate(event: FormEvent) {
+    event.preventDefault();
+    if (!token) return;
+    if (!createForm.approverUserIds.length) {
+      setApprovalError("상신 전 결재선을 최소 1명 이상 선택하세요.");
+      return;
+    }
+    setLoading(true);
+    setApprovalError("");
+    try {
+      const isEdit = approvalModal === "edit";
+      const documentId = selectedApprovalId;
+      if (isEdit && documentId) {
+        await updateApproval(token, documentId, createForm);
+        setMessage("결재 초안이 수정되었습니다.");
+      } else {
+        const response = await createApproval(token, createForm);
+        setSelectedApprovalId(response.documentId);
+        setMessage("결재 초안이 저장되었습니다.");
+      }
+      setApprovalModal("none");
+      setCreateForm({ title: "", content: "", approverUserIds: [] });
+      await reload();
+    } catch (error) {
+      setApprovalError(normalizeClientError(error, "결재 초안 저장 실패"));
     } finally {
       setLoading(false);
     }
@@ -836,15 +1439,21 @@ export default function App() {
 
   async function executeApprove(documentId: string, accepted: boolean) {
     if (!token) return;
+    if (!accepted && !reasonAction.reason.trim()) {
+      setApprovalError("반려 의견을 입력하세요.");
+      return;
+    }
     setLoading(true);
     setApprovalError("");
     try {
       const act = accepted ? approveApproval : rejectApproval;
-      await act(token, documentId, reasonAction.reason || "확인");
+      await act(token, documentId, reasonAction.reason.trim() || "확인");
       setReasonAction({ documentId: "", reason: "" });
+      setApprovalModal("none");
       await reload();
+      await selectApprovalDocument(documentId);
     } catch (error) {
-      setApprovalError(error instanceof Error ? error.message : "처리 실패");
+      setApprovalError(normalizeClientError(error, "결재 처리 실패"));
     } finally {
       setLoading(false);
     }
@@ -855,16 +1464,14 @@ export default function App() {
     setLoading(true);
     setApprovalError("");
     try {
-      if (action === "submit") {
-        await submitApproval(token, documentId);
-      } else if (action === "withdraw") {
-        await withdrawApproval(token, documentId);
-      } else {
-        await redraftApproval(token, documentId);
-      }
+      if (action === "submit") await submitApproval(token, documentId);
+      else if (action === "withdraw") await withdrawApproval(token, documentId);
+      else await redraftApproval(token, documentId);
+      setApprovalModal("none");
       await reload();
+      await selectApprovalDocument(documentId);
     } catch (error) {
-      setApprovalError(error instanceof Error ? error.message : "처리 실패");
+      setApprovalError(normalizeClientError(error, "결재 상태 변경 실패"));
     } finally {
       setLoading(false);
     }
@@ -881,6 +1488,64 @@ export default function App() {
       setNotificationError(error instanceof Error ? error.message : "읽음 처리 실패");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function executeReadAll() {
+    if (!token) return;
+    setLoading(true);
+    setNotificationError("");
+    try {
+      await readAllNotifications(token);
+      await refreshNotifications(token);
+    } catch (error) {
+      setNotificationError(error instanceof Error ? error.message : "전체 읽음 처리 실패");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function closeNotificationPanel() {
+    setShowNotificationPanel(false);
+    requestAnimationFrame(() => notificationButtonRef.current?.focus());
+  }
+
+  function toggleNotificationPanel() {
+    if (showNotificationPanel) {
+      closeNotificationPanel();
+      return;
+    }
+    setShowNotificationPanel(true);
+  }
+
+  async function openNotificationTarget(menu: "mail" | "approval" | "messenger" | "schedule" | "files" | "notices" | "alerts", item: NotificationRecord) {
+    if (!token) return;
+    if (item.status === "unread") {
+      await executeAck(item.notificationId);
+    }
+    closeNotificationPanel();
+    setPortalMenu(menu);
+    try {
+      if (menu === "mail") {
+        await selectMail(token, item.resourceId, "inbox", { markRead: true, propagateError: true });
+      } else if (menu === "approval") {
+        await selectApprovalDocument(item.resourceId);
+      } else if (menu === "messenger") {
+        await selectMessengerRoom(token, item.resourceId, { markRead: true });
+      } else if (menu === "schedule") {
+        setSearchWorkspaceSelection({ menu: "schedule", id: item.resourceId });
+      } else if (menu === "files") {
+        setSearchWorkspaceSelection({ menu: "files", id: item.resourceId });
+      } else if (menu === "notices") {
+        const detail = await fetchWorkspaceNotice(token, item.resourceId);
+        setSelectedNotice(detail);
+      }
+    } catch {
+      const originError = "원본 항목이 삭제되었거나 접근 권한이 없습니다.";
+      if (menu === "mail") setMailError(originError);
+      else if (menu === "approval") setApprovalError(originError);
+      else if (menu === "messenger") setMessengerError(originError);
+      else setNotificationError(originError);
     }
   }
 
@@ -917,14 +1582,14 @@ export default function App() {
   }
 
   const navItems = [
-    { label: "메일", desc: MAIL_POLICY.serverRetention },
+    { label: "메일", desc: "받은편지함 우선 확인" },
     { label: "결재", desc: `${dashboardStats.pendingApprovals}건 대기` },
-    { label: "메신저", desc: MESSENGER_POLICY.serverRetention },
-    { label: "일정", desc: "오늘 일정 3건 기준 영역" },
+    { label: "메신저", desc: "최근 대화 확인" },
+    { label: "일정", desc: "오늘 일정" },
     { label: "주소록", desc: "조직도·연락처 연계" },
     { label: "조직도", desc: "부서 및 권한 구조" },
-    { label: "파일", desc: "로컬/공유 파일 허브" },
-    { label: "설정", desc: "언어, 시간대, Help, 정책 안내" },
+    { label: "파일", desc: "업무 파일 허브" },
+    { label: "설정", desc: "언어, 시간대, 화면" },
   ];
 
   const orderedNavItems = [...navItems].sort((left, right) => {
@@ -973,14 +1638,15 @@ export default function App() {
   });
 
   const visibleMailList = getMailListByFolder(activeMailFolder);
-  const localMailArchiveHint = activeMailFolder === "localArchive" ? "설치형 로컬 아카이브 연동 경로로 이동해 보관된 메일을 확인하세요." : "";
+  const localMailArchiveHint = activeMailFolder === "localArchive" ? "로컬 아카이브에서 확인" : "";
   const starredMailCount = [...inboxMails, ...sentMails].filter((item) => item.isStarred).length;
-  const draftMailCount = [...inboxMails, ...sentMails].filter((item) => item.status === "draft").length;
+  const draftMailCount = draftMails.length;
   const unreadInboxCount = inboxMails.filter((item) => !item.isRead).length;
   const selectedMailSummary =
     visibleMailList.find((item) => item.mailId === selectedMailId) ??
     inboxMails.find((item) => item.mailId === selectedMailId) ??
     sentMails.find((item) => item.mailId === selectedMailId) ??
+    draftMails.find((item) => item.mailId === selectedMailId) ??
     null;
 
   function handleHomeSurfaceCardClick(surfaceCardId: string) {
@@ -1085,8 +1751,8 @@ export default function App() {
       body: roomMessages[roomMessages.length - 1]?.readState || "메시지 없음",
     },
     {
-      title: "보관 정책",
-      body: "메신저 서버 2주 보관 / 장기 보관은 설치형 대화 파일 저장으로 연결",
+      title: "협업 안내",
+      body: "정책 경로: Help / 정책",
     },
     {
       title: "대화방 ID",
@@ -1099,7 +1765,7 @@ export default function App() {
     { title: "오류 메시지", sample: notificationError || approvalError || uiContract.messages.error, tone: "#b91c1c" },
     { title: "차단 메시지", sample: uiContract.messages.blocked, tone: "#9f1239" },
     { title: "경고 메시지", sample: uiContract.messages.warning, tone: "#9a3412" },
-    { title: "성공 메시지", sample: message || uiContract.messages.success, tone: "#166534" },
+    { title: "성공 메시지", sample: feedbackItems[feedbackItems.length - 1]?.title || uiContract.messages.success, tone: "#166534" },
   ];
 
   const contactDirectory = useMemo(() => {
@@ -1243,7 +1909,77 @@ export default function App() {
     { title: "정책 안내 반영", body: "정책 본문은 직접 노출하지 않고 Help / 정책 안내 / 설정 > 보관 정책 경로만 공통 유지합니다." },
   ];
 
-  if (token) {
+  if (token && !me) {
+    return (
+      <main
+        style={{
+          minHeight: "100vh",
+          display: "grid",
+          placeItems: "center",
+          background: "linear-gradient(180deg, #f7f5ef 0%, #eef4f3 100%)",
+          color: "#0f172a",
+          fontFamily: `"Pretendard Variable", "SUIT", "Noto Sans KR", "Segoe UI", sans-serif`,
+        }}
+      >
+        <section style={{ width: "min(480px, calc(100% - 40px))", background: "#fff", borderRadius: 28, padding: 28, border: "1px solid #dbe4ec", boxShadow: "0 18px 40px rgba(15, 23, 42, 0.08)" }}>
+          <h2 style={{ marginTop: 0 }}>세션 확인 중</h2>
+          <p style={{ marginBottom: 0, color: "#475569" }}>저장된 사용자 세션을 확인하고 있습니다.</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (token && me?.mustChangePassword) {
+    return (
+      <main
+        style={{
+          minHeight: "100vh",
+          display: "grid",
+          placeItems: "center",
+          background: "linear-gradient(180deg, #f7f5ef 0%, #eef4f3 100%)",
+          color: "#0f172a",
+          fontFamily: `"Pretendard Variable", "SUIT", "Noto Sans KR", "Segoe UI", sans-serif`,
+          padding: 24,
+        }}
+      >
+        <section style={{ width: "min(560px, 100%)", background: "#fff", borderRadius: 32, padding: 30, border: "1px solid #dbe4ec", boxShadow: "0 18px 40px rgba(15, 23, 42, 0.08)", display: "grid", gap: 18 }}>
+          <div>
+            <div style={{ display: "inline-flex", padding: "8px 14px", borderRadius: 999, background: "#ecfeff", color: "#0f766e", fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>First Login Policy</div>
+            <h1 style={{ margin: "18px 0 10px", fontSize: 34, lineHeight: 1.15, letterSpacing: "-0.04em" }}>최초 로그인 비밀번호 변경</h1>
+            <p style={{ margin: 0, color: "#475569", lineHeight: 1.7 }}>초기 비밀번호는 아이디와 동일하게 설정되었습니다. 업무 화면에 진입하기 전에 새 비밀번호로 변경해야 합니다.</p>
+          </div>
+          <article style={{ padding: 18, borderRadius: 22, background: "#f8fafc", border: "1px solid #dbe4ec" }}>
+            <strong>{me.userName}</strong>
+            <div style={{ marginTop: 6, color: "#475569" }}>{me.userEmail}</div>
+            <div style={{ marginTop: 6, color: "#475569" }}>권한 역할: {me.roleName}</div>
+          </article>
+          <form onSubmit={handleForcedPasswordChange} style={{ display: "grid", gap: 14 }}>
+            <label style={{ display: "grid", gap: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "#334155" }}>현재 비밀번호</span>
+              <input type="password" value={passwordChangeForm.currentPassword} onChange={(event) => setPasswordChangeForm((current) => ({ ...current, currentPassword: event.target.value }))} style={{ height: 48, borderRadius: 14, border: "1px solid #cbd5e1", padding: "0 14px", font: "inherit" }} />
+            </label>
+            <label style={{ display: "grid", gap: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "#334155" }}>새 비밀번호</span>
+              <input type="password" value={passwordChangeForm.newPassword} onChange={(event) => setPasswordChangeForm((current) => ({ ...current, newPassword: event.target.value }))} style={{ height: 48, borderRadius: 14, border: "1px solid #cbd5e1", padding: "0 14px", font: "inherit" }} />
+            </label>
+            <label style={{ display: "grid", gap: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "#334155" }}>새 비밀번호 확인</span>
+              <input type="password" value={passwordChangeForm.confirmPassword} onChange={(event) => setPasswordChangeForm((current) => ({ ...current, confirmPassword: event.target.value }))} style={{ height: 48, borderRadius: 14, border: "1px solid #cbd5e1", padding: "0 14px", font: "inherit" }} />
+            </label>
+            {approvalError ? <FeedbackState state="error" title="비밀번호를 변경하지 못했습니다." message={approvalError} /> : null}
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              <button type="submit" disabled={loading} style={{ height: 50, borderRadius: 16, border: 0, background: "linear-gradient(135deg, #0f766e 0%, #0f172a 100%)", color: "#fff", padding: "0 18px", fontWeight: 800, cursor: "pointer" }}>
+                {loading ? "변경 중..." : "비밀번호 변경 후 계속"}
+              </button>
+              <button type="button" onClick={() => { clearUserToken(); setToken(""); setMe(null); setPasswordChangeForm({ currentPassword: "", newPassword: "", confirmPassword: "" }); }} style={{ height: 50, borderRadius: 16, border: "1px solid #cbd5e1", background: "#fff", padding: "0 18px", fontWeight: 700, cursor: "pointer" }}>로그아웃</button>
+            </div>
+          </form>
+        </section>
+      </main>
+    );
+  }
+
+  if (token && me) {
     const portalMenus: Array<{ key: UserPortalMenu; label: string; desc: string }> = [
       { key: "home", label: "홈", desc: "오늘 업무 우선순위" },
       { key: "mail", label: "메일", desc: `${notificationSummary?.unreadCount ?? 0}건 확인` },
@@ -1253,16 +1989,46 @@ export default function App() {
       { key: "contacts", label: "주소록", desc: "연락처" },
       { key: "org", label: "조직도", desc: "부서/역할" },
       { key: "files", label: "파일", desc: "업무 파일" },
-      { key: "alerts", label: "알림", desc: `${dashboardStats.unreadCount}건` },
       { key: "settings", label: "설정", desc: "언어/화면" },
       { key: "help", label: "Help / 정책", desc: "정책 경로" },
     ];
 
     const renderWorkPanel = () => {
+      if (["messenger"].includes(activePortalMenu as string)) {
+        return <MessengerPanel token={token} />;
+      }
+      if (["schedule", "contacts", "org", "files", "settings", "help"].includes(activePortalMenu)) {
+        return (
+          <WorkspacePanels
+            menu={activePortalMenu as "schedule" | "contacts" | "org" | "files" | "settings" | "help"}
+            token={token}
+            locale={locale}
+            timezone={timezone}
+            initialSelectionId={searchWorkspaceSelection?.menu === activePortalMenu ? searchWorkspaceSelection.id : activePortalMenu === "schedule" ? homeScheduleSelectionId : undefined}
+            onPreferencesSaved={(nextLocale, nextTimezone) => {
+              saveLocale(resolveLocale(nextLocale));
+              saveTimezone(nextTimezone);
+            }}
+          />
+        );
+      }
+      if (activePortalMenu === "notices") {
+        const currentNotice = selectedNotice ?? homeNotices[0] ?? null;
+        return <section className="ui008-notice-workspace" aria-label="공지 목록과 상세">
+          <article className="ui008-notice-list">
+            <header><h2>공지</h2><span>{homeNotices.filter((item) => !item.is_read).length}건 미확인</span></header>
+            <div>{homeNotices.map((item) => <button key={item.id} type="button" className={currentNotice?.id === item.id ? "is-active" : ""} onClick={() => void openHomeItem("notices", item.id)}><strong>{item.title}</strong><span>{item.author_name} · {formatDateLabel(item.published_at)}</span></button>)}</div>
+            {!homeNotices.length ? <FeedbackState state="empty" title="게시된 공지가 없습니다." /> : null}
+          </article>
+          <article className="ui008-notice-detail">
+            {currentNotice ? <><header><span>{currentNotice.is_read ? "읽음" : "미확인"}</span><h2>{currentNotice.title}</h2><p>{currentNotice.author_name} · {formatDateLabel(currentNotice.published_at)}</p></header><div>{currentNotice.content}</div></> : <FeedbackState state="empty" title="공지 선택" message="목록에서 공지를 선택하세요." />}
+          </article>
+        </section>;
+      }
       if (activePortalMenu === "mail") {
         return (
-          <section style={{ display: "grid", gridTemplateColumns: "240px minmax(320px, 0.9fr) minmax(360px, 1.1fr)", gap: 18, minHeight: 0 }}>
-            <aside style={{ display: "grid", gap: 10, alignContent: "start", overflowY: "auto" }}>
+          <section className={`user-mail-workbench${mailDetailExpanded ? " is-detail-expanded" : ""}`}>
+            <aside className="user-mail-folder-panel">
               {mailFolders.map((item) => (
             <button
                   key={item.title}
@@ -1290,12 +2056,31 @@ export default function App() {
                 </button>
               ))}
             </aside>
-            <section style={{ display: "grid", gap: 10, alignContent: "start", overflowY: "auto" }}>
-              {activeMailFolder === "localArchive" ? (
+            <SplitView
+              ariaLabel="메일 목록과 상세 영역 너비 조절"
+              storageKey="moaworks.user.mail.split-ratio.v1"
+              secondaryMaximized={mailDetailExpanded}
+              primary={(
+            <section className="user-mail-list-panel">
+              {activeMailFolder === "inbox" ? (
+                <div style={{ display: "grid", gap: 8 }}>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {["primary", "promotions", "social", "updates", "forums"].map((category) => <button key={category} type="button" onClick={() => setMailCategoryFilter(category)} style={{ height: 30, borderRadius: 999, border: mailCategory === category ? `1px solid ${uiContract.brand.primary}` : "1px solid #dbe4ec", background: "#fff", padding: "0 10px", cursor: "pointer" }}>{({ primary: "기본", promotions: "프로모션", social: "소셜", updates: "업데이트", forums: "포럼" } as Record<string, string>)[category]}</button>)}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <button type="button" onClick={() => void loadMailWorkspace(token, activeMailbox)}>새로고침</button>
+                    <button type="button" onClick={() => void runBulkMailAction("read")}>읽음</button>
+                    <button type="button" onClick={() => void runBulkMailAction("unread")}>안 읽음</button>
+                    <button type="button" onClick={() => void runBulkMailAction("star")}>중요</button>
+                    <button type="button" onClick={() => setMailDeleteConfirmOpen(true)} disabled={selectedMailIds.length === 0 || mailBulkBusy}>삭제</button>
+                    {selectedMailIds.length === 1 ? <select value={mailCategory} onChange={(event) => void changeSelectedMailCategory(event.target.value)}><option value="primary">기본</option><option value="promotions">프로모션</option><option value="social">소셜</option><option value="updates">업데이트</option><option value="forums">포럼</option></select> : null}
+                  </div>
+                </div>
+              ) : null}              {activeMailFolder === "localArchive" ? (
                 <article style={{ borderRadius: 20, padding: 18, border: "1px solid #dbe4ec", background: "#fff", color: "#334155", lineHeight: 1.7 }}>
                   {mailLoading
                     ? "로컬 아카이브를 동기화하고 있습니다."
-                    : "로컬 아카이브는 설치형 클라이언트의 장기 보관 경로로 연동되며, 현재는 파일 연계 상태 확인만 지원합니다."}
+                    : "로컬 아카이브는 설치형에서 확인합니다."}
                 </article>
               ) : (
                 <>
@@ -1304,6 +2089,7 @@ export default function App() {
                       key={item.mailId}
                       type="button"
                       onClick={() => {
+                        setMailDetailExpanded(false);
                         const mailbox = inferMailboxFromMailId(item.mailId);
                         void selectMail(token, item.mailId, mailbox, { markRead: mailbox === "inbox" });
                       }}
@@ -1320,62 +2106,188 @@ export default function App() {
                         <strong>{item.sender}</strong>
                         <span style={{ color: "#64748b", fontSize: 13 }}>{item.time}</span>
                       </div>
-                      <h3 style={{ margin: "8px 0 6px", fontSize: 18 }}>{item.subject}</h3>
+                      <div style={{ margin: "8px 0 6px", fontSize: 12, fontWeight: 800, color: "#0f172a" }}>{item.subject}</div>
                       <p style={{ margin: 0, color: "#475569", lineHeight: 1.55 }}>{item.preview}</p>
                     </button>
                   ))}
-                  {mailListSamples.length === 0 ? (
-                    <article style={{ borderRadius: 20, padding: 18, border: "1px dashed #cbd5e1", color: "#64748b", background: "#fff" }}>
-                      {mailLoading ? "메일을 불러오는 중입니다." : uiContract.messages.empty}
-                    </article>
+                  {mailListSamples.length === 0 && !selectedMailId ? (
+                    <FeedbackState
+                      state={mailLoading ? "loading" : mailError ? "error" : "empty"}
+                      title={mailLoading ? "메일을 불러오는 중입니다." : mailError ? "메일을 불러오지 못했습니다." : "표시할 메일이 없습니다."}
+                      message={mailError || undefined}
+                      action={mailError ? { label: "다시 시도", onAction: () => void loadMailWorkspace(token, activeMailbox) } : undefined}
+                    />
                   ) : null}
                 </>
               )}
             </section>
-            <article style={{ borderRadius: 24, padding: 22, border: "1px solid #dbe4ec", background: "#fff", overflowY: "auto" }}>
-              <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>메일 상세</div>
-              <h2 style={{ margin: "10px 0 0", fontSize: 28 }}>{selectedMailDetail?.subject || "메일을 선택하세요"}</h2>
-              <p style={{ color: "#475569", lineHeight: 1.7 }}>
-                {selectedMailDetail
-                  ? selectedMailDetail.bodyText || selectedMailDetail.subject
-                  : "받은편지함 또는 보낸편지함 목록에서 메일을 선택하면 상세 본문을 확인할 수 있습니다."}
-              </p>
-              <p style={{ color: "#64748b", fontSize: 14 }}>
-                발신자 {selectedMailDetail?.senderEmail || "-"} / 수신 {selectedMailDetail?.recipients.map((item) => item.recipientEmail).join(", ") || "-"}
-              </p>
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (selectedMailId) {
-                      const mailbox = inferMailboxFromMailId(selectedMailId);
-                      void selectMail(token, selectedMailId, mailbox, { markRead: mailbox === "inbox" });
-                    }
-                  }}
-                  style={{ padding: "9px 12px", borderRadius: 999, background: "#ecfeff", color: "#0f766e", fontWeight: 700, fontSize: 13, border: 0, cursor: "pointer" }}
-                >
-                  읽음 처리
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void toggleSelectedMailStar()}
-                  style={{ padding: "9px 12px", borderRadius: 999, background: "#fff7ed", color: "#b45309", fontWeight: 700, fontSize: 13, border: 0, cursor: "pointer" }}
-                >
-                  중요 표시
-                </button>
-                <span style={{ padding: "9px 12px", borderRadius: 999, background: "#f8fafc", color: "#475569", fontWeight: 700, fontSize: 13 }}>
-                  첨부 {selectedMailDetail?.attachmentCount ?? 0}
-                </span>
-                <span style={{ padding: "9px 12px", borderRadius: 999, background: "#f0fdf4", color: "#166534", fontWeight: 700, fontSize: 13 }}>
-                  {selectedMailDetail ? (inferMailboxFromMailId(selectedMailId || selectedMailDetail.mailId) === "sent" ? "보낸편지함" : "받은편지함") : localMailArchiveHint || "받은편지함"}
-                </span>
-                {activeMailFolder === "localArchive" ? (
-                  <span style={{ padding: "9px 12px", borderRadius: 999, background: "#ecfeff", color: "#0f766e", fontWeight: 700, fontSize: 13 }}>
-                    {localMailArchiveHint}
-                  </span>
-                ) : null}
+              )}
+              secondary={(
+            <article className="user-mail-detail-panel">
+              {quickComposeMode === "mail" ? (
+                <form className={`user-mail-compose-popup is-${composeWindow}`} onSubmit={(event) => event.preventDefault()} style={{ display: "grid", gap: 12, position: "fixed", zIndex: 30, right: mailComposePosition ? "auto" : 24, bottom: mailComposePosition ? "auto" : 24, left: mailComposePosition?.left, top: mailComposePosition?.top, width: composeWindow === "maximized" ? "min(900px, calc(100vw - 280px))" : "min(520px, calc(100vw - 48px))", maxHeight: "calc(100vh - 48px)", overflowY: "auto", resize: composeWindow === "normal" ? "both" : "none", borderRadius: 18, border: "1px solid #cbd5e1", background: "#fff", padding: 18, boxShadow: "0 18px 50px rgba(15, 23, 42, .24)" }}>
+                  <div className="user-mail-compose-titlebar" onMouseDown={startMailComposeDrag} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                    <div>
+                      <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>메일 작성</div>
+                      <h2 style={{ margin: "10px 0 0", fontSize: 22 }}>{mailComposeContext === "reply" ? "답장" : mailComposeContext === "forward" ? "전달" : "새 메일"}</h2>
+                    </div>
+                    <div style={{ display: "flex", gap: 6 }}><button type="button" onClick={() => setComposeWindow((current) => current === "minimized" ? "normal" : "minimized")} style={{ height: 34 }}>최소화</button><button type="button" onClick={() => setComposeWindow((current) => current === "maximized" ? "normal" : "maximized")} style={{ height: 34 }}>확대</button><button type="button" onClick={closeMailCompose} style={{ height: 34 }}>닫기</button></div>
+                  </div>
+                  <div className="user-mail-compose-body">
+                  <label style={{ display: "grid", gap: 6 }}>
+                    <span style={{ fontWeight: 800, color: "#334155" }}>받는 사람</span>
+                    <input
+                      aria-label="mail-compose-to"
+                      value={mailComposeForm.to}
+                      onChange={(event) => setMailComposeForm((current) => ({ ...current, to: event.target.value }))}
+                      placeholder={`admin@${uiContract.company.domain}`}
+                      style={{ height: 38, borderRadius: 10, border: "1px solid #cbd5e1", padding: "0 12px", font: "inherit" }}
+                    />
+                  </label>
+                  <label style={{ display: "grid", gap: 6 }}>
+                    <span style={{ fontWeight: 800, color: "#334155" }}>제목</span>
+                    <input
+                      aria-label="mail-compose-subject"
+                      value={mailComposeForm.subject}
+                      onChange={(event) => setMailComposeForm((current) => ({ ...current, subject: event.target.value }))}
+                      placeholder="제목 입력"
+                      style={{ height: 38, borderRadius: 10, border: "1px solid #cbd5e1", padding: "0 12px", font: "inherit" }}
+                    />
+                  </label>
+                  <label style={{ display: "grid", gap: 6, minHeight: 0 }}>
+                    <span style={{ fontWeight: 800, color: "#334155" }}>본문</span>
+                    <textarea
+                      aria-label="mail-compose-body"
+                      value={mailComposeForm.bodyText}
+                      onChange={(event) => setMailComposeForm((current) => ({ ...current, bodyText: event.target.value }))}
+                      placeholder="본문 입력"
+                      style={{ minHeight: 180, resize: "vertical", borderRadius: 12, border: "1px solid #cbd5e1", padding: 12, font: "inherit", lineHeight: 1.5 }}
+                    />
+                  </label>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <button type="button" disabled={mailLoading} onClick={() => void submitMailCompose("draft")} style={{ height: 38, borderRadius: 12, border: "1px solid #cbd5e1", background: "#fff", padding: "0 14px", fontWeight: 800, cursor: "pointer" }}>임시저장</button>
+                    <button type="button" disabled={mailLoading} onClick={() => void submitMailCompose("send")} style={{ height: 38, borderRadius: 12, border: 0, background: uiContract.brand.primary, color: "#fff", padding: "0 14px", fontWeight: 800, cursor: "pointer" }}>발송</button>
+                  </div>
+                  {mailError ? <FeedbackState state="error" title="메일을 처리하지 못했습니다." message={mailError} /> : null}
+                  </div>
+                </form>
+              ) : (
+                <>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                    <div>
+                      <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>메일 상세</div>
+                      <h2 style={{ margin: "10px 0 0", fontSize: 22 }}>{selectedMailDetail?.subject || "메일을 선택하세요"}</h2>
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}><button type="button" aria-label={mailDetailExpanded ? "메일 상세 분할 보기" : "메일 상세 전체 보기"} aria-pressed={mailDetailExpanded} onClick={() => setMailDetailExpanded((current) => !current)} style={{ height: 36, borderRadius: 12, border: "1px solid #cbd5e1", background: "#fff", padding: "0 12px", fontWeight: 700, cursor: "pointer" }}>{mailDetailExpanded ? "분할 보기" : "상세 전체 보기"}</button><button type="button" onClick={openNewMailCompose} style={{ height: 36, borderRadius: 12, border: 0, background: uiContract.brand.primary, color: "#fff", padding: "0 14px", fontWeight: 800, cursor: "pointer" }}>메일 작성</button></div>
+                  </div>
+                  <p style={{ color: "#475569", lineHeight: 1.7 }}>
+                    {selectedMailDetail
+                      ? selectedMailDetail.bodyText || selectedMailDetail.subject
+                      : "받은편지함 또는 보낸편지함 목록에서 메일을 선택하면 상세 본문을 확인할 수 있습니다."}
+                  </p>
+                  <p style={{ color: "#64748b", fontSize: 14 }}>
+                    발신자 {selectedMailDetail?.senderEmail || "-"} / 수신 {selectedMailDetail?.recipients.map((item) => item.recipientEmail).join(", ") || "-"}
+                  </p>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <button type="button" disabled={!selectedMailDetail} onClick={() => openMailComposeFromDetail("reply")} style={{ padding: "9px 12px", borderRadius: 999, border: 0, cursor: "pointer" }}>
+                      답장
+                    </button>
+                    <button type="button" disabled={!selectedMailDetail} onClick={() => openMailComposeFromDetail("forward")} style={{ padding: "9px 12px", borderRadius: 999, border: 0, cursor: "pointer" }}>
+                      전달
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="mail-detail-read-action"
+                      onClick={() => void handleSelectedMailReadAction()}
+                      style={{ padding: "9px 12px", borderRadius: 999, background: "#ecfeff", color: "#0f766e", fontWeight: 700, fontSize: 13, border: 0, cursor: "pointer" }}
+                    >
+                      {selectedMailSummary?.isRead ? "읽음 상태 확인" : "읽음 처리"}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="mail-detail-star-action"
+                      onClick={() => void toggleSelectedMailStar()}
+                      style={{ padding: "9px 12px", borderRadius: 999, background: "#fff7ed", color: "#b45309", fontWeight: 700, fontSize: 13, border: 0, cursor: "pointer" }}
+                    >
+                      {selectedMailSummary?.isStarred ? "중요 해제" : "중요 표시"}
+                    </button>
+                    <span style={{ padding: "9px 12px", borderRadius: 999, background: "#f8fafc", color: "#475569", fontWeight: 700, fontSize: 13 }}>
+                      첨부 {selectedMailDetail?.attachmentCount ?? 0}
+                    </span>
+                    <span style={{ padding: "9px 12px", borderRadius: 999, background: "#f0fdf4", color: "#166534", fontWeight: 700, fontSize: 13 }}>
+                      {selectedMailDetail ? (inferMailboxFromMailId(selectedMailId || selectedMailDetail.mailId) === "sent" ? "보낸편지함" : "받은편지함") : localMailArchiveHint || "받은편지함"}
+                    </span>
+                    {selectedMailDetail?.externalDeliveries?.length ? (
+                      <span style={{ padding: "9px 12px", borderRadius: 999, background: "#eef2ff", color: "#4338ca", fontWeight: 700, fontSize: 13 }}>
+                        외부 발송 {selectedMailDetail.externalDeliveries.length}건
+                      </span>
+                    ) : null}
+                    {activeMailFolder === "localArchive" ? (
+                      <span style={{ padding: "9px 12px", borderRadius: 999, background: "#ecfeff", color: "#0f766e", fontWeight: 700, fontSize: 13 }}>
+                        {localMailArchiveHint}
+                      </span>
+                    ) : null}
+                  </div>
+                  {selectedMailDetail?.externalDeliveries?.length ? (
+                    <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+                      {selectedMailDetail.externalDeliveries.map((item) => (
+                        <div key={item.queueId} style={{ borderRadius: 16, border: "1px solid #dbe4ec", background: "#f8fafc", padding: 14 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                            <strong style={{ color: "#0f172a" }}>{item.recipient}</strong>
+                            <span style={{ color: item.status === "sent" ? "#166534" : item.status === "failed" ? "#b91c1c" : "#4338ca", fontWeight: 800 }}>{item.status}</span>
+                          </div>
+                          <div style={{ marginTop: 8, color: "#475569", fontSize: 13 }}>
+                            provider {item.provider} / attempt {item.attemptCount}
+                          </div>
+                          {item.lastError ? <div style={{ marginTop: 6, color: "#b91c1c", fontSize: 13 }}>{item.lastError}</div> : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {mailError && selectedMailId ? <FeedbackState state="error" title="메일을 처리하지 못했습니다." message={mailError} action={{ label: "다시 시도", onAction: () => void selectMail(token, selectedMailId, inferMailboxFromMailId(selectedMailId)) }} /> : null}
+                </>
+              )}
+            </article>
+              )}
+            />
+          </section>
+        );
+      }
+
+      if (activePortalMenu === "schedule") {
+        return (
+          <section style={{ display: "grid", gridTemplateColumns: "320px minmax(420px, 1fr)", gap: 18, minHeight: 0 }}>
+            <aside style={{ borderRadius: 24, padding: 22, background: "#fff", border: "1px solid #dbe4ec", overflowY: "auto" }}>
+              <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>일정 요약</div>
+              <h2 style={{ margin: "10px 0 0" }}>오늘 일정</h2>
+              <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+                {[
+                  { title: "오전 점검", time: "09:30", state: "운영 확인" },
+                  { title: "결재 마감 확인", time: "13:00", state: `${dashboardStats.pendingApprovals}건 대기` },
+                  { title: "알림 점검", time: "16:00", state: `미확인 ${dashboardStats.unreadCount}건` },
+                ].map((item) => (
+                  <article key={`${item.time}-${item.title}`} style={{ borderRadius: 16, border: "1px solid #dbe4ec", background: "#f8fafc", padding: 14 }}>
+                    <div style={{ fontWeight: 800 }}>{item.title}</div>
+                    <div style={{ marginTop: 6, color: "#475569" }}>{item.time}</div>
+                    <div style={{ marginTop: 8, color: "#0f766e", fontWeight: 700 }}>{item.state}</div>
+                  </article>
+                ))}
               </div>
-              {mailError ? <p style={{ color: "#b91c1c", marginTop: 14 }}>{mailError}</p> : null}
+            </aside>
+            <article style={{ borderRadius: 24, padding: 22, background: "#fff", border: "1px solid #dbe4ec", overflowY: "auto" }}>
+              <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>업무 일정 보기</div>
+              <h2 style={{ margin: "10px 0 0" }}>마감과 협업 일정</h2>
+              <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+                {[
+                  "메일 확인과 결재 처리 흐름을 일정 우선순위에 맞춰 정렬합니다.",
+                  "긴 설명 대신 오늘 처리해야 할 업무와 마감 시각만 먼저 보여줍니다.",
+                  "정책 경로는 Help / 설정에서 확인합니다.",
+                ].map((item) => (
+                  <div key={item} style={{ borderRadius: 16, border: "1px solid #dbe4ec", background: "#fff", padding: 14, color: "#334155", lineHeight: 1.6 }}>
+                    {item}
+                  </div>
+                ))}
+              </div>
             </article>
           </section>
         );
@@ -1386,7 +2298,7 @@ export default function App() {
           <section style={{ display: "grid", gridTemplateColumns: "280px minmax(420px, 1fr)", gap: 18, minHeight: 0 }}>
             <aside style={{ borderRadius: 24, padding: 22, background: "#fff", border: "1px solid #dbe4ec", overflowY: "auto" }}>
               <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>주소록 요약</div>
-              <h3 style={{ margin: "10px 0 0", fontSize: 28 }}>부서/즐겨찾기/최근 연락처</h3>
+              <h2 style={{ margin: "10px 0 0" }}>주소록 업무 보기</h2>
               {contactDirectory.length === 0 ? <div style={{ marginTop: 14, color: "#64748b" }}>{uiContract.messages.empty}</div> : null}
               <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
                 {contactDirectory.map((item) => (
@@ -1429,7 +2341,7 @@ export default function App() {
           <section style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, minHeight: 0 }}>
             <article style={{ borderRadius: 24, padding: 22, background: "#fff", border: "1px solid #dbe4ec", overflowY: "auto" }}>
               <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>조직 트리</div>
-              <h3 style={{ margin: "10px 0 0", fontSize: 28 }}>부서/권한 요약</h3>
+              <h2 style={{ margin: "10px 0 0" }}>조직도 업무 보기</h2>
               <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
                 {organizationTree.map((item) => (
                   <div key={item.department} style={{ border: "1px solid #dbe4ec", borderRadius: 16, padding: 14, background: "#f8fafc" }}>
@@ -1468,7 +2380,7 @@ export default function App() {
           <section style={{ display: "grid", gridTemplateColumns: "1.1fr 0.9fr", gap: 18, minHeight: 0 }}>
             <article style={{ borderRadius: 24, padding: 22, background: "#fff", border: "1px solid #dbe4ec", overflowY: "auto" }}>
               <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>최근 파일</div>
-              <h3 style={{ margin: "10px 0 0", fontSize: 28 }}>메일 첨부 / 결재 첨부 / 메신저 공유</h3>
+              <h2 style={{ margin: "10px 0 0" }}>파일 업무 보기</h2>
               {fileHubItems.length > 0 ? (
                 <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
                   {fileHubItems.map((item) => (
@@ -1491,13 +2403,11 @@ export default function App() {
               )}
             </article>
             <article style={{ borderRadius: 24, padding: 22, background: "#fff", border: "1px solid #dbe4ec", overflowY: "auto" }}>
-              <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>로컬 보관 연계</div>
-              <h3 style={{ margin: "10px 0 0", fontSize: 28 }}>설치형 로컬 아카이브</h3>
+              <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>파일 연계</div>
+              <h3 style={{ margin: "10px 0 0", fontSize: 22 }}>설치형 연동 보기</h3>
               <p style={{ color: "#475569", lineHeight: 1.7 }}>
-                결재 첨부/메일 첨부/메신저 공유 항목은 로컬 정책(설치형 무기한 보관)과 연계된 보관 경로로 전달할 수 있게 구성합니다.
+                첨부 파일과 공유 항목은 설치형 연동으로 확인합니다.
               </p>
-              <p style={{ color: "#334155", fontWeight: 800 }}>{MAIL_POLICY.localRetention}</p>
-              <p style={{ color: "#334155", fontWeight: 800 }}>{MESSENGER_POLICY.localRetention}</p>
               {selectedFileItem ? (
                 <div style={{ marginTop: 14, border: "1px solid #dbe4ec", borderRadius: 16, padding: 14, background: "#f8fafc" }}>
                   <div style={{ fontWeight: 800 }}>{selectedFileItem.type}</div>
@@ -1512,38 +2422,77 @@ export default function App() {
       }
 
       if (activePortalMenu === "approval") {
+        const filteredDocuments = documents.filter((document) => {
+          const statusMatches = approvalStatusFilter === "all" || document.status === approvalStatusFilter;
+          const keyword = approvalSearch.trim().toLowerCase();
+          return statusMatches && (!keyword || `${document.title} ${document.creatorUserName}`.toLowerCase().includes(keyword));
+        });
+        const selectedDocument = documents.find((document) => document.id === selectedApprovalId) ?? filteredDocuments[0] ?? null;
+        const selectedApprovers = createForm.approverUserIds
+          .map((userId) => approvalApprovers.find((user) => user.userId === userId))
+          .filter((user): user is ApprovalApprover => Boolean(user));
+        const availableApprovers = approvalApprovers.filter((user) => {
+          const keyword = approverSearch.trim().toLowerCase();
+          return !createForm.approverUserIds.includes(user.userId) && (!keyword || `${user.userName} ${user.departmentName} ${user.userEmail}`.toLowerCase().includes(keyword));
+        });
+        const openActionModal = (mode: ApprovalModalMode) => {
+          if (!selectedDocument) return;
+          setReasonAction({ documentId: selectedDocument.id, reason: "" });
+          setApprovalError("");
+          setApprovalModal(mode);
+        };
         return (
-          <section style={{ display: "grid", gridTemplateColumns: "minmax(360px, 0.9fr) minmax(420px, 1.1fr)", gap: 18, minHeight: 0 }}>
-            <div style={{ display: "grid", gap: 12, alignContent: "start", overflowY: "auto" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10 }}>
-                {approvalBuckets.map((item) => (
-                  <article key={item.title} style={{ borderRadius: 18, padding: 16, border: "1px solid #dbe4ec", background: "#fff" }}>
-                    <div style={{ color: item.tone, fontWeight: 800 }}>{item.title}</div>
-                    <div style={{ marginTop: 8, fontSize: 28, fontWeight: 800 }}>{item.count}</div>
-                  </article>
-                ))}
+          <section style={{ display: "grid", gridTemplateRows: "auto minmax(0, 1fr)", gap: 14, minHeight: 0, height: "100%" }}>
+            <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "14px 16px", borderRadius: 18, border: "1px solid #dbe4ec", background: "#fff" }}>
+              <div>
+                <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800 }}>전자결재</div>
+                <strong style={{ display: "block", marginTop: 4, fontSize: 20 }}>문서 목록과 선택 상세</strong>
               </div>
-              {documents.slice(0, 8).map((doc) => (
-                <article key={doc.id} style={{ borderRadius: 20, padding: 16, border: "1px solid #dbe4ec", background: doc.status === "submitted" ? "#f8fafc" : "#fff" }}>
-                  <strong>{doc.title}</strong>
-                  <p style={{ margin: "8px 0 0", color: "#475569" }}>{doc.status} / 작성자 {doc.creatorUserName}</p>
-                </article>
-              ))}
-              {documents.length === 0 ? <article style={{ borderRadius: 20, padding: 18, border: "1px dashed #cbd5e1", color: "#64748b" }}>아직 문서가 없습니다.</article> : null}
+              <button aria-label="새 결재 작성" type="button" disabled={!canAct.create} onClick={() => void openApprovalEditor("create")} style={{ height: 36, borderRadius: 12, border: 0, background: uiContract.brand.primary, color: "#fff", padding: "0 14px", fontWeight: 800 }}>새 결재 작성</button>
+            </header>
+            {approvalError && approvalModal === "none" ? <FeedbackState state="error" title="결재 정보를 처리하지 못했습니다." message={approvalError} action={{ label: "다시 시도", onAction: () => void reload() }} /> : null}
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(360px, 0.9fr) minmax(420px, 1.1fr)", gap: 14, minHeight: 0 }}>
+              <section aria-label="결재 목록" style={{ minHeight: 0, display: "grid", gridTemplateRows: "auto auto minmax(0, 1fr)", gap: 10, padding: 14, borderRadius: 20, border: "1px solid #dbe4ec", background: "#fff" }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {[["all", "전체"], ["draft", "초안"], ["submitted", "상신"], ["rejected", "반려"], ["approved", "완료"]].map(([value, label]) => (
+                    <button key={value} type="button" onClick={() => setApprovalStatusFilter(value)} style={{ height: 30, borderRadius: 999, border: approvalStatusFilter === value ? `1px solid ${uiContract.brand.primary}` : "1px solid #cbd5e1", background: approvalStatusFilter === value ? "#ecfdf5" : "#fff", padding: "0 10px", fontSize: 12, fontWeight: 700 }}>{label}</button>
+                  ))}
+                </div>
+                <input aria-label="결재 검색" value={approvalSearch} onChange={(event) => setApprovalSearch(event.target.value)} placeholder="제목 또는 기안자 검색" style={{ height: 34, borderRadius: 10, border: "1px solid #cbd5e1", padding: "0 10px" }} />
+                <div style={{ minHeight: 0, overflowY: "auto", display: "grid", gap: 8, alignContent: "start" }}>
+                  {filteredDocuments.map((document) => {
+                    const currentLine = document.lines.find((line) => line.sequence === document.currentLineIndex);
+                    return <button key={document.id} type="button" onDoubleClick={() => void selectApprovalDocument(document.id)} onClick={() => void selectApprovalDocument(document.id)} style={{ textAlign: "left", padding: 12, borderRadius: 14, border: selectedDocument?.id === document.id ? `1px solid ${uiContract.brand.primary}` : "1px solid #dbe4ec", background: selectedDocument?.id === document.id ? "#f0fdfa" : "#fff", cursor: "pointer" }}>
+                      <strong>{document.title}</strong>
+                      <div style={{ marginTop: 5, display: "flex", justifyContent: "space-between", gap: 8, color: "#475569", fontSize: 12 }}><span>{document.creatorUserName}</span><span>{document.status}</span></div>
+                      <div style={{ marginTop: 4, color: "#64748b", fontSize: 11 }}>현재 결재자: {currentLine?.approverUserName ?? "-"} · {formatDateLabel(document.updatedAt)}</div>
+                    </button>;
+                  })}
+                  {!filteredDocuments.length ? <div style={{ padding: 16, border: "1px dashed #cbd5e1", borderRadius: 12, color: "#64748b" }}>표시할 결재 문서가 없습니다.</div> : null}
+                </div>
+              </section>
+              <section aria-label="결재 상세" style={{ minHeight: 0, overflowY: "auto", padding: 18, borderRadius: 20, border: "1px solid #dbe4ec", background: "#fff" }}>
+                {selectedDocument ? <>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}><div><div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800 }}>선택 문서</div><h2 style={{ margin: "6px 0 0", fontSize: 22 }}>{selectedDocument.title}</h2></div><span style={{ padding: "5px 9px", borderRadius: 999, background: "#e2e8f0", fontSize: 12, fontWeight: 800 }}>{selectedDocument.status}</span></div>
+                  <p style={{ whiteSpace: "pre-wrap", color: "#334155", lineHeight: 1.6 }}>{selectedDocument.content}</p>
+                  <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e2e8f0" }}><strong>결재선</strong>{selectedDocument.lines.map((line) => <div key={line.id} style={{ marginTop: 7, fontSize: 12, color: "#475569" }}>{line.sequence}. {line.approverUserName} · {line.status}{line.comment ? ` · ${line.comment}` : ""}</div>)}</div>
+                  <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {selectedDocument.creatorUserId === me?.userId && selectedDocument.status === "draft" && canAct.create ? <button type="button" onClick={() => void openApprovalEditor("edit", selectedDocument)}>수정</button> : null}
+                    {selectedDocument.creatorUserId === me?.userId && selectedDocument.status === "draft" && canAct.submit ? <button type="button" onClick={() => openActionModal("submit")}>상신</button> : null}
+                    {selectedDocument.creatorUserId === me?.userId && selectedDocument.status === "submitted" && canAct.withdraw ? <button type="button" onClick={() => openActionModal("withdraw")}>회수</button> : null}
+                    {selectedDocument.creatorUserId === me?.userId && (selectedDocument.status === "rejected" || selectedDocument.status === "withdrawn") && canAct.rework ? <button type="button" onClick={() => openActionModal("redraft")}>재기안</button> : null}
+                    {isCurrentApprover(selectedDocument) && canAct.act ? <button type="button" onClick={() => openActionModal("approve")}>승인</button> : null}
+                    {isCurrentApprover(selectedDocument) && canAct.act ? <button type="button" onClick={() => openActionModal("reject")}>반려</button> : null}
+                  </div>
+                  <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid #e2e8f0" }}><strong>처리 이력</strong>{approvalLogs.length ? approvalLogs.map((log) => <div key={log.id} style={{ marginTop: 7, color: "#64748b", fontSize: 12 }}>{log.event} · {log.actorUserName} · {formatDateLabel(log.createdAt)}</div>) : <div style={{ marginTop: 7, color: "#64748b", fontSize: 12 }}>이력을 불러오는 중이거나 아직 없습니다.</div>}</div>
+                </> : <div style={{ color: "#64748b" }}>목록에서 결재 문서를 선택하세요.</div>}
+              </section>
             </div>
-            <article style={{ borderRadius: 24, padding: 22, border: "1px solid #dbe4ec", background: "#fff", overflowY: "auto" }}>
-              <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>결재 처리</div>
-              <h2 style={{ margin: "10px 0 0", fontSize: 28 }}>대기 결재와 빠른 작성</h2>
-              <p style={{ color: "#475569", lineHeight: 1.7 }}>상신, 승인, 반려, 회수, 재기안은 서버 상태 전이 규칙에 따라 처리합니다. 상세 문서가 길면 이 패널 내부에서만 스크롤됩니다.</p>
-              {uiContract.quickComposeVisible ? (
-                <form onSubmit={handleCreate} style={{ display: "grid", gap: 12, marginTop: 18 }}>
-                  <input value={createForm.title} onChange={(event) => setCreateForm((current) => ({ ...current, title: event.target.value }))} placeholder="결재 제목" style={{ height: 46, borderRadius: 14, border: "1px solid #cbd5e1", padding: "0 14px" }} />
-                  <textarea value={createForm.content} onChange={(event) => setCreateForm((current) => ({ ...current, content: event.target.value }))} placeholder="내용" style={{ minHeight: 110, borderRadius: 16, border: "1px solid #cbd5e1", padding: 14 }} />
-                  <input value={createForm.approverUserIds} onChange={(event) => setCreateForm((current) => ({ ...current, approverUserIds: event.target.value }))} placeholder="결재자 사용자 ID" style={{ height: 46, borderRadius: 14, border: "1px solid #cbd5e1", padding: "0 14px" }} />
-                  <button disabled={loading || !canAct.create} style={{ height: 48, borderRadius: 16, border: 0, background: uiContract.brand.primary, color: "#fff", fontWeight: 800 }}>결재 초안 저장</button>
-                </form>
-              ) : null}
-            </article>
+            {approvalModal !== "none" ? <div role="dialog" aria-modal="true" aria-label={`결재 ${approvalModal} 팝업`} style={{ position: "fixed", inset: 0, zIndex: 30, display: "grid", placeItems: "center", padding: 20, background: "rgba(15, 23, 42, 0.42)" }}>
+              <div style={{ width: "min(760px, 92vw)", maxHeight: "88vh", overflowY: "auto", borderRadius: 20, padding: 20, background: "#fff", boxShadow: "0 24px 64px rgba(15,23,42,.25)" }}>
+                {(approvalModal === "create" || approvalModal === "edit") ? <form onSubmit={handleCreate} style={{ display: "grid", gap: 12 }}><div style={{ display: "flex", justifyContent: "space-between" }}><strong>{approvalModal === "create" ? "새 결재 작성" : "초안 수정"}</strong><button type="button" onClick={closeApprovalModal}>닫기</button></div><input aria-label="결재 제목" required value={createForm.title} onChange={(event) => setCreateForm((current) => ({ ...current, title: event.target.value }))} placeholder="결재 제목" style={{ height: 36, borderRadius: 10, border: "1px solid #cbd5e1", padding: "0 10px" }} /><textarea aria-label="결재 본문" required value={createForm.content} onChange={(event) => setCreateForm((current) => ({ ...current, content: event.target.value }))} placeholder="내용" style={{ minHeight: 120, borderRadius: 10, border: "1px solid #cbd5e1", padding: 10 }} /><div><strong>결재선</strong><input aria-label="결재선 사용자 검색" value={approverSearch} onChange={(event) => setApproverSearch(event.target.value)} placeholder="이름, 부서, 이메일 검색" style={{ display: "block", width: "100%", boxSizing: "border-box", height: 34, marginTop: 8, borderRadius: 10, border: "1px solid #cbd5e1", padding: "0 10px" }} /><div style={{ maxHeight: 120, overflowY: "auto", marginTop: 8, display: "grid", gap: 6 }}>{availableApprovers.map((user) => <button type="button" key={user.userId} onClick={() => selectApprovalApprover(user.userId)} style={{ textAlign: "left", padding: 8, border: "1px solid #dbe4ec", borderRadius: 8, background: "#fff" }}>{user.userName} · {user.departmentName} · {user.userEmail}</button>)}</div><div aria-label="선택된 결재선" style={{ marginTop: 10, display: "grid", gap: 6 }}>{selectedApprovers.map((user, index) => <div key={user.userId} style={{ display: "flex", gap: 6, alignItems: "center", padding: 8, borderRadius: 8, background: "#f0fdfa" }}><span style={{ flex: 1 }}>{index + 1}. {user.userName} ({user.departmentName})</span><button type="button" onClick={() => moveApprovalApprover(user.userId, -1)}>위</button><button type="button" onClick={() => moveApprovalApprover(user.userId, 1)}>아래</button><button type="button" onClick={() => setCreateForm((current) => ({ ...current, approverUserIds: current.approverUserIds.filter((id) => id !== user.userId) }))}>제거</button></div>)}</div></div>{approvalError ? <div role="alert" className="common-popup-error">{approvalError}</div> : null}<div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={closeApprovalModal}>취소</button><button type="submit" disabled={loading}>{approvalModal === "create" ? "초안 저장" : "수정 저장"}</button></div></form> : <div style={{ display: "grid", gap: 12 }}><strong>{({ submit: "상신 확인", approve: "승인", reject: "반려", withdraw: "회수 확인", redraft: "재기안 확인" } as Record<string, string>)[approvalModal]}</strong><div>{selectedDocument?.title}</div>{(approvalModal === "approve" || approvalModal === "reject") ? <textarea aria-label="처리 의견" value={reasonAction.reason} onChange={(event) => setReasonAction((current) => ({ ...current, reason: event.target.value }))} placeholder={approvalModal === "reject" ? "반려 의견 (필수)" : "처리 의견"} style={{ minHeight: 96, borderRadius: 10, border: "1px solid #cbd5e1", padding: 10 }} /> : null}{approvalError ? <div role="alert" className="common-popup-error">{approvalError}</div> : null}<div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={closeApprovalModal}>취소</button><button type="button" disabled={loading} onClick={() => { if (!selectedDocument) return; if (approvalModal === "approve") void executeApprove(selectedDocument.id, true); else if (approvalModal === "reject") void executeApprove(selectedDocument.id, false); else void executeSubmit(selectedDocument.id, approvalModal as "submit" | "withdraw" | "redraft"); }}>{approvalModal === "approve" ? "승인" : approvalModal === "reject" ? "반려" : "확인"}</button></div></div>}
+              </div>
+            </div> : null}
           </section>
         );
       }
@@ -1637,102 +2586,95 @@ export default function App() {
 
       if (activePortalMenu === "alerts") {
         return (
-          <section style={{ display: "grid", gridTemplateColumns: "minmax(420px, 1fr) 320px", gap: 18, minHeight: 0 }}>
-            <div style={{ display: "grid", gap: 12, alignContent: "start", overflowY: "auto" }}>
-              {notifications.slice(0, 12).map((item) => (
-                <article key={item.notificationId} style={{ borderRadius: 20, padding: 16, border: "1px solid #dbe4ec", background: item.status === "unread" ? "#f8fafc" : "#fff" }}>
-                  <strong>{item.title}</strong>
-                  <p style={{ color: "#475569", lineHeight: 1.6 }}>{item.message}</p>
-                  <button type="button" onClick={() => void executeAck(item.notificationId)} disabled={loading || item.status !== "unread"} style={{ height: 38, borderRadius: 12, border: "1px solid #cbd5e1", background: "#fff", padding: "0 12px" }}>읽음 처리</button>
-                </article>
-              ))}
-              {notifications.length === 0 ? <article style={{ borderRadius: 20, padding: 18, border: "1px dashed #cbd5e1", color: "#64748b" }}>아직 표시할 알림이 없습니다.</article> : null}
-            </div>
-            <article style={{ borderRadius: 24, padding: 22, border: "1px solid #dbe4ec", background: "#fff" }}>
-              <h2 style={{ marginTop: 0 }}>알림 정책</h2>
-              <p style={{ color: "#475569", lineHeight: 1.7 }}>현재 모드: {notificationMode === "streaming" ? "SSE" : notificationMode === "fallback" ? "Polling Fallback" : "Polling"}</p>
-              {notificationError ? <p style={{ color: "#b91c1c" }}>{notificationError}</p> : null}
+          <NotificationCenter
+            token={token}
+            onChanged={() => refreshNotifications(token)}
+            onNavigate={(menu, item) => { void openNotificationTarget(menu, item); }}
+          />
+        );
+      }
+
+      if (activePortalMenu === "settings") {
+        return (
+          <section style={{ display: "grid", gridTemplateColumns: "minmax(360px, 0.9fr) minmax(420px, 1.1fr)", gap: 18, minHeight: 0 }}>
+            <article style={{ borderRadius: 24, padding: 22, border: "1px solid #dbe4ec", background: "#fff", overflowY: "auto" }}>
+              <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>사용자 설정</div>
+              <h2 style={{ marginTop: 10 }}>언어 / 시간대 / 연결 정보</h2>
+              <div style={{ marginTop: 14, display: "grid", gap: 12 }}>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span style={{ color: "#475569", fontWeight: 700 }}>언어</span>
+                  <select value={locale} onChange={(event) => saveLocale(resolveLocale(event.target.value))}>
+                    {supportedLocales.map((item) => (
+                      <option key={item} value={item}>
+                        {item}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span style={{ color: "#475569", fontWeight: 700 }}>시간대</span>
+                  <select value={timezone} onChange={(event) => saveTimezone(event.target.value)}>
+                    {supportedTimezones.map((item) => (
+                      <option key={item} value={item}>
+                        {item}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div style={{ borderRadius: 16, background: "#f8fafc", border: "1px solid #dbe4ec", padding: 14 }}>
+                  <div style={{ color: "#475569", fontWeight: 700 }}>API Base</div>
+                  <div style={{ marginTop: 8, color: "#334155", wordBreak: "break-all" }}>{apiBase}</div>
+                </div>
+              </div>
+            </article>
+            <article style={{ borderRadius: 24, padding: 22, border: "1px solid #dbe4ec", background: "#fff", overflowY: "auto" }}>
+              <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>설정 반영</div>
+              <h2 style={{ marginTop: 10 }}>화면 계약 반영 상태</h2>
+              <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+                {settingsContractCards.map((item) => (
+                  <div key={item.title} style={{ padding: 14, borderRadius: 16, background: "#f8fafc", border: "1px solid #dbe4ec" }}>
+                    <strong>{item.title}</strong>
+                    <p style={{ marginBottom: 0, color: "#475569", lineHeight: 1.6 }}>{item.body}</p>
+                  </div>
+                ))}
+              </div>
             </article>
           </section>
         );
       }
 
-      if (activePortalMenu === "settings" || activePortalMenu === "help") {
+      if (activePortalMenu === "help") {
         return (
-          <section style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 18, minHeight: 0, overflowY: "auto" }}>
-            <article style={{ borderRadius: 24, padding: 22, border: "1px solid #dbe4ec", background: "#fff" }}>
+          <section style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 18, minHeight: 0 }}>
+            <article style={{ borderRadius: 24, padding: 22, border: "1px solid #dbe4ec", background: "#fff", overflowY: "auto" }}>
               <h2 style={{ marginTop: 0 }}>Help / 정책 안내</h2>
               <p style={{ color: "#475569", lineHeight: 1.7 }}>정책 본문은 업무 홈에 직접 노출하지 않고 {uiContract.helpText} 경로에서 확인합니다.</p>
               <p style={{ color: "#475569", lineHeight: 1.7 }}>메일: {MAIL_POLICY.serverRetention} / {MAIL_POLICY.localRetention}</p>
               <p style={{ color: "#475569", lineHeight: 1.7 }}>메신저: {MESSENGER_POLICY.serverRetention} / {MESSENGER_POLICY.localRetention}</p>
             </article>
-            <article style={{ borderRadius: 24, padding: 22, border: "1px solid #dbe4ec", background: "#fff" }}>
-              <h2 style={{ marginTop: 0 }}>설정 반영</h2>
-              {settingsContractCards.map((item) => (
-                <div key={item.title} style={{ marginTop: 12, padding: 14, borderRadius: 16, background: "#f8fafc", border: "1px solid #dbe4ec" }}>
-                  <strong>{item.title}</strong>
-                  <p style={{ marginBottom: 0, color: "#475569", lineHeight: 1.6 }}>{item.body}</p>
-                </div>
-              ))}
+            <article style={{ borderRadius: 24, padding: 22, border: "1px solid #dbe4ec", background: "#fff", overflowY: "auto" }}>
+              <h2 style={{ marginTop: 0 }}>정책 경로</h2>
+              <div style={{ display: "grid", gap: 10 }}>
+                <div style={{ padding: 14, borderRadius: 16, background: "#f8fafc", border: "1px solid #dbe4ec", color: "#475569", lineHeight: 1.6 }}>메일 보관 정책은 Help 및 설정 경로에서 확인합니다.</div>
+                <div style={{ padding: 14, borderRadius: 16, background: "#f8fafc", border: "1px solid #dbe4ec", color: "#475569", lineHeight: 1.6 }}>로그인 후 업무 화면에는 정책 본문을 길게 노출하지 않습니다.</div>
+              </div>
             </article>
           </section>
         );
       }
 
-      return (
-        <section style={{ display: "grid", gridTemplateRows: "auto minmax(0, 1fr)", gap: 18, minHeight: 0 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 16 }}>
-            {homeSurfaceCards.map((item) => (
-              <SurfaceCard
-                key={item.id}
-                title={item.title}
-                value={item.value}
-                subtext={item.subtext}
-                tone={item.tone}
-                onClick={token ? () => handleHomeSurfaceCardClick(item.id) : undefined}
-              />
-            ))}
-          </div>
-          <section style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 340px", gap: 18, minHeight: 0 }}>
-            <article style={{ borderRadius: 24, padding: 22, border: "1px solid #dbe4ec", background: "#fff", overflowY: "auto" }}>
-            <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>오늘 업무</div>
-            <h2 style={{ margin: "10px 0 0", fontSize: 30 }}>업무 카드에서 바로 처리하세요</h2>
-            <div style={{ marginTop: 18, display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 14 }}>
-                {[
-                  { title: "메일", description: "받은편지함, 중요메일, 임시보관함", key: "mail" as UserPortalMenu },
-                  { title: "결재", description: "대기 결재, 신규 상신, 반려 재기안", key: "approval" as UserPortalMenu },
-                  { title: "메신저", description: "최근 대화, 고정 채널, 파일 링크", key: "messenger" as UserPortalMenu },
-                  { title: "오늘 일정", description: "회의와 마감 확인", key: "schedule" as UserPortalMenu },
-                  { title: "공지", description: "운영 공지와 팀 알림", key: "alerts" as UserPortalMenu },
-                  { title: "즐겨찾기", description: "자주 쓰는 업무 바로가기", key: "files" as UserPortalMenu },
-                ].map((item) => (
-                  <button
-                    key={item.title}
-                    type="button"
-                    onClick={() => setPortalMenu(item.key)}
-                    style={{ textAlign: "left", borderRadius: 20, border: "1px solid #dbe4ec", background: "#f8fafc", padding: 18, color: "#0f172a", cursor: "pointer" }}
-                  >
-                    <strong style={{ fontSize: 18 }}>{item.title}</strong>
-                    <p style={{ margin: "8px 0 0", color: "#475569", lineHeight: 1.55 }}>{item.description}</p>
-                  </button>
-                ))}
-              </div>
-            </article>
-            <aside style={{ display: "grid", gap: 14, alignContent: "start", overflowY: "auto" }}>
-              <article style={{ borderRadius: 24, padding: 20, background: "linear-gradient(135deg, #f0fdfa, #ecfeff)", border: "1px solid #99f6e4" }}>
-                <strong>{me?.userName}</strong>
-                <p style={{ margin: "8px 0 0", color: "#334155" }}>{me?.roleName || "역할 미지정"} / {me?.userEmail}</p>
-              </article>
-              <article style={{ borderRadius: 24, padding: 20, background: "#fff", border: "1px solid #dbe4ec" }}>
-                <strong>알림 센터</strong>
-                <p style={{ color: "#475569" }}>읽지 않은 알림 {dashboardStats.unreadCount}건 / 긴급 {dashboardStats.urgentCount}건</p>
-                <button type="button" onClick={() => setPortalMenu("alerts")} style={{ height: 42, borderRadius: 14, border: 0, background: uiContract.brand.primary, color: "#fff", padding: "0 14px", fontWeight: 800 }}>알림 열기</button>
-              </article>
-              <button onClick={() => { clearUserToken(); setToken(""); setMe(null); }} style={{ height: 48, borderRadius: 16, border: 0, background: "#0f172a", color: "#fff", fontWeight: 800 }}>로그아웃</button>
-            </aside>
-          </section>
-        </section>
-      );
+      return <UserHome
+        userName={me.userName}
+        loading={homeLoading}
+        error={homeError || mailError || approvalError || messengerError}
+        mails={inboxMails}
+        approvals={documents}
+        schedules={homeSchedules}
+        rooms={messengerRoomsData}
+        notices={homeNotices}
+        onOpenList={(target) => setPortalMenu(target)}
+        onOpenItem={(target, itemId) => void openHomeItem(target, itemId)}
+      />;
     };
 
     const quickComposeTargets = [
@@ -1813,6 +2755,7 @@ export default function App() {
 
     return (
       <main
+        className="user-shell"
         style={{
           height: "100vh",
           overflow: "hidden",
@@ -1821,14 +2764,22 @@ export default function App() {
           fontFamily: `"Pretendard Variable", "SUIT", "Noto Sans KR", "Segoe UI", sans-serif`,
         }}
       >
-        <div style={{ display: "grid", gridTemplateColumns: "260px minmax(0, 1fr)", gap: 20, height: "100%", padding: 24, overflow: "hidden" }}>
-          <aside style={{ borderRadius: 30, padding: 22, background: "linear-gradient(180deg, #102a43 0%, #0f172a 100%)", color: "#e2e8f0", overflowY: "auto" }}>
-            <div style={{ fontSize: 13, color: "#7dd3fc", letterSpacing: "0.08em", textTransform: "uppercase" }}>MoaWorks Portal</div>
-            <h1 style={{ margin: "14px 0 8px", fontSize: 30, lineHeight: 1.08, letterSpacing: "-0.04em" }}>사용자 업무 홈</h1>
-            <p style={{ margin: 0, color: "rgba(226,232,240,0.72)", lineHeight: 1.65 }}>업무 처리 중심의 그룹웨어 홈입니다.</p>
-            <nav style={{ display: "grid", gap: 8, marginTop: 24 }}>
+        <div className="user-shell-layout" style={{ display: "grid", gridTemplateColumns: "260px minmax(0, 1fr)", gap: 20, height: "100%", padding: 24, overflow: "hidden" }}>
+          <aside className="user-app-rail" style={{ borderRadius: 30, padding: 22, background: "linear-gradient(180deg, #102a43 0%, #0f172a 100%)", color: "#e2e8f0", overflowY: "auto" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ width: 56, height: 56, borderRadius: 18, overflow: "hidden", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)" }}>
+                <img src={uiContract.company.logoDataUrl} alt={`${uiContract.company.name} 로고`} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 13, color: "#7dd3fc", letterSpacing: "0.08em", textTransform: "uppercase" }}>{uiContract.company.name} Portal</div>
+                <h1 style={{ margin: "10px 0 6px", fontSize: 30, lineHeight: 1.08, letterSpacing: "-0.04em" }}>사용자 업무 홈</h1>
+                <p style={{ margin: 0, color: "rgba(226,232,240,0.72)", lineHeight: 1.65 }}>{uiContract.company.domain}</p>
+              </div>
+            </div>
+            <p style={{ margin: "14px 0 0", color: "rgba(226,232,240,0.72)", lineHeight: 1.65 }}>업무 처리 중심의 그룹웨어 홈입니다.</p>
+            <nav className="user-app-rail-menu" aria-label="업무 메뉴" style={{ display: "grid", gap: 8, marginTop: 24 }}>
               {portalMenus.map((item) => (
-                <button key={item.key} type="button" onClick={() => setPortalMenu(item.key)} style={{ borderRadius: 16, padding: "12px 14px", border: activePortalMenu === item.key ? "1px solid #7dd3fc" : "1px solid rgba(255,255,255,0.05)", background: activePortalMenu === item.key ? "rgba(125,211,252,0.18)" : "rgba(255,255,255,0.04)", color: "#e2e8f0", textAlign: "left", cursor: "pointer" }}>
+                <button className="user-app-rail-item" key={item.key} type="button" aria-current={activePortalMenu === item.key ? "page" : undefined} onClick={() => setPortalMenu(item.key)} style={{ borderRadius: 16, padding: "12px 14px", border: activePortalMenu === item.key ? "1px solid #7dd3fc" : "1px solid rgba(255,255,255,0.05)", background: activePortalMenu === item.key ? "rgba(125,211,252,0.18)" : "rgba(255,255,255,0.04)", color: "#e2e8f0", textAlign: "left", cursor: "pointer" }}>
                   <span style={{ display: "block", fontWeight: 800 }}>{item.label}</span>
                   <small style={{ color: "rgba(226,232,240,0.64)" }}>{item.desc}</small>
                 </button>
@@ -1837,14 +2788,24 @@ export default function App() {
           </aside>
 
           <section style={{ minWidth: 0, height: "100%", display: "grid", gridTemplateRows: "auto minmax(0, 1fr)", gap: 16, overflow: "hidden" }}>
-            <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, padding: "18px 22px", borderRadius: 26, background: "rgba(255,255,255,0.9)", border: "1px solid rgba(148, 163, 184, 0.18)" }}>
+            <header className="user-shell-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, padding: "18px 22px", borderRadius: 26, background: "rgba(255,255,255,0.9)", border: "1px solid rgba(148, 163, 184, 0.18)" }}>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 800, color: uiContract.brand.primary }}>오늘의 업무 허브</div>
-                <div style={{ marginTop: 6, fontSize: 30, fontWeight: 900, letterSpacing: "-0.04em" }}>{me?.userName}님, 우선순위를 확인하세요</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <div style={{ width: 52, height: 52, borderRadius: 16, overflow: "hidden", background: "#eff6ff", border: "1px solid #d7e0e8" }}>
+                    <img src={uiContract.company.logoDataUrl} alt={`${uiContract.company.name} 로고`} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: uiContract.brand.primary }}>{uiContract.company.name} 업무 허브</div>
+                    <div style={{ marginTop: 6, fontSize: 30, fontWeight: 900, letterSpacing: "-0.04em" }}>{me?.userName}님, 우선순위를 확인하세요</div>
+                  </div>
+                </div>
               </div>
-              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="메일, 결재, 대화, 파일 검색" style={{ width: 300, height: 46, borderRadius: 14, border: "1px solid #d7e0e8", background: "#fff", padding: "0 14px" }} />
-                {uiContract.quickComposeVisible ? (
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <input className="user-global-search" aria-label="통합 검색" value={searchText} onFocus={() => { if (searchText.trim()) setSearchOpen(true); }} onKeyDown={(event) => { if (event.key === "Escape") closeUnifiedSearch(); }} onChange={(event) => setSearchText(event.target.value)} placeholder="통합 검색" style={{ width: 300, height: 46, borderRadius: 14, border: "1px solid #d7e0e8", background: "#fff", padding: "0 14px" }} />
+                {searchText ? <button type="button" className="user-search-clear" aria-label="검색 지우기" onClick={closeUnifiedSearch}>지우기</button> : null}
+                {notificationError && !showNotificationPanel ? <div className="feedback-shell-warning"><CompactWarning item={{ id: "notification-load", source: "notifications", tone: "warning", title: "알림 연결 확인 필요", message: notificationError, action: { label: "다시 시도", onAction: () => void loadNotificationData(token) } }} onDismiss={() => setNotificationError("")} /></div> : null}
+                <button ref={notificationButtonRef} className="user-notification-entry" type="button" aria-label={`알림, 미확인 ${notificationSummary?.unreadCount ?? 0}건`} aria-controls="recent-notification-panel" aria-expanded={showNotificationPanel} onClick={toggleNotificationPanel} style={{ height: 46, borderRadius: 14, border: "1px solid #d7e0e8", background: "#fff", padding: "0 12px", fontWeight: 700, cursor: "pointer" }}>알림 {(notificationSummary?.unreadCount ?? 0) > 0 ? <span aria-hidden="true">{notificationSummary?.unreadCount}</span> : null}</button>
+                {uiContract.quickComposeVisible && activePortalMenu !== "home" ? (
                   <button
                     type="button"
                     onClick={() => void openQuickCompose()}
@@ -1854,10 +2815,109 @@ export default function App() {
                   </button>
                 ) : null}
                 <button type="button" onClick={refreshUiContract} style={{ height: 46, borderRadius: 14, border: "1px solid #d7e0e8", background: "#fff", padding: "0 14px", fontWeight: 700 }}>설정 반영</button>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 46, padding: "0 12px", borderRadius: 14, border: "1px solid #d7e0e8", background: "#fff" }}>
+                  <div style={{ display: "grid", gap: 2, lineHeight: 1.1 }}>
+                    <strong>{me.userName}</strong>
+                    <span style={{ color: "#64748b", fontSize: 11 }}>{me.roleName || "역할 미지정"} / {me.userEmail}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      clearUserToken();
+                      setToken("");
+                      setMe(null);
+                    }}
+                    style={{ height: 34, borderRadius: 12, border: 0, background: "#0f172a", color: "#fff", padding: "0 12px", fontWeight: 800, cursor: "pointer" }}
+                  >
+                    로그아웃
+                  </button>
+                </div>
               </div>
             </header>
-            <section style={{ minHeight: 0, overflow: "hidden" }}>{renderWorkPanel()}</section>
+            {searchOpen ? (
+              <div className="user-search-backdrop">
+                <button type="button" className="user-search-dismiss" aria-label="검색 바깥 영역 닫기" onClick={closeUnifiedSearch} />
+                <section className="user-search-panel" role="dialog" aria-label="통합 검색 결과">
+                  <div className="user-search-panel-header">
+                    <div><strong>통합 검색</strong><span>{searchText.trim()}</span></div>
+                    <button type="button" aria-label="검색 닫기" onClick={closeUnifiedSearch}>닫기</button>
+                  </div>
+                  <div className="user-search-filters" role="group" aria-label="검색 유형 필터">
+                    {([["all", "전체"], ["mail", "메일"], ["approval", "결재"], ["messenger", "메신저"], ["schedule", "일정"], ["contacts", "주소록"], ["org", "조직도"], ["files", "파일"]] as const).map(([type, label]) => (
+                      <button key={type} type="button" data-search-filter={type} aria-pressed={searchFilter === type} onClick={() => setSearchFilter(type)}>{label} {type === "all" ? searchResults.length : searchResults.filter((item) => item.type === type).length}</button>
+                    ))}
+                  </div>
+                  <div className="user-search-result-list">
+                    {searchLoading ? <div className="user-search-state">검색 중입니다.</div> : null}
+                    {!searchLoading && searchError ? <div className="user-search-error" role="alert">{searchError}</div> : null}
+                    {!searchLoading && !searchError && searchResults.filter((item) => searchFilter === "all" || item.type === searchFilter).length === 0 ? <div className="user-search-state">검색 결과가 없습니다.</div> : null}
+                    {!searchLoading && !searchError ? searchResults.filter((item) => searchFilter === "all" || item.type === searchFilter).map((item) => (
+                      <button key={`${item.type}-${item.id}`} type="button" className="user-search-result" onClick={() => openSearchResult(item)}>
+                        <span>{item.type}</span><strong>{item.title}</strong><small>{item.detail}</small>
+                      </button>
+                    )) : null}
+                  </div>
+                  <button type="button" className="user-search-all" onClick={() => setSearchFilter("all")}>전체 결과</button>
+                </section>
+              </div>
+            ) : null}
+            {showNotificationPanel ? (
+              <div className="user-notification-backdrop">
+                <button type="button" className="user-notification-dismiss" aria-label="알림 바깥 영역 닫기" onClick={closeNotificationPanel} />
+                <aside id="recent-notification-panel" className="user-notification-panel" role="dialog" aria-labelledby="recent-notification-title" aria-modal="false" onKeyDown={event => { if (event.key === "Escape") closeNotificationPanel(); }}>
+                  <div className="user-notification-panel-header">
+                    <div>
+                      <strong id="recent-notification-title">최근 알림</strong>
+                      <span>읽지 않음 {notificationSummary?.unreadCount ?? 0}건</span>
+                    </div>
+                    <button type="button" aria-label="알림 닫기" autoFocus onClick={closeNotificationPanel}>닫기</button>
+                  </div>
+                  {notificationError ? <div className="user-notification-panel-error" role="alert">{notificationError}</div> : null}
+                  <div className="user-notification-panel-list" aria-busy={loading || notificationLoading}>
+                    {loading ? <div className="user-notification-empty">알림을 처리하는 중입니다.</div> : null}
+                    {notificationLoading && notifications.length === 0 ? <div className="user-notification-empty">알림을 불러오는 중입니다.</div> : null}
+                    {notifications.slice(0, 5).map(item => {
+                      const value = (item.resourceType || item.category).toLowerCase();
+                      const menu = value.includes("mail") ? "mail" : value.includes("approval") ? "approval" : value.includes("message") || value.includes("room") ? "messenger" : value.includes("schedule") || value.includes("calendar") ? "schedule" : value.includes("file") ? "files" : value.includes("notice") ? "notices" : "alerts";
+                      return <button key={item.notificationId} type="button" className={`user-notification-row ${item.status === "unread" ? "is-unread" : ""}`} onClick={() => void openNotificationTarget(menu, item)}>
+                        <span>{item.category}</span>
+                        <strong>{item.title}</strong>
+                        <small>{new Date(item.occurredAt).toLocaleString("ko-KR")} · {item.status === "unread" ? "읽지 않음" : "읽음"}</small>
+                      </button>;
+                    })}
+                    {!notificationLoading && notifications.length === 0 ? <div className="user-notification-empty">최근 알림이 없습니다.</div> : null}
+                  </div>
+                  <div className="user-notification-panel-actions">
+                    <button type="button" onClick={() => void executeReadAll()} disabled={loading || notificationLoading || !(notificationSummary?.unreadCount ?? 0)}>모두 읽음</button>
+                    <button type="button" className="user-notification-all" onClick={() => { closeNotificationPanel(); setPortalMenu("alerts"); }}>전체 알림 보기</button>
+                  </div>
+                </aside>
+              </div>
+            ) : null}
+            <section className="user-shell-content" style={{ minHeight: 0, overflow: "hidden", position: "relative" }}>
+              {renderWorkPanel()}
+            </section>
           </section>
+          <ConfirmModal
+            open={mailComposeCloseConfirmOpen}
+            title="작성 중인 메일 닫기"
+            message="저장하지 않은 받는 사람, 제목, 본문이 사라집니다."
+            confirmLabel="저장하지 않고 닫기"
+            onCancel={() => setMailComposeCloseConfirmOpen(false)}
+            onConfirm={resetMailCompose}
+          />
+          <ConfirmModal
+            open={mailDeleteConfirmOpen}
+            title="메일 삭제 확인"
+            message={<><strong>{selectedMailIds.length}개 메일</strong>을 삭제 상태로 전환합니다. 처리 후 목록을 다시 불러옵니다.</>}
+            confirmLabel="선택 메일 삭제"
+            busy={mailBulkBusy}
+            onCancel={() => setMailDeleteConfirmOpen(false)}
+            onConfirm={async () => {
+              const completed = await runBulkMailAction("delete");
+              if (completed) setMailDeleteConfirmOpen(false);
+            }}
+          />
           {quickComposePicker}
         </div>
       </main>
@@ -1911,6 +2971,8 @@ export default function App() {
               <div
                 style={{
                   display: "inline-flex",
+                  alignItems: "center",
+                  gap: 10,
                   padding: "8px 14px",
                   borderRadius: 999,
                   border: "1px solid rgba(255,255,255,0.18)",
@@ -1920,7 +2982,10 @@ export default function App() {
                   textTransform: "uppercase",
                 }}
               >
-                MoaWorks Groupware
+                <span style={{ width: 28, height: 28, borderRadius: 10, overflow: "hidden", display: "inline-block", background: "rgba(255,255,255,0.16)" }}>
+                  <img src={uiContract.company.logoDataUrl} alt={`${uiContract.company.name} 로고`} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                </span>
+                {uiContract.company.name} Groupware
               </div>
               <h1 style={{ margin: "24px 0 18px", fontSize: 58, lineHeight: 1.05, letterSpacing: "-0.04em" }}>
                 메일, 결재, 메신저가 한 화면에서 이어지는
@@ -2005,25 +3070,61 @@ export default function App() {
                   <div style={{ fontSize: 14, color: "#0f766e", fontWeight: 700 }}>사용자 포털 접속</div>
                   <h2 style={{ margin: "10px 0 0", fontSize: 34, letterSpacing: "-0.04em" }}>업무 시작</h2>
                 </div>
-                <p style={{ margin: 0, color: "#115e59", fontSize: 13, fontWeight: 700 }}>설정: 로그인 후 설정 메뉴에서 관리</p>
+                <p style={{ margin: 0, color: "#115e59", fontSize: 13, fontWeight: 700 }}>Help / 정책 안내로 주요 설정을 안내합니다.</p>
+              </div>
+
+              <div
+                style={{
+                  marginTop: 18,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 14,
+                  padding: "14px 16px",
+                  borderRadius: 20,
+                  background: "#f8fafc",
+                  border: "1px solid #dbe4ec",
+                }}
+              >
+                <div
+                  style={{
+                    width: 44,
+                    height: 44,
+                    borderRadius: 14,
+                    overflow: "hidden",
+                    background: "#ffffff",
+                    border: "1px solid #dbe4ec",
+                    flexShrink: 0,
+                  }}
+                >
+                  <img src={uiContract.company.logoDataUrl} alt={`${uiContract.company.name} 로고`} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: "#0f172a" }}>{uiContract.company.name}</div>
+                  <div style={{ marginTop: 4, fontSize: 13, color: "#475569" }}>{uiContract.company.domain}</div>
+                </div>
               </div>
 
               <form onSubmit={handleLogin} style={{ display: "grid", gap: 14, marginTop: 24 }}>
                 <label style={{ display: "grid", gap: 8 }}>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: "#334155" }}>이메일</span>
-                  <input
-                    value={loginForm.email}
-                    onChange={(event) => setLoginForm((current) => ({ ...current, email: event.target.value }))}
-                    placeholder="user@moaworks.local"
-                    style={{
-                      height: 54,
-                      borderRadius: 16,
-                      border: "1px solid #cbd5e1",
-                      padding: "0 16px",
-                      font: "inherit",
-                      background: "#fff",
-                    }}
-                  />
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "#334155" }}>아이디</span>
+                  <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 10, alignItems: "center" }}>
+                    <input
+                      value={loginForm.loginId}
+                      onChange={(event) => setLoginForm((current) => ({ ...current, loginId: normalizeLoginIdInput(event.target.value) }))}
+                      placeholder="admin"
+                      style={{
+                        height: 54,
+                        borderRadius: 16,
+                        border: "1px solid #cbd5e1",
+                        padding: "0 16px",
+                        font: "inherit",
+                        background: "#fff",
+                      }}
+                    />
+                    <span style={{ height: 54, display: "inline-flex", alignItems: "center", padding: "0 16px", borderRadius: 16, border: "1px solid #dbe4ec", background: "#f8fafc", color: "#475569", fontSize: 13, fontWeight: 700 }}>
+                      @{uiContract.company.domain}
+                    </span>
+                  </div>
                 </label>
                 <label style={{ display: "grid", gap: 8 }}>
                   <span style={{ fontSize: 13, fontWeight: 700, color: "#334155" }}>비밀번호</span>
@@ -2081,14 +3182,12 @@ export default function App() {
                   lineHeight: 1.7,
                 }}
               >
-                정책 본문은 `Help`, `정책 안내`, `설정 &gt; 보관 정책` 경로로만 안내합니다.
+                정책 경로: `Help`, `정책 안내`, `설정 &gt; 보관 정책`
               </div>
             </article>
 
             {approvalError ? (
-              <div style={{ color: "#b91c1c", background: "#fff1f2", border: "1px solid #fecdd3", padding: "16px 18px", borderRadius: 18 }}>
-                {approvalError}
-              </div>
+              <FeedbackState state="error" title="로그인할 수 없습니다." message={approvalError} />
             ) : null}
           </section>
         </div>
@@ -2115,9 +3214,17 @@ export default function App() {
               boxShadow: "0 24px 64px rgba(15, 23, 42, 0.24)",
             }}
           >
-            <div style={{ fontSize: 14, color: "#7dd3fc", letterSpacing: "0.08em", textTransform: "uppercase" }}>MoaWorks Portal</div>
-            <h1 style={{ margin: "14px 0 8px", fontSize: 32, lineHeight: 1.08, letterSpacing: "-0.04em" }}>사용자 업무 홈</h1>
-            <p style={{ margin: 0, color: "rgba(226,232,240,0.72)", lineHeight: 1.5 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ width: 56, height: 56, borderRadius: 18, overflow: "hidden", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)" }}>
+                <img src={uiContract.company.logoDataUrl} alt={`${uiContract.company.name} 로고`} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 14, color: "#7dd3fc", letterSpacing: "0.08em", textTransform: "uppercase" }}>{uiContract.company.name} Portal</div>
+                <h1 style={{ margin: "14px 0 8px", fontSize: 32, lineHeight: 1.08, letterSpacing: "-0.04em" }}>사용자 업무 홈</h1>
+                <p style={{ margin: 0, color: "rgba(226,232,240,0.72)", lineHeight: 1.5 }}>{uiContract.company.domain}</p>
+              </div>
+            </div>
+            <p style={{ margin: "14px 0 0", color: "rgba(226,232,240,0.72)", lineHeight: 1.5 }}>
               메일, 결재, 메신저, 알림을 바로 처리하는 업무 홈입니다.
             </p>
 
@@ -2141,8 +3248,7 @@ export default function App() {
             <div style={{ marginTop: 26, paddingTop: 20, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
               <div style={{ fontSize: 12, color: "#67e8f9", letterSpacing: "0.08em", textTransform: "uppercase" }}>Help / 정책 안내</div>
               <div style={{ marginTop: 12, fontSize: 13, color: "rgba(226,232,240,0.82)", lineHeight: 1.8 }}>
-                <div>정책 본문은 메인 업무 화면에서 직접 노출하지 않습니다.</div>
-                <div style={{ marginTop: 10 }}>확인 위치: {uiContract.helpText}</div>
+                <div>정책 경로: {uiContract.helpText}</div>
               </div>
             </div>
           </aside>
@@ -2939,66 +4045,16 @@ export default function App() {
                 </div>
 
                 {canAct.create ? (
-                  <form onSubmit={handleCreate} style={{ display: "grid", gap: 14, marginTop: 20 }}>
-                    <label style={{ display: "grid", gap: 8 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: "#334155" }}>제목</span>
-                      <input
-                        value={createForm.title}
-                        onChange={(event) => setCreateForm((current) => ({ ...current, title: event.target.value }))}
-                        style={{
-                          height: 48,
-                          borderRadius: 14,
-                          border: "1px solid #cbd5e1",
-                          padding: "0 14px",
-                          font: "inherit",
-                        }}
-                      />
-                    </label>
-                    <label style={{ display: "grid", gap: 8 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: "#334155" }}>내용</span>
-                      <textarea
-                        value={createForm.content}
-                        onChange={(event) => setCreateForm((current) => ({ ...current, content: event.target.value }))}
-                        style={{
-                          minHeight: 132,
-                          borderRadius: 18,
-                          border: "1px solid #cbd5e1",
-                          padding: 14,
-                          font: "inherit",
-                          resize: "vertical",
-                        }}
-                      />
-                    </label>
-                    <label style={{ display: "grid", gap: 8 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: "#334155" }}>결재자 사용자 ID</span>
-                      <input
-                        value={createForm.approverUserIds}
-                        onChange={(event) => setCreateForm((current) => ({ ...current, approverUserIds: event.target.value }))}
-                        placeholder="user_123456,user_abcdef"
-                        style={{
-                          height: 48,
-                          borderRadius: 14,
-                          border: "1px solid #cbd5e1",
-                          padding: "0 14px",
-                          font: "inherit",
-                        }}
-                      />
-                    </label>
+                  <div style={{ marginTop: 20, display: "grid", gap: 12 }}>
+                    <div style={{ color: "#475569", fontSize: 13 }}>결재 작성과 결재선 선택은 별도 팝업에서 처리합니다.</div>
                     <button
-                      disabled={loading}
-                      style={{
-                        height: 52,
-                        borderRadius: 16,
-                        border: 0,
-                        background: "linear-gradient(135deg, #0f766e 0%, #0f172a 100%)",
-                        color: "#fff",
-                        fontWeight: 800,
-                        cursor: "pointer",
-                      }}
+                      type="button"
+                      onClick={() => void openApprovalEditor("create")}
+                      style={{ height: 44, borderRadius: 14, border: 0, background: "linear-gradient(135deg, #0f766e 0%, #0f172a 100%)", color: "#fff", fontWeight: 800, cursor: "pointer" }}
                     >
-                      결재 초안 저장
+                      새 결재 작성 열기
                     </button>
-                  </form>
+                  </div>
                 ) : (
                   <div
                     style={{
@@ -3226,24 +4282,7 @@ export default function App() {
         </div>
       )}
 
-      {message ? (
-        <div
-          style={{
-            position: "fixed",
-            right: 24,
-            bottom: 24,
-            maxWidth: 360,
-            padding: "14px 16px",
-            borderRadius: 18,
-            background: "#0f766e",
-            color: "#fff",
-            boxShadow: "0 16px 32px rgba(15, 118, 110, 0.22)",
-            fontWeight: 700,
-          }}
-        >
-          {message}
-        </div>
-      ) : null}
+<ToastViewport items={feedbackItems} onDismiss={dismissFeedback} />
     </main>
   );
 }

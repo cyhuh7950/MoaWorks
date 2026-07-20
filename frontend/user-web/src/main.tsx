@@ -1,11 +1,10 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-
 import App from "./App";
+import { PopupSystemDemo } from "./components/CommonPopup";
+import { FeedbackSystemDemo } from "./components/FeedbackSystem";
 import "./global.css";
-
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+const params = new URLSearchParams(window.location.search);
+const popupDemo = params.has("popup-system-demo");
+const feedbackDemo = params.has("feedback-system-demo");
+createRoot(document.getElementById("root")!).render(<StrictMode>{feedbackDemo ? <FeedbackSystemDemo /> : popupDemo ? <PopupSystemDemo /> : <App />}</StrictMode>);

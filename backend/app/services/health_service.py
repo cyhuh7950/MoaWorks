@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import socket
 import threading
 from uuid import uuid4
@@ -109,14 +110,21 @@ class HealthService:
     def _build_mail(self, initialized: bool) -> ComponentHealth:
         if not initialized:
             return ComponentHealth(status="not_configured", message="초기 설정 전입니다.")
-        overview = self.directory_store.get_overview()
+        with self.directory_store.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT provider_type, relay_host, relay_port FROM mail_provider_configs ORDER BY updated_at DESC LIMIT 1"
+                )
+                provider = cursor.fetchone()
+        if provider is None:
+            return ComponentHealth(status="not_configured", message="메일 설정이 존재하지 않습니다.")
         return ComponentHealth(
             status="ok",
             message="메일 Relay 설정이 PostgreSQL에서 확인되었습니다.",
             details={
-                "provider": overview.mailProvider.providerType,
-                "relay_host": overview.mailProvider.relayHost,
-                "relay_port": str(overview.mailProvider.relayPort),
+                "provider": provider["provider_type"],
+                "relay_host": provider["relay_host"],
+                "relay_port": str(provider["relay_port"]),
             },
         )
 
@@ -124,9 +132,8 @@ class HealthService:
         path = settings.storage_path
         try:
             path.mkdir(parents=True, exist_ok=True)
-            probe = path / ".health-test"
-            probe.write_text("ok", encoding="utf-8")
-            probe.unlink(missing_ok=True)
+            if not os.access(path, os.W_OK):
+                raise OSError("저장소 경로에 쓰기 권한이 없습니다.")
         except OSError as exc:
             return ComponentHealth(
                 status="error",

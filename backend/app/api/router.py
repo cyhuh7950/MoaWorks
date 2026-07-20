@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from app.api.dependencies import require_admin
-from app.api.routes import admin, approvals, auth, health, mail, messenger, monitoring, notifications, setup, translation, ui_contract
+from app.api.routes import admin, approvals, auth, health, mail, messenger, monitoring, notifications, setup, translation, ui_contract, workspace
 
 
 api_router = APIRouter()
@@ -13,6 +13,7 @@ api_router.include_router(approvals.admin_router, prefix="/admin/approvals", tag
 api_router.include_router(approvals.router, prefix="/approvals", tags=["approvals"])
 api_router.include_router(mail.router, prefix="/mail", tags=["mail"])
 api_router.include_router(messenger.router, prefix="/messenger", tags=["messenger"])
+api_router.include_router(workspace.router, prefix="/workspace", tags=["workspace"])
 api_router.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
 api_router.include_router(monitoring.router, prefix="/admin/monitoring", tags=["monitoring"])
 api_router.include_router(translation.router, tags=["translation"])
