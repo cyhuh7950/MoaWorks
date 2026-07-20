@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 const root = resolve(import.meta.dirname, "..");
 const source = await readFile(resolve(root, "src/NotificationCenter.tsx"), "utf8");
 const popup = await readFile(resolve(root, "src/components/CommonPopup.tsx"), "utf8");
+const styles = await readFile(resolve(root, "src/global.css"), "utf8");
 const api = await readFile(resolve(root, "src/api.ts"), "utf8");
 const schema = await readFile(resolve(root, "../../backend/app/schemas/notification_center.py"), "utf8");
 const service = await readFile(resolve(root, "../../backend/app/services/notification_center_service.py"), "utf8");
@@ -24,6 +25,8 @@ const checks = [
   ["payload 필드 유지", ["enabled", "quietHoursEnabled", "quietHoursStart", "quietHoursEnd", "categories", "updatedAt"].every(key => api.includes(`${key}:`))],
   ["backend 시간 검증", schema.includes('@field_validator("quietHoursStart", "quietHoursEnd")')],
   ["DB upsert 및 audit", service.includes("ON CONFLICT (user_id) DO UPDATE") && service.includes('"notification.preferences.updated", "user_save"')],
+  ["UI-013 checkbox 16px 범위 보정", styles.includes('#root .notification-settings-form input[type="checkbox"]') && styles.includes("flex: 0 0 16px") && styles.includes("height: 16px")],
+  ["UI-013 popup 제목 16px 범위 보정", styles.includes("#root .common-popup:has(.notification-settings-form) .common-popup-header h2") && styles.includes("font-size: 16px !important")],
   ["제외된 backdrop 동작 미변경", !popup.includes("event.target === event.currentTarget")],
   ["제외된 saving 닫기 동작 미변경", !popup.includes("if (saving) return")],
 ];

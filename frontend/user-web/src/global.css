@@ -1081,6 +1081,20 @@ textarea {
   display: grid;
   gap: 14px;
 }
+#root .notification-settings-form input[type="checkbox"] {
+  flex: 0 0 16px;
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+  min-height: 16px;
+  margin: 0;
+  padding: 0 !important;
+}
+
+#root .common-popup:has(.notification-settings-form) .common-popup-header h2 {
+  font-size: 16px !important;
+  line-height: 1.3 !important;
+}
 
 #root .notification-settings-master {
   display: flex;
