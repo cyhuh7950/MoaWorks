@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   archiveNotifications,
@@ -18,6 +18,7 @@ type Props = {
   onChanged: () => Promise<void>;
   onNavigate: (menu: PortalMenu, item: NotificationRecord) => void;
 };
+type ReadStatusFilter = "all" | "unread" | "read";
 
 const categoryLabels: Record<string, string> = {
   mail: "메일",
@@ -53,7 +54,7 @@ export function NotificationCenter({ token, onChanged, onNavigate }: Props) {
   const [items, setItems] = useState<NotificationRecord[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedId, setSelectedId] = useState("");
-  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [readStatus, setReadStatus] = useState<ReadStatusFilter>("all");
   const [category, setCategory] = useState("all");
   const [severity, setSeverity] = useState("all");
   const [period, setPeriod] = useState("30");
@@ -64,6 +65,8 @@ export function NotificationCenter({ token, onChanged, onNavigate }: Props) {
   const [savedSettings, setSavedSettings] = useState<NotificationPreferences>(emptyPreferences);
   const [settingsError, setSettingsError] = useState("");
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
+  const [archiveError, setArchiveError] = useState("");
   const settingsFirstRef = useRef<HTMLInputElement>(null);
 
   const load = async () => {
@@ -72,7 +75,7 @@ export function NotificationCenter({ token, onChanged, onNavigate }: Props) {
     try {
       const days = Number(period);
       const response = await fetchNotifications(token, {
-        unreadOnly,
+        unreadOnly: readStatus === "unread",
         category: category === "all" ? undefined : category,
         severity: severity === "all" ? undefined : [severity],
         fromAt: Number.isFinite(days) && days > 0 ? new Date(Date.now() - days * 86400000).toISOString() : undefined,
@@ -88,10 +91,30 @@ export function NotificationCenter({ token, onChanged, onNavigate }: Props) {
     }
   };
 
-  useEffect(() => { void load(); }, [token, unreadOnly, category, severity, period]);
+  useEffect(() => { void load(); }, [token, readStatus, category, severity, period]);
 
-  const selected = items.find(item => item.notificationId === selectedId) ?? null;
-  const allSelected = items.length > 0 && items.every(item => selectedIds.includes(item.notificationId));
+  const visibleItems = useMemo(() => {
+    const days = Number(period);
+    const cutoff = Number.isFinite(days) && days > 0 ? Date.now() - days * 86400000 : null;
+    return items.filter(item => {
+      if (cutoff !== null && new Date(item.occurredAt).getTime() < cutoff) return false;
+      if (readStatus === "read" && item.status !== "read") return false;
+      if (readStatus === "unread" && item.status !== "unread") return false;
+      return true;
+    });
+  }, [items, period, readStatus]);
+
+  useEffect(() => {
+    const visibleIds = new Set(visibleItems.map(item => item.notificationId));
+    setSelectedIds(current => {
+      const next = current.filter(id => visibleIds.has(id));
+      return next.length === current.length ? current : next;
+    });
+    setSelectedId(current => visibleIds.has(current) ? current : visibleItems[0]?.notificationId ?? "");
+  }, [visibleItems]);
+
+  const selected = visibleItems.find(item => item.notificationId === selectedId) ?? null;
+  const allSelected = visibleItems.length > 0 && visibleItems.every(item => selectedIds.includes(item.notificationId));
 
   const refreshAll = async () => {
     await load();
@@ -108,6 +131,19 @@ export function NotificationCenter({ token, onChanged, onNavigate }: Props) {
       await refreshAll();
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "선택 알림을 읽음 처리하지 못했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const markOneRead = async (notificationId: string) => {
+    setLoading(true);
+    setError("");
+    try {
+      await bulkReadNotifications(token, [notificationId]);
+      await refreshAll();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "알림을 읽음 처리하지 못했습니다.");
     } finally {
       setLoading(false);
     }
@@ -131,15 +167,17 @@ export function NotificationCenter({ token, onChanged, onNavigate }: Props) {
   };
 
   const archiveSelected = async () => {
-    if (!selectedIds.length || !window.confirm("선택한 알림을 목록에서 삭제할까요? 원본 업무는 삭제되지 않습니다.")) return;
+    if (!selectedIds.length) return;
     setLoading(true);
     setError("");
+    setArchiveError("");
     try {
       await archiveNotifications(token, selectedIds);
       setSelectedIds([]);
+      setArchiveConfirmOpen(false);
       await refreshAll();
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "선택 알림을 삭제하지 못했습니다.");
+      setArchiveError(nextError instanceof Error ? nextError.message : "선택 알림을 삭제하지 못했습니다.");
     } finally {
       setLoading(false);
     }
@@ -196,7 +234,7 @@ export function NotificationCenter({ token, onChanged, onNavigate }: Props) {
     </header>
 
     <div className="notification-center-filters" aria-label="알림 필터">
-      <label><span>상태</span><select value={unreadOnly ? "unread" : "all"} onChange={event => setUnreadOnly(event.target.value === "unread")}><option value="all">전체</option><option value="unread">읽지 않음</option></select></label>
+      <label><span>상태</span><select value={readStatus} onChange={event => setReadStatus(event.target.value as ReadStatusFilter)}><option value="all">전체</option><option value="unread">미확인</option><option value="read">확인 완료</option></select></label>
       <label><span>업무 유형</span><select value={category} onChange={event => setCategory(event.target.value)}><option value="all">전체</option>{Object.entries(categoryLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
       <label><span>중요도</span><select value={severity} onChange={event => setSeverity(event.target.value)}><option value="all">전체</option><option value="CRITICAL">긴급</option><option value="ERROR">오류</option><option value="WARN">경고</option><option value="INFO">정보</option></select></label>
       <label><span>기간</span><select value={period} onChange={event => setPeriod(event.target.value)}><option value="7">최근 7일</option><option value="30">최근 30일</option><option value="90">최근 90일</option><option value="0">전체</option></select></label>
@@ -205,18 +243,18 @@ export function NotificationCenter({ token, onChanged, onNavigate }: Props) {
     {error ? <div className="notification-center-error" role="alert">{error}</div> : null}
 
     <div className="notification-center-selection">
-      <label><input type="checkbox" checked={allSelected} onChange={event => setSelectedIds(event.target.checked ? items.map(item => item.notificationId) : [])} /> 전체 선택</label>
+      <label><input type="checkbox" checked={allSelected} onChange={event => setSelectedIds(event.target.checked ? visibleItems.map(item => item.notificationId) : [])} /> 전체 선택</label>
       <span>{selectedIds.length}개 선택</span>
       <button type="button" onClick={() => void markSelectedRead()} disabled={!selectedIds.length || loading}>읽음 처리</button>
-      <button type="button" onClick={() => void archiveSelected()} disabled={!selectedIds.length || loading}>삭제</button>
+      <button type="button" onClick={() => { setArchiveError(""); setArchiveConfirmOpen(true); }} disabled={!selectedIds.length || loading}>삭제</button>
       <button type="button" onClick={() => void load()} disabled={loading}>새로고침</button>
     </div>
 
     <div className="notification-center-split">
       <div className="notification-center-list" role="list" aria-busy={loading}>
         {loading && !items.length ? <div className="notification-center-state">알림을 불러오는 중입니다.</div> : null}
-        {!loading && !items.length ? <div className="notification-center-state">조건에 맞는 알림이 없습니다.</div> : null}
-        {items.map(item => <article key={item.notificationId} className={`notification-center-row ${item.status === "unread" ? "is-unread" : ""} ${selectedId === item.notificationId ? "is-selected" : ""}`} role="listitem">
+        {!loading && !visibleItems.length ? <div className="notification-center-state">조건에 맞는 알림이 없습니다.</div> : null}
+        {visibleItems.map(item => <article key={item.notificationId} className={`notification-center-row ${item.status === "unread" ? "is-unread" : ""} ${selectedId === item.notificationId ? "is-selected" : ""}`} role="listitem">
           <input aria-label={`${item.title} 선택`} type="checkbox" checked={selectedIds.includes(item.notificationId)} onChange={event => setSelectedIds(current => event.target.checked ? [...current, item.notificationId] : current.filter(id => id !== item.notificationId))} />
           <button type="button" onClick={() => setSelectedId(item.notificationId)}>
             <span>{categoryLabels[item.category] ?? item.category}</span>
@@ -233,10 +271,21 @@ export function NotificationCenter({ token, onChanged, onNavigate }: Props) {
           <time>{new Date(selected.occurredAt).toLocaleString("ko-KR")}</time>
           <p>{selected.message}</p>
           <dl><div><dt>원본 유형</dt><dd>{selected.resourceType}</dd></div><div><dt>처리 상태</dt><dd>{selected.status === "unread" ? "읽지 않음" : "읽음"}</dd></div></dl>
-          <button type="button" className="notification-center-primary" onClick={() => onNavigate(resolveMenu(selected), selected)}>원본으로 이동</button>
+          <div className="notification-center-detail-actions">
+            {selected.status === "unread" ? <button type="button" onClick={() => void markOneRead(selected.notificationId)} disabled={loading}>읽음 처리</button> : null}
+            <button type="button" className="notification-center-primary" onClick={() => onNavigate(resolveMenu(selected), selected)}>원본으로 이동</button>
+          </div>
         </> : <div className="notification-center-state">알림을 선택하면 상세 내용을 확인할 수 있습니다.</div>}
       </aside>
     </div>
+
+    <CommonPopup title="알림 삭제" open={archiveConfirmOpen} onClose={() => { if (!loading) setArchiveConfirmOpen(false); }} error={archiveError} saving={loading} kind="alertdialog">
+      <p className="feedback-confirm-message">선택한 {selectedIds.length}개 알림을 목록에서 삭제할까요? 원본 업무는 삭제되지 않습니다.</p>
+      <div className="feedback-confirm-actions">
+        <button type="button" onClick={() => setArchiveConfirmOpen(false)} disabled={loading}>취소</button>
+        <button type="button" className="is-destructive" onClick={() => void archiveSelected()} disabled={loading}>삭제</button>
+      </div>
+    </CommonPopup>
 
     <CommonPopup title="알림 설정" open={settingsOpen} onClose={() => setSettingsOpen(false)} dirty={JSON.stringify(settings) !== JSON.stringify(savedSettings)} error={settingsError} saving={settingsSaving} initialFocusRef={settingsFirstRef}>
       <div className="notification-settings-form">
