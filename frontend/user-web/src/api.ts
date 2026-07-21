@@ -273,6 +273,7 @@ export type MailSummary = {
   accountId: string;
   senderEmail: string;
   subject: string;
+  previewText: string;
   status: string;
   isRead: boolean;
   isStarred: boolean;
@@ -285,6 +286,21 @@ export type MailSummary = {
 
 export type MailListResponse = {
   mails: MailSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+};
+
+export type MailListQuery = {
+  q?: string;
+  read?: "all" | "read" | "unread";
+  starred?: "all" | "starred" | "unstarred";
+  attachment?: "all" | "with" | "without";
+  category?: "all" | "primary" | "promotions" | "social" | "updates" | "forums";
+  sort?: "date_desc" | "date_asc" | "sender_asc" | "subject_asc";
+  limit?: number;
+  offset?: number;
 };
 
 export type MailStorageResponse = {
@@ -659,10 +675,28 @@ export async function fetchUiContract(): Promise<UiContract> {
   return request<UiContract>("/ui-contract");
 }
 
-export async function fetchInbox(token: string): Promise<MailListResponse> {
-  return request<MailListResponse>("/mail/inbox", {
+function mailListPath(mailbox: "inbox" | "sent" | "drafts", options: MailListQuery = {}) {
+  const query = new URLSearchParams();
+  if (options.q?.trim()) query.set("q", options.q.trim());
+  if (options.read) query.set("read", options.read);
+  if (options.starred) query.set("starred", options.starred);
+  if (options.attachment) query.set("attachment", options.attachment);
+  if (options.category) query.set("category", options.category);
+  if (options.sort) query.set("sort", options.sort);
+  if (options.limit !== undefined) query.set("limit", String(options.limit));
+  if (options.offset !== undefined) query.set("offset", String(options.offset));
+  const suffix = query.toString();
+  return `/mail/${mailbox}${suffix ? `?${suffix}` : ""}`;
+}
+
+async function fetchMailList(token: string, mailbox: "inbox" | "sent" | "drafts", options?: MailListQuery): Promise<MailListResponse> {
+  return request<MailListResponse>(mailListPath(mailbox, options), {
     headers: authHeaders(token),
   });
+}
+
+export async function fetchInbox(token: string, options?: MailListQuery): Promise<MailListResponse> {
+  return fetchMailList(token, "inbox", options);
 }
 
 export async function fetchMailStorage(token: string): Promise<MailStorageResponse> {
@@ -671,25 +705,29 @@ export async function fetchMailStorage(token: string): Promise<MailStorageRespon
   });
 }
 
-export type MailBulkAction = "read" | "unread" | "star" | "unstar" | "delete";
+export type MailBulkAction = "read" | "unread" | "star" | "unstar" | "move" | "delete";
+
+export type MailBulkResponse = {
+  action: MailBulkAction;
+  requestedCount: number;
+  changedCount: number;
+  unchangedCount: number;
+  targetCategory?: string | null;
+};
 
 export async function setMailCategory(token: string, mailId: string, category: string): Promise<MailStatusResponse> {
   return request<MailStatusResponse>(`/mail/${mailId}/category`, { method: "POST", headers: { ...authHeaders(token), "Content-Type": "application/json" }, body: JSON.stringify({ category }) });
 }
 
-export async function bulkMailAction(token: string, mailIds: string[], action: MailBulkAction, mailbox = "inbox"): Promise<{ action: string; changedCount: number }> {
-  return request<{ action: string; changedCount: number }>("/mail/bulk", { method: "POST", headers: { ...authHeaders(token), "Content-Type": "application/json" }, body: JSON.stringify({ mailIds, action, mailbox }) });
+export async function bulkMailAction(token: string, mailIds: string[], action: MailBulkAction, mailbox = "inbox", targetCategory?: string): Promise<MailBulkResponse> {
+  return request<MailBulkResponse>("/mail/bulk", { method: "POST", headers: { ...authHeaders(token), "Content-Type": "application/json" }, body: JSON.stringify({ mailIds, action, mailbox, ...(targetCategory ? { targetCategory } : {}) }) });
 }
-export async function fetchSentMail(token: string): Promise<MailListResponse> {
-  return request<MailListResponse>("/mail/sent", {
-    headers: authHeaders(token),
-  });
+export async function fetchSentMail(token: string, options?: MailListQuery): Promise<MailListResponse> {
+  return fetchMailList(token, "sent", options);
 }
 
-export async function fetchDraftMail(token: string): Promise<MailListResponse> {
-  return request<MailListResponse>("/mail/drafts", {
-    headers: authHeaders(token),
-  });
+export async function fetchDraftMail(token: string, options?: MailListQuery): Promise<MailListResponse> {
+  return fetchMailList(token, "drafts", options);
 }
 
 export type MailDeliveryProviderStatus = {

@@ -3,9 +3,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.api.dependencies import permission_required
 from app.schemas.directory import AuthUserSummary
 from app.schemas.mail_messenger import (
+    MailBulkRequest,
+    MailBulkResponse,
     MailCategoryRequest,
     MailDetailResponse,
     MailDraftRequest,
+    MailListQuery,
     MailListResponse,
     MailSendRequest,
     MailSendResponse,
@@ -45,27 +48,36 @@ def _handle_error(exc: Exception) -> None:
 
 
 @router.get("/inbox", response_model=MailListResponse)
-def list_inbox(user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailListResponse:
+def list_inbox(query: MailListQuery = Depends(), user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailListResponse:
     try:
-        return _service().list_inbox(user)
+        return _service().list_inbox(user, query)
     except Exception as exc:
         _handle_error(exc)
         raise
 
 
 @router.get("/sent", response_model=MailListResponse)
-def list_sent(user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailListResponse:
+def list_sent(query: MailListQuery = Depends(), user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailListResponse:
     try:
-        return _service().list_sent(user)
+        return _service().list_sent(user, query)
     except Exception as exc:
         _handle_error(exc)
         raise
 
 
 @router.get("/drafts", response_model=MailListResponse)
-def list_drafts(user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailListResponse:
+def list_drafts(query: MailListQuery = Depends(), user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailListResponse:
     try:
-        return _service().list_drafts(user)
+        return _service().list_drafts(user, query)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.post("/bulk", response_model=MailBulkResponse)
+def bulk_mail(payload: MailBulkRequest, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailBulkResponse:
+    try:
+        return _service().bulk_mail(user, payload)
     except Exception as exc:
         _handle_error(exc)
         raise

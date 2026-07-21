@@ -9,9 +9,12 @@ from psycopg.types.json import Jsonb
 from app.schemas.directory import AuthUserSummary
 from app.schemas.mail_messenger import (
     MailAttachmentMeta,
+    MailBulkRequest,
+    MailBulkResponse,
     MailCategoryRequest,
     MailDetailResponse,
     MailDraftRequest,
+    MailListQuery,
     MailListResponse,
     MailRecipientView,
     MailSendRequest,
@@ -36,7 +39,9 @@ class MailMessengerService:
     def __init__(self) -> None:
         self.db = PostgresService()
 
-    def list_inbox(self, actor: AuthUserSummary) -> MailListResponse:
+    def list_inbox(self, actor: AuthUserSummary, query: MailListQuery | None = None) -> MailListResponse:
+        if query is not None:
+            return self._list_inbox_query(actor, query)
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
@@ -60,13 +65,17 @@ class MailMessengerService:
                     WHERE m.company_id = %s
                       AND (r.recipient_user_id = %s OR LOWER(r.recipient_email) = %s)
                       AND m.status = 'sent'
+                      AND r.deleted_at IS NULL
                     ORDER BY COALESCE(r.received_at, m.sent_at, m.created_at) DESC
                     """,
                     (actor.companyId, actor.userId, actor.userEmail.lower()),
                 )
-                return MailListResponse(mails=[self._to_mail_summary(row) for row in cursor.fetchall()])
+                mails = [self._to_mail_summary(row) for row in cursor.fetchall()]
+                return MailListResponse(mails=mails, total=len(mails), limit=50, offset=0, hasMore=False)
 
-    def list_sent(self, actor: AuthUserSummary) -> MailListResponse:
+    def list_sent(self, actor: AuthUserSummary, query: MailListQuery | None = None) -> MailListResponse:
+        if query is not None:
+            return self._list_sender_query(actor, query, mailbox="sent")
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
@@ -89,13 +98,17 @@ class MailMessengerService:
                     WHERE m.company_id = %s
                       AND m.sender_user_id = %s
                       AND m.status = 'sent'
+                      AND m.sender_deleted_at IS NULL
                     ORDER BY COALESCE(m.sent_at, m.created_at) DESC
                     """,
                     (actor.companyId, actor.userId),
                 )
-                return MailListResponse(mails=[self._to_mail_summary(row) for row in cursor.fetchall()])
+                mails = [self._to_mail_summary(row) for row in cursor.fetchall()]
+                return MailListResponse(mails=mails, total=len(mails), limit=50, offset=0, hasMore=False)
 
-    def list_drafts(self, actor: AuthUserSummary) -> MailListResponse:
+    def list_drafts(self, actor: AuthUserSummary, query: MailListQuery | None = None) -> MailListResponse:
+        if query is not None:
+            return self._list_sender_query(actor, query, mailbox="draft")
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
@@ -118,11 +131,152 @@ class MailMessengerService:
                     WHERE m.company_id = %s
                       AND m.sender_user_id = %s
                       AND m.status = 'draft'
+                      AND m.sender_deleted_at IS NULL
                     ORDER BY COALESCE(m.updated_at, m.created_at) DESC
                     """,
                     (actor.companyId, actor.userId),
                 )
-                return MailListResponse(mails=[self._to_mail_summary(row) for row in cursor.fetchall()])
+                mails = [self._to_mail_summary(row) for row in cursor.fetchall()]
+                return MailListResponse(mails=mails, total=len(mails), limit=50, offset=0, hasMore=False)
+
+    def _list_inbox_query(self, actor: AuthUserSummary, query: MailListQuery) -> MailListResponse:
+        self.db.ensure_migrations_applied()
+        conditions = [
+            "m.company_id = %s",
+            "(r.recipient_user_id = %s OR LOWER(r.recipient_email) = %s)",
+            "m.status = 'sent'",
+            "r.deleted_at IS NULL",
+        ]
+        params: list[object] = [actor.companyId, actor.userId, actor.userEmail.lower()]
+        if query.read != "all":
+            conditions.append("r.is_read = %s")
+            params.append(query.read == "read")
+        if query.starred != "all":
+            conditions.append("r.is_starred = %s")
+            params.append(query.starred == "starred")
+        if query.attachment == "with":
+            conditions.append("m.attachment_count > 0")
+        elif query.attachment == "without":
+            conditions.append("m.attachment_count = 0")
+        if query.category != "all":
+            conditions.append("COALESCE(r.inbox_category, 'primary') = %s")
+            params.append(query.category)
+        if query.q:
+            conditions.append("CONCAT_WS(' ', m.subject, m.sender_email, m.body_text) ILIKE %s")
+            params.append(f"%{query.q}%")
+        where_sql = " AND ".join(conditions)
+        order_sql = self._mail_sort_sql(query.sort, mailbox="inbox")
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"SELECT COUNT(*)::BIGINT AS total FROM mail_recipients r JOIN mail_messages m ON m.id = r.message_id WHERE {where_sql}",
+                    tuple(params),
+                )
+                count_row = cursor.fetchone() or {"total": 0}
+                total = int(count_row["total"] or 0)
+                cursor.execute(
+                    f"""
+                    SELECT
+                        m.id AS mail_id,
+                        m.sender_account_id AS account_id,
+                        m.sender_email,
+                        m.subject,
+                        LEFT(COALESCE(m.body_text, ''), 240) AS preview_text,
+                        m.status,
+                        m.sent_at,
+                        m.retention_expires_at,
+                        m.attachment_count,
+                        r.is_read,
+                        r.is_starred,
+                        r.received_at,
+                        COALESCE(r.inbox_category, 'primary') AS category
+                    FROM mail_recipients r
+                    JOIN mail_messages m ON m.id = r.message_id
+                    WHERE {where_sql}
+                    ORDER BY {order_sql}
+                    LIMIT %s OFFSET %s
+                    """,
+                    tuple([*params, query.limit, query.offset]),
+                )
+                mails = [self._to_mail_summary(row) for row in cursor.fetchall()]
+        return MailListResponse(
+            mails=mails,
+            total=total,
+            limit=query.limit,
+            offset=query.offset,
+            hasMore=query.offset + len(mails) < total,
+        )
+
+    def _list_sender_query(self, actor: AuthUserSummary, query: MailListQuery, *, mailbox: str) -> MailListResponse:
+        self.db.ensure_migrations_applied()
+        status_value = "draft" if mailbox == "draft" else "sent"
+        conditions = [
+            "m.company_id = %s",
+            "m.sender_user_id = %s",
+            "m.status = %s",
+            "m.sender_deleted_at IS NULL",
+        ]
+        params: list[object] = [actor.companyId, actor.userId, status_value]
+        if query.attachment == "with":
+            conditions.append("m.attachment_count > 0")
+        elif query.attachment == "without":
+            conditions.append("m.attachment_count = 0")
+        if query.q:
+            conditions.append("CONCAT_WS(' ', m.subject, m.sender_email, m.body_text) ILIKE %s")
+            params.append(f"%{query.q}%")
+        where_sql = " AND ".join(conditions)
+        order_sql = self._mail_sort_sql(query.sort, mailbox=mailbox)
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"SELECT COUNT(*)::BIGINT AS total FROM mail_messages m WHERE {where_sql}",
+                    tuple(params),
+                )
+                count_row = cursor.fetchone() or {"total": 0}
+                total = int(count_row["total"] or 0)
+                cursor.execute(
+                    f"""
+                    SELECT
+                        m.id AS mail_id,
+                        m.sender_account_id AS account_id,
+                        m.sender_email,
+                        m.subject,
+                        LEFT(COALESCE(m.body_text, ''), 240) AS preview_text,
+                        m.status,
+                        m.sent_at,
+                        m.retention_expires_at,
+                        m.attachment_count,
+                        TRUE AS is_read,
+                        FALSE AS is_starred,
+                        NULL AS received_at,
+                        'primary' AS category
+                    FROM mail_messages m
+                    WHERE {where_sql}
+                    ORDER BY {order_sql}
+                    LIMIT %s OFFSET %s
+                    """,
+                    tuple([*params, query.limit, query.offset]),
+                )
+                mails = [self._to_mail_summary(row) for row in cursor.fetchall()]
+        return MailListResponse(
+            mails=mails,
+            total=total,
+            limit=query.limit,
+            offset=query.offset,
+            hasMore=query.offset + len(mails) < total,
+        )
+
+    @staticmethod
+    def _mail_sort_sql(sort: str, *, mailbox: str) -> str:
+        date_expression = "COALESCE(m.updated_at, m.created_at)" if mailbox == "draft" else (
+            "COALESCE(r.received_at, m.sent_at, m.created_at)" if mailbox == "inbox" else "COALESCE(m.sent_at, m.created_at)"
+        )
+        return {
+            "date_desc": f"{date_expression} DESC, m.id DESC",
+            "date_asc": f"{date_expression} ASC, m.id ASC",
+            "sender_asc": f"LOWER(m.sender_email) ASC, {date_expression} DESC, m.id DESC",
+            "subject_asc": f"LOWER(m.subject) ASC, {date_expression} DESC, m.id DESC",
+        }[sort]
 
     def get_mail_storage(self, actor: AuthUserSummary) -> MailStorageResponse:
         self.db.ensure_migrations_applied()
@@ -295,6 +449,166 @@ class MailMessengerService:
                 )
             connection.commit()
         return MailStatusResponse(mailId=mail_id, status=payload.category, isRead=row["is_read"], isStarred=row["is_starred"], category=payload.category)
+
+    def bulk_mail(self, actor: AuthUserSummary, payload: MailBulkRequest) -> MailBulkResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        request_id = self._new_id("mailbulk")
+        changed_count = 0
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                if payload.mailbox == "inbox":
+                    cursor.execute(
+                        """
+                        SELECT
+                            r.id AS recipient_id,
+                            r.message_id AS mail_id,
+                            r.is_read,
+                            r.is_starred,
+                            COALESCE(r.inbox_category, 'primary') AS category,
+                            r.deleted_at
+                        FROM mail_recipients r
+                        JOIN mail_messages m ON m.id = r.message_id
+                        WHERE r.message_id = ANY(%s)
+                          AND m.company_id = %s
+                          AND (r.recipient_user_id = %s OR LOWER(r.recipient_email) = %s)
+                          AND m.status = 'sent'
+                        FOR UPDATE OF r
+                        """,
+                        (payload.mailIds, actor.companyId, actor.userId, actor.userEmail.lower()),
+                    )
+                else:
+                    expected_status = "draft" if payload.mailbox == "draft" else "sent"
+                    cursor.execute(
+                        """
+                        SELECT
+                            m.id AS mail_id,
+                            m.status,
+                            m.sender_deleted_at
+                        FROM mail_messages m
+                        WHERE m.id = ANY(%s)
+                          AND m.company_id = %s
+                          AND m.sender_user_id = %s
+                          AND m.status = %s
+                        FOR UPDATE OF m
+                        """,
+                        (payload.mailIds, actor.companyId, actor.userId, expected_status),
+                    )
+                rows = cursor.fetchall()
+                locked_ids = [row["mail_id"] for row in rows]
+                if len(rows) != len(payload.mailIds) or set(locked_ids) != set(payload.mailIds):
+                    raise PermissionError("요청한 모든 메일을 처리할 권한이 없습니다.")
+
+                for row in rows:
+                    if payload.mailbox == "inbox":
+                        before = {
+                            "isRead": bool(row["is_read"]),
+                            "isStarred": bool(row["is_starred"]),
+                            "category": row.get("category") or "primary",
+                            "deleted": row.get("deleted_at") is not None,
+                        }
+                        after = dict(before)
+                        if payload.action in {"read", "unread"}:
+                            after["isRead"] = payload.action == "read"
+                        elif payload.action in {"star", "unstar"}:
+                            after["isStarred"] = payload.action == "star"
+                        elif payload.action == "move":
+                            after["category"] = payload.targetCategory
+                        elif payload.action == "delete":
+                            after["deleted"] = True
+                        if before == after:
+                            continue
+                        if payload.action in {"read", "unread"}:
+                            cursor.execute(
+                                """
+                                UPDATE mail_recipients
+                                SET is_read = %s,
+                                    read_at = CASE WHEN %s THEN %s ELSE NULL END
+                                WHERE id = %s
+                                """,
+                                (after["isRead"], after["isRead"], now, row["recipient_id"]),
+                            )
+                        elif payload.action in {"star", "unstar"}:
+                            cursor.execute(
+                                "UPDATE mail_recipients SET is_starred = %s WHERE id = %s",
+                                (after["isStarred"], row["recipient_id"]),
+                            )
+                        elif payload.action == "move":
+                            cursor.execute(
+                                "UPDATE mail_recipients SET inbox_category = %s WHERE id = %s",
+                                (payload.targetCategory, row["recipient_id"]),
+                            )
+                        else:
+                            cursor.execute(
+                                "UPDATE mail_recipients SET deleted_at = %s, deleted_by_user_id = %s WHERE id = %s",
+                                (now, actor.userId, row["recipient_id"]),
+                            )
+                    else:
+                        before = {"deleted": row.get("sender_deleted_at") is not None}
+                        after = {"deleted": True}
+                        if before == after:
+                            continue
+                        cursor.execute(
+                            """
+                            UPDATE mail_messages
+                            SET sender_deleted_at = %s,
+                                sender_deleted_by_user_id = %s,
+                                updated_at = %s
+                            WHERE id = %s
+                            """,
+                            (now, actor.userId, now, row["mail_id"]),
+                        )
+                    self._write_mail_bulk_audit(
+                        cursor,
+                        actor,
+                        row["mail_id"],
+                        payload.action,
+                        before,
+                        after,
+                        payload.mailbox,
+                        request_id,
+                    )
+                    changed_count += 1
+            connection.commit()
+        return MailBulkResponse(
+            action=payload.action,
+            requestedCount=len(payload.mailIds),
+            changedCount=changed_count,
+            unchangedCount=len(payload.mailIds) - changed_count,
+            targetCategory=payload.targetCategory,
+        )
+
+    def _write_mail_bulk_audit(
+        self,
+        cursor,
+        actor: AuthUserSummary,
+        target_id: str,
+        action: str,
+        before: dict,
+        after: dict,
+        mailbox: str,
+        request_id: str,
+    ) -> None:
+        cursor.execute(
+            """
+            INSERT INTO audit_logs (
+                id, company_id, actor_user_id, actor_user_name, target_type, target_id,
+                event, status_before, status_after, reason, created_at
+            ) VALUES (%s, %s, %s, %s, 'mail', %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                self._new_id("audit"),
+                actor.companyId,
+                actor.userId,
+                actor.userName,
+                target_id,
+                f"mail.bulk.{action}",
+                json.dumps(before, ensure_ascii=False, sort_keys=True),
+                json.dumps(after, ensure_ascii=False, sort_keys=True),
+                json.dumps({"mailbox": mailbox, "requestId": request_id}, ensure_ascii=False, sort_keys=True),
+                self._now(),
+            ),
+        )
 
     def list_rooms(self, actor: AuthUserSummary) -> MessengerRoomListResponse:
         self.db.ensure_migrations_applied()
@@ -766,6 +1080,7 @@ class MailMessengerService:
             accountId=row["account_id"],
             senderEmail=row["sender_email"],
             subject=row["subject"],
+            previewText=(row.get("preview_text") or "")[:240],
             status=row["status"],
             isRead=bool(row["is_read"]),
             isStarred=bool(row["is_starred"]),

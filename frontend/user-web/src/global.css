@@ -786,9 +786,123 @@ textarea {
   padding-right: 2px;
 }
 
-.user-mail-list-panel > button {
-  border-radius: 12px !important;
-  padding: 12px !important;
+.user-mail-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  padding: 7px;
+  border: 1px solid #dbe4ec;
+  border-radius: 12px;
+  background: #f8fafc;
+  font-size: 12px;
+}
+
+.user-mail-toolbar input,
+.user-mail-toolbar select,
+.user-mail-toolbar button {
+  min-height: 28px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  background: #fff;
+  color: #334155;
+  font: inherit;
+}
+
+.user-mail-toolbar > input[type="text"],
+.user-mail-toolbar > input:not([type]) {
+  min-width: 150px;
+  flex: 1 1 180px;
+  padding: 0 8px;
+}
+
+.user-mail-toolbar button {
+  padding: 0 8px;
+  cursor: pointer;
+}
+
+.user-mail-toolbar button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.user-mail-toolbar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.user-mail-reload-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid #fecaca;
+  border-radius: 9px;
+  background: #fff1f2;
+  color: #b91c1c;
+  font-size: 10px;
+}
+
+.user-mail-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: start;
+  gap: 6px;
+  border: 1px solid #dbe4ec;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.user-mail-row[data-selected="true"] {
+  border-color: #0f766e;
+}
+
+.user-mail-row[data-unread="true"] {
+  background: #f8fafc;
+}
+
+.user-mail-row > input {
+  margin: 12px 0 0 10px;
+}
+
+.user-mail-row__main {
+  min-width: 0;
+  padding: 10px 10px 10px 2px;
+  border: 0;
+  background: transparent;
+  color: #334155;
+  text-align: left;
+  cursor: pointer;
+}
+
+.user-mail-row__main > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.user-mail-row__main > div + div {
+  justify-content: flex-start;
+  margin-top: 5px;
+  color: #0f172a;
+}
+
+.user-mail-row__main span,
+.user-mail-row__main p {
+  color: #64748b;
+  font-size: 10px;
+}
+
+.user-mail-row__main p {
+  overflow: hidden;
+  margin: 5px 0 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .user-mail-detail-panel {
