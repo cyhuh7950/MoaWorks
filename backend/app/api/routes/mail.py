@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.api.dependencies import permission_required
 from app.schemas.directory import AuthUserSummary
 from app.schemas.mail_messenger import (
+    MailCategoryRequest,
     MailDetailResponse,
     MailDraftRequest,
     MailListResponse,
@@ -69,6 +70,14 @@ def list_drafts(user: AuthUserSummary = Depends(permission_required("mail:read")
         _handle_error(exc)
         raise
 
+
+@router.post("/{mail_id}/category", response_model=MailStatusResponse)
+def set_category(mail_id: str, payload: MailCategoryRequest, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailStatusResponse:
+    try:
+        return _service().set_mail_category(user, mail_id, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
 
 @router.get("/storage", response_model=MailStorageResponse)
 def get_mail_storage(user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailStorageResponse:

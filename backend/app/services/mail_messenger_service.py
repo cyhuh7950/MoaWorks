@@ -9,6 +9,7 @@ from psycopg.types.json import Jsonb
 from app.schemas.directory import AuthUserSummary
 from app.schemas.mail_messenger import (
     MailAttachmentMeta,
+    MailCategoryRequest,
     MailDetailResponse,
     MailDraftRequest,
     MailListResponse,
@@ -52,7 +53,8 @@ class MailMessengerService:
                         m.attachment_count,
                         r.is_read,
                         r.is_starred,
-                        r.received_at
+                        r.received_at,
+                        COALESCE(r.inbox_category, 'primary') AS category
                     FROM mail_recipients r
                     JOIN mail_messages m ON m.id = r.message_id
                     WHERE m.company_id = %s
@@ -81,7 +83,8 @@ class MailMessengerService:
                         m.attachment_count,
                         TRUE AS is_read,
                         FALSE AS is_starred,
-                        NULL AS received_at
+                        NULL AS received_at,
+                        'primary' AS category
                     FROM mail_messages m
                     WHERE m.company_id = %s
                       AND m.sender_user_id = %s
@@ -109,7 +112,8 @@ class MailMessengerService:
                         m.attachment_count,
                         TRUE AS is_read,
                         FALSE AS is_starred,
-                        NULL AS received_at
+                        NULL AS received_at,
+                        'primary' AS category
                     FROM mail_messages m
                     WHERE m.company_id = %s
                       AND m.sender_user_id = %s
@@ -239,6 +243,58 @@ class MailMessengerService:
                     raise PermissionError("받은 메일만 중요 표시할 수 있습니다.")
             connection.commit()
         return MailStatusResponse(mailId=mail_id, status="starred" if row["is_starred"] else "unstarred", isRead=row["is_read"], isStarred=row["is_starred"])
+
+    def set_mail_category(self, actor: AuthUserSummary, mail_id: str, payload: MailCategoryRequest) -> MailStatusResponse:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT COALESCE(r.inbox_category, 'primary') AS category,
+                           r.is_read, r.is_starred
+                    FROM mail_recipients r
+                    JOIN mail_messages m ON m.id = r.message_id
+                    WHERE r.message_id = %s
+                      AND m.company_id = %s
+                      AND (r.recipient_user_id = %s OR LOWER(r.recipient_email) = %s)
+                    FOR UPDATE
+                    """,
+                    (mail_id, actor.companyId, actor.userId, actor.userEmail.lower()),
+                )
+                previous = cursor.fetchone()
+                if previous is None:
+                    raise PermissionError("받은 메일의 분류만 변경할 수 있습니다.")
+                cursor.execute(
+                    """
+                    UPDATE mail_recipients AS r
+                    SET inbox_category = %s
+                    FROM mail_messages AS m
+                    WHERE m.id = r.message_id
+                      AND r.message_id = %s
+                      AND m.company_id = %s
+                      AND (r.recipient_user_id = %s OR LOWER(r.recipient_email) = %s)
+                    RETURNING r.is_read, r.is_starred
+                    """,
+                    (payload.category, mail_id, actor.companyId, actor.userId, actor.userEmail.lower()),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise PermissionError("받은 메일의 분류만 변경할 수 있습니다.")
+                cursor.execute(
+                    """
+                    INSERT INTO audit_logs (
+                        id, company_id, actor_user_id, actor_user_name, target_type, target_id,
+                        event, status_before, status_after, reason, created_at
+                    ) VALUES (%s, %s, %s, %s, 'mail', %s, %s, %s, %s, NULL, %s)
+                    """,
+                    (
+                        self._new_id("audit"), actor.companyId, actor.userId, actor.userName,
+                        mail_id, "mail.category.changed", previous["category"], payload.category,
+                        self._now(),
+                    ),
+                )
+            connection.commit()
+        return MailStatusResponse(mailId=mail_id, status=payload.category, isRead=row["is_read"], isStarred=row["is_starred"], category=payload.category)
 
     def list_rooms(self, actor: AuthUserSummary) -> MessengerRoomListResponse:
         self.db.ensure_migrations_applied()
@@ -717,6 +773,7 @@ class MailMessengerService:
             receivedAt=row["received_at"],
             retentionExpiresAt=row["retention_expires_at"],
             attachmentCount=row["attachment_count"],
+            category=row.get("category") or "primary",
         )
 
     def _to_mail_detail(self, message: dict, recipients: list[MailRecipientView], attachments: list[MailAttachmentMeta]) -> MailDetailResponse:

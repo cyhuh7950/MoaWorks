@@ -43,6 +43,21 @@ class MailStatusResponse(BaseModel):
     status: str
     isRead: bool | None = None
     isStarred: bool | None = None
+    category: str | None = None
+
+
+class MailCategoryRequest(BaseModel):
+    category: str = Field(min_length=1)
+
+    @field_validator("category")
+    @classmethod
+    def validate_category(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"primary", "promotions", "social", "updates", "forums"}:
+            raise ValueError("지원하지 않는 메일 분류입니다.")
+        return normalized
+
+
 
 
 class MailSendResponse(BaseModel):
@@ -73,6 +88,7 @@ class MailSummary(BaseModel):
     receivedAt: datetime | None = None
     retentionExpiresAt: datetime | None = None
     attachmentCount: int
+    category: str = "primary"
 
 
 class MailListResponse(BaseModel):

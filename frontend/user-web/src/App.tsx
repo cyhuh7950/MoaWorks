@@ -91,6 +91,14 @@ const MAIL_POLICY = {
   localRetention: "설치형 PC 로컬 아카이브 무기한",
 };
 
+const MAIL_CATEGORIES = [
+  ["primary", "기본"],
+  ["promotions", "프로모션"],
+  ["social", "소셜"],
+  ["updates", "업데이트"],
+  ["forums", "포럼"],
+] as const;
+
 const MESSENGER_POLICY = {
   serverRetention: "서버 2주 보관",
   localRetention: "설치형 PC 대화 파일(JSON/HTML) 보관",
@@ -433,6 +441,7 @@ export default function App() {
   const [mailComposeForm, setMailComposeForm] = useState<MailComposeForm>({ to: "", subject: "", bodyText: "" });
   const [mailError, setMailError] = useState("");
   const [mailLoading, setMailLoading] = useState(false);
+  const [mailCategoryBusy, setMailCategoryBusy] = useState(false);
   const [mailStorage, setMailStorage] = useState<MailStorageResponse | null>(null);
   const [mailStorageLoading, setMailStorageLoading] = useState(false);
   const [mailStorageError, setMailStorageError] = useState("");
@@ -615,13 +624,25 @@ export default function App() {
   }
 
   async function changeSelectedMailCategory(category: string) {
-    if (!token || selectedMailIds.length !== 1) return;
+    if (!token || !selectedMailId || activeMailFolder !== "inbox" || mailCategoryBusy) return;
+    if ((selectedMailSummary?.category || "primary") === category) return;
+    setMailCategoryBusy(true);
+    setMailError("");
     try {
-      await setMailCategory(token, selectedMailIds[0], category);
+      await setMailCategory(token, selectedMailId, category);
       setMailCategoryFilter(category);
-      await loadMailWorkspace(token, "inbox");
+      try {
+        const response = await fetchInbox(token);
+        setInboxMails(response.mails ?? []);
+      } catch {
+        setMailError("저장은 완료됐지만 목록을 다시 불러오지 못했습니다.");
+        return;
+      }
+      setMessage("메일 분류를 변경했습니다.");
     } catch (error) {
-      setMailError(error instanceof Error ? error.message : "메일 분류 변경에 실패했습니다.");
+      setMailError(normalizeClientError(error, "메일 분류 변경에 실패했습니다."));
+    } finally {
+      setMailCategoryBusy(false);
     }
   }
   async function refreshUiContract() {
@@ -2105,7 +2126,7 @@ export default function App() {
               {activeMailFolder === "inbox" ? (
                 <div style={{ display: "grid", gap: 8 }}>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {["primary", "promotions", "social", "updates", "forums"].map((category) => <button key={category} type="button" onClick={() => setMailCategoryFilter(category)} style={{ height: 30, borderRadius: 999, border: mailCategory === category ? `1px solid ${uiContract.brand.primary}` : "1px solid #dbe4ec", background: "#fff", padding: "0 10px", cursor: "pointer" }}>{({ primary: "기본", promotions: "프로모션", social: "소셜", updates: "업데이트", forums: "포럼" } as Record<string, string>)[category]}</button>)}
+                    {MAIL_CATEGORIES.map(([category, label]) => <button key={category} type="button" aria-pressed={mailCategory === category} onClick={() => setMailCategoryFilter(category)} style={{ height: 30, borderRadius: 999, border: mailCategory === category ? `1px solid ${uiContract.brand.primary}` : "1px solid #dbe4ec", background: "#fff", padding: "0 10px", cursor: "pointer" }}>{label}</button>)}
                   </div>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     <button type="button" onClick={() => void loadMailWorkspace(token, activeMailbox)}>새로고침</button>
@@ -2113,7 +2134,8 @@ export default function App() {
                     <button type="button" onClick={() => void runBulkMailAction("unread")}>안 읽음</button>
                     <button type="button" onClick={() => void runBulkMailAction("star")}>중요</button>
                     <button type="button" onClick={() => setMailDeleteConfirmOpen(true)} disabled={selectedMailIds.length === 0 || mailBulkBusy}>삭제</button>
-                    {selectedMailIds.length === 1 ? <select value={mailCategory} onChange={(event) => void changeSelectedMailCategory(event.target.value)}><option value="primary">기본</option><option value="promotions">프로모션</option><option value="social">소셜</option><option value="updates">업데이트</option><option value="forums">포럼</option></select> : null}
+                    {selectedMailId && selectedMailSummary && inboxMails.some((item) => item.mailId === selectedMailId) ? <select aria-label="선택 메일 분류" value={selectedMailSummary?.category || "primary"} disabled={mailCategoryBusy} onChange={(event) => void changeSelectedMailCategory(event.target.value)}>{MAIL_CATEGORIES.map(([category, label]) => <option key={category} value={category}>{label}</option>)}</select> : null}
+                    {mailCategoryBusy ? <small aria-live="polite">분류 저장 중</small> : null}
                   </div>
                 </div>
               ) : null}              {activeMailFolder === "localArchive" ? (
