@@ -912,6 +912,122 @@ textarea {
   background: #fff;
 }
 
+.user-mail-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.user-mail-detail-header small {
+  color: #0f766e;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.user-mail-detail-header h2 {
+  margin: 5px 0 0;
+  color: #0f172a;
+  font-size: 16px;
+}
+
+.user-mail-detail-header > div:last-child,
+.user-mail-detail-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.user-mail-detail-header button,
+.user-mail-detail-actions button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.user-mail-detail-content {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
+  font-size: 12px;
+}
+
+.user-mail-detail-meta {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 10px;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.user-mail-detail-meta > div {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.user-mail-detail-meta dt {
+  color: #64748b;
+  font-size: 10px;
+}
+
+.user-mail-detail-meta dd {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: #334155;
+}
+
+.user-mail-detail-body {
+  min-height: 180px;
+  padding: 14px 2px;
+  border-top: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+  color: #334155;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.user-mail-detail-attachments {
+  display: grid;
+  gap: 6px;
+}
+
+.user-mail-detail-attachments h3 {
+  margin: 0;
+  font-size: 12px;
+}
+
+.user-mail-detail-attachments > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid #dbe4ec;
+  border-radius: 9px;
+  background: #f8fafc;
+}
+
+.user-mail-detail-attachments span {
+  color: #64748b;
+  font-size: 10px;
+}
+
+.user-mail-detail-attachments small {
+  color: #64748b;
+  font-size: 9px;
+}
+
 .user-mail-compose-popup {
   min-width: 380px;
 }

@@ -12,6 +12,12 @@ class MailAttachmentMeta(BaseModel):
     storageKey: str | None = None
 
 
+class MailAttachmentView(BaseModel):
+    fileName: str
+    contentType: str
+    sizeBytes: int = Field(ge=0)
+
+
 class MailSendRequest(BaseModel):
     to: list[str] = Field(default_factory=list)
     cc: list[str] = Field(default_factory=list)
@@ -220,7 +226,7 @@ class MailDetailResponse(BaseModel):
     retentionExpiresAt: datetime | None = None
     attachmentCount: int
     recipients: list[MailRecipientView]
-    attachments: list[MailAttachmentMeta]
+    attachments: list[MailAttachmentView]
 
 
 class MessengerRoomCreateRequest(BaseModel):

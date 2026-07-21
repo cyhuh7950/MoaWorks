@@ -268,6 +268,12 @@ export type MailAttachment = {
   storageKey?: string | null;
 };
 
+export type MailAttachmentView = {
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+};
+
 export type MailSummary = {
   mailId: string;
   accountId: string;
@@ -324,7 +330,7 @@ export type MailDetail = {
   retentionExpiresAt: string | null;
   attachmentCount: number;
   recipients: MailRecipient[];
-  attachments: MailAttachment[];
+  attachments: MailAttachmentView[];
   externalDeliveries: MailExternalDeliveryStatus[];
 };
 

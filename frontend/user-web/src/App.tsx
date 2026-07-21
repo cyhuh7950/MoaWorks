@@ -255,6 +255,24 @@ type WorkspaceTab = "mail" | "approval" | "messenger";
 type UserPortalMenu = "home" | "mail" | "approval" | "messenger" | "schedule" | "contacts" | "org" | "files" | "alerts" | "notices" | "settings" | "help";
 type MailboxType = "inbox" | "sent";
 type MailFolderType = MailboxType | "starred" | "unread" | "draft" | "localArchive";
+
+function withMailSubjectPrefix(subject: string, mode: "reply" | "forward") {
+  const prefix = mode === "reply" ? "Re:" : "Fwd:";
+  const existingPrefix = mode === "reply" ? /^re:\s*/i : /^fwd:\s*/i;
+  return existingPrefix.test(subject.trimStart()) ? subject : `${prefix} ${subject}`;
+}
+
+function formatFileSize(value: number) {
+  if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${value} B`;
+}
+
+function formatMailDate(value: string | null | undefined) {
+  if (!value) return "-";
+  return new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
+
 type QuickComposeMode = "none" | "mail" | "approval" | "messenger";
 type UnifiedSearchType = "mail" | "approval" | "messenger" | "schedule" | "contacts" | "org" | "files";
 type UnifiedSearchResult = { id: string; type: UnifiedSearchType; title: string; detail: string; menu: UserPortalMenu; mailbox?: MailboxType };
@@ -454,6 +472,8 @@ export default function App() {
   const [mailComposePosition, setMailComposePosition] = useState<{ left: number; top: number } | null>(null);
   const [mailDetailExpanded, setMailDetailExpanded] = useState(false);
   const [selectedMailDetail, setSelectedMailDetail] = useState<MailDetail | null>(null);
+  const [mailDetailLoading, setMailDetailLoading] = useState(false);
+  const [mailDetailError, setMailDetailError] = useState("");
   const [mailDeliveryStatus, setMailDeliveryStatus] = useState<MailDeliveryStatusResponse | null>(null);
   const [mailComposeForm, setMailComposeForm] = useState<MailComposeForm>({ to: "", subject: "", bodyText: "" });
   const [mailError, setMailError] = useState("");
@@ -896,25 +916,30 @@ export default function App() {
     }
   }
 
-  async function selectMail(targetToken: string, mailId: string, mailbox: MailboxType, options?: { markRead?: boolean; propagateError?: boolean }) {
-    setMailLoading(true);
-    setMailError("");
+  async function loadMailDetail(targetToken: string, mailId: string, mailbox: MailboxType, options?: { markRead?: boolean; propagateError?: boolean }) {
+    setSelectedMailId(mailId);
+    setSelectedMailDetail(null);
+    setMailDetailLoading(true);
+    setMailDetailError("");
     try {
       if (mailbox === "inbox" && options?.markRead) {
         await markMailRead(targetToken, mailId);
       }
       const detail = await fetchMailDetail(targetToken, mailId);
-      setSelectedMailId(mailId);
       setSelectedMailDetail(detail);
       if (mailbox === "inbox" && options?.markRead) {
         setInboxMails((current) => current.map((item) => (item.mailId === mailId ? { ...item, isRead: true } : item)));
       }
     } catch (error) {
-      setMailError(normalizeClientError(error, "메일 상세 조회 실패"));
+      setMailDetailError(normalizeClientError(error, "메일 상세 조회 실패"));
       if (options?.propagateError) throw error;
     } finally {
-      setMailLoading(false);
+      setMailDetailLoading(false);
     }
+  }
+
+  async function selectMail(targetToken: string, mailId: string, mailbox: MailboxType, options?: { markRead?: boolean; propagateError?: boolean }) {
+    await loadMailDetail(targetToken, mailId, mailbox, options);
   }
 
   async function loadMailWorkspace(
@@ -964,12 +989,11 @@ export default function App() {
         : activeList[0] ?? null;
       setActiveMailbox(resolvedMailbox);
       if (targetMail) {
-        const detail = await fetchMailDetail(targetToken, targetMail.mailId);
-        setSelectedMailId(targetMail.mailId);
-        setSelectedMailDetail(detail);
+        await loadMailDetail(targetToken, targetMail.mailId, resolvedMailbox);
       } else {
         setSelectedMailId("");
         setSelectedMailDetail(null);
+        setMailDetailError("");
       }
       return true;
     } catch (error) {
@@ -1118,10 +1142,7 @@ export default function App() {
 
   function openMailComposeFromDetail(mode: "reply" | "forward") {
     if (!selectedMailDetail) return;
-    const subjectPrefix = mode === "reply" ? "Re: " : "Fwd: ";
-    const subject = selectedMailDetail.subject.startsWith(subjectPrefix)
-      ? selectedMailDetail.subject
-      : `${subjectPrefix}${selectedMailDetail.subject}`;
+    const subject = withMailSubjectPrefix(selectedMailDetail.subject, mode);
     const quoted = [
       "",
       "--- 원문 ---",
@@ -1778,6 +1799,12 @@ export default function App() {
     sentMails.find((item) => item.mailId === selectedMailId) ??
     draftMails.find((item) => item.mailId === selectedMailId) ??
     null;
+  const mailToRecipients = selectedMailDetail?.recipients.filter((item) => item.recipientKind === "to") ?? [];
+  const mailCcRecipients = selectedMailDetail?.recipients.filter((item) => item.recipientKind === "cc") ?? [];
+  const isInboxDetail = ["inbox", "starred", "unread"].includes(activeMailFolder);
+  const canReplyToSelectedMail = Boolean(selectedMailDetail && isInboxDetail);
+  const canForwardSelectedMail = Boolean(selectedMailDetail && (isInboxDetail || activeMailFolder === "sent"));
+  const canUpdateSelectedMailStatus = Boolean(selectedMailDetail && isInboxDetail);
 
   function handleHomeSurfaceCardClick(surfaceCardId: string) {
     if (surfaceCardId === "mail") {
@@ -2307,78 +2334,40 @@ export default function App() {
                 </form>
               ) : (
                 <>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-                    <div>
-                      <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>메일 상세</div>
-                      <h2 style={{ margin: "10px 0 0", fontSize: 22 }}>{selectedMailDetail?.subject || "메일을 선택하세요"}</h2>
+                  <header className="user-mail-detail-header">
+                    <div><small>메일 상세</small><h2>{selectedMailDetail?.subject || "메일을 선택하세요"}</h2></div>
+                    <div><button type="button" aria-label={mailDetailExpanded ? "메일 상세 분할 보기" : "메일 상세 전체 보기"} aria-pressed={mailDetailExpanded} onClick={() => setMailDetailExpanded((current) => !current)}>{mailDetailExpanded ? "분할 보기" : "상세 전체 보기"}</button><button type="button" onClick={openNewMailCompose}>메일 작성</button></div>
+                  </header>
+                  {mailDetailLoading ? (
+                    <FeedbackState state="loading" title="메일 상세를 불러오는 중입니다." />
+                  ) : mailDetailError ? (
+                    <FeedbackState state="error" title="메일 상세를 불러오지 못했습니다." message={mailDetailError} action={{ label: "다시 시도", onAction: () => void loadMailDetail(token, selectedMailId, inferMailboxFromMailId(selectedMailId)) }} />
+                  ) : !selectedMailDetail ? (
+                    <FeedbackState state="empty" title="메일을 선택하세요." message="목록에서 메일을 선택하면 상세 내용을 확인할 수 있습니다." />
+                  ) : (
+                    <div className="user-mail-detail-content">
+                      <dl className="user-mail-detail-meta">
+                        <div><dt>보낸 사람</dt><dd>{selectedMailDetail.senderEmail}</dd></div>
+                        <div><dt>받는 사람</dt><dd>{mailToRecipients.map((item) => item.recipientEmail).join(", ") || "-"}</dd></div>
+                        <div><dt>참조</dt><dd>{mailCcRecipients.map((item) => item.recipientEmail).join(", ") || "-"}</dd></div>
+                        <div><dt>일시</dt><dd>{formatMailDate(selectedMailDetail.sentAt || selectedMailDetail.createdAt)}</dd></div>
+                        <div><dt>상태</dt><dd>{activeMailFolder === "sent" ? "보낸편지함" : activeMailFolder === "draft" ? "임시보관함" : "받은편지함"}</dd></div>
+                      </dl>
+                      <div className="user-mail-detail-actions">
+                        {canReplyToSelectedMail ? <button type="button" onClick={() => openMailComposeFromDetail("reply")}>답장</button> : null}
+                        {canForwardSelectedMail ? <button type="button" onClick={() => openMailComposeFromDetail("forward")}>전달</button> : null}
+                        {canUpdateSelectedMailStatus ? <button type="button" aria-label="mail-detail-read-action" onClick={() => void handleSelectedMailReadAction()}>{selectedMailSummary?.isRead ? "읽음 상태 확인" : "읽음 처리"}</button> : null}
+                        {canUpdateSelectedMailStatus ? <button type="button" aria-label="mail-detail-star-action" onClick={() => void toggleSelectedMailStar()}>{selectedMailSummary?.isStarred ? "중요 해제" : "중요 표시"}</button> : null}
+                      </div>
+                      <div className="user-mail-detail-body">{selectedMailDetail.bodyText || selectedMailDetail.subject}</div>
+                      {selectedMailDetail.attachments.length ? (
+                        <section className="user-mail-detail-attachments" aria-label="첨부 파일">
+                          <h3>첨부 {selectedMailDetail.attachments.length}개</h3>
+                          {selectedMailDetail.attachments.map((attachment, index) => <div key={`${attachment.fileName}-${index}`}><strong>{attachment.fileName}</strong><span>{attachment.contentType}</span><small>{formatFileSize(attachment.sizeBytes)}</small></div>)}
+                        </section>
+                      ) : null}
                     </div>
-                    <div style={{ display: "flex", gap: 8 }}><button type="button" aria-label={mailDetailExpanded ? "메일 상세 분할 보기" : "메일 상세 전체 보기"} aria-pressed={mailDetailExpanded} onClick={() => setMailDetailExpanded((current) => !current)} style={{ height: 36, borderRadius: 12, border: "1px solid #cbd5e1", background: "#fff", padding: "0 12px", fontWeight: 700, cursor: "pointer" }}>{mailDetailExpanded ? "분할 보기" : "상세 전체 보기"}</button><button type="button" onClick={openNewMailCompose} style={{ height: 36, borderRadius: 12, border: 0, background: uiContract.brand.primary, color: "#fff", padding: "0 14px", fontWeight: 800, cursor: "pointer" }}>메일 작성</button></div>
-                  </div>
-                  <p style={{ color: "#475569", lineHeight: 1.7 }}>
-                    {selectedMailDetail
-                      ? selectedMailDetail.bodyText || selectedMailDetail.subject
-                      : "받은편지함 또는 보낸편지함 목록에서 메일을 선택하면 상세 본문을 확인할 수 있습니다."}
-                  </p>
-                  <p style={{ color: "#64748b", fontSize: 14 }}>
-                    발신자 {selectedMailDetail?.senderEmail || "-"} / 수신 {selectedMailDetail?.recipients.map((item) => item.recipientEmail).join(", ") || "-"}
-                  </p>
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <button type="button" disabled={!selectedMailDetail} onClick={() => openMailComposeFromDetail("reply")} style={{ padding: "9px 12px", borderRadius: 999, border: 0, cursor: "pointer" }}>
-                      답장
-                    </button>
-                    <button type="button" disabled={!selectedMailDetail} onClick={() => openMailComposeFromDetail("forward")} style={{ padding: "9px 12px", borderRadius: 999, border: 0, cursor: "pointer" }}>
-                      전달
-                    </button>
-                    <button
-                      type="button"
-                      aria-label="mail-detail-read-action"
-                      onClick={() => void handleSelectedMailReadAction()}
-                      style={{ padding: "9px 12px", borderRadius: 999, background: "#ecfeff", color: "#0f766e", fontWeight: 700, fontSize: 13, border: 0, cursor: "pointer" }}
-                    >
-                      {selectedMailSummary?.isRead ? "읽음 상태 확인" : "읽음 처리"}
-                    </button>
-                    <button
-                      type="button"
-                      aria-label="mail-detail-star-action"
-                      onClick={() => void toggleSelectedMailStar()}
-                      style={{ padding: "9px 12px", borderRadius: 999, background: "#fff7ed", color: "#b45309", fontWeight: 700, fontSize: 13, border: 0, cursor: "pointer" }}
-                    >
-                      {selectedMailSummary?.isStarred ? "중요 해제" : "중요 표시"}
-                    </button>
-                    <span style={{ padding: "9px 12px", borderRadius: 999, background: "#f8fafc", color: "#475569", fontWeight: 700, fontSize: 13 }}>
-                      첨부 {selectedMailDetail?.attachmentCount ?? 0}
-                    </span>
-                    <span style={{ padding: "9px 12px", borderRadius: 999, background: "#f0fdf4", color: "#166534", fontWeight: 700, fontSize: 13 }}>
-                      {selectedMailDetail ? (inferMailboxFromMailId(selectedMailId || selectedMailDetail.mailId) === "sent" ? "보낸편지함" : "받은편지함") : localMailArchiveHint || "받은편지함"}
-                    </span>
-                    {selectedMailDetail?.externalDeliveries?.length ? (
-                      <span style={{ padding: "9px 12px", borderRadius: 999, background: "#eef2ff", color: "#4338ca", fontWeight: 700, fontSize: 13 }}>
-                        외부 발송 {selectedMailDetail.externalDeliveries.length}건
-                      </span>
-                    ) : null}
-                    {activeMailFolder === "localArchive" ? (
-                      <span style={{ padding: "9px 12px", borderRadius: 999, background: "#ecfeff", color: "#0f766e", fontWeight: 700, fontSize: 13 }}>
-                        {localMailArchiveHint}
-                      </span>
-                    ) : null}
-                  </div>
-                  {selectedMailDetail?.externalDeliveries?.length ? (
-                    <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
-                      {selectedMailDetail.externalDeliveries.map((item) => (
-                        <div key={item.queueId} style={{ borderRadius: 16, border: "1px solid #dbe4ec", background: "#f8fafc", padding: 14 }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                            <strong style={{ color: "#0f172a" }}>{item.recipient}</strong>
-                            <span style={{ color: item.status === "sent" ? "#166534" : item.status === "failed" ? "#b91c1c" : "#4338ca", fontWeight: 800 }}>{item.status}</span>
-                          </div>
-                          <div style={{ marginTop: 8, color: "#475569", fontSize: 13 }}>
-                            provider {item.provider} / attempt {item.attemptCount}
-                          </div>
-                          {item.lastError ? <div style={{ marginTop: 6, color: "#b91c1c", fontSize: 13 }}>{item.lastError}</div> : null}
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                  {mailError && selectedMailId ? <FeedbackState state="error" title="메일을 처리하지 못했습니다." message={mailError} action={{ label: "다시 시도", onAction: () => void selectMail(token, selectedMailId, inferMailboxFromMailId(selectedMailId)) }} /> : null}
+                  )}
                 </>
               )}
             </article>

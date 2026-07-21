@@ -9,6 +9,7 @@ from psycopg.types.json import Jsonb
 from app.schemas.directory import AuthUserSummary
 from app.schemas.mail_messenger import (
     MailAttachmentMeta,
+    MailAttachmentView,
     MailBulkRequest,
     MailBulkResponse,
     MailCategoryRequest,
@@ -342,7 +343,12 @@ class MailMessengerService:
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
                 message = self._fetch_accessible_mail(cursor, actor, mail_id)
-                recipients = self._fetch_mail_recipients(cursor, mail_id)
+                recipients = self._fetch_mail_recipients(
+                    cursor,
+                    actor,
+                    mail_id,
+                    is_sender_view=bool(message["is_sender_view"]),
+                )
                 attachments = self._fetch_mail_attachments(cursor, mail_id)
         return self._to_mail_detail(message, recipients, attachments)
 
@@ -919,33 +925,49 @@ class MailMessengerService:
                 m.created_at,
                 m.updated_at,
                 m.retention_expires_at,
-                m.attachment_count
+                m.attachment_count,
+                (m.sender_user_id = %s AND m.sender_deleted_at IS NULL) AS is_sender_view
             FROM mail_messages m
             LEFT JOIN mail_recipients r ON r.message_id = m.id
             WHERE m.id = %s
               AND m.company_id = %s
               AND (
-                m.sender_user_id = %s
-                OR r.recipient_user_id = %s
-                OR LOWER(r.recipient_email) = %s
+                (m.sender_user_id = %s AND m.sender_deleted_at IS NULL)
+                OR (
+                  (r.recipient_user_id = %s OR LOWER(r.recipient_email) = %s)
+                  AND r.deleted_at IS NULL
+                )
               )
             """,
-            (mail_id, actor.companyId, actor.userId, actor.userId, actor.userEmail.lower()),
+            (actor.userId, mail_id, actor.companyId, actor.userId, actor.userId, actor.userEmail.lower()),
         )
         row = cursor.fetchone()
         if row is None:
             raise PermissionError("메일을 조회할 권한이 없습니다.")
         return row
 
-    def _fetch_mail_recipients(self, cursor, mail_id: str) -> list[MailRecipientView]:
+    def _fetch_mail_recipients(
+        self,
+        cursor,
+        actor: AuthUserSummary,
+        mail_id: str,
+        *,
+        is_sender_view: bool,
+    ) -> list[MailRecipientView]:
         cursor.execute(
             """
             SELECT recipient_email, recipient_user_id, recipient_kind, is_read, is_starred, received_at, read_at
             FROM mail_recipients
             WHERE message_id = %s
+              AND (
+                recipient_kind <> 'bcc'
+                OR %s
+                OR recipient_user_id = %s
+                OR LOWER(recipient_email) = %s
+              )
             ORDER BY recipient_kind, recipient_email
             """,
-            (mail_id,),
+            (mail_id, is_sender_view, actor.userId, actor.userEmail.lower()),
         )
         return [
             MailRecipientView(
@@ -960,10 +982,10 @@ class MailMessengerService:
             for row in cursor.fetchall()
         ]
 
-    def _fetch_mail_attachments(self, cursor, mail_id: str) -> list[MailAttachmentMeta]:
+    def _fetch_mail_attachments(self, cursor, mail_id: str) -> list[MailAttachmentView]:
         cursor.execute(
             """
-            SELECT file_name, content_type, size_bytes, storage_key
+            SELECT file_name, content_type, size_bytes
             FROM mail_attachments
             WHERE message_id = %s
             ORDER BY created_at ASC
@@ -971,11 +993,10 @@ class MailMessengerService:
             (mail_id,),
         )
         return [
-            MailAttachmentMeta(
+            MailAttachmentView(
                 fileName=row["file_name"],
                 contentType=row["content_type"],
                 sizeBytes=row["size_bytes"],
-                storageKey=row["storage_key"],
             )
             for row in cursor.fetchall()
         ]
@@ -1092,7 +1113,12 @@ class MailMessengerService:
             category=row.get("category") or "primary",
         )
 
-    def _to_mail_detail(self, message: dict, recipients: list[MailRecipientView], attachments: list[MailAttachmentMeta]) -> MailDetailResponse:
+    def _to_mail_detail(
+        self,
+        message: dict,
+        recipients: list[MailRecipientView],
+        attachments: list[MailAttachmentMeta | MailAttachmentView],
+    ) -> MailDetailResponse:
         return MailDetailResponse(
             mailId=message["mail_id"],
             accountId=message["account_id"],
@@ -1108,7 +1134,14 @@ class MailMessengerService:
             retentionExpiresAt=message["retention_expires_at"],
             attachmentCount=message["attachment_count"],
             recipients=recipients,
-            attachments=attachments,
+            attachments=[
+                MailAttachmentView(
+                    fileName=item.fileName,
+                    contentType=item.contentType,
+                    sizeBytes=item.sizeBytes,
+                )
+                for item in attachments
+            ],
         )
 
     def _to_room_summary(self, row: dict) -> MessengerRoomSummary:
