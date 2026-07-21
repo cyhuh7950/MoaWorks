@@ -92,6 +92,34 @@ class MailMessengerService:
                 )
                 return MailListResponse(mails=[self._to_mail_summary(row) for row in cursor.fetchall()])
 
+    def list_drafts(self, actor: AuthUserSummary) -> MailListResponse:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        m.id AS mail_id,
+                        m.sender_account_id AS account_id,
+                        m.sender_email,
+                        m.subject,
+                        m.status,
+                        m.sent_at,
+                        m.retention_expires_at,
+                        m.attachment_count,
+                        TRUE AS is_read,
+                        FALSE AS is_starred,
+                        NULL AS received_at
+                    FROM mail_messages m
+                    WHERE m.company_id = %s
+                      AND m.sender_user_id = %s
+                      AND m.status = 'draft'
+                    ORDER BY COALESCE(m.updated_at, m.created_at) DESC
+                    """,
+                    (actor.companyId, actor.userId),
+                )
+                return MailListResponse(mails=[self._to_mail_summary(row) for row in cursor.fetchall()])
+
     def get_mail_storage(self, actor: AuthUserSummary) -> MailStorageResponse:
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection:

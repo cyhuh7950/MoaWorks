@@ -61,6 +61,15 @@ def list_sent(user: AuthUserSummary = Depends(permission_required("mail:read")))
         raise
 
 
+@router.get("/drafts", response_model=MailListResponse)
+def list_drafts(user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailListResponse:
+    try:
+        return _service().list_drafts(user)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
 @router.get("/storage", response_model=MailStorageResponse)
 def get_mail_storage(user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailStorageResponse:
     try:
