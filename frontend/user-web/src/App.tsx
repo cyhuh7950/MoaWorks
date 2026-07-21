@@ -18,6 +18,7 @@ import {
   fetchInbox,
   fetchMailDeliveryStatus,
   fetchMailDetail,
+  fetchMailStorage,
   fetchMe,
   fetchMessengerMessages,
   fetchMessengerRoom,
@@ -56,6 +57,7 @@ import {
   type LoginResponse,
   type MailDeliveryStatusResponse,
   type MailDetail,
+  type MailStorageResponse,
   type MailSummary,
   type MessengerMessage,
   type MessengerRoomDetail,
@@ -431,6 +433,9 @@ export default function App() {
   const [mailComposeForm, setMailComposeForm] = useState<MailComposeForm>({ to: "", subject: "", bodyText: "" });
   const [mailError, setMailError] = useState("");
   const [mailLoading, setMailLoading] = useState(false);
+  const [mailStorage, setMailStorage] = useState<MailStorageResponse | null>(null);
+  const [mailStorageLoading, setMailStorageLoading] = useState(false);
+  const [mailStorageError, setMailStorageError] = useState("");
   const [messengerRoomsData, setMessengerRoomsData] = useState<MessengerRoomSummary[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState("");
   const [selectedRoomDetail, setSelectedRoomDetail] = useState<MessengerRoomDetail | null>(null);
@@ -440,6 +445,7 @@ export default function App() {
   const [messengerLoading, setMessengerLoading] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   const notificationButtonRef = useRef<HTMLButtonElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const streamCursorRef = useRef<string>("");
   const streamRetryRef = useRef(0);
 
@@ -890,6 +896,31 @@ export default function App() {
     }
   }
 
+  async function loadMailStorage(targetToken: string) {
+    setMailStorageLoading(true);
+    setMailStorageError("");
+    try {
+      setMailStorage(await fetchMailStorage(targetToken));
+    } catch (error) {
+      setMailStorageError(normalizeClientError(error, "메일 용량을 불러오지 못했습니다."));
+    } finally {
+      setMailStorageLoading(false);
+    }
+  }
+
+  function openMailQuickSearch() {
+    setSearchFilter("mail");
+    setSearchOpen(Boolean(searchText.trim()));
+    window.requestAnimationFrame(() => searchInputRef.current?.focus());
+  }
+
+  function formatStorageBytes(value: number) {
+    if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;
+    if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+    if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+    return `${value} B`;
+  }
+
   async function toggleSelectedMailStar() {
     if (!token || !selectedMailId) return;
     setMailLoading(true);
@@ -1239,6 +1270,7 @@ export default function App() {
     }
     void reload().catch((error) => setApprovalError(error instanceof Error ? error.message : "조회 실패"));
     void loadMailWorkspace(token).catch((error) => setMailError(normalizeClientError(error, "메일 조회 실패")));
+    void loadMailStorage(token);
     void loadMessengerWorkspace(token).catch((error) => setMessengerError(normalizeClientError(error, "메신저 조회 실패")));
     setHomeLoading(true);
     setHomeError("");
@@ -2028,33 +2060,41 @@ export default function App() {
       if (activePortalMenu === "mail") {
         return (
           <section className={`user-mail-workbench${mailDetailExpanded ? " is-detail-expanded" : ""}`}>
-            <aside className="user-mail-folder-panel">
-              {mailFolders.map((item) => (
-            <button
-                  key={item.title}
-                  type="button"
-                  onClick={() => {
-                    setMailFolder(item.folder);
-                    const workspaceMailbox: MailboxType = item.folder === "sent" ? "sent" : "inbox";
-                    if (item.folder === "localArchive") {
-                      setSelectedMailId("");
-                      setSelectedMailDetail(null);
-                    }
-                    void loadMailWorkspace(token, workspaceMailbox);
-                  }}
-                  style={{
-                    borderRadius: 18,
-                    padding: 16,
-                    border: activeMailFolder === item.folder ? `1px solid ${item.tone}` : "1px solid #dbe4ec",
-                    background: "#fff",
-                    textAlign: "left",
-                    cursor: "pointer",
-                  }}
-                >
-                  <strong>{item.title}</strong>
-                  <div style={{ marginTop: 8, color: item.tone, fontWeight: 800 }}>{item.count}</div>
-                </button>
-              ))}
+            <aside className="user-mail-shell" aria-label="메일함 메뉴">
+              <button type="button" className="user-mail-compose-action" onClick={openNewMailCompose}>메일쓰기</button>
+              <div className="user-mail-shell-group" aria-label="즐겨찾기">
+                <strong>즐겨찾기</strong>
+                <button type="button" aria-pressed={activeMailFolder === "starred"} onClick={() => setMailFolder("starred")}>중요 <span>{starredMailCount}</span></button>
+                <button type="button" aria-pressed={activeMailFolder === "unread"} onClick={() => setMailFolder("unread")}>안 읽은 메일 <span>{unreadInboxCount}</span></button>
+              </div>
+              <div className="user-mail-shell-group" aria-label="기본 메일함">
+                <strong>메일함</strong>
+                <button type="button" aria-pressed={activeMailFolder === "inbox"} onClick={() => { setMailFolder("inbox"); void loadMailWorkspace(token, "inbox"); }}>받은편지함 <span>{inboxMails.length}</span></button>
+                <button type="button" aria-pressed={activeMailFolder === "sent"} onClick={() => { setMailFolder("sent"); void loadMailWorkspace(token, "sent"); }}>보낸편지함 <span>{sentMails.length}</span></button>
+                <button type="button" aria-pressed={activeMailFolder === "draft"} onClick={() => { setMailFolder("draft"); void loadMailWorkspace(token, "inbox"); }}>임시보관함 <span>{draftMailCount}</span></button>
+                {[
+                  ["예약메일함", "예약 발송은 UI-018에서 제공합니다."],
+                  ["스팸메일함", "스팸 메일함은 UI-020에서 제공합니다."],
+                  ["휴지통", "휴지통 관리는 UI-020에서 제공합니다."],
+                  ["사용자 메일함", "사용자 메일함 관리는 UI-020에서 제공합니다."],
+                  ["태그", "태그 관리는 UI-020에서 제공합니다."],
+                ].map(([label, tooltip]) => (
+                  <button key={label} type="button" aria-disabled="true" data-tooltip={tooltip} onClick={(event) => event.preventDefault()}>{label} <span aria-hidden="true">i</span></button>
+                ))}
+              </div>
+              <div className="user-mail-shell-group" aria-label="메일 도구">
+                <strong>도구</strong>
+                <button type="button" onClick={openMailQuickSearch}>빠른 검색</button>
+                <button type="button" onClick={() => setPortalMenu("settings")}>환경설정</button>
+              </div>
+              <div className="user-mail-storage" aria-live="polite">
+                <div><strong>메일 용량</strong>{mailStorage ? <span>{Math.round(mailStorage.usagePercent)}%</span> : null}</div>
+                <progress max="100" value={Math.min(100, mailStorage?.usagePercent ?? 0)} />
+                {mailStorageLoading ? <small>용량 확인 중</small> : null}
+                {!mailStorageLoading && mailStorage && mailStorage.quotaBytes > 0 ? <small>{formatStorageBytes(mailStorage.usedBytes)} / {formatStorageBytes(mailStorage.quotaBytes)}</small> : null}
+                {!mailStorageLoading && mailStorage && mailStorage.quotaBytes === 0 ? <small>할당량 미설정 · 사용량 {formatStorageBytes(mailStorage.usedBytes)}</small> : null}
+                {!mailStorageLoading && mailStorageError ? <><small role="alert">{mailStorageError}</small><button type="button" onClick={() => void loadMailStorage(token)}>용량 다시 시도</button></> : null}
+              </div>
             </aside>
             <SplitView
               ariaLabel="메일 목록과 상세 영역 너비 조절"
@@ -2801,7 +2841,7 @@ export default function App() {
                 </div>
               </div>
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                <input className="user-global-search" aria-label="통합 검색" value={searchText} onFocus={() => { if (searchText.trim()) setSearchOpen(true); }} onKeyDown={(event) => { if (event.key === "Escape") closeUnifiedSearch(); }} onChange={(event) => setSearchText(event.target.value)} placeholder="통합 검색" style={{ width: 300, height: 46, borderRadius: 14, border: "1px solid #d7e0e8", background: "#fff", padding: "0 14px" }} />
+                <input ref={searchInputRef} className="user-global-search" aria-label="통합 검색" value={searchText} onFocus={() => { if (searchText.trim()) setSearchOpen(true); }} onKeyDown={(event) => { if (event.key === "Escape") closeUnifiedSearch(); }} onChange={(event) => setSearchText(event.target.value)} placeholder="통합 검색" style={{ width: 300, height: 46, borderRadius: 14, border: "1px solid #d7e0e8", background: "#fff", padding: "0 14px" }} />
                 {searchText ? <button type="button" className="user-search-clear" aria-label="검색 지우기" onClick={closeUnifiedSearch}>지우기</button> : null}
                 {notificationError && !showNotificationPanel ? <div className="feedback-shell-warning"><CompactWarning item={{ id: "notification-load", source: "notifications", tone: "warning", title: "알림 연결 확인 필요", message: notificationError, action: { label: "다시 시도", onAction: () => void loadNotificationData(token) } }} onDismiss={() => setNotificationError("")} /></div> : null}
                 <button ref={notificationButtonRef} className="user-notification-entry" type="button" aria-label={`알림, 미확인 ${notificationSummary?.unreadCount ?? 0}건`} aria-controls="recent-notification-panel" aria-expanded={showNotificationPanel} onClick={toggleNotificationPanel} style={{ height: 46, borderRadius: 14, border: "1px solid #d7e0e8", background: "#fff", padding: "0 12px", fontWeight: 700, cursor: "pointer" }}>알림 {(notificationSummary?.unreadCount ?? 0) > 0 ? <span aria-hidden="true">{notificationSummary?.unreadCount}</span> : null}</button>

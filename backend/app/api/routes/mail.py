@@ -8,6 +8,7 @@ from app.schemas.mail_messenger import (
     MailListResponse,
     MailSendRequest,
     MailSendResponse,
+    MailStorageResponse,
     MailStatusResponse,
 )
 from app.services.mail_messenger_service import MailMessengerService
@@ -55,6 +56,15 @@ def list_inbox(user: AuthUserSummary = Depends(permission_required("mail:read"))
 def list_sent(user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailListResponse:
     try:
         return _service().list_sent(user)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.get("/storage", response_model=MailStorageResponse)
+def get_mail_storage(user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailStorageResponse:
+    try:
+        return _service().get_mail_storage(user)
     except Exception as exc:
         _handle_error(exc)
         raise

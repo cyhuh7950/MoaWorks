@@ -15,6 +15,7 @@ from app.schemas.mail_messenger import (
     MailRecipientView,
     MailSendRequest,
     MailSendResponse,
+    MailStorageResponse,
     MailStatusResponse,
     MailSummary,
     MessengerMessageListResponse,
@@ -90,6 +91,65 @@ class MailMessengerService:
                     (actor.companyId, actor.userId),
                 )
                 return MailListResponse(mails=[self._to_mail_summary(row) for row in cursor.fetchall()])
+
+    def get_mail_storage(self, actor: AuthUserSummary) -> MailStorageResponse:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    WITH accessible_messages AS (
+                        SELECT DISTINCT m.id, m.subject, m.body_text, m.body_html
+                        FROM mail_messages m
+                        LEFT JOIN mail_recipients r ON r.message_id = m.id
+                        WHERE m.company_id = %s
+                          AND (
+                            m.sender_user_id = %s
+                            OR r.recipient_user_id = %s
+                            OR LOWER(r.recipient_email) = %s
+                          )
+                    ), message_sizes AS (
+                        SELECT
+                            am.id,
+                            OCTET_LENGTH(COALESCE(am.subject, ''))
+                            + OCTET_LENGTH(COALESCE(am.body_text, ''))
+                            + OCTET_LENGTH(COALESCE(am.body_html, ''))
+                            + COALESCE(SUM(a.size_bytes), 0) AS used_bytes
+                        FROM accessible_messages am
+                        LEFT JOIN mail_attachments a ON a.message_id = am.id
+                        GROUP BY am.id, am.subject, am.body_text, am.body_html
+                    ), usage AS (
+                        SELECT COALESCE(SUM(used_bytes), 0)::BIGINT AS used_bytes
+                        FROM message_sizes
+                    )
+                    SELECT ma.quota_mb, usage.used_bytes
+                    FROM mail_accounts ma
+                    JOIN users u ON u.id = ma.user_id
+                    CROSS JOIN usage
+                    WHERE ma.user_id = %s
+                      AND u.company_id = %s
+                      AND ma.status = 'active'
+                    """,
+                    (
+                        actor.companyId,
+                        actor.userId,
+                        actor.userId,
+                        actor.userEmail.lower(),
+                        actor.userId,
+                        actor.companyId,
+                    ),
+                )
+                row = cursor.fetchone()
+        if row is None:
+            raise ValueError("활성 메일 계정을 찾을 수 없습니다.")
+        used_bytes = max(0, int(row["used_bytes"] or 0))
+        quota_bytes = max(0, int(row["quota_mb"] or 0) * 1024 * 1024)
+        usage_percent = round((used_bytes / quota_bytes) * 100, 2) if quota_bytes else 0.0
+        return MailStorageResponse(
+            usedBytes=used_bytes,
+            quotaBytes=quota_bytes,
+            usagePercent=usage_percent,
+        )
 
     def get_mail(self, actor: AuthUserSummary, mail_id: str) -> MailDetailResponse:
         self.db.ensure_migrations_applied()

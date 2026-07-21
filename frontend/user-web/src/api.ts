@@ -287,6 +287,12 @@ export type MailListResponse = {
   mails: MailSummary[];
 };
 
+export type MailStorageResponse = {
+  usedBytes: number;
+  quotaBytes: number;
+  usagePercent: number;
+};
+
 export type MailDetail = {
   mailId: string;
   accountId: string;
@@ -655,6 +661,12 @@ export async function fetchUiContract(): Promise<UiContract> {
 
 export async function fetchInbox(token: string): Promise<MailListResponse> {
   return request<MailListResponse>("/mail/inbox", {
+    headers: authHeaders(token),
+  });
+}
+
+export async function fetchMailStorage(token: string): Promise<MailStorageResponse> {
+  return request<MailStorageResponse>("/mail/storage", {
     headers: authHeaders(token),
   });
 }

@@ -79,6 +79,12 @@ class MailListResponse(BaseModel):
     mails: list[MailSummary]
 
 
+class MailStorageResponse(BaseModel):
+    usedBytes: int = Field(ge=0)
+    quotaBytes: int = Field(ge=0)
+    usagePercent: float = Field(ge=0)
+
+
 class MailDetailResponse(BaseModel):
     mailId: str
     accountId: str
