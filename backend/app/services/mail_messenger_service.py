@@ -451,6 +451,7 @@ class MailMessengerService:
         return MailStatusResponse(mailId=mail_id, status=payload.category, isRead=row["is_read"], isStarred=row["is_starred"], category=payload.category)
 
     def bulk_mail(self, actor: AuthUserSummary, payload: MailBulkRequest) -> MailBulkResponse:
+        payload.validate_contract()
         self.db.ensure_migrations_applied()
         now = self._now()
         request_id = self._new_id("mailbulk")

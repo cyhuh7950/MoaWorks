@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class MailAttachmentMeta(BaseModel):
@@ -138,8 +138,7 @@ class MailBulkRequest(BaseModel):
             raise ValueError("지원하지 않는 메일 분류입니다.")
         return normalized
 
-    @model_validator(mode="after")
-    def validate_action_mailbox_contract(self):
+    def validate_contract(self) -> None:
         allowed = {
             "inbox": {"read", "unread", "star", "unstar", "move", "delete"},
             "sent": {"delete"},
@@ -151,7 +150,6 @@ class MailBulkRequest(BaseModel):
             raise ValueError("분류 이동 대상이 필요합니다.")
         if self.action != "move" and self.targetCategory is not None:
             raise ValueError("분류 이동에서만 이동 대상을 지정할 수 있습니다.")
-        return self
 
 
 class MailBulkResponse(BaseModel):

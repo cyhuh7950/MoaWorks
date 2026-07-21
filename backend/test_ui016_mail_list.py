@@ -3,9 +3,12 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
+from fastapi import HTTPException
 from pydantic import ValidationError
 
+from app.api.routes import mail as mail_routes
 from app.schemas.mail_messenger import MailBulkRequest, MailListQuery, MailSummary
 from app.services.mail_messenger_service import MailMessengerService
 
@@ -54,11 +57,15 @@ class FakeDb:
     def __init__(self, *, fetchone=None, fetchall=None):
         self.cursor_instance = FakeCursor(fetchone=fetchone, fetchall=fetchall)
         self.connection = FakeConnection(self.cursor_instance)
+        self.ensure_count = 0
+        self.connect_count = 0
 
     def ensure_migrations_applied(self):
+        self.ensure_count += 1
         return None
 
     def connect(self):
+        self.connect_count += 1
         return self.connection
 
 
@@ -103,7 +110,7 @@ class MailListOperationsTest(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(ValidationError):
                 MailListQuery(**invalid)
 
-    def test_bulk_schema_deduplicates_and_enforces_action_mailbox_contract(self):
+    def test_bulk_schema_deduplicates_and_keeps_field_validation(self):
         payload = MailBulkRequest(
             mailIds=[" mail-1 ", "mail-1", "mail-2"],
             action="MOVE",
@@ -118,13 +125,73 @@ class MailListOperationsTest(unittest.TestCase):
         invalid_payloads = (
             {"mailIds": [" "], "action": "read", "mailbox": "inbox"},
             {"mailIds": [f"mail-{index}" for index in range(101)], "action": "read", "mailbox": "inbox"},
-            {"mailIds": ["mail-1"], "action": "read", "mailbox": "sent"},
-            {"mailIds": ["mail-1"], "action": "move", "mailbox": "inbox"},
+            {"mailIds": ["mail-1"], "action": "archive", "mailbox": "inbox"},
+            {"mailIds": ["mail-1"], "action": "read", "mailbox": "trash"},
             {"mailIds": ["mail-1"], "action": "move", "mailbox": "inbox", "targetCategory": "spam"},
         )
         for invalid in invalid_payloads:
             with self.subTest(invalid=invalid), self.assertRaises(ValidationError):
                 MailBulkRequest(**invalid)
+
+    def test_bulk_semantic_contract_is_explicit_request_validation(self):
+        invalid_combinations = (
+            {"mailIds": ["mail-1"], "action": "read", "mailbox": "sent"},
+            {"mailIds": ["mail-1"], "action": "move", "mailbox": "inbox"},
+            {"mailIds": ["mail-1"], "action": "read", "mailbox": "inbox", "targetCategory": "social"},
+        )
+        for combination in invalid_combinations:
+            with self.subTest(combination=combination):
+                payload = MailBulkRequest(**combination)
+                with self.assertRaises(ValueError):
+                    payload.validate_contract()
+
+    def test_bulk_service_rejects_semantic_contract_before_database_access(self):
+        service = MailMessengerService()
+        service.db = FakeDb()
+        payload = MailBulkRequest(mailIds=["mail-1"], action="read", mailbox="sent")
+
+        with self.assertRaises(ValueError):
+            service.bulk_mail(self.actor(), payload)
+
+        self.assertEqual(service.db.ensure_count, 0)
+        self.assertEqual(service.db.connect_count, 0)
+        self.assertEqual(service.db.cursor_instance.executions, [])
+
+    def test_bulk_route_maps_semantic_contract_error_to_http_400(self):
+        service = MailMessengerService()
+        service.db = FakeDb()
+        payload = MailBulkRequest(mailIds=["mail-1"], action="read", mailbox="sent")
+
+        with patch.object(mail_routes, "_service", return_value=service):
+            with self.assertRaises(HTTPException) as captured:
+                mail_routes.bulk_mail(payload, self.actor())
+
+        self.assertEqual(captured.exception.status_code, 400)
+        self.assertEqual(captured.exception.detail["code"], "MAIL_REQUEST_INVALID")
+        self.assertEqual(service.db.connect_count, 0)
+
+    def test_bulk_route_maps_mixed_id_denial_to_http_403_and_rolls_back(self):
+        service = MailMessengerService()
+        service.db = FakeDb(fetchall=[[
+            {
+                "recipient_id": "recipient-1",
+                "mail_id": "mail-1",
+                "is_read": False,
+                "is_starred": False,
+                "category": "primary",
+                "deleted_at": None,
+            },
+        ]])
+        payload = MailBulkRequest(mailIds=["mail-1", "mail-other"], action="read", mailbox="inbox")
+
+        with patch.object(mail_routes, "_service", return_value=service):
+            with self.assertRaises(HTTPException) as captured:
+                mail_routes.bulk_mail(payload, self.actor())
+
+        self.assertEqual(captured.exception.status_code, 403)
+        self.assertEqual(captured.exception.detail["code"], "MAIL_FORBIDDEN")
+        self.assertEqual(service.db.connection.commit_count, 0)
+        self.assertEqual(len(service.db.cursor_instance.executions), 1)
 
     def test_ui016_migration_separates_recipient_and_sender_deletion(self):
         migration = (self.root / "migrations" / "020_mail_list_operations.sql").read_text(encoding="utf-8")
