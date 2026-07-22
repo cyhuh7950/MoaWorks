@@ -11,6 +11,7 @@ const checks = [
   ["Bcc 상태와 입력", app.includes("mailComposeForm.bcc") && app.includes('aria-label="mail-compose-bcc"')],
   ["공통 수신자 선택 dialog", app.includes('aria-label="메일 수신자 선택"') && app.includes("recipientPickerTarget")],
   ["최근 수신자 API", api.includes("/mail/recent-recipients")],
+  ["수신자 원본 부분 실패 허용", app.includes("Promise.allSettled") && app.includes("failedSourceCount")],
   ["실제 첨부 upload", api.includes('"/mail/attachments"') && app.includes("uploadMailAttachment")],
   ["첨부 제거와 합계", app.includes("removeMailComposeAttachment") && app.includes("mailComposeAttachmentBytes")],
   ["예약 발송", app.includes("scheduledAt") && app.includes('type="datetime-local"')],

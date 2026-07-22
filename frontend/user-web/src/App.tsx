@@ -1151,7 +1151,7 @@ export default function App() {
     setRecipientPickerLoading(true);
     setMailError("");
     try {
-      const [recent, directory, contacts] = await Promise.all([
+      const [recent, directory, contacts] = await Promise.allSettled([
         fetchRecentMailRecipients(token),
         fetchWorkspaceDirectory(token),
         fetchContacts(token),
@@ -1162,9 +1162,22 @@ export default function App() {
         if (!normalized || merged.has(normalized)) return;
         merged.set(normalized, { email: normalized, name, detail, source });
       };
-      recent.recipients.forEach((item: MailRecentRecipient) => add(item.email, item.name || item.email, item.departmentName || "최근 수신자", "recent"));
-      directory.users.forEach((item: WorkspaceDirectory["users"][number]) => add(item.email, item.name, `${item.department_name} · ${item.role_name}`, "directory"));
-      contacts.items.forEach((item: WorkspaceContact) => add(item.email, item.name, item.company_name || "개인 연락처", "contact"));
+      if (recent.status === "fulfilled") {
+        recent.value.recipients.forEach((item: MailRecentRecipient) => add(item.email, item.name || item.email, item.departmentName || "최근 수신자", "recent"));
+      }
+      if (directory.status === "fulfilled") {
+        directory.value.users.forEach((item: WorkspaceDirectory["users"][number]) => add(item.email, item.name, `${item.department_name} · ${item.role_name}`, "directory"));
+      }
+      if (contacts.status === "fulfilled") {
+        contacts.value.items.forEach((item: WorkspaceContact) => add(item.email, item.name, item.company_name || "개인 연락처", "contact"));
+      }
+      const failedSourceCount = [recent, directory, contacts].filter((result) => result.status === "rejected").length;
+      if (failedSourceCount === 3) {
+        throw new Error("수신자 원본을 불러오지 못했습니다.");
+      }
+      if (failedSourceCount > 0) {
+        setMessage("일부 수신자 원본을 불러오지 못해 확인 가능한 목록만 표시합니다.");
+      }
       setRecipientSuggestions([...merged.values()]);
     } catch (error) {
       setMailError(normalizeClientError(error, "수신자 목록 조회 실패"));
