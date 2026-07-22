@@ -1,11 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse
+
 
 from app.api.dependencies import permission_required
+from app.core.config import settings
 from app.schemas.directory import AuthUserSummary
 from app.schemas.mail_messenger import (
     MailBulkRequest,
     MailBulkResponse,
     MailCategoryRequest,
+    MailAttachmentUploadResponse,
+    MailRecentRecipientListResponse,
     MailDetailResponse,
     MailDraftRequest,
     MailListQuery,
@@ -98,6 +103,55 @@ def get_mail_storage(user: AuthUserSummary = Depends(permission_required("mail:r
     except Exception as exc:
         _handle_error(exc)
         raise
+
+
+@router.post("/attachments", response_model=MailAttachmentUploadResponse)
+async def upload_attachment(
+    file: UploadFile = File(...),
+    user: AuthUserSummary = Depends(permission_required("mail:send")),
+) -> MailAttachmentUploadResponse:
+    try:
+        content = await file.read(settings.mail_attachment_max_file_bytes + 1)
+        return _service().stage_attachment(
+            user,
+            file.filename or "attachment.bin",
+            file.content_type or "application/octet-stream",
+            content,
+        )
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.get("/recent-recipients", response_model=MailRecentRecipientListResponse)
+def recent_recipients(
+    limit: int = Query(default=20, ge=1, le=50),
+    user: AuthUserSummary = Depends(permission_required("mail:read")),
+) -> MailRecentRecipientListResponse:
+    try:
+        return _service().list_recent_recipients(user, limit)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.get("/{mail_id}/attachments/{attachment_id}")
+def download_attachment(
+    mail_id: str,
+    attachment_id: str,
+    user: AuthUserSummary = Depends(permission_required("mail:read")),
+) -> FileResponse:
+    try:
+        item = _service().download_attachment(user, mail_id, attachment_id)
+        return FileResponse(
+            path=item["path"],
+            media_type=item["contentType"],
+            filename=item["fileName"],
+        )
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
 
 
 @router.get("/{mail_id}", response_model=MailDetailResponse)

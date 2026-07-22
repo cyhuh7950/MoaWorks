@@ -9,6 +9,7 @@ import {
   changePassword,
   ApiRequestError,
   clearUserToken,
+  downloadMailAttachment,
   createApproval,
   fetchApprovalApprovers,
   fetchContacts,
@@ -18,6 +19,7 @@ import {
   fetchInbox,
   fetchMailDeliveryStatus,
   fetchMailDetail,
+  fetchRecentMailRecipients,
   fetchMailStorage,
   fetchMe,
   fetchMessengerMessages,
@@ -40,6 +42,7 @@ import {
   readMessengerRoom,
   readWorkspaceNotice,
   redraftApproval,
+  uploadMailAttachment,
   rejectApproval,
   requestTranslation,
   saveMailDraft,
@@ -50,8 +53,10 @@ import {
   toggleMailStar,
   setMailCategory,
   updateApproval,
+  type MailAttachment,
   withdrawApproval,
   type ApprovalApprover,
+  type MailRecentRecipient,
   type ApprovalDocument,
   type AuditLog,
   type AuthUser,
@@ -68,6 +73,8 @@ import {
   type NotificationSummary,
   type TranslationItem,
   type TranslationRequest,
+  type WorkspaceContact,
+  type WorkspaceDirectory,
   type TranslationResponse,
   type UiContract as ServerUiContract,
   type WorkspaceNotice,
@@ -243,10 +250,44 @@ type PasswordChangeForm = {
 
 type MailComposeForm = {
   to: string;
+  cc: string;
+  bcc: string;
   subject: string;
   bodyText: string;
+  scheduledAt: string;
 };
 
+type MailComposeFile = {
+  id: string;
+  file: File;
+};
+
+type RecipientPickerTarget = "to" | "cc" | "bcc";
+
+type RecipientSuggestion = {
+  email: string;
+  name: string;
+  detail: string;
+  source: "recent" | "directory" | "contact";
+};
+
+const MAIL_ATTACHMENT_LIMITS = {
+  maxFiles: 10,
+  maxFileBytes: 10 * 1024 * 1024,
+  maxTotalBytes: 25 * 1024 * 1024,
+};
+
+
+function createEmptyMailComposeForm(): MailComposeForm {
+  return {
+    to: "",
+    cc: "",
+    bcc: "",
+    subject: "",
+    bodyText: "",
+    scheduledAt: "",
+  };
+}
 type ReasonAction = {
   documentId: string;
   reason: string;
@@ -476,7 +517,13 @@ export default function App() {
   const [mailDetailLoading, setMailDetailLoading] = useState(false);
   const [mailDetailError, setMailDetailError] = useState("");
   const [mailDeliveryStatus, setMailDeliveryStatus] = useState<MailDeliveryStatusResponse | null>(null);
-  const [mailComposeForm, setMailComposeForm] = useState<MailComposeForm>({ to: "", subject: "", bodyText: "" });
+  const [mailComposeForm, setMailComposeForm] = useState<MailComposeForm>(createEmptyMailComposeForm);
+  const [mailComposeFiles, setMailComposeFiles] = useState<MailComposeFile[]>([]);
+  const [recipientPickerTarget, setRecipientPickerTarget] = useState<RecipientPickerTarget | null>(null);
+  const [recipientSuggestions, setRecipientSuggestions] = useState<RecipientSuggestion[]>([]);
+  const [recipientPickerQuery, setRecipientPickerQuery] = useState("");
+  const mailComposeAttachmentBytes = mailComposeFiles.reduce((sum, item) => sum + item.file.size, 0);
+  const [recipientPickerLoading, setRecipientPickerLoading] = useState(false);
   const [mailError, setMailError] = useState("");
   const [mailLoading, setMailLoading] = useState(false);
   const [mailCategoryBusy, setMailCategoryBusy] = useState(false);
@@ -626,8 +673,10 @@ export default function App() {
   function openNewMailCompose() {
     setMailComposeContext("new");
     setMailComposePosition(null);
+    setMailComposeFiles([]);
+    setRecipientPickerTarget(null);
     setComposeWindow("normal");
-    setMailComposeForm({ to: "", subject: "", bodyText: "" });
+    setMailComposeForm(createEmptyMailComposeForm());
     setMailError("");
     setQuickComposeMode("mail");
   }
@@ -1095,39 +1144,150 @@ export default function App() {
     }
   }
 
-  async function submitMailCompose(action: "draft" | "send") {
+  async function openRecipientPicker(target: RecipientPickerTarget) {
     if (!token) return;
-    const recipients = normalizeMailRecipients(mailComposeForm.to, uiContract.company.domain);
+    setRecipientPickerTarget(target);
+    setRecipientPickerQuery("");
+    setRecipientPickerLoading(true);
+    setMailError("");
+    try {
+      const [recent, directory, contacts] = await Promise.all([
+        fetchRecentMailRecipients(token),
+        fetchWorkspaceDirectory(token),
+        fetchContacts(token),
+      ]);
+      const merged = new Map<string, RecipientSuggestion>();
+      const add = (email: string, name: string, detail: string, source: RecipientSuggestion["source"]) => {
+        const normalized = email.trim().toLowerCase();
+        if (!normalized || merged.has(normalized)) return;
+        merged.set(normalized, { email: normalized, name, detail, source });
+      };
+      recent.recipients.forEach((item: MailRecentRecipient) => add(item.email, item.name || item.email, item.departmentName || "최근 수신자", "recent"));
+      directory.users.forEach((item: WorkspaceDirectory["users"][number]) => add(item.email, item.name, `${item.department_name} · ${item.role_name}`, "directory"));
+      contacts.items.forEach((item: WorkspaceContact) => add(item.email, item.name, item.company_name || "개인 연락처", "contact"));
+      setRecipientSuggestions([...merged.values()]);
+    } catch (error) {
+      setMailError(normalizeClientError(error, "수신자 목록 조회 실패"));
+      setRecipientPickerTarget(null);
+    } finally {
+      setRecipientPickerLoading(false);
+    }
+  }
+
+  function addRecipientSuggestion(suggestion: RecipientSuggestion) {
+    if (!recipientPickerTarget) return;
+    setMailComposeForm((current) => {
+      const existing = normalizeMailRecipients(current[recipientPickerTarget], uiContract.company.domain);
+      const next = existing.includes(suggestion.email) ? existing : [...existing, suggestion.email];
+      return { ...current, [recipientPickerTarget]: next.join(", ") };
+    });
+    setRecipientPickerTarget(null);
+    setRecipientPickerQuery("");
+  }
+
+  function addMailComposeFiles(files: FileList | null) {
+    if (!files?.length) return;
+    const additions = Array.from(files);
+    const nextCount = mailComposeFiles.length + additions.length;
+    if (nextCount > MAIL_ATTACHMENT_LIMITS.maxFiles) {
+      setMailError(`첨부는 최대 ${MAIL_ATTACHMENT_LIMITS.maxFiles}개까지 가능합니다.`);
+      return;
+    }
+    if (additions.some((file) => file.size === 0 || file.size > MAIL_ATTACHMENT_LIMITS.maxFileBytes)) {
+      setMailError("빈 파일 또는 10 MB를 초과한 파일은 첨부할 수 없습니다.");
+      return;
+    }
+    const totalBytes = mailComposeFiles.reduce((sum, item) => sum + item.file.size, 0) + additions.reduce((sum, file) => sum + file.size, 0);
+    if (totalBytes > MAIL_ATTACHMENT_LIMITS.maxTotalBytes) {
+      setMailError("첨부 파일 합계는 25 MB를 초과할 수 없습니다.");
+      return;
+    }
+    setMailError("");
+    setMailComposeFiles((current) => [
+      ...current,
+      ...additions.map((file) => ({ id: `${file.name}-${file.lastModified}-${crypto.randomUUID()}`, file })),
+    ]);
+  }
+
+  function removeMailComposeAttachment(id: string) {
+    setMailComposeFiles((current) => current.filter((item) => item.id !== id));
+  }
+
+  async function uploadComposeAttachments(targetToken: string): Promise<MailAttachment[]> {
+    const uploaded: MailAttachment[] = [];
+    for (const item of mailComposeFiles) {
+      uploaded.push(await uploadMailAttachment(targetToken, item.file));
+    }
+    return uploaded;
+  }
+
+  async function handleMailAttachmentDownload(attachmentId: string, fileName: string) {
+    if (!token || !selectedMailDetail) return;
+    try {
+      await downloadMailAttachment(token, selectedMailDetail.mailId, attachmentId, fileName);
+    } catch (error) {
+      setMailDetailError(normalizeClientError(error, "첨부 다운로드 실패"));
+    }
+  }
+
+
+  async function submitMailCompose(action: "draft" | "send" | "schedule") {
+    if (!token) return;
+    const to = normalizeMailRecipients(mailComposeForm.to, uiContract.company.domain);
+    const cc = normalizeMailRecipients(mailComposeForm.cc, uiContract.company.domain);
+    const bcc = normalizeMailRecipients(mailComposeForm.bcc, uiContract.company.domain);
+    const recipients = [...new Set([...to, ...cc, ...bcc])];
     const subject = mailComposeForm.subject.trim();
     const bodyText = mailComposeForm.bodyText.trim();
-    if (!recipients.length) {
+    const hasDraftContent = Boolean(recipients.length || subject || bodyText || mailComposeFiles.length);
+    if (action === "draft" && !hasDraftContent) {
+      setMailError("저장할 초안 내용을 입력해 주세요.");
+      return;
+    }
+    if (action !== "draft" && !recipients.length) {
       setMailError("받는 사람을 입력해 주세요.");
       return;
     }
-    if (!subject) {
+    if (action !== "draft" && !subject) {
       setMailError("제목을 입력해 주세요.");
       return;
     }
-    if (!bodyText) {
+    if (action !== "draft" && !bodyText) {
       setMailError("본문을 입력해 주세요.");
       return;
     }
+    if (action === "schedule" && !mailComposeForm.scheduledAt) {
+      setMailError("예약 발송 시각을 입력해 주세요.");
+      return;
+    }
+    let scheduledAt: string | undefined;
+    if (action === "schedule") {
+      const scheduledDate = new Date(mailComposeForm.scheduledAt);
+      if (Number.isNaN(scheduledDate.getTime())) {
+        setMailError("예약 발송 시각이 올바르지 않습니다.");
+        return;
+      }
+      scheduledAt = scheduledDate.toISOString();
+    }
     const hasExternal = hasExternalRecipients(recipients, uiContract.company.domain);
-    if (hasExternal && !mailDeliveryStatus?.provider.enabled) {
+    if (action !== "draft" && hasExternal && !mailDeliveryStatus?.provider.enabled) {
       setMailError("자체 SMTP 엔진이 비활성화되어 외부 수신자에게 발송할 수 없습니다.");
       return;
     }
-    if (hasExternal && !mailDeliveryStatus) {
+    if (action !== "draft" && hasExternal && !mailDeliveryStatus) {
       setMailError("외부 발송 상태를 아직 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.");
       return;
     }
     setMailLoading(true);
     setMailError("");
     try {
-      const payload = { to: recipients, subject, bodyText };
+      const attachments = await uploadComposeAttachments(token);
+      const payload = { to, cc, bcc, subject, bodyText, attachments, scheduledAt };
       const response = action === "draft" ? await saveMailDraft(token, payload) : await sendMail(token, payload);
       if (action === "draft") {
         setMessage("메일을 임시저장했습니다.");
+      } else if (action === "schedule") {
+        setMessage("메일을 예약했습니다.");
       } else if (response.deliverySummary?.externalRecipientCount) {
         setMessage(
           `메일을 발송했습니다. 외부 ${response.deliverySummary.externalRecipientCount}건 / sent ${response.deliverySummary.sentCount} / retry ${response.deliverySummary.retryPendingCount} / failed ${response.deliverySummary.failedCount}`,
@@ -1135,7 +1295,8 @@ export default function App() {
       } else {
         setMessage("메일을 발송했습니다.");
       }
-      setMailComposeForm({ to: "", subject: "", bodyText: "" });
+      setMailComposeForm(createEmptyMailComposeForm());
+      setMailComposeFiles([]);
       setQuickComposeMode("none");
       const nextMailbox: MailboxType = action === "draft" ? "inbox" : "sent";
       setMailFolder(action === "draft" ? "draft" : "sent");
@@ -1148,7 +1309,8 @@ export default function App() {
         { ...mailListQuery, offset: 0 },
       );
     } catch (error) {
-      setMailError(normalizeClientError(error, action === "draft" ? "메일 임시저장 실패" : "메일 발송 실패"));
+      const fallback = action === "draft" ? "메일 임시저장 실패" : action === "schedule" ? "메일 예약 실패" : "메일 발송 실패";
+      setMailError(normalizeClientError(error, fallback));
     } finally {
       setMailLoading(false);
     }
@@ -1168,6 +1330,9 @@ export default function App() {
     setMailComposeForm({
       to: mode === "reply" ? selectedMailDetail.senderEmail : "",
       subject,
+      cc: "",
+      bcc: "",
+      scheduledAt: "",
       bodyText: quoted,
     });
     setMailComposeContext(mode);
@@ -1177,16 +1342,19 @@ export default function App() {
   }
 
   function resetMailCompose() {
-    setMailComposeForm({ to: "", subject: "", bodyText: "" });
+    setMailComposeForm(createEmptyMailComposeForm());
     setMailComposeContext("new");
     setMailComposePosition(null);
+    setMailComposeFiles([]);
+    setRecipientPickerTarget(null);
+    setRecipientPickerQuery("");
     setComposeWindow("normal");
     setQuickComposeMode("none");
     setMailComposeCloseConfirmOpen(false);
   }
 
   function closeMailCompose() {
-    const hasDraft = Boolean(mailComposeForm.to || mailComposeForm.subject || mailComposeForm.bodyText);
+    const hasDraft = Boolean(mailComposeForm.to || mailComposeForm.cc || mailComposeForm.bcc || mailComposeForm.subject || mailComposeForm.bodyText || mailComposeForm.scheduledAt || mailComposeFiles.length);
     if (hasDraft) {
       setMailComposeCloseConfirmOpen(true);
       return;
@@ -1428,10 +1596,12 @@ export default function App() {
       setSelectedMailId("");
       setSelectedMailDetail(null);
       setMailDeliveryStatus(null);
-      setMailComposeForm({ to: "", subject: "", bodyText: "" });
+      setMailComposeForm(createEmptyMailComposeForm());
       setQuickComposeMode("none");
       setMessengerRoomsData([]);
       setSelectedRoomId("");
+      setMailComposeFiles([]);
+      setRecipientPickerTarget(null);
       setSelectedRoomDetail(null);
       setRoomMessages([]);
       setMailError("");
@@ -2309,40 +2479,56 @@ export default function App() {
                     <div style={{ display: "flex", gap: 6 }}><button type="button" onClick={() => setComposeWindow((current) => current === "minimized" ? "normal" : "minimized")} style={{ height: 34 }}>최소화</button><button type="button" onClick={() => setComposeWindow((current) => current === "maximized" ? "normal" : "maximized")} style={{ height: 34 }}>확대</button><button type="button" onClick={closeMailCompose} style={{ height: 34 }}>닫기</button></div>
                   </div>
                   <div className="user-mail-compose-body">
-                  <label style={{ display: "grid", gap: 6 }}>
-                    <span style={{ fontWeight: 800, color: "#334155" }}>받는 사람</span>
-                    <input
-                      aria-label="mail-compose-to"
-                      value={mailComposeForm.to}
-                      onChange={(event) => setMailComposeForm((current) => ({ ...current, to: event.target.value }))}
-                      placeholder={`admin@${uiContract.company.domain}`}
-                      style={{ height: 38, borderRadius: 10, border: "1px solid #cbd5e1", padding: "0 12px", font: "inherit" }}
-                    />
-                  </label>
-                  <label style={{ display: "grid", gap: 6 }}>
-                    <span style={{ fontWeight: 800, color: "#334155" }}>제목</span>
-                    <input
-                      aria-label="mail-compose-subject"
-                      value={mailComposeForm.subject}
-                      onChange={(event) => setMailComposeForm((current) => ({ ...current, subject: event.target.value }))}
-                      placeholder="제목 입력"
-                      style={{ height: 38, borderRadius: 10, border: "1px solid #cbd5e1", padding: "0 12px", font: "inherit" }}
-                    />
-                  </label>
-                  <label style={{ display: "grid", gap: 6, minHeight: 0 }}>
-                    <span style={{ fontWeight: 800, color: "#334155" }}>본문</span>
-                    <textarea
-                      aria-label="mail-compose-body"
-                      value={mailComposeForm.bodyText}
-                      onChange={(event) => setMailComposeForm((current) => ({ ...current, bodyText: event.target.value }))}
-                      placeholder="본문 입력"
-                      style={{ minHeight: 180, resize: "vertical", borderRadius: 12, border: "1px solid #cbd5e1", padding: 12, font: "inherit", lineHeight: 1.5 }}
-                    />
-                  </label>
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <button type="button" disabled={mailLoading} onClick={() => void submitMailCompose("draft")} style={{ height: 38, borderRadius: 12, border: "1px solid #cbd5e1", background: "#fff", padding: "0 14px", fontWeight: 800, cursor: "pointer" }}>임시저장</button>
-                    <button type="button" disabled={mailLoading} onClick={() => void submitMailCompose("send")} style={{ height: 38, borderRadius: 12, border: 0, background: uiContract.brand.primary, color: "#fff", padding: "0 14px", fontWeight: 800, cursor: "pointer" }}>발송</button>
+                  <div className="user-mail-compose-recipients">
+                    <label>
+                      <span>받는 사람</span>
+                      <div><input aria-label="mail-compose-to" value={mailComposeForm.to} onChange={(event) => setMailComposeForm((current) => ({ ...current, to: event.target.value }))} placeholder={`admin@${uiContract.company.domain}`} /><button type="button" title="조직·연락처에서 받는 사람 선택" onClick={() => void openRecipientPicker("to")}>선택</button></div>
+                    </label>
+                    <label>
+                      <span>참조</span>
+                      <div><input aria-label="mail-compose-cc" value={mailComposeForm.cc} onChange={(event) => setMailComposeForm((current) => ({ ...current, cc: event.target.value }))} placeholder="참조 이메일" /><button type="button" title="조직·연락처에서 참조 선택" onClick={() => void openRecipientPicker("cc")}>선택</button></div>
+                    </label>
+                    <label>
+                      <span>숨은참조</span>
+                      <div><input aria-label="mail-compose-bcc" value={mailComposeForm.bcc} onChange={(event) => setMailComposeForm((current) => ({ ...current, bcc: event.target.value }))} placeholder="숨은참조 이메일" /><button type="button" title="조직·연락처에서 숨은참조 선택" onClick={() => void openRecipientPicker("bcc")}>선택</button></div>
+                    </label>
                   </div>
+                  <label className="user-mail-compose-field">
+                    <span>제목</span>
+                    <input aria-label="mail-compose-subject" value={mailComposeForm.subject} onChange={(event) => setMailComposeForm((current) => ({ ...current, subject: event.target.value }))} placeholder="제목 입력" />
+                  </label>
+                  <label className="user-mail-compose-field">
+                    <span>본문</span>
+                    <textarea aria-label="mail-compose-body" value={mailComposeForm.bodyText} onChange={(event) => setMailComposeForm((current) => ({ ...current, bodyText: event.target.value }))} placeholder="본문 입력" />
+                  </label>
+                  <section className="user-mail-compose-attachments" aria-label="메일 첨부">
+                    <div><strong>첨부</strong><small>{mailComposeFiles.length}개 · {formatFileSize(mailComposeAttachmentBytes)}</small></div>
+                    <label title="파일당 10 MB, 최대 10개, 합계 25 MB">
+                      파일 선택
+                      <input type="file" multiple onChange={(event) => { addMailComposeFiles(event.target.files); event.target.value = ""; }} />
+                    </label>
+                    {mailComposeFiles.map((item) => <div key={item.id}><span>{item.file.name}</span><small>{formatFileSize(item.file.size)}</small><button type="button" aria-label={`${item.file.name} 첨부 제거`} onClick={() => removeMailComposeAttachment(item.id)}>제거</button></div>)}
+                  </section>
+                  <label className="user-mail-compose-field" title="현재보다 1분 이후, 365일 이내">
+                    <span>예약 발송 시각</span>
+                    <input type="datetime-local" aria-label="mail-compose-scheduled-at" value={mailComposeForm.scheduledAt} onChange={(event) => setMailComposeForm((current) => ({ ...current, scheduledAt: event.target.value }))} />
+                  </label>
+                  <div className="user-mail-compose-submit-actions">
+                    <button type="button" disabled={mailLoading} onClick={() => void submitMailCompose("draft")}>임시저장</button>
+                    <button type="button" disabled={mailLoading} onClick={() => void submitMailCompose("schedule")}>예약 발송</button>
+                    <button type="button" disabled={mailLoading} onClick={() => void submitMailCompose("send")} style={{ background: uiContract.brand.primary, color: "#fff" }}>즉시 발송</button>
+                  </div>
+                  {recipientPickerTarget ? (
+                    <div className="user-mail-recipient-picker-backdrop">
+                      <section role="dialog" aria-modal="true" aria-label="메일 수신자 선택" className="user-mail-recipient-picker" onKeyDown={(event) => { if (event.key === "Escape") setRecipientPickerTarget(null); }}>
+                        <header><strong>{recipientPickerTarget === "to" ? "받는 사람" : recipientPickerTarget === "cc" ? "참조" : "숨은참조"} 선택</strong><button type="button" onClick={() => setRecipientPickerTarget(null)}>닫기</button></header>
+                        <input autoFocus aria-label="수신자 검색" value={recipientPickerQuery} onChange={(event) => setRecipientPickerQuery(event.target.value)} placeholder="이름, 부서, 이메일 검색" />
+                        <div className="user-mail-recipient-picker-list">
+                          {recipientPickerLoading ? <span role="status">수신자를 불러오는 중입니다.</span> : recipientSuggestions.filter((item) => `${item.name} ${item.email} ${item.detail}`.toLowerCase().includes(recipientPickerQuery.trim().toLowerCase())).map((item) => <button type="button" key={item.email} onClick={() => addRecipientSuggestion(item)}><strong>{item.name}</strong><span>{item.email}</span><small>{item.detail} · {item.source === "recent" ? "최근" : item.source === "directory" ? "조직" : "연락처"}</small></button>)}
+                        </div>
+                      </section>
+                    </div>
+                  ) : null}
                   {mailError ? <FeedbackState state="error" title="메일을 처리하지 못했습니다." message={mailError} /> : null}
                   </div>
                 </form>
@@ -2377,7 +2563,7 @@ export default function App() {
                       {selectedMailDetail.attachments.length ? (
                         <section className="user-mail-detail-attachments" aria-label="첨부 파일">
                           <h3>첨부 {selectedMailDetail.attachments.length}개</h3>
-                          {selectedMailDetail.attachments.map((attachment, index) => <div key={`${attachment.fileName}-${index}`}><strong>{attachment.fileName}</strong><span>{attachment.contentType}</span><small>{formatFileSize(attachment.sizeBytes)}</small></div>)}
+                          {selectedMailDetail.attachments.map((attachment) => <button type="button" key={attachment.attachmentId} onClick={() => void handleMailAttachmentDownload(attachment.attachmentId, attachment.fileName)}><strong>{attachment.fileName}</strong><span>{attachment.contentType}</span><small>{formatFileSize(attachment.sizeBytes)}</small><em>다운로드</em></button>)}
                         </section>
                       ) : null}
                     </div>

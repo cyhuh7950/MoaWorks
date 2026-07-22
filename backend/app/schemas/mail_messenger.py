@@ -1,18 +1,33 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class MailAttachmentMeta(BaseModel):
-    fileName: str = Field(min_length=1)
-    contentType: str = Field(default="application/octet-stream")
-    sizeBytes: int = Field(default=0, ge=0)
-    storageKey: str | None = None
+    uploadId: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+    fileName: str = Field(min_length=1, max_length=255)
+    contentType: str = Field(default="application/octet-stream", max_length=255)
+    sizeBytes: int = Field(default=0, gt=0)
+    storageKey: str | None = Field(default=None, exclude=True)
+
+    @model_validator(mode="after")
+    def require_upload_reference(self):
+        if not self.uploadId and not self.storageKey:
+            raise ValueError("실제 업로드된 첨부만 사용할 수 있습니다.")
+        return self
+
+
+class MailAttachmentUploadResponse(BaseModel):
+    uploadId: str
+    fileName: str
+    contentType: str
+    sizeBytes: int = Field(gt=0)
 
 
 class MailAttachmentView(BaseModel):
+    attachmentId: str | None = None
     fileName: str
     contentType: str
     sizeBytes: int = Field(ge=0)
@@ -25,7 +40,8 @@ class MailSendRequest(BaseModel):
     subject: str = Field(min_length=1)
     bodyText: str = Field(min_length=1)
     bodyHtml: str | None = None
-    attachments: list[MailAttachmentMeta] = Field(default_factory=list)
+    attachments: list[MailAttachmentMeta] = Field(default_factory=list, max_length=10)
+    scheduledAt: datetime | None = None
 
     @field_validator("to", "cc", "bcc")
     @classmethod
@@ -39,9 +55,52 @@ class MailSendRequest(BaseModel):
                 normalized.append(email)
         return normalized
 
+    @field_validator("scheduledAt")
+    @classmethod
+    def validate_scheduled_at(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("예약 발송 시각에는 timezone이 필요합니다.")
+        normalized = value.astimezone(UTC)
+        now = datetime.now(UTC)
+        if normalized <= now + timedelta(minutes=1):
+            raise ValueError("예약 발송은 현재보다 1분 이후여야 합니다.")
+        if normalized > now + timedelta(days=365):
+            raise ValueError("예약 발송은 365일 이내만 가능합니다.")
+        return normalized
+
+    @model_validator(mode="after")
+    def dedupe_recipient_kinds(self):
+        seen: set[str] = set()
+        for field_name in ("to", "cc", "bcc"):
+            values = [email for email in getattr(self, field_name) if email not in seen]
+            setattr(self, field_name, values)
+            seen.update(values)
+        return self
+
 
 class MailDraftRequest(MailSendRequest):
+    subject: str = Field(default="")
     bodyText: str = Field(default="")
+    scheduledAt: None = None
+
+    @model_validator(mode="after")
+    def require_draft_content(self):
+        if not (self.subject.strip() or self.bodyText.strip() or self.to or self.cc or self.bcc or self.attachments):
+            raise ValueError("저장할 초안 내용이 없습니다.")
+        return self
+
+
+class MailRecentRecipient(BaseModel):
+    email: str
+    name: str | None = None
+    departmentName: str | None = None
+    lastUsedAt: datetime
+
+
+class MailRecentRecipientListResponse(BaseModel):
+    recipients: list[MailRecentRecipient]
 
 
 class MailStatusResponse(BaseModel):
@@ -169,6 +228,7 @@ class MailSendResponse(BaseModel):
     mailId: str
     status: str
     sentAt: datetime | None = None
+    scheduledAt: datetime | None = None
 
 
 class MailRecipientView(BaseModel):
@@ -191,6 +251,7 @@ class MailSummary(BaseModel):
     isRead: bool
     isStarred: bool
     sentAt: datetime | None = None
+    scheduledAt: datetime | None = None
     receivedAt: datetime | None = None
     retentionExpiresAt: datetime | None = None
     attachmentCount: int
@@ -221,6 +282,7 @@ class MailDetailResponse(BaseModel):
     bodyHtml: str | None = None
     status: str
     sentAt: datetime | None = None
+    scheduledAt: datetime | None = None
     createdAt: datetime
     updatedAt: datetime
     retentionExpiresAt: datetime | None = None

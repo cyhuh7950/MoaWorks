@@ -1007,7 +1007,7 @@ textarea {
   font-size: 12px;
 }
 
-.user-mail-detail-attachments > div {
+.user-mail-detail-attachments > button {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 8px;
@@ -1049,6 +1049,221 @@ textarea {
 
 .user-mail-compose-titlebar button {
   cursor: pointer;
+}
+
+
+.user-mail-compose-body {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+}
+
+.user-mail-compose-recipients {
+  display: grid;
+  gap: 6px;
+}
+
+.user-mail-compose-recipients label,
+.user-mail-compose-field {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.user-mail-compose-recipients label > div {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.user-mail-compose-recipients input,
+.user-mail-compose-field input,
+.user-mail-compose-field textarea,
+.user-mail-recipient-picker > input {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  padding: 0 10px;
+  background: #fff;
+  color: #0f172a;
+  font: inherit;
+}
+
+.user-mail-compose-recipients input,
+.user-mail-compose-field input,
+.user-mail-recipient-picker > input {
+  height: 34px;
+}
+
+.user-mail-compose-field textarea {
+  min-height: 160px;
+  padding: 10px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.user-mail-compose-recipients button,
+.user-mail-compose-submit-actions button,
+.user-mail-compose-attachments button,
+.user-mail-recipient-picker button,
+.user-mail-detail-attachments > button {
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  background: #fff;
+  color: #334155;
+  font: inherit;
+  cursor: pointer;
+}
+
+.user-mail-compose-recipients button {
+  flex: 0 0 auto;
+  padding: 0 10px;
+}
+
+.user-mail-compose-attachments {
+  display: grid;
+  gap: 6px;
+  padding: 9px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.user-mail-compose-attachments > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.user-mail-compose-attachments > div:first-child {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.user-mail-compose-attachments small {
+  color: #64748b;
+  font-size: 10px;
+}
+
+.user-mail-compose-attachments > label {
+  position: relative;
+  width: fit-content;
+  padding: 6px 10px;
+  border: 1px dashed #94a3b8;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.user-mail-compose-attachments input[type="file"] {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  opacity: 0;
+}
+
+.user-mail-compose-submit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.user-mail-compose-submit-actions button {
+  min-height: 34px;
+  padding: 0 12px;
+  font-weight: 700;
+}
+
+.user-mail-compose-submit-actions button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.user-mail-recipient-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.user-mail-recipient-picker {
+  width: min(460px, calc(100vw - 48px));
+  max-height: min(620px, calc(100vh - 48px));
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 10px;
+  padding: 14px;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.3);
+}
+
+.user-mail-recipient-picker header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.user-mail-recipient-picker header strong {
+  font-size: 16px;
+}
+
+.user-mail-recipient-picker-list {
+  min-height: 120px;
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.user-mail-recipient-picker-list > button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 8px;
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.user-mail-recipient-picker-list > button strong,
+.user-mail-recipient-picker-list > button small {
+  grid-column: 1 / -1;
+}
+
+.user-mail-recipient-picker-list span,
+.user-mail-recipient-picker-list small {
+  color: #64748b;
+  font-size: 10px;
+}
+
+.user-mail-detail-attachments > button {
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.user-mail-detail-attachments > button em {
+  color: #0f766e;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+@media (max-width: 760px) {
+  .user-mail-compose-recipients label,
+  .user-mail-compose-field {
+    grid-template-columns: 1fr;
+  }
 }
 
 .popup-demo { min-height: 100%; display: grid; place-content: center; gap: 12px; background: #eef7f4; color: #102a24; }

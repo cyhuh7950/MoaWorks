@@ -262,14 +262,15 @@ export type MailRecipient = {
 };
 
 export type MailAttachment = {
+  uploadId: string;
   fileName: string;
   contentType: string;
   sizeBytes: number;
-  storageKey?: string | null;
 };
 
 export type MailAttachmentView = {
   fileName: string;
+  attachmentId: string;
   contentType: string;
   sizeBytes: number;
 };
@@ -285,6 +286,7 @@ export type MailSummary = {
   isStarred: boolean;
   sentAt: string | null;
   receivedAt: string | null;
+  scheduledAt: string | null;
   retentionExpiresAt: string | null;
   attachmentCount: number;
   category: string;
@@ -326,6 +328,7 @@ export type MailDetail = {
   status: string;
   sentAt: string | null;
   createdAt: string;
+  scheduledAt: string | null;
   updatedAt: string;
   retentionExpiresAt: string | null;
   attachmentCount: number;
@@ -349,6 +352,7 @@ export type MailComposePayload = {
   bodyText: string;
   bodyHtml?: string | null;
   attachments?: MailAttachment[];
+  scheduledAt?: string | null;
 };
 
 export type MailDeliveryOutcomeSummary = {
@@ -367,6 +371,7 @@ export type MailSendResponse = {
   status: string;
   sentAt: string | null;
   deliverySummary?: MailDeliveryOutcomeSummary | null;
+  scheduledAt?: string | null;
 };
 
 export type MailExternalDeliveryStatus = {
@@ -789,6 +794,54 @@ export type MailDeliveryStatusResponse = {
   provider: MailDeliveryProviderStatus;
   summary: MailDeliveryQueueSummary;
 };
+
+export type MailRecentRecipient = {
+  email: string;
+  name: string | null;
+  departmentName: string | null;
+  lastUsedAt: string;
+};
+
+export async function fetchRecentMailRecipients(token: string, limit = 20): Promise<{ recipients: MailRecentRecipient[] }> {
+  return request<{ recipients: MailRecentRecipient[] }>(`/mail/recent-recipients?limit=${limit}`, {
+    headers: authHeaders(token),
+  });
+}
+
+export async function uploadMailAttachment(token: string, file: File): Promise<MailAttachment> {
+  const form = new FormData();
+  form.append("file", file);
+  return request<MailAttachment>("/mail/attachments", {
+    method: "POST",
+    headers: authHeaders(token),
+    body: form,
+  });
+}
+
+export async function downloadMailAttachment(
+  token: string,
+  mailId: string,
+  attachmentId: string,
+  fileName: string,
+): Promise<void> {
+  const response = await fetch(`${apiBase}/mail/${mailId}/attachments/${attachmentId}`, {
+    headers: authHeaders(token),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw extractApiError(response, data);
+  }
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = fileName;
+    anchor.click();
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
 
 export async function fetchMailDetail(token: string, mailId: string): Promise<MailDetail> {
   return request<MailDetail>(`/mail/${mailId}`, {

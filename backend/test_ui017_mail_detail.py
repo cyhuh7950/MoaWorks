@@ -92,11 +92,11 @@ class MailDetailTest(unittest.TestCase):
 
     def test_attachment_response_view_never_serializes_storage_key(self):
         self.assertTrue(hasattr(mail_schemas, "MailAttachmentView"), "상세 응답 전용 첨부 view가 필요합니다.")
-        view = mail_schemas.MailAttachmentView(fileName="report.pdf", contentType="application/pdf", sizeBytes=1234)
-        self.assertEqual(view.model_dump(mode="json"), {"fileName": "report.pdf", "contentType": "application/pdf", "sizeBytes": 1234})
+        view = mail_schemas.MailAttachmentView(attachmentId="attach-1", fileName="report.pdf", contentType="application/pdf", sizeBytes=1234)
+        self.assertEqual(view.model_dump(mode="json"), {"attachmentId": "attach-1", "fileName": "report.pdf", "contentType": "application/pdf", "sizeBytes": 1234})
 
     def test_attachment_query_does_not_select_or_return_storage_key(self):
-        service = MailMessengerService(); cursor = FakeCursor(fetchall=[[{"file_name": "report.pdf", "content_type": "application/pdf", "size_bytes": 1234}]])
+        service = MailMessengerService(); cursor = FakeCursor(fetchall=[[{"id": "attach-1", "file_name": "report.pdf", "content_type": "application/pdf", "size_bytes": 1234}]])
         attachments = service._fetch_mail_attachments(cursor, "mail-1")
         self.assertNotIn("STORAGE_KEY", cursor.executions[0][0].upper())
         self.assertNotIn("storageKey", attachments[0].model_dump())

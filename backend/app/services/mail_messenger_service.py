@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 import json
+import logging
 from uuid import uuid4
 
 from psycopg.types.json import Jsonb
+from app.core.config import settings
 
 from app.schemas.directory import AuthUserSummary
 from app.schemas.mail_messenger import (
@@ -16,6 +18,8 @@ from app.schemas.mail_messenger import (
     MailDetailResponse,
     MailDraftRequest,
     MailListQuery,
+    MailRecentRecipient,
+    MailRecentRecipientListResponse,
     MailListResponse,
     MailRecipientView,
     MailSendRequest,
@@ -35,10 +39,15 @@ from app.schemas.mail_messenger import (
 )
 from app.services.postgres_service import PostgresService
 
+logger = logging.getLogger(__name__)
+
+from app.services.mail_attachment_storage import MailAttachmentStorage
+
 
 class MailMessengerService:
     def __init__(self) -> None:
         self.db = PostgresService()
+        self.attachment_storage = MailAttachmentStorage()
 
     def list_inbox(self, actor: AuthUserSummary, query: MailListQuery | None = None) -> MailListResponse:
         if query is not None:
@@ -55,6 +64,7 @@ class MailMessengerService:
                         m.subject,
                         m.status,
                         m.sent_at,
+                        m.scheduled_at,
                         m.retention_expires_at,
                         m.attachment_count,
                         r.is_read,
@@ -89,6 +99,7 @@ class MailMessengerService:
                         m.subject,
                         m.status,
                         m.sent_at,
+                        m.scheduled_at,
                         m.retention_expires_at,
                         m.attachment_count,
                         TRUE AS is_read,
@@ -98,9 +109,9 @@ class MailMessengerService:
                     FROM mail_messages m
                     WHERE m.company_id = %s
                       AND m.sender_user_id = %s
-                      AND m.status = 'sent'
+                      AND m.status IN ('sent', 'scheduled')
                       AND m.sender_deleted_at IS NULL
-                    ORDER BY COALESCE(m.sent_at, m.created_at) DESC
+                    ORDER BY COALESCE(m.scheduled_at, m.sent_at, m.created_at) DESC
                     """,
                     (actor.companyId, actor.userId),
                 )
@@ -122,6 +133,7 @@ class MailMessengerService:
                         m.subject,
                         m.status,
                         m.sent_at,
+                        m.scheduled_at,
                         m.retention_expires_at,
                         m.attachment_count,
                         TRUE AS is_read,
@@ -185,6 +197,7 @@ class MailMessengerService:
                         LEFT(COALESCE(m.body_text, ''), 240) AS preview_text,
                         m.status,
                         m.sent_at,
+                        m.scheduled_at,
                         m.retention_expires_at,
                         m.attachment_count,
                         r.is_read,
@@ -210,14 +223,14 @@ class MailMessengerService:
 
     def _list_sender_query(self, actor: AuthUserSummary, query: MailListQuery, *, mailbox: str) -> MailListResponse:
         self.db.ensure_migrations_applied()
-        status_value = "draft" if mailbox == "draft" else "sent"
+        status_condition = "m.status = 'draft'" if mailbox == "draft" else "m.status IN ('sent', 'scheduled')"
         conditions = [
             "m.company_id = %s",
             "m.sender_user_id = %s",
-            "m.status = %s",
+            status_condition,
             "m.sender_deleted_at IS NULL",
         ]
-        params: list[object] = [actor.companyId, actor.userId, status_value]
+        params: list[object] = [actor.companyId, actor.userId]
         if query.attachment == "with":
             conditions.append("m.attachment_count > 0")
         elif query.attachment == "without":
@@ -245,6 +258,7 @@ class MailMessengerService:
                         LEFT(COALESCE(m.body_text, ''), 240) AS preview_text,
                         m.status,
                         m.sent_at,
+                        m.scheduled_at,
                         m.retention_expires_at,
                         m.attachment_count,
                         TRUE AS is_read,
@@ -270,7 +284,7 @@ class MailMessengerService:
     @staticmethod
     def _mail_sort_sql(sort: str, *, mailbox: str) -> str:
         date_expression = "COALESCE(m.updated_at, m.created_at)" if mailbox == "draft" else (
-            "COALESCE(r.received_at, m.sent_at, m.created_at)" if mailbox == "inbox" else "COALESCE(m.sent_at, m.created_at)"
+            "COALESCE(r.received_at, m.sent_at, m.created_at)" if mailbox == "inbox" else "COALESCE(m.scheduled_at, m.sent_at, m.created_at)"
         )
         return {
             "date_desc": f"{date_expression} DESC, m.id DESC",
@@ -352,13 +366,131 @@ class MailMessengerService:
                 attachments = self._fetch_mail_attachments(cursor, mail_id)
         return self._to_mail_detail(message, recipients, attachments)
 
+    def stage_attachment(
+        self,
+        actor: AuthUserSummary,
+        file_name: str,
+        content_type: str,
+        content: bytes,
+    ):
+        self.attachment_storage.cleanup_expired()
+        return self.attachment_storage.stage(actor, file_name, content_type, content)
+
+    def list_recent_recipients(self, actor: AuthUserSummary, limit: int = 20) -> MailRecentRecipientListResponse:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT email, name, department_name, last_used_at
+                    FROM (
+                        SELECT DISTINCT ON (LOWER(r.recipient_email))
+                            LOWER(r.recipient_email) AS email,
+                            u.name,
+                            d.name AS department_name,
+                            COALESCE(m.sent_at, m.scheduled_at, m.created_at) AS last_used_at
+                        FROM mail_recipients r
+                        JOIN mail_messages m ON m.id = r.message_id
+                        LEFT JOIN users u ON u.company_id = m.company_id AND LOWER(u.email) = LOWER(r.recipient_email)
+                        LEFT JOIN departments d ON d.id = u.department_id
+                        WHERE m.company_id = %s
+                          AND m.sender_user_id = %s
+                          AND m.status IN ('sent', 'scheduled')
+                          AND m.sender_deleted_at IS NULL
+                        ORDER BY LOWER(r.recipient_email), COALESCE(m.sent_at, m.scheduled_at, m.created_at) DESC
+                    ) recent
+                    ORDER BY last_used_at DESC
+                    LIMIT %s
+                    """,
+                    (actor.companyId, actor.userId, limit),
+                )
+                recipients = [
+                    MailRecentRecipient(
+                        email=row["email"],
+                        name=row["name"],
+                        departmentName=row["department_name"],
+                        lastUsedAt=row["last_used_at"],
+                    )
+                    for row in cursor.fetchall()
+                ]
+        return MailRecentRecipientListResponse(recipients=recipients)
+
+    def download_attachment(self, actor: AuthUserSummary, mail_id: str, attachment_id: str) -> dict:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                self._fetch_accessible_mail(cursor, actor, mail_id)
+                cursor.execute(
+                    """
+                    SELECT id, file_name, content_type, size_bytes, storage_key
+                    FROM mail_attachments
+                    WHERE id = %s AND message_id = %s
+                    """,
+                    (attachment_id, mail_id),
+                )
+                row = cursor.fetchone()
+        if row is None:
+            raise PermissionError("첨부 파일에 접근할 권한이 없습니다.")
+        path = self.attachment_storage.stored_path(row["storage_key"])
+        return {
+            "path": path,
+            "fileName": row["file_name"],
+            "contentType": row["content_type"],
+            "sizeBytes": row["size_bytes"],
+        }
+
     def send_mail(self, actor: AuthUserSummary, payload: MailSendRequest) -> MailSendResponse:
         if not payload.to and not payload.cc and not payload.bcc:
             raise ValueError("수신자를 1명 이상 입력해야 합니다.")
-        return self._save_mail(actor, payload, status_value="sent")
+        status_value = "scheduled" if payload.scheduledAt is not None else "sent"
+        return self._save_mail(actor, payload, status_value=status_value)
 
     def save_draft(self, actor: AuthUserSummary, payload: MailDraftRequest) -> MailSendResponse:
         return self._save_mail(actor, payload, status_value="draft")
+
+    def dispatch_scheduled_mail(self, *, limit: int = 100) -> int:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        dispatched = 0
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, company_id, sender_user_id
+                    FROM mail_messages
+                    WHERE status = 'scheduled'
+                      AND scheduled_at <= %s
+                      AND sender_deleted_at IS NULL
+                    ORDER BY scheduled_at ASC
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT %s
+                    """,
+                    (now, limit),
+                )
+                rows = cursor.fetchall()
+                for row in rows:
+                    cursor.execute(
+                        "UPDATE mail_messages SET status = 'sent', sent_at = %s, updated_at = %s WHERE id = %s",
+                        (now, now, row["id"]),
+                    )
+                    cursor.execute(
+                        "UPDATE mail_recipients SET received_at = %s WHERE message_id = %s",
+                        (now, row["id"]),
+                    )
+                    self._write_mail_event_audit(
+                        cursor,
+                        company_id=row["company_id"],
+                        actor_user_id=row["sender_user_id"],
+                        actor_user_name="system",
+                        mail_id=row["id"],
+                        event="mail.scheduled.dispatched",
+                        status_before="scheduled",
+                        status_after="sent",
+                        now=now,
+                    )
+                    dispatched += 1
+            connection.commit()
+        return dispatched
 
     def mark_mail_read(self, actor: AuthUserSummary, mail_id: str) -> MailStatusResponse:
         self.db.ensure_migrations_applied()
@@ -832,9 +964,18 @@ class MailMessengerService:
 
     def _save_mail(self, actor: AuthUserSummary, payload: MailSendRequest | MailDraftRequest, *, status_value: str) -> MailSendResponse:
         self.db.ensure_migrations_applied()
+        resolved_attachments = [self.attachment_storage.resolve(actor, item) for item in payload.attachments]
+        if len(resolved_attachments) > settings.mail_attachment_max_files:
+            raise ValueError("첨부 파일 개수 제한을 초과했습니다.")
+        if len({item["upload_id"] for item in resolved_attachments}) != len(resolved_attachments):
+            raise ValueError("같은 첨부 파일을 중복 사용할 수 없습니다.")
+        if sum(item["size_bytes"] for item in resolved_attachments) > settings.mail_attachment_max_total_bytes:
+            raise ValueError("첨부 파일의 전체 용량 제한을 초과했습니다.")
+
         now = self._now()
         mail_id = self._new_id("mailmsg")
         sent_at = now if status_value == "sent" else None
+        scheduled_at = payload.scheduledAt if status_value == "scheduled" else None
         received_at = now if status_value == "sent" else None
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
@@ -843,10 +984,10 @@ class MailMessengerService:
                     """
                     INSERT INTO mail_messages (
                         id, company_id, sender_user_id, sender_account_id, sender_email,
-                        subject, body_text, body_html, status, sent_at, created_at,
+                        subject, body_text, body_html, status, sent_at, scheduled_at, created_at,
                         updated_at, retention_expires_at, attachment_count
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         mail_id,
@@ -859,10 +1000,11 @@ class MailMessengerService:
                         payload.bodyHtml,
                         status_value,
                         sent_at,
+                        scheduled_at,
                         now,
                         now,
                         now + timedelta(days=30),
-                        len(payload.attachments),
+                        len(resolved_attachments),
                     ),
                 )
                 recipient_pairs = [("to", item) for item in payload.to] + [("cc", item) for item in payload.cc] + [("bcc", item) for item in payload.bcc]
@@ -878,7 +1020,7 @@ class MailMessengerService:
                         """,
                         (self._new_id("rcpt"), mail_id, recipient_user_id, email, kind, False, False, received_at),
                     )
-                for attachment in payload.attachments:
+                for attachment in resolved_attachments:
                     cursor.execute(
                         """
                         INSERT INTO mail_attachments (
@@ -889,15 +1031,74 @@ class MailMessengerService:
                         (
                             self._new_id("attach"),
                             mail_id,
-                            attachment.fileName,
-                            attachment.contentType,
-                            attachment.sizeBytes,
-                            attachment.storageKey,
+                            attachment["file_name"],
+                            attachment["content_type"],
+                            attachment["size_bytes"],
+                            attachment["storage_key"],
                             now,
                         ),
                     )
+                event = {
+                    "draft": "mail.draft.saved",
+                    "scheduled": "mail.scheduled",
+                    "sent": "mail.sent",
+                }[status_value]
+                self._write_mail_event_audit(
+                    cursor,
+                    company_id=actor.companyId,
+                    actor_user_id=actor.userId,
+                    actor_user_name=actor.userName,
+                    mail_id=mail_id,
+                    event=event,
+                    status_before=None,
+                    status_after=status_value,
+                    now=now,
+                )
             connection.commit()
-        return MailSendResponse(mailId=mail_id, status=status_value, sentAt=sent_at)
+        for attachment in resolved_attachments:
+            try:
+                self.attachment_storage.mark_attached(attachment["upload_id"])
+            except (OSError, ValueError):
+                logger.exception(
+                    "Mail attachment state update failed after commit: mail_id=%s upload_id=%s",
+                    mail_id,
+                    attachment["upload_id"],
+                )
+        return MailSendResponse(mailId=mail_id, status=status_value, sentAt=sent_at, scheduledAt=scheduled_at)
+
+    def _write_mail_event_audit(
+        self,
+        cursor,
+        *,
+        company_id: str,
+        actor_user_id: str,
+        actor_user_name: str,
+        mail_id: str,
+        event: str,
+        status_before: str | None,
+        status_after: str,
+        now: datetime,
+    ) -> None:
+        cursor.execute(
+            """
+            INSERT INTO audit_logs (
+                id, company_id, actor_user_id, actor_user_name, target_type, target_id,
+                event, status_before, status_after, reason, created_at
+            ) VALUES (%s, %s, %s, %s, 'mail', %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                self._new_id("audit"),
+                company_id,
+                actor_user_id,
+                actor_user_name,
+                mail_id,
+                event,
+                status_before,
+                status_after,
+                "UI-018 mail compose",
+                now,
+            ),
+        )
 
     def _fetch_mail_account(self, cursor, user_id: str) -> dict:
         cursor.execute("SELECT id, email, status FROM mail_accounts WHERE user_id = %s", (user_id,))
@@ -922,6 +1123,7 @@ class MailMessengerService:
                 m.body_html,
                 m.status,
                 m.sent_at,
+                m.scheduled_at,
                 m.created_at,
                 m.updated_at,
                 m.retention_expires_at,
@@ -985,7 +1187,7 @@ class MailMessengerService:
     def _fetch_mail_attachments(self, cursor, mail_id: str) -> list[MailAttachmentView]:
         cursor.execute(
             """
-            SELECT file_name, content_type, size_bytes
+            SELECT id, file_name, content_type, size_bytes
             FROM mail_attachments
             WHERE message_id = %s
             ORDER BY created_at ASC
@@ -994,6 +1196,7 @@ class MailMessengerService:
         )
         return [
             MailAttachmentView(
+                attachmentId=row["id"],
                 fileName=row["file_name"],
                 contentType=row["content_type"],
                 sizeBytes=row["size_bytes"],
@@ -1108,6 +1311,7 @@ class MailMessengerService:
             isStarred=bool(row["is_starred"]),
             sentAt=row["sent_at"],
             receivedAt=row["received_at"],
+            scheduledAt=row.get("scheduled_at"),
             retentionExpiresAt=row["retention_expires_at"],
             attachmentCount=row["attachment_count"],
             category=row.get("category") or "primary",
@@ -1129,6 +1333,7 @@ class MailMessengerService:
             bodyHtml=message["body_html"],
             status=message["status"],
             sentAt=message["sent_at"],
+            scheduledAt=message.get("scheduled_at"),
             createdAt=message["created_at"],
             updatedAt=message["updated_at"],
             retentionExpiresAt=message["retention_expires_at"],
@@ -1136,6 +1341,7 @@ class MailMessengerService:
             recipients=recipients,
             attachments=[
                 MailAttachmentView(
+                    attachmentId=getattr(item, "attachmentId", None),
                     fileName=item.fileName,
                     contentType=item.contentType,
                     sizeBytes=item.sizeBytes,

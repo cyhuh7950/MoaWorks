@@ -25,6 +25,11 @@ class Settings(BaseSettings):
 
     storage_driver: str = "local"
     storage_local_path: str = "./data/storage"
+    mail_attachment_max_files: int = 10
+    mail_attachment_max_file_bytes: int = 10 * 1024 * 1024
+    mail_attachment_max_total_bytes: int = 25 * 1024 * 1024
+    mail_scheduler_enabled: bool = True
+    mail_scheduler_interval_seconds: int = 30
 
     watcher_enabled: bool = True
     watcher_interval_seconds: int = 60
