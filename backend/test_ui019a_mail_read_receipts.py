@@ -3,21 +3,62 @@ from __future__ import annotations
 import unittest
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from app.schemas.mail_messenger import MailRecipientView
 from app.services.mail_messenger_service import MailMessengerService
 
 
 class FakeCursor:
-    def __init__(self, rows: list[dict]):
+    def __init__(self, rows: list[dict], *, fetchone: list[dict | None] | None = None):
         self.rows = rows
+        self.fetchone_results = list(fetchone or [])
         self.executions: list[tuple[str, tuple]] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
 
     def execute(self, sql, params=()):
         self.executions.append((" ".join(str(sql).split()), tuple(params)))
 
+    def fetchone(self):
+        return self.fetchone_results.pop(0) if self.fetchone_results else None
+
     def fetchall(self):
         return self.rows
+
+
+class FakeConnection:
+    def __init__(self, cursor: FakeCursor):
+        self.cursor_instance = cursor
+        self.commit_count = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def cursor(self):
+        return self.cursor_instance
+
+    def commit(self):
+        self.commit_count += 1
+
+
+class FakeDb:
+    def __init__(self, cursor: FakeCursor):
+        self.connection = FakeConnection(cursor)
+        self.ensure_count = 0
+
+    def ensure_migrations_applied(self):
+        self.ensure_count += 1
+
+    def connect(self):
+        return self.connection
 
 
 class MailReadReceiptTest(unittest.TestCase):
@@ -108,6 +149,23 @@ class MailReadReceiptTest(unittest.TestCase):
         recipient_detail = service._to_mail_detail(self.message(sender_view=False), [recipient], [])
         self.assertTrue(sender_detail.canViewReadReceipts)
         self.assertFalse(recipient_detail.canViewReadReceipts)
+
+    def test_messenger_room_read_contract_remains_unchanged(self):
+        now = datetime.now(UTC)
+        cursor = FakeCursor([], fetchone=[{"id": "message-last"}])
+        db = FakeDb(cursor)
+        service = MailMessengerService()
+        service.db = db
+        service._fetch_accessible_room = Mock(return_value={"room_id": "room-1"})
+        with patch.object(service, "_now", return_value=now), patch.object(service, "_new_id", return_value="read-id"):
+            response = service.mark_room_read(self.actor(), "room-1")
+
+        statements = "\n".join(sql for sql, _ in cursor.executions).upper()
+        self.assertIn("INSERT INTO MESSENGER_MESSAGE_READS", statements)
+        self.assertIn("UPDATE MESSENGER_ROOM_MEMBERS", statements)
+        self.assertEqual(response.lastReadMessageId, "message-last")
+        self.assertEqual(response.readAt, now)
+        self.assertEqual(db.connection.commit_count, 1)
 
 
 if __name__ == "__main__":

@@ -1206,10 +1206,10 @@ class MailMessengerService:
                 recipientEmail=row["recipient_email"],
                 recipientUserId=row["recipient_user_id"],
                 recipientKind=row["recipient_kind"],
-                isRead=row["is_read"],
-                isStarred=row["is_starred"],
+                isRead=row["is_read"] if is_sender_view else None,
+                isStarred=row["is_starred"] if is_sender_view else None,
                 receivedAt=row["received_at"],
-                readAt=row["read_at"],
+                readAt=row["read_at"] if is_sender_view else None,
             )
             for row in cursor.fetchall()
         ]
@@ -1395,6 +1395,7 @@ class MailMessengerService:
             updatedAt=message["updated_at"],
             retentionExpiresAt=message["retention_expires_at"],
             attachmentCount=message["attachment_count"],
+            canViewReadReceipts=bool(message["is_sender_view"]),
             recipients=recipients,
             attachments=[
                 MailAttachmentView(

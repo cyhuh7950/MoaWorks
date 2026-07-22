@@ -368,6 +368,13 @@ function formatMailDate(value: string | null | undefined) {
   return new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 }
 
+function summarizeMailReadReceipts(detail: MailDetail): string {
+  const internalRecipients = detail.recipients.filter((item) => Boolean(item.recipientUserId));
+  const internalCount = internalRecipients.length;
+  const readCount = internalRecipients.filter((item) => item.isRead === true).length;
+  return internalCount ? `읽음 ${readCount} / ${internalCount}` : "확인 불가";
+}
+
 type QuickComposeMode = "none" | "mail" | "approval" | "messenger";
 type UnifiedSearchType = "mail" | "approval" | "messenger" | "schedule" | "contacts" | "org" | "files";
 type UnifiedSearchResult = { id: string; type: UnifiedSearchType; title: string; detail: string; menu: UserPortalMenu; mailbox?: MailboxType };
@@ -567,6 +574,7 @@ export default function App() {
   const [mailComposePosition, setMailComposePosition] = useState<{ left: number; top: number } | null>(null);
   const [mailDetailExpanded, setMailDetailExpanded] = useState(false);
   const [selectedMailDetail, setSelectedMailDetail] = useState<MailDetail | null>(null);
+  const [mailReadReceiptOpen, setMailReadReceiptOpen] = useState(false);
   const [mailDetailLoading, setMailDetailLoading] = useState(false);
   const [mailDetailError, setMailDetailError] = useState("");
   const [mailDeliveryStatus, setMailDeliveryStatus] = useState<MailDeliveryStatusResponse | null>(null);
@@ -686,6 +694,7 @@ export default function App() {
     setActiveMailFolder(folder);
     setSelectedMailIds([]);
     setSelectedMailId("");
+    setMailReadReceiptOpen(false);
     setSelectedMailDetail(null);
     setMailBulkReloadError("");
     setMailListQuery((current) => ({ ...current, offset: 0 }));
@@ -1043,6 +1052,7 @@ export default function App() {
   async function loadMailDetail(targetToken: string, mailId: string, mailbox: MailboxType, options?: { markRead?: boolean; propagateError?: boolean }) {
     setSelectedMailId(mailId);
     setSelectedMailDetail(null);
+    setMailReadReceiptOpen(false);
     setMailDetailLoading(true);
     setMailDetailError("");
     try {
@@ -1116,6 +1126,7 @@ export default function App() {
         await loadMailDetail(targetToken, targetMail.mailId, resolvedMailbox);
       } else {
         setSelectedMailId("");
+        setMailReadReceiptOpen(false);
         setSelectedMailDetail(null);
         setMailDetailError("");
       }
@@ -1127,6 +1138,7 @@ export default function App() {
       setDraftMails([]);
       setMailListMeta({ total: 0, limit: query.limit ?? 50, offset: query.offset ?? 0, hasMore: false });
       setSelectedMailId("");
+      setMailReadReceiptOpen(false);
       setSelectedMailDetail(null);
       return false;
     } finally {
@@ -1649,6 +1661,15 @@ export default function App() {
   }, [searchText, token, me?.userId, me?.mustChangePassword, inboxMails, sentMails, draftMails, documents, messengerRoomsData]);
 
   useEffect(() => {
+    if (!mailReadReceiptOpen) return;
+    function handleMailReadReceiptKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setMailReadReceiptOpen(false);
+    }
+    window.addEventListener("keydown", handleMailReadReceiptKeyDown);
+    return () => window.removeEventListener("keydown", handleMailReadReceiptKeyDown);
+  }, [mailReadReceiptOpen]);
+
+  useEffect(() => {
     const current = getUserToken();
     if (current) {
       setToken(current);
@@ -1689,6 +1710,7 @@ export default function App() {
       setSentMails([]);
       setDraftMails([]);
       setSelectedMailId("");
+      setMailReadReceiptOpen(false);
       setSelectedMailDetail(null);
       setMailDeliveryStatus(null);
       setMailComposeForm(createEmptyMailComposeForm());
@@ -2086,6 +2108,10 @@ export default function App() {
   const canReplyToSelectedMail = Boolean(selectedMailDetail && isInboxDetail);
   const canForwardSelectedMail = Boolean(selectedMailDetail && (isInboxDetail || activeMailFolder === "sent"));
   const canUpdateSelectedMailStatus = Boolean(selectedMailDetail && isInboxDetail);
+  const canViewSelectedMailReadReceipts = Boolean(
+    selectedMailDetail && activeMailFolder === "sent" && selectedMailDetail.canViewReadReceipts,
+  );
+  const selectedMailReadReceiptSummary = selectedMailDetail ? summarizeMailReadReceipts(selectedMailDetail) : "확인 불가";
 
   function handleHomeSurfaceCardClick(surfaceCardId: string) {
     if (surfaceCardId === "mail") {
@@ -2669,9 +2695,23 @@ export default function App() {
                         {canReplyToSelectedMail ? <button type="button" onClick={() => openMailComposeFromDetail("reply")}>답장</button> : null}
                         {canReplyToSelectedMail ? <button type="button" onClick={() => openMailComposeFromDetail("reply_all")}>전체답장</button> : null}
                         {canForwardSelectedMail ? <button type="button" onClick={() => openMailComposeFromDetail("forward")}>전달</button> : null}
+                        {canViewSelectedMailReadReceipts ? <button type="button" aria-expanded={mailReadReceiptOpen} aria-controls="mail-read-receipt-popover" onClick={() => setMailReadReceiptOpen((current) => !current)}>수신 확인 · {selectedMailReadReceiptSummary}</button> : null}
                         {canUpdateSelectedMailStatus ? <button type="button" aria-label="mail-detail-read-action" onClick={() => void handleSelectedMailReadAction()}>{selectedMailSummary?.isRead ? "읽음 상태 확인" : "읽음 처리"}</button> : null}
                         {canUpdateSelectedMailStatus ? <button type="button" aria-label="mail-detail-star-action" onClick={() => void toggleSelectedMailStar()}>{selectedMailSummary?.isStarred ? "중요 해제" : "중요 표시"}</button> : null}
                       </div>
+                      {canViewSelectedMailReadReceipts && mailReadReceiptOpen ? (
+                        <section id="mail-read-receipt-popover" className="user-mail-read-receipt" role="dialog" aria-label="수신 확인 상세" aria-modal="false" onKeyDown={(event) => { if (event.key === "Escape") setMailReadReceiptOpen(false); }}>
+                          <header><div><strong>수신 확인</strong><small aria-live="polite">{selectedMailReadReceiptSummary}</small></div><button type="button" onClick={() => setMailReadReceiptOpen(false)}>닫기</button></header>
+                          <ul>
+                            {selectedMailDetail.recipients.map((recipient) => (
+                              <li key={`${recipient.recipientKind}:${recipient.recipientEmail}`}>
+                                <span className="user-mail-read-receipt__recipient"><small>{recipient.recipientKind === "to" ? "받는 사람" : recipient.recipientKind === "cc" ? "참조" : recipient.recipientKind === "bcc" ? "숨은참조" : recipient.recipientKind}</small><strong>{recipient.recipientEmail}</strong></span>
+                                <span className="user-mail-read-receipt__status">{recipient.recipientUserId ? recipient.isRead === true ? <>읽음 · <time dateTime={recipient.readAt || undefined}>{formatMailDate(recipient.readAt)}</time></> : "읽지 않음" : "확인 불가"}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </section>
+                      ) : null}
                       <div className="user-mail-detail-body">{selectedMailDetail.bodyText || selectedMailDetail.subject}</div>
                       {selectedMailDetail.attachments.length ? (
                         <section className="user-mail-detail-attachments" aria-label="첨부 파일">

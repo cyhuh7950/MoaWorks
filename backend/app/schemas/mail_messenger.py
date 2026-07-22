@@ -261,8 +261,8 @@ class MailRecipientView(BaseModel):
     recipientEmail: str
     recipientUserId: str | None = None
     recipientKind: str
-    isRead: bool
-    isStarred: bool
+    isRead: bool | None
+    isStarred: bool | None
     receivedAt: datetime | None = None
     readAt: datetime | None = None
 
@@ -313,6 +313,7 @@ class MailDetailResponse(BaseModel):
     updatedAt: datetime
     retentionExpiresAt: datetime | None = None
     attachmentCount: int
+    canViewReadReceipts: bool
     recipients: list[MailRecipientView]
     attachments: list[MailAttachmentView]
 

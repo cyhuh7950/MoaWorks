@@ -255,8 +255,8 @@ export type MailRecipient = {
   recipientEmail: string;
   recipientUserId: string | null;
   recipientKind: string;
-  isRead: boolean;
-  isStarred: boolean;
+  isRead: boolean | null;
+  isStarred: boolean | null;
   receivedAt: string | null;
   readAt: string | null;
 };
@@ -332,6 +332,7 @@ export type MailDetail = {
   updatedAt: string;
   retentionExpiresAt: string | null;
   attachmentCount: number;
+  canViewReadReceipts: boolean;
   recipients: MailRecipient[];
   attachments: MailAttachmentView[];
   externalDeliveries: MailExternalDeliveryStatus[];
