@@ -71,6 +71,13 @@ class Ui018MailComposeTests(unittest.TestCase):
         self.assertEqual(serialized["uploadId"], "a" * 32)
         self.assertNotIn("storageKey", serialized)
 
+    def test_recipient_source_migration_matches_existing_workspace_contract(self):
+        migration = (Path(__file__).parent / "migrations" / "022_workspace_recipient_sources.sql").read_text(encoding="utf-8").lower()
+        self.assertIn("add column if not exists department_code", migration)
+        self.assertIn("create table if not exists personal_contacts", migration)
+        self.assertIn("owner_user_id", migration)
+        self.assertIn("status text not null default 'active'", migration)
+
 
 if __name__ == "__main__":
     unittest.main()
