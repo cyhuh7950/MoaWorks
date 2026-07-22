@@ -313,6 +313,21 @@ type MailboxType = "inbox" | "sent";
 type MailFolderType = MailboxType | "starred" | "unread" | "draft" | "spam" | "trash" | "localArchive" | string;
 
 type MailComposeContext = "new" | "reply" | "reply_all" | "forward";
+type MailTrashSource = "inbox" | "sent" | "draft";
+const sourceMailboxOptions: MailTrashSource[] = ["inbox", "sent", "draft"];
+
+function mailSelectionKey(item: Pick<MailSummary, "mailId" | "sourceMailbox">, folder: MailFolderType): string {
+  if (folder !== "trash") return item.mailId;
+  return item.mailId + "::" + (item.sourceMailbox ?? "inbox");
+}
+
+function parseTrashSelectionKey(key: string): { mailId: string; sourceMailbox: MailTrashSource } | null {
+  const separator = key.lastIndexOf("::");
+  if (separator < 1) return null;
+  const sourceMailbox = key.slice(separator + 2);
+  if (!sourceMailboxOptions.includes(sourceMailbox as MailTrashSource)) return null;
+  return { mailId: key.slice(0, separator), sourceMailbox: sourceMailbox as MailTrashSource };
+}
 
 function withMailSubjectPrefix(subject: string, mode: MailComposeContext) {
   const prefix = mode === "forward" ? "Fwd:" : "Re:";
@@ -817,9 +832,19 @@ export default function App() {
     setMailBulkBusy(true);
     setMailError("");
     try {
-      const result = await bulkMailAction(token, selectedMailIds, action, ui020Mailbox(activeMailFolder), undefined,
+      const trashViews = activeMailFolder === "trash"
+        ? selectedMailIds.map(parseTrashSelectionKey).filter((item): item is { mailId: string; sourceMailbox: MailTrashSource } => item !== null)
+        : undefined;
+      if (activeMailFolder === "trash" && trashViews?.length !== selectedMailIds.length) {
+        throw new Error("휴지통 선택 정보가 올바르지 않습니다.");
+      }
+      const mailIds = trashViews ? [...new Set(trashViews.map((item) => item.mailId))] : selectedMailIds;
+      const result = await bulkMailAction(
+        token, mailIds, action, ui020Mailbox(activeMailFolder), undefined,
         action === "move_folder" ? targetId : undefined,
-        action === "add_tag" || action === "remove_tag" ? targetId : undefined);
+        action === "add_tag" || action === "remove_tag" ? targetId : undefined,
+        trashViews,
+      );
       setMessage(result.changedCount + "개 메일을 처리했습니다.");
       setSelectedMailIds([]);
       await Promise.all([loadMailWorkspace(token, activeMailbox, undefined, activeMailFolder, mailListQuery), refreshMailResources(token)]);
@@ -2185,7 +2210,7 @@ export default function App() {
   });
 
   const visibleMailList = getMailListByFolder(activeMailFolder);
-  const allPageSelected = visibleMailList.length > 0 && visibleMailList.every((item) => selectedMailIds.includes(item.mailId));
+  const allPageSelected = visibleMailList.length > 0 && visibleMailList.every((item) => selectedMailIds.includes(mailSelectionKey(item, activeMailFolder)));
   const inboxBulkEnabled = activeMailFolder === "inbox" || activeMailFolder === "starred" || activeMailFolder === "unread";
   const localMailArchiveHint = activeMailFolder === "localArchive" ? "로컬 아카이브에서 확인" : "";
   const starredMailCount = [...inboxMails, ...sentMails].filter((item) => item.isStarred).length;
@@ -2244,6 +2269,8 @@ export default function App() {
 
   const mailListSamples = visibleMailList.map((item) => ({
     mailId: item.mailId,
+    sourceMailbox: item.sourceMailbox ?? "inbox",
+    selectionKey: mailSelectionKey(item, activeMailFolder),
     sender: item.senderEmail,
     subject: item.subject,
     preview:
@@ -2649,7 +2676,7 @@ export default function App() {
                   {activeMailFolder === "inbox" ? <select aria-label="분류 필터" value={mailListQuery.category} onChange={(event) => updateMailListQuery({ category: event.target.value as MailListQuery["category"] })}><option value="all">전체 분류</option>{MAIL_CATEGORIES.map(([category, label]) => <option key={category} value={category}>{label}</option>)}</select> : null}
                   <select aria-label="정렬" value={mailListQuery.sort} onChange={(event) => updateMailListQuery({ sort: event.target.value as MailListQuery["sort"] })}><option value="date_desc">최신순</option><option value="date_asc">오래된순</option><option value="sender_asc">보낸 사람순</option><option value="subject_asc">제목순</option></select>
                   <button type="button" title="현재 조건으로 다시 조회" onClick={() => void loadMailWorkspace(token, activeMailbox, undefined, activeMailFolder, mailListQuery)}>새로고침</button>
-                  <label title="현재 결과 페이지의 메일만 선택"><input type="checkbox" aria-label="현재 페이지 전체 선택" checked={allPageSelected} onChange={(event) => setSelectedMailIds(event.target.checked ? visibleMailList.map((item) => item.mailId) : [])} />전체</label>
+                  <label title="현재 결과 페이지의 메일만 선택"><input type="checkbox" aria-label="현재 페이지 전체 선택" checked={allPageSelected} onChange={(event) => setSelectedMailIds(event.target.checked ? visibleMailList.map((item) => mailSelectionKey(item, activeMailFolder)) : [])} />전체</label>
                   <span aria-live="polite">선택 {selectedMailIds.length} / 전체 {mailListMeta.total}</span>
                   {inboxBulkEnabled ? <><button type="button" title="선택 메일 읽음" disabled={!selectedMailIds.length || mailBulkBusy} onClick={() => void runBulkMailAction("read")}>읽음</button><button type="button" title="선택 메일 안 읽음" disabled={!selectedMailIds.length || mailBulkBusy} onClick={() => void runBulkMailAction("unread")}>안 읽음</button><button type="button" title="선택 메일 중요" disabled={!selectedMailIds.length || mailBulkBusy} onClick={() => void runBulkMailAction("star")}>중요</button><button type="button" title="선택 메일 중요 해제" disabled={!selectedMailIds.length || mailBulkBusy} onClick={() => void runBulkMailAction("unstar")}>중요 해제</button><select aria-label="분류 이동 대상" value={mailMoveCategory} onChange={(event) => setMailMoveCategory(event.target.value)}>{MAIL_CATEGORIES.map(([category, label]) => <option key={category} value={category}>{label}</option>)}</select><button type="button" title="선택 메일 분류 이동" disabled={!selectedMailIds.length || mailBulkBusy} onClick={() => void runBulkMailAction("move", mailMoveCategory)}>분류 이동</button></> : null}
                   {["inbox", "starred", "unread"].includes(activeMailFolder) || activeMailFolder.startsWith("folder:") || activeMailFolder.startsWith("tag:") ? <>
@@ -2682,12 +2709,12 @@ export default function App() {
                 <>
                   {mailListSamples.map((item) => (
                     <article
-                      key={item.mailId}
+                      key={item.selectionKey}
                       className="user-mail-row"
                       data-selected={selectedMailId === item.mailId}
                       data-unread={item.unread}
                     >
-                      <input type="checkbox" aria-label={`메일 선택: ${item.subject}`} checked={selectedMailIds.includes(item.mailId)} onClick={(event) => event.stopPropagation()} onChange={(event) => setSelectedMailIds((current) => event.target.checked ? [...current, item.mailId] : current.filter((mailId) => mailId !== item.mailId))} />
+                      <input type="checkbox" aria-label={`메일 선택: ${item.subject}`} checked={selectedMailIds.includes(item.selectionKey)} onClick={(event) => event.stopPropagation()} onChange={(event) => setSelectedMailIds((current) => event.target.checked ? [...current, item.selectionKey] : current.filter((selectionKey) => selectionKey !== item.selectionKey))} />
                       <button className="user-mail-row__main" type="button" onClick={() => { setMailDetailExpanded(false); const mailbox = inferMailboxFromMailId(item.mailId); void selectMail(token, item.mailId, mailbox, { markRead: mailbox === "inbox" && activeMailFolder !== "trash" }); }}>
                         <div><strong>{item.sender}</strong><span>{item.time}</span></div>
                         <div><span>{item.important ? "★" : ""}{item.attachment ? " 첨부" : ""}</span><strong>{item.subject}</strong></div>

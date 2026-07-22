@@ -252,6 +252,18 @@ class MailTagView(BaseModel):
 class MailTagListResponse(BaseModel):
     tags: list[MailTagView]
 
+class MailTrashSelection(BaseModel):
+    mailId: str = Field(min_length=1, max_length=200)
+    sourceMailbox: Literal["inbox", "sent", "draft"]
+
+    @field_validator("mailId")
+    @classmethod
+    def normalize_mail_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("메일 ID는 비어 있을 수 없습니다.")
+        return normalized
+
 class MailBulkRequest(BaseModel):
     mailIds: list[str] = Field(min_length=1, max_length=100)
     action: str = Field(min_length=1)
@@ -259,6 +271,7 @@ class MailBulkRequest(BaseModel):
     targetCategory: str | None = None
     targetFolderId: str | None = None
     targetTagId: str | None = None
+    trashViews: list[MailTrashSelection] | None = Field(default=None, min_length=1, max_length=100)
 
     @field_validator("mailIds", mode="before")
     @classmethod
@@ -333,6 +346,16 @@ class MailBulkRequest(BaseModel):
             raise ValueError("대상 태그가 필요합니다.")
         if self.action not in {"add_tag", "remove_tag"} and self.targetTagId is not None:
             raise ValueError("태그 처리에서만 대상 태그를 지정할 수 있습니다.")
+        if self.mailbox == "trash":
+            if not self.trashViews:
+                raise ValueError("휴지통 처리에는 sourceMailbox가 포함된 선택 정보가 필요합니다.")
+            selection_keys = [(item.mailId, item.sourceMailbox) for item in self.trashViews]
+            if len(selection_keys) != len(set(selection_keys)):
+                raise ValueError("같은 휴지통 view를 중복 선택할 수 없습니다.")
+            if {item.mailId for item in self.trashViews} != set(self.mailIds):
+                raise ValueError("휴지통 선택과 메일 ID가 일치하지 않습니다.")
+        elif self.trashViews is not None:
+            raise ValueError("휴지통 처리에서만 sourceMailbox 선택 정보를 사용할 수 있습니다.")
 
 class MailBulkResponse(BaseModel):
     action: str

@@ -290,6 +290,7 @@ export type MailSummary = {
   retentionExpiresAt: string | null;
   attachmentCount: number;
   category: string;
+  sourceMailbox?: "inbox" | "sent" | "draft" | null;
 };
 
 export type MailListResponse = {
@@ -785,15 +786,16 @@ export async function bulkMailAction(
   targetCategory?: string,
   targetFolderId?: string,
   targetTagId?: string,
+  trashViews?: Array<{ mailId: string; sourceMailbox: "inbox" | "sent" | "draft" }>,
 ): Promise<MailBulkResponse> {
   return request<MailBulkResponse>("/mail/bulk", {
     method: "POST",
     headers: { ...authHeaders(token), "Content-Type": "application/json" },
     body: JSON.stringify({ mailIds, action, mailbox, ...(targetCategory ? { targetCategory } : {}),
-      ...(targetFolderId ? { targetFolderId } : {}), ...(targetTagId ? { targetTagId } : {}) }),
+      ...(targetFolderId ? { targetFolderId } : {}), ...(targetTagId ? { targetTagId } : {}),
+      ...(trashViews ? { trashViews } : {}) }),
   });
 }
-
 export async function fetchMailFolders(token: string): Promise<MailFolderListResponse> {
   return request<MailFolderListResponse>("/mail/folders", { headers: authHeaders(token) });
 }

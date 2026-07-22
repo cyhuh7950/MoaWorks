@@ -906,33 +906,44 @@ class MailMessengerService:
                 if payload.targetTagId:
                     self._lock_owned_tag(cursor, actor, payload.targetTagId)
                 if payload.mailbox == "trash":
-                    cursor.execute(
-                        """
-                        SELECT m.id AS mail_id, m.status, m.sender_deleted_at, m.sender_purged_at
-                        FROM mail_messages m WHERE m.id = ANY(%s) AND m.company_id = %s AND m.sender_user_id = %s
-                          AND m.sender_deleted_at IS NOT NULL AND m.sender_purged_at IS NULL
-                        FOR UPDATE OF m
-                        """,
-                        (payload.mailIds, actor.companyId, actor.userId),
-                    )
-                    sender_rows = cursor.fetchall()
-                    sender_ids = {row["mail_id"] for row in sender_rows}
-                    missing = [mail_id for mail_id in payload.mailIds if mail_id not in sender_ids]
-                    recipient_rows: list[dict] = []
-                    if missing:
-                        cursor.execute(
-                            """
-                            SELECT r.id AS recipient_id, r.message_id AS mail_id, r.folder_id, r.is_spam,
-                              r.deleted_at, r.purged_at, r.is_read, r.is_starred
-                            FROM mail_recipients r JOIN mail_messages m ON m.id = r.message_id
-                            WHERE r.message_id = ANY(%s) AND m.company_id = %s
-                              AND (r.recipient_user_id = %s OR LOWER(r.recipient_email) = %s)
-                              AND r.deleted_at IS NOT NULL AND r.purged_at IS NULL FOR UPDATE OF r
-                            """,
-                            (missing, actor.companyId, actor.userId, actor.userEmail.lower()),
-                        )
-                        recipient_rows = cursor.fetchall()
-                    rows = [dict(row, view_kind="sender") for row in sender_rows] + [dict(row, view_kind="recipient") for row in recipient_rows]
+                    rows: list[dict] = []
+                    for selection in payload.trashViews or []:
+                        if selection.sourceMailbox == "inbox":
+                            cursor.execute(
+                                """
+                                SELECT r.id AS recipient_id, r.message_id AS mail_id, r.folder_id, r.is_spam,
+                                  r.deleted_at, r.purged_at, r.is_read, r.is_starred
+                                FROM mail_recipients r JOIN mail_messages m ON m.id = r.message_id
+                                WHERE r.message_id = %s AND m.company_id = %s
+                                  AND (r.recipient_user_id = %s OR LOWER(r.recipient_email) = %s)
+                                  AND r.deleted_at IS NOT NULL AND r.purged_at IS NULL
+                                FOR UPDATE OF r
+                                """,
+                                (selection.mailId, actor.companyId, actor.userId, actor.userEmail.lower()),
+                            )
+                            row = cursor.fetchone()
+                            if row is not None:
+                                rows.append(dict(row, view_kind="recipient", source_mailbox="inbox"))
+                        else:
+                            status_condition = "m.status = 'draft'" if selection.sourceMailbox == "draft" else "m.status IN ('sent', 'scheduled')"
+                            cursor.execute(
+                                f"""
+                                SELECT m.id AS mail_id, m.status, m.sender_deleted_at, m.sender_purged_at
+                                FROM mail_messages m
+                                WHERE m.id = %s AND m.company_id = %s AND m.sender_user_id = %s
+                                  AND {status_condition}
+                                  AND m.sender_deleted_at IS NOT NULL AND m.sender_purged_at IS NULL
+                                FOR UPDATE OF m
+                                """,
+                                (selection.mailId, actor.companyId, actor.userId),
+                            )
+                            row = cursor.fetchone()
+                            if row is not None:
+                                rows.append(dict(row, view_kind="sender", source_mailbox=selection.sourceMailbox))
+                    locked_keys = {(row["mail_id"], row["source_mailbox"]) for row in rows}
+                    requested_keys = {(item.mailId, item.sourceMailbox) for item in payload.trashViews or []}
+                    if locked_keys != requested_keys:
+                        raise PermissionError("요청한 모든 휴지통 view를 처리할 권한이 없습니다.")
                 else:
                     context = {
                         "inbox": "r.deleted_at IS NULL AND r.purged_at IS NULL",
@@ -952,15 +963,20 @@ class MailMessengerService:
                         (payload.mailIds, actor.companyId, actor.userId, actor.userEmail.lower()),
                     )
                     rows = [dict(row, view_kind="recipient") for row in cursor.fetchall()]
-                locked_ids = {row["mail_id"] for row in rows}
-                if locked_ids != set(payload.mailIds):
-                    raise PermissionError("요청한 모든 메일을 처리할 권한이 없습니다.")
+                    if {row["mail_id"] for row in rows} != set(payload.mailIds):
+                        raise PermissionError("요청한 모든 메일을 처리할 권한이 없습니다.")
 
                 for row in rows:
-                    before = {
-                        "folderId": row.get("folder_id"), "spam": bool(row.get("is_spam")),
-                        "deleted": row.get("deleted_at") is not None, "purged": row.get("purged_at") is not None,
-                    }
+                    if row["view_kind"] == "sender":
+                        before = {
+                            "deleted": row.get("sender_deleted_at") is not None,
+                            "purged": row.get("sender_purged_at") is not None,
+                        }
+                    else:
+                        before = {
+                            "folderId": row.get("folder_id"), "spam": bool(row.get("is_spam")),
+                            "deleted": row.get("deleted_at") is not None, "purged": row.get("purged_at") is not None,
+                        }
                     after = dict(before)
                     if row["view_kind"] == "sender":
                         if payload.action == "restore":
@@ -993,12 +1009,14 @@ class MailMessengerService:
                     elif payload.action == "purge":
                         after["purged"] = True
                         cursor.execute("UPDATE mail_recipients SET purged_at = %s, purged_by_user_id = %s WHERE id = %s", (now, actor.userId, row["recipient_id"]))
-                    self._write_mail_bulk_audit(cursor, actor, row["mail_id"], payload.action, before, after, payload.mailbox, request_id)
+                    audit_mailbox = row.get("source_mailbox") if payload.mailbox == "trash" else payload.mailbox
+                    self._write_mail_bulk_audit(cursor, actor, row["mail_id"], payload.action, before, after, audit_mailbox, request_id)
                     changed_count += 1
             connection.commit()
+        requested_count = len(payload.trashViews or []) if payload.mailbox == "trash" else len(payload.mailIds)
         return MailBulkResponse(
-            action=payload.action, requestedCount=len(payload.mailIds), changedCount=changed_count,
-            unchangedCount=len(payload.mailIds) - changed_count, targetCategory=payload.targetCategory,
+            action=payload.action, requestedCount=requested_count, changedCount=changed_count,
+            unchangedCount=requested_count - changed_count, targetCategory=payload.targetCategory,
             targetFolderId=payload.targetFolderId, targetTagId=payload.targetTagId,
         )
     def bulk_mail(self, actor: AuthUserSummary, payload: MailBulkRequest) -> MailBulkResponse:

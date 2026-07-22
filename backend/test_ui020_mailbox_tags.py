@@ -43,7 +43,7 @@ class MailboxTagsContractTest(unittest.TestCase):
             {"action": "add_tag", "mailbox": "folder", "targetTagId": "tag-1"},
             {"action": "remove_tag", "mailbox": "tag", "targetTagId": "tag-1"},
             {"action": "spam", "mailbox": "inbox"}, {"action": "not_spam", "mailbox": "spam"},
-            {"action": "restore", "mailbox": "trash"}, {"action": "purge", "mailbox": "trash"},
+            {"action": "restore", "mailbox": "trash", "trashViews": [{"mailId": "mail-1", "sourceMailbox": "inbox"}]}, {"action": "purge", "mailbox": "trash", "trashViews": [{"mailId": "mail-1", "sourceMailbox": "inbox"}]},
         )
         for fields in cases:
             with self.subTest(fields=fields):
@@ -87,15 +87,19 @@ class MailboxTagsContractTest(unittest.TestCase):
 
     def test_sender_purge_is_logical_and_audited(self):
         service = MailMessengerService()
-        service.db = FakeDb(fetchall=[[{"mail_id": "mail-1", "status": "sent",
-                                       "sender_deleted_at": object(), "sender_purged_at": None}]])
+        service.db = FakeDb(fetchone=[{"mail_id": "mail-1", "status": "sent",
+                                      "sender_deleted_at": object(), "sender_purged_at": None}])
         response = service.bulk_mail(
-            self.actor(), MailBulkRequest(mailIds=["mail-1"], action="purge", mailbox="trash")
+            self.actor(), MailBulkRequest(
+                mailIds=["mail-1"], action="purge", mailbox="trash",
+                trashViews=[{"mailId": "mail-1", "sourceMailbox": "sent"}],
+            )
         )
         self.assertEqual(response.changedCount, 1)
         executions = service.db.cursor_instance.executions
         self.assertTrue(any("SENDER_PURGED_AT" in sql.upper() for sql, _ in executions))
         self.assertTrue(any("INSERT INTO AUDIT_LOGS" in sql.upper() for sql, _ in executions))
+        self.assertTrue(any('"deleted": true' in str(value) for _, params in executions for value in params))
         self.assertFalse(any(sql.strip().upper().startswith("DELETE FROM MAIL_MESSAGES") for sql, _ in executions))
 
     def test_ui020_audit_reason_contains_only_context_and_request_id(self):
@@ -155,6 +159,45 @@ class MailboxTagsContractTest(unittest.TestCase):
         sql = [statement.upper() for statement, _ in service.db.cursor_instance.executions]
         self.assertTrue(any("UPDATE MAIL_RECIPIENTS" in statement for statement in sql))
         self.assertTrue(any("UPDATE MAIL_MESSAGES" in statement for statement in sql))
+
+    def test_trash_mixed_missing_view_rolls_back_before_updates(self):
+        service = MailMessengerService()
+        service.db = FakeDb(fetchone=[
+            {"recipient_id": "recipient-self", "mail_id": "self-mail", "folder_id": None,
+             "is_spam": False, "deleted_at": object(), "purged_at": None,
+             "is_read": True, "is_starred": False},
+            None,
+        ])
+        request = MailBulkRequest(
+            mailIds=["self-mail"], action="restore", mailbox="trash",
+            trashViews=[
+                {"mailId": "self-mail", "sourceMailbox": "inbox"},
+                {"mailId": "self-mail", "sourceMailbox": "sent"},
+            ],
+        )
+        with self.assertRaises(PermissionError):
+            service.bulk_mail(self.actor(), request)
+        self.assertEqual(service.db.connection.commit_count, 0)
+        self.assertFalse(any(sql.strip().upper().startswith("UPDATE ") for sql, _ in service.db.cursor_instance.executions))
+
+    def test_recipient_purge_does_not_change_sender_view(self):
+        service = MailMessengerService()
+        service.db = FakeDb(fetchone=[
+            {"recipient_id": "recipient-self", "mail_id": "self-mail", "folder_id": None,
+             "is_spam": False, "deleted_at": object(), "purged_at": None,
+             "is_read": True, "is_starred": False},
+        ])
+        response = service.bulk_mail(
+            self.actor(),
+            MailBulkRequest(
+                mailIds=["self-mail"], action="purge", mailbox="trash",
+                trashViews=[{"mailId": "self-mail", "sourceMailbox": "inbox"}],
+            ),
+        )
+        self.assertEqual((response.requestedCount, response.changedCount), (1, 1))
+        sql = [statement.upper() for statement, _ in service.db.cursor_instance.executions]
+        self.assertTrue(any("UPDATE MAIL_RECIPIENTS" in statement and "PURGED_AT" in statement for statement in sql))
+        self.assertFalse(any("UPDATE MAIL_MESSAGES" in statement for statement in sql))
 
 if __name__ == "__main__":
     unittest.main()
