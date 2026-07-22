@@ -25,6 +25,7 @@ import {
   fetchMessengerRooms,
   fetchSchedules,
   fetchNotifications,
+  fetchNotificationStream,
   fetchNotificationSummary,
   fetchSentMail,
   fetchWorkspaceDirectory,
@@ -489,7 +490,8 @@ export default function App() {
   const [messengerDraft, setMessengerDraft] = useState("");
   const [messengerError, setMessengerError] = useState("");
   const [messengerLoading, setMessengerLoading] = useState(false);
-  const eventSourceRef = useRef<EventSource | null>(null);
+  const notificationStreamAbortRef = useRef<AbortController | null>(null);
+  const notificationStreamTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const notificationButtonRef = useRef<HTMLButtonElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const streamCursorRef = useRef<string>("");
@@ -777,9 +779,11 @@ export default function App() {
   }
 
   function stopNotificationStream() {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
+    notificationStreamAbortRef.current?.abort();
+    notificationStreamAbortRef.current = null;
+    if (notificationStreamTimerRef.current) {
+      clearTimeout(notificationStreamTimerRef.current);
+      notificationStreamTimerRef.current = null;
     }
   }
 
@@ -804,60 +808,19 @@ export default function App() {
   }
 
   function connectNotificationStream(targetToken: string) {
-    if (typeof EventSource === "undefined") {
-      setNotificationMode("polling");
-      return;
-    }
     stopNotificationStream();
-    const cursorQuery = streamCursorRef.current ? `&cursor=${encodeURIComponent(streamCursorRef.current)}` : "";
-    const streamUrl = `${apiBase}/notifications/stream?token=${encodeURIComponent(targetToken)}${cursorQuery}`;
-    const source = new EventSource(streamUrl);
-    eventSourceRef.current = source;
+    const controller = new AbortController();
+    notificationStreamAbortRef.current = controller;
     setNotificationMode("streaming");
 
-    source.addEventListener("notification", (event) => {
-      try {
-        const payload = JSON.parse((event as MessageEvent).data) as NotificationRecord;
-        appendNotification(payload);
-      } catch {
-        // ignore malformed stream payload
+    function scheduleReconnect() {
+      if (notificationStreamAbortRef.current !== controller) {
+        return;
       }
-    });
-
-    source.addEventListener("streammeta", (event) => {
-      try {
-        const payload = JSON.parse((event as MessageEvent).data) as { value?: string };
-        if (payload.value) {
-          streamCursorRef.current = payload.value;
-        }
-      } catch {
-        // ignore malformed payload
-      }
-    });
-
-    source.addEventListener("heartbeat", (event) => {
-      try {
-        const payload = JSON.parse((event as MessageEvent).data) as { type?: string };
-        if (payload.type === "fallback") {
-          applyStreamPolicyError(new Error("stream fallback"));
-        }
-      } catch (error) {
-        if (error instanceof Error && error.message === "stream fallback") {
-          return;
-        }
-        if (error instanceof SyntaxError) {
-          return;
-        }
-        applyStreamPolicyError(error instanceof Error ? error : new Error("stream heartbeat 처리 실패"));
-      }
-    });
-
-    source.onerror = () => {
-      source.close();
-      eventSourceRef.current = null;
+      notificationStreamAbortRef.current = null;
       if (streamRetryRef.current < NOTIFICATION_POLICY.streamRetryMax) {
         streamRetryRef.current += 1;
-        setTimeout(() => {
+        notificationStreamTimerRef.current = setTimeout(() => {
           if (targetToken) {
             connectNotificationStream(targetToken);
           }
@@ -866,14 +829,65 @@ export default function App() {
       }
       streamRetryRef.current = 0;
       void refreshNotificationsFallback(targetToken).catch(applyStreamPolicyError);
-    };
+    }
 
-    source.onopen = () => {
-      streamRetryRef.current = 0;
-      void fetchNotificationSummary(targetToken)
-        .then((summary) => setNotificationSummary(summary))
-        .catch(() => setNotificationError("알림 요약 조회 실패"));
-    };
+    void fetchNotificationStream(targetToken, {
+      cursor: streamCursorRef.current || undefined,
+      signal: controller.signal,
+    })
+      .then((streamPayload) => {
+        if (controller.signal.aborted) return;
+        streamRetryRef.current = 0;
+        void fetchNotificationSummary(targetToken)
+          .then((summary) => setNotificationSummary(summary))
+          .catch(() => setNotificationError("알림 요약 조회 실패"));
+
+        let fallbackRequested = false;
+        const eventBlocks = streamPayload.split(/\r?\n\r?\n/);
+        for (const block of eventBlocks) {
+          const lines = block.split(/\r?\n/);
+          const eventName = lines.find((line) => line.startsWith("event:"))?.slice(6).trim();
+          const data = lines
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.slice(5).trimStart())
+            .join("\n");
+          if (!eventName || !data) continue;
+
+          try {
+            if (eventName === "notification") {
+              const payload = JSON.parse(data) as NotificationRecord;
+              appendNotification(payload);
+              continue;
+            }
+            if (eventName === "streammeta") {
+              const payload = JSON.parse(data) as { value?: string };
+              if (payload.value) {
+                streamCursorRef.current = payload.value;
+              }
+              continue;
+            }
+            if (eventName === "heartbeat") {
+              const heartbeat = JSON.parse(data) as { type?: string };
+              if (heartbeat.type === "fallback") {
+                fallbackRequested = true;
+                break;
+              }
+            }
+          } catch {
+            // ignore malformed stream payload
+          }
+        }
+
+        if (fallbackRequested) {
+          applyStreamPolicyError(new Error("stream fallback"));
+          return;
+        }
+        scheduleReconnect();
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        scheduleReconnect();
+      });
   }
 
   async function refreshNotifications(targetToken: string) {

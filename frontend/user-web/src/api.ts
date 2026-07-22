@@ -611,6 +611,30 @@ export async function fetchNotifications(token: string, options?: { unreadOnly?:
   });
 }
 
+export async function fetchNotificationStream(
+  token: string,
+  options?: { cursor?: string; signal?: AbortSignal },
+): Promise<string> {
+  const query = new URLSearchParams();
+  if (options?.cursor) query.append("cursor", options.cursor);
+  const qs = query.toString();
+  const response = await fetch(`${apiBase}/notifications/stream${qs ? `?${qs}` : ""}`, {
+    headers: authHeaders(token),
+    signal: options?.signal,
+  });
+  const payload = await response.text();
+  if (!response.ok) {
+    let data: unknown = {};
+    try {
+      data = JSON.parse(payload || "{}") as unknown;
+    } catch {
+      // non-JSON proxy errors use the standard API error message
+    }
+    throw extractApiError(response, data);
+  }
+  return payload;
+}
+
 export async function ackNotification(token: string, notificationId: string) {
   return request<NotificationRecord>(`/notifications/${notificationId}/ack`, {
     method: "POST",
