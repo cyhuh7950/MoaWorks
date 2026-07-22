@@ -8,7 +8,7 @@ assert.match(app, /type MailComposeContext = "new" \| "reply" \| "reply_all" \| 
 assert.match(app, /function buildMailReplyRecipients/);
 assert.match(app, /function buildMailQuotedBody/);
 assert.match(app, /while \(\/\^\(re\|fwd\|fw\):/i);
-assert.match(app, /recipientKind === "bcc"/);
+assert.match(app, /recipientKind !== "bcc"/);
 assert.match(app, /me\?\.userEmail/);
 assert.match(app, />전체답장</);
 assert.match(app, /openMailComposeFromDetail\("reply_all"\)/);

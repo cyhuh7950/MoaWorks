@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -42,6 +43,9 @@ class MailSendRequest(BaseModel):
     bodyHtml: str | None = None
     attachments: list[MailAttachmentMeta] = Field(default_factory=list, max_length=10)
     scheduledAt: datetime | None = None
+    composeAction: Literal["new", "reply", "reply_all", "forward"] = "new"
+    sourceMailId: str | None = Field(default=None, min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
+    copiedAttachmentIds: list[str] = Field(default_factory=list, max_length=10)
 
     @field_validator("to", "cc", "bcc")
     @classmethod
@@ -55,6 +59,20 @@ class MailSendRequest(BaseModel):
                 normalized.append(email)
         return normalized
 
+    @field_validator("copiedAttachmentIds")
+    @classmethod
+    def validate_copied_attachment_ids(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            attachment_id = value.strip()
+            if not attachment_id or len(attachment_id) > 100:
+                raise ValueError("전달 첨부 식별자가 올바르지 않습니다.")
+            if not all(character.isalnum() or character in "_-" for character in attachment_id):
+                raise ValueError("전달 첨부 식별자가 올바르지 않습니다.")
+
+            if attachment_id not in normalized:
+                normalized.append(attachment_id)
+        return normalized
     @field_validator("scheduledAt")
     @classmethod
     def validate_scheduled_at(cls, value: datetime | None) -> datetime | None:
@@ -77,6 +95,14 @@ class MailSendRequest(BaseModel):
             values = [email for email in getattr(self, field_name) if email not in seen]
             setattr(self, field_name, values)
             seen.update(values)
+
+        has_source = self.sourceMailId is not None
+        if self.composeAction == "new" and (has_source or self.copiedAttachmentIds):
+            raise ValueError("새 메일에는 원문 정보를 지정할 수 없습니다.")
+        if self.composeAction != "new" and not has_source:
+            raise ValueError("답장·전달에는 원문 메일이 필요합니다.")
+        if self.composeAction != "forward" and self.copiedAttachmentIds:
+            raise ValueError("원문 첨부는 전달에서만 복제할 수 있습니다.")
         return self
 
 

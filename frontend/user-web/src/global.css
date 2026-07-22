@@ -1161,6 +1161,23 @@ textarea {
   cursor: pointer;
 }
 
+.user-mail-compose-source-attachments > label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border-style: solid;
+}
+
+.user-mail-compose-source-attachments input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
 .user-mail-compose-attachments input[type="file"] {
   position: absolute;
   inline-size: 1px;

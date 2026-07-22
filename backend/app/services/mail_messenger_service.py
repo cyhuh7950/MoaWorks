@@ -980,14 +980,40 @@ class MailMessengerService:
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
                 account = self._fetch_mail_account(cursor, actor.userId)
+                if payload.sourceMailId:
+                    if payload.copiedAttachmentIds:
+                        source_attachments = self._fetch_source_attachments(
+                            cursor,
+                            actor,
+                            payload.sourceMailId,
+                            payload.copiedAttachmentIds,
+                        )
+                        for source_attachment in source_attachments:
+                            resolved_attachments.append(
+                                self.attachment_storage.clone(
+                                    actor,
+                                    storage_key=source_attachment["storage_key"],
+                                    file_name=source_attachment["file_name"],
+                                    content_type=source_attachment["content_type"],
+                                    size_bytes=source_attachment["size_bytes"],
+                                )
+                            )
+                    else:
+                        self._fetch_accessible_mail(cursor, actor, payload.sourceMailId)
+                if len(resolved_attachments) > settings.mail_attachment_max_files:
+                    raise ValueError("첨부 파일 개수 제한을 초과했습니다.")
+                if sum(item["size_bytes"] for item in resolved_attachments) > settings.mail_attachment_max_total_bytes:
+                    raise ValueError("첨부 파일의 전체 용량 제한을 초과했습니다.")
+
                 cursor.execute(
                     """
                     INSERT INTO mail_messages (
                         id, company_id, sender_user_id, sender_account_id, sender_email,
                         subject, body_text, body_html, status, sent_at, scheduled_at, created_at,
-                        updated_at, retention_expires_at, attachment_count
+                        updated_at, retention_expires_at, attachment_count,
+                        source_message_id, source_action
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         mail_id,
@@ -1005,6 +1031,8 @@ class MailMessengerService:
                         now,
                         now + timedelta(days=30),
                         len(resolved_attachments),
+                        payload.sourceMailId,
+                        None if payload.composeAction == "new" else payload.composeAction,
                     ),
                 )
                 recipient_pairs = [("to", item) for item in payload.to] + [("cc", item) for item in payload.cc] + [("bcc", item) for item in payload.bcc]
@@ -1053,6 +1081,7 @@ class MailMessengerService:
                     status_before=None,
                     status_after=status_value,
                     now=now,
+                    reason="UI-018 mail compose" if payload.composeAction == "new" else f"UI-019 {payload.composeAction}",
                 )
             connection.commit()
         for attachment in resolved_attachments:
@@ -1078,6 +1107,7 @@ class MailMessengerService:
         status_before: str | None,
         status_after: str,
         now: datetime,
+        reason: str = "UI-018 mail compose",
     ) -> None:
         cursor.execute(
             """
@@ -1095,7 +1125,7 @@ class MailMessengerService:
                 event,
                 status_before,
                 status_after,
-                "UI-018 mail compose",
+                reason,
                 now,
             ),
         )
@@ -1183,6 +1213,33 @@ class MailMessengerService:
             )
             for row in cursor.fetchall()
         ]
+
+    def _fetch_source_attachments(
+        self,
+        cursor,
+        actor: AuthUserSummary,
+        source_mail_id: str,
+        attachment_ids: list[str],
+    ) -> list[dict]:
+        self._fetch_accessible_mail(cursor, actor, source_mail_id)
+        if not attachment_ids:
+            return []
+        cursor.execute(
+            """
+            SELECT id, file_name, content_type, size_bytes, storage_key
+            FROM mail_attachments
+            WHERE message_id = %s
+              AND id = ANY(%s)
+            """,
+            (source_mail_id, attachment_ids),
+        )
+        rows = cursor.fetchall()
+        by_id = {row["id"]: row for row in rows}
+        if len(by_id) != len(attachment_ids) or any(attachment_id not in by_id for attachment_id in attachment_ids):
+            raise PermissionError("전달할 원문 첨부에 접근할 권한이 없습니다.")
+        if any(not row["storage_key"] for row in rows):
+            raise ValueError("원문 첨부 파일 저장 상태가 올바르지 않습니다.")
+        return [by_id[attachment_id] for attachment_id in attachment_ids]
 
     def _fetch_mail_attachments(self, cursor, mail_id: str) -> list[MailAttachmentView]:
         cursor.execute(

@@ -298,10 +298,63 @@ type UserPortalMenu = "home" | "mail" | "approval" | "messenger" | "schedule" | 
 type MailboxType = "inbox" | "sent";
 type MailFolderType = MailboxType | "starred" | "unread" | "draft" | "localArchive";
 
-function withMailSubjectPrefix(subject: string, mode: "reply" | "forward") {
-  const prefix = mode === "reply" ? "Re:" : "Fwd:";
-  const existingPrefix = mode === "reply" ? /^re:\s*/i : /^fwd:\s*/i;
-  return existingPrefix.test(subject.trimStart()) ? subject : `${prefix} ${subject}`;
+type MailComposeContext = "new" | "reply" | "reply_all" | "forward";
+
+function withMailSubjectPrefix(subject: string, mode: MailComposeContext) {
+  const prefix = mode === "forward" ? "Fwd:" : "Re:";
+  let baseSubject = subject.trim();
+  while (/^(re|fwd|fw):\s*/i.test(baseSubject)) {
+    baseSubject = baseSubject.replace(/^(re|fwd|fw):\s*/i, "").trimStart();
+  }
+  return baseSubject ? `${prefix} ${baseSubject}` : prefix;
+}
+
+function buildMailReplyRecipients(
+  detail: MailDetail,
+  actorEmail: string,
+  mode: "reply" | "reply_all",
+): { to: string[]; cc: string[] } {
+  const ownEmail = actorEmail.trim().toLowerCase();
+  const visibleRecipients = detail.recipients.filter((item) => item.recipientKind !== "bcc");
+  const originalTo = visibleRecipients
+    .filter((item) => item.recipientKind === "to")
+    .map((item) => item.recipientEmail.trim().toLowerCase());
+  const originalCc = visibleRecipients
+    .filter((item) => item.recipientKind === "cc")
+    .map((item) => item.recipientEmail.trim().toLowerCase());
+  const senderEmail = detail.senderEmail.trim().toLowerCase();
+  const toCandidates = mode === "reply" ? [senderEmail] : [senderEmail, ...originalTo];
+  const to = mode === "reply"
+    ? [...new Set(toCandidates.filter(Boolean))]
+    : [...new Set(toCandidates.filter((email) => email && email !== ownEmail))];
+  const toSet = new Set(to);
+  const cc = mode === "reply_all"
+    ? [...new Set(originalCc.filter((email) => email && email !== ownEmail && !toSet.has(email)))]
+    : [];
+  return { to, cc };
+}
+
+function buildMailQuotedBody(detail: MailDetail): string {
+  const visibleRecipients = detail.recipients.filter((item) => item.recipientKind !== "bcc");
+  const to = visibleRecipients
+    .filter((item) => item.recipientKind === "to")
+    .map((item) => item.recipientEmail)
+    .join(", ");
+  const cc = visibleRecipients
+    .filter((item) => item.recipientKind === "cc")
+    .map((item) => item.recipientEmail)
+    .join(", ");
+  return [
+    "",
+    "--- 원문 ---",
+    `일시: ${formatMailDate(detail.sentAt || detail.createdAt)}`,
+    `보낸 사람: ${detail.senderEmail}`,
+    `받는 사람: ${to || "-"}`,
+    `참조: ${cc || "-"}`,
+    `제목: ${detail.subject}`,
+    "",
+    detail.bodyText,
+  ].join("\n");
 }
 
 function formatFileSize(value: number) {
@@ -510,7 +563,7 @@ export default function App() {
   const [mailMoveCategory, setMailMoveCategory] = useState("primary");
   const [mailBulkReloadError, setMailBulkReloadError] = useState("");
   const [composeWindow, setComposeWindow] = useState<"normal" | "minimized" | "maximized">("normal");
-  const [mailComposeContext, setMailComposeContext] = useState<"new" | "reply" | "forward">("new");
+  const [mailComposeContext, setMailComposeContext] = useState<MailComposeContext>("new");
   const [mailComposePosition, setMailComposePosition] = useState<{ left: number; top: number } | null>(null);
   const [mailDetailExpanded, setMailDetailExpanded] = useState(false);
   const [selectedMailDetail, setSelectedMailDetail] = useState<MailDetail | null>(null);
@@ -519,10 +572,16 @@ export default function App() {
   const [mailDeliveryStatus, setMailDeliveryStatus] = useState<MailDeliveryStatusResponse | null>(null);
   const [mailComposeForm, setMailComposeForm] = useState<MailComposeForm>(createEmptyMailComposeForm);
   const [mailComposeFiles, setMailComposeFiles] = useState<MailComposeFile[]>([]);
+  const [mailComposeSourceDetail, setMailComposeSourceDetail] = useState<MailDetail | null>(null);
+  const [selectedForwardAttachmentIds, setSelectedForwardAttachmentIds] = useState<string[]>([]);
   const [recipientPickerTarget, setRecipientPickerTarget] = useState<RecipientPickerTarget | null>(null);
   const [recipientSuggestions, setRecipientSuggestions] = useState<RecipientSuggestion[]>([]);
   const [recipientPickerQuery, setRecipientPickerQuery] = useState("");
-  const mailComposeAttachmentBytes = mailComposeFiles.reduce((sum, item) => sum + item.file.size, 0);
+  const selectedForwardAttachments = mailComposeSourceDetail?.attachments.filter((item) => selectedForwardAttachmentIds.includes(item.attachmentId)) ?? [];
+  const mailComposeNewAttachmentBytes = mailComposeFiles.reduce((sum, item) => sum + item.file.size, 0);
+  const mailComposeSourceAttachmentBytes = selectedForwardAttachments.reduce((sum, item) => sum + item.sizeBytes, 0);
+  const mailComposeAttachmentBytes = mailComposeNewAttachmentBytes + mailComposeSourceAttachmentBytes;
+  const mailComposeAttachmentCount = mailComposeFiles.length + selectedForwardAttachments.length;
   const [recipientPickerLoading, setRecipientPickerLoading] = useState(false);
   const [mailError, setMailError] = useState("");
   const [mailLoading, setMailLoading] = useState(false);
@@ -674,6 +733,8 @@ export default function App() {
     setMailComposeContext("new");
     setMailComposePosition(null);
     setMailComposeFiles([]);
+    setMailComposeSourceDetail(null);
+    setSelectedForwardAttachmentIds([]);
     setRecipientPickerTarget(null);
     setComposeWindow("normal");
     setMailComposeForm(createEmptyMailComposeForm());
@@ -1201,7 +1262,7 @@ export default function App() {
   function addMailComposeFiles(files: FileList | null) {
     if (!files?.length) return;
     const additions = Array.from(files);
-    const nextCount = mailComposeFiles.length + additions.length;
+    const nextCount = mailComposeAttachmentCount + additions.length;
     if (nextCount > MAIL_ATTACHMENT_LIMITS.maxFiles) {
       setMailError(`첨부는 최대 ${MAIL_ATTACHMENT_LIMITS.maxFiles}개까지 가능합니다.`);
       return;
@@ -1210,7 +1271,7 @@ export default function App() {
       setMailError("빈 파일 또는 10 MB를 초과한 파일은 첨부할 수 없습니다.");
       return;
     }
-    const totalBytes = mailComposeFiles.reduce((sum, item) => sum + item.file.size, 0) + additions.reduce((sum, file) => sum + file.size, 0);
+    const totalBytes = mailComposeAttachmentBytes + additions.reduce((sum, file) => sum + file.size, 0);
     if (totalBytes > MAIL_ATTACHMENT_LIMITS.maxTotalBytes) {
       setMailError("첨부 파일 합계는 25 MB를 초과할 수 없습니다.");
       return;
@@ -1252,7 +1313,15 @@ export default function App() {
     const recipients = [...new Set([...to, ...cc, ...bcc])];
     const subject = mailComposeForm.subject.trim();
     const bodyText = mailComposeForm.bodyText.trim();
-    const hasDraftContent = Boolean(recipients.length || subject || bodyText || mailComposeFiles.length);
+    const hasDraftContent = Boolean(recipients.length || subject || bodyText || mailComposeAttachmentCount);
+    if (mailComposeAttachmentCount > MAIL_ATTACHMENT_LIMITS.maxFiles) {
+      setMailError(`첨부는 최대 ${MAIL_ATTACHMENT_LIMITS.maxFiles}개까지 가능합니다.`);
+      return;
+    }
+    if (mailComposeAttachmentBytes > MAIL_ATTACHMENT_LIMITS.maxTotalBytes) {
+      setMailError("첨부 파일 합계는 25 MB를 초과할 수 없습니다.");
+      return;
+    }
     if (action === "draft" && !hasDraftContent) {
       setMailError("저장할 초안 내용을 입력해 주세요.");
       return;
@@ -1295,7 +1364,14 @@ export default function App() {
     setMailError("");
     try {
       const attachments = await uploadComposeAttachments(token);
-      const payload = { to, cc, bcc, subject, bodyText, attachments, scheduledAt };
+      const payload = {
+        to, cc, bcc, subject, bodyText, attachments, scheduledAt,
+        composeAction: mailComposeContext,
+        sourceMailId: mailComposeSourceDetail?.mailId,
+        copiedAttachmentIds: mailComposeContext === "forward"
+          ? selectedForwardAttachmentIds
+          : [],
+      };
       const response = action === "draft" ? await saveMailDraft(token, payload) : await sendMail(token, payload);
       if (action === "draft") {
         setMessage("메일을 임시저장했습니다.");
@@ -1310,6 +1386,8 @@ export default function App() {
       }
       setMailComposeForm(createEmptyMailComposeForm());
       setMailComposeFiles([]);
+      setMailComposeSourceDetail(null);
+      setSelectedForwardAttachmentIds([]);
       setQuickComposeMode("none");
       const nextMailbox: MailboxType = action === "draft" ? "inbox" : "sent";
       setMailFolder(action === "draft" ? "draft" : "sent");
@@ -1329,28 +1407,30 @@ export default function App() {
     }
   }
 
-  function openMailComposeFromDetail(mode: "reply" | "forward") {
+  function openMailComposeFromDetail(mode: "reply" | "reply_all" | "forward") {
     if (!selectedMailDetail) return;
-    const subject = withMailSubjectPrefix(selectedMailDetail.subject, mode);
-    const quoted = [
-      "",
-      "--- 원문 ---",
-      `발신자: ${selectedMailDetail.senderEmail}`,
-      `수신자: ${selectedMailDetail.recipients.map((item) => item.recipientEmail).join(", ")}`,
-      `제목: ${selectedMailDetail.subject}`,
-      selectedMailDetail.bodyText,
-    ].join("\n");
+    const replyRecipients = mode === "forward"
+      ? { to: [], cc: [] }
+      : buildMailReplyRecipients(selectedMailDetail, me?.userEmail || "", mode);
     setMailComposeForm({
-      to: mode === "reply" ? selectedMailDetail.senderEmail : "",
-      subject,
-      cc: "",
+      to: replyRecipients.to.join(", "),
+      cc: replyRecipients.cc.join(", "),
       bcc: "",
+      subject: withMailSubjectPrefix(selectedMailDetail.subject, mode),
+      bodyText: buildMailQuotedBody(selectedMailDetail),
       scheduledAt: "",
-      bodyText: quoted,
     });
     setMailComposeContext(mode);
+    setMailComposeSourceDetail(selectedMailDetail);
+    setSelectedForwardAttachmentIds(
+      mode === "forward"
+        ? selectedMailDetail.attachments.map((item) => item.attachmentId).filter(Boolean)
+        : [],
+    );
+    setMailComposeFiles([]);
     setMailComposePosition(null);
     setComposeWindow("normal");
+    setMailError("");
     setQuickComposeMode("mail");
   }
 
@@ -1359,6 +1439,8 @@ export default function App() {
     setMailComposeContext("new");
     setMailComposePosition(null);
     setMailComposeFiles([]);
+    setMailComposeSourceDetail(null);
+    setSelectedForwardAttachmentIds([]);
     setRecipientPickerTarget(null);
     setRecipientPickerQuery("");
     setComposeWindow("normal");
@@ -1367,7 +1449,7 @@ export default function App() {
   }
 
   function closeMailCompose() {
-    const hasDraft = Boolean(mailComposeForm.to || mailComposeForm.cc || mailComposeForm.bcc || mailComposeForm.subject || mailComposeForm.bodyText || mailComposeForm.scheduledAt || mailComposeFiles.length);
+    const hasDraft = Boolean(mailComposeForm.to || mailComposeForm.cc || mailComposeForm.bcc || mailComposeForm.subject || mailComposeForm.bodyText || mailComposeForm.scheduledAt || mailComposeAttachmentCount);
     if (hasDraft) {
       setMailComposeCloseConfirmOpen(true);
       return;
@@ -1614,6 +1696,8 @@ export default function App() {
       setMessengerRoomsData([]);
       setSelectedRoomId("");
       setMailComposeFiles([]);
+      setMailComposeSourceDetail(null);
+      setSelectedForwardAttachmentIds([]);
       setRecipientPickerTarget(null);
       setSelectedRoomDetail(null);
       setRoomMessages([]);
@@ -2487,7 +2571,7 @@ export default function App() {
                   <div className="user-mail-compose-titlebar" onMouseDown={startMailComposeDrag} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
                     <div>
                       <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>메일 작성</div>
-                      <h2 style={{ margin: "10px 0 0", fontSize: 22 }}>{mailComposeContext === "reply" ? "답장" : mailComposeContext === "forward" ? "전달" : "새 메일"}</h2>
+                      <h2 style={{ margin: "10px 0 0", fontSize: 16 }}>{mailComposeContext === "reply" ? "답장" : mailComposeContext === "reply_all" ? "전체답장" : mailComposeContext === "forward" ? "전달" : "새 메일"}</h2>
                     </div>
                     <div style={{ display: "flex", gap: 6 }}><button type="button" onClick={() => setComposeWindow((current) => current === "minimized" ? "normal" : "minimized")} style={{ height: 34 }}>최소화</button><button type="button" onClick={() => setComposeWindow((current) => current === "maximized" ? "normal" : "maximized")} style={{ height: 34 }}>확대</button><button type="button" onClick={closeMailCompose} style={{ height: 34 }}>닫기</button></div>
                   </div>
@@ -2514,8 +2598,23 @@ export default function App() {
                     <span>본문</span>
                     <textarea aria-label="mail-compose-body" value={mailComposeForm.bodyText} onChange={(event) => setMailComposeForm((current) => ({ ...current, bodyText: event.target.value }))} placeholder="본문 입력" />
                   </label>
+                  {mailComposeContext === "forward" && mailComposeSourceDetail?.attachments.length ? (
+                    <section className="user-mail-compose-attachments user-mail-compose-source-attachments" aria-label="원문 첨부" title="선택한 원문 첨부는 권한 확인 후 새 파일로 복제됩니다.">
+                      <div><strong>원문 첨부</strong><small>{selectedForwardAttachments.length}/{mailComposeSourceDetail.attachments.length}개 선택</small></div>
+                      {mailComposeSourceDetail.attachments.map((item) => (
+                        <label key={item.attachmentId}>
+                          <input
+                            type="checkbox"
+                            checked={selectedForwardAttachmentIds.includes(item.attachmentId)}
+                            onChange={() => setSelectedForwardAttachmentIds((current) => current.includes(item.attachmentId) ? current.filter((id) => id !== item.attachmentId) : [...current, item.attachmentId])}
+                          />
+                          <span>{item.fileName}</span><small>{formatFileSize(item.sizeBytes)}</small>
+                        </label>
+                      ))}
+                    </section>
+                  ) : null}
                   <section className="user-mail-compose-attachments" aria-label="메일 첨부">
-                    <div><strong>첨부</strong><small>{mailComposeFiles.length}개 · {formatFileSize(mailComposeAttachmentBytes)}</small></div>
+                    <div><strong>첨부</strong><small>{mailComposeAttachmentCount}개 · {formatFileSize(mailComposeAttachmentBytes)}</small></div>
                     <label title="파일당 10 MB, 최대 10개, 합계 25 MB">
                       파일 선택
                       <input type="file" multiple onChange={(event) => { addMailComposeFiles(event.target.files); event.target.value = ""; }} />
@@ -2568,6 +2667,7 @@ export default function App() {
                       </dl>
                       <div className="user-mail-detail-actions">
                         {canReplyToSelectedMail ? <button type="button" onClick={() => openMailComposeFromDetail("reply")}>답장</button> : null}
+                        {canReplyToSelectedMail ? <button type="button" onClick={() => openMailComposeFromDetail("reply_all")}>전체답장</button> : null}
                         {canForwardSelectedMail ? <button type="button" onClick={() => openMailComposeFromDetail("forward")}>전달</button> : null}
                         {canUpdateSelectedMailStatus ? <button type="button" aria-label="mail-detail-read-action" onClick={() => void handleSelectedMailReadAction()}>{selectedMailSummary?.isRead ? "읽음 상태 확인" : "읽음 처리"}</button> : null}
                         {canUpdateSelectedMailStatus ? <button type="button" aria-label="mail-detail-star-action" onClick={() => void toggleSelectedMailStar()}>{selectedMailSummary?.isStarred ? "중요 해제" : "중요 표시"}</button> : null}

@@ -353,6 +353,9 @@ export type MailComposePayload = {
   bodyHtml?: string | null;
   attachments?: MailAttachment[];
   scheduledAt?: string | null;
+  composeAction?: "new" | "reply" | "reply_all" | "forward";
+  sourceMailId?: string;
+  copiedAttachmentIds?: string[];
 };
 
 export type MailDeliveryOutcomeSummary = {

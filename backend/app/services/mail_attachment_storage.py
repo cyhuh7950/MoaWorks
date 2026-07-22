@@ -76,6 +76,29 @@ class MailAttachmentStorage:
             "storage_key": metadata["storageKey"],
         }
 
+    def clone(
+        self,
+        actor: AuthUserSummary,
+        *,
+        storage_key: str,
+        file_name: str,
+        content_type: str,
+        size_bytes: int,
+    ) -> dict:
+        source_path = self.stored_path(storage_key)
+        if source_path.stat().st_size != size_bytes:
+            raise ValueError("원문 첨부 파일 저장 상태가 올바르지 않습니다.")
+        uploaded = self.stage(actor, file_name, content_type, source_path.read_bytes())
+        return self.resolve(
+            actor,
+            MailAttachmentMeta(
+                uploadId=uploaded.uploadId,
+                fileName=uploaded.fileName,
+                contentType=uploaded.contentType,
+                sizeBytes=uploaded.sizeBytes,
+            ),
+        )
+
     def mark_attached(self, upload_id: str) -> None:
         metadata = self._load_metadata(upload_id)
         metadata["attached"] = True
