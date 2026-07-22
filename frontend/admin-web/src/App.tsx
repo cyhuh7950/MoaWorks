@@ -7,6 +7,8 @@ import {
   createRole,
   createUser,
   fetchDirectory,
+  fetchMailDeliveryStatus, fetchMailDeliveryQueue, updateMailDeliveryProvider, testMailDeliveryProvider, retryMailDelivery,
+  type MailDeliveryStatusResponse, type MailDeliveryQueueItem,
   fetchHealth,
   fetchMonitoringEvents,
   fetchMonitoringOverview,
@@ -390,6 +392,8 @@ export default function App() {
   const [approvalAuditLogs, setApprovalAuditLogs] = useState<ApprovalAuditLog[]>([]);
   const [domainResult, setDomainResult] = useState<DomainVerifyResponse | null>(null);
   const [relayResult, setRelayResult] = useState<RelayTestResponse | null>(null);
+  const [mailDeliveryStatus, setMailDeliveryStatus] = useState<MailDeliveryStatusResponse | null>(null);
+  const [mailDeliveryQueue, setMailDeliveryQueue] = useState<MailDeliveryQueueItem[]>([]);
   const [translationStatus, setTranslationStatus] = useState<TranslationStatus | null>(null);
   const [translationPolicy, setTranslationPolicy] = useState<TranslationPolicy | null>(null);
   const [translationSource, setTranslationSource] = useState("");
@@ -905,6 +909,20 @@ export default function App() {
     );
   }) ?? [];
 
+  async function refreshMailDelivery() {
+    if (!token) return;
+    try {
+      const [statusResult, queueResult] = await Promise.all([fetchMailDeliveryStatus(token), fetchMailDeliveryQueue(token)]);
+      setMailDeliveryStatus(statusResult); setMailDeliveryQueue(queueResult.items);
+    } catch (error) { setErrors([error instanceof Error ? error.message : "메일 운영 상태를 불러오지 못했습니다."]); }
+  }
+  async function toggleMailDeliveryLock() {
+    if (!token || !mailDeliveryStatus) return;
+    await updateMailDeliveryProvider(token,{deliveryEnabled:!mailDeliveryStatus.provider.deliveryEnabled}); await refreshMailDelivery();
+  }
+  async function runMailProviderTest() { if (!token) return; await testMailDeliveryProvider(token); await refreshMailDelivery(); }
+  async function retryDelivery(queueId:string) { if (!token) return; await retryMailDelivery(token,queueId); await refreshMailDelivery(); }
+
   const renderAdminPanel = () => {
     if (!overview) {
       return null;
@@ -1352,36 +1370,21 @@ export default function App() {
         return (
           <section className="panel">
             <div className="panel-head">
-              <div>
-                <h2>메일 설정</h2>
-                <p className="muted">메일 제공자 상태, Relay 상태, 메일 테스트만 표시합니다.</p>
-              </div>
+              <div><h2>메일 운영</h2><p className="muted">Provider 잠금, 실제 연결, worker heartbeat와 외부 전달 큐를 관리합니다.</p></div>
+              <button type="button" className="secondary" onClick={() => void refreshMailDelivery()}>새로고침</button>
             </div>
-            <div className="overview-grid">
-              <article className="status-card">
-                <strong>메일 제공자 상태</strong>
-                <p>{overview.mailProvider.providerType}</p>
-                <p className="muted">활성 여부: {overview.mailProvider.active ? "active" : "inactive"}</p>
-              </article>
-              <article className="status-card">
-                <strong>Relay 상태</strong>
-                <p>{overview.mailProvider.relayHost}:{overview.mailProvider.relayPort}</p>
-                <p className="muted">마지막 테스트: {overview.mailProvider.lastTestStatus}</p>
-              </article>
+            {mailDeliveryStatus ? <div className="overview-grid">
+              <article className="status-card"><strong>외부 발송 잠금</strong><p>{mailDeliveryStatus.provider.deliveryEnabled ? "해제" : "잠금"}</p><button type="button" onClick={() => void toggleMailDeliveryLock()}>{mailDeliveryStatus.provider.deliveryEnabled ? "외부 발송 잠금" : "검증 후 잠금 해제"}</button></article>
+              <article className="status-card"><strong>Provider 연결</strong><p>{mailDeliveryStatus.provider.providerType} / {mailDeliveryStatus.provider.lastTestStatus}</p><p className="muted">{mailDeliveryStatus.provider.relayHost}:{mailDeliveryStatus.provider.relayPort}</p><button type="button" className="secondary" onClick={() => void runMailProviderTest()}>연결 테스트</button></article>
+              <article className="status-card"><strong>Worker heartbeat</strong><p>{String(mailDeliveryStatus.worker.status ?? "미확인")}</p><p className="muted">{String(mailDeliveryStatus.worker.last_heartbeat_at ?? "heartbeat 없음")}</p></article>
+              <article className="status-card"><strong>큐 요약</strong><p>{Object.entries(mailDeliveryStatus.summary).map(([key,value]) => key+" "+value).join(" / ") || "큐 없음"}</p></article>
+            </div> : <p className="muted">메일 운영 상태를 불러오는 중입니다.</p>}
+            <div className="status-card"><strong>외부 전달 큐</strong>
+              <table><thead><tr><th>수신자</th><th>제목</th><th>상태</th><th>attempt</th><th>작업</th></tr></thead><tbody>
+              {mailDeliveryQueue.map(item => <tr key={item.queueId}><td>{item.recipientEmail}</td><td>{item.subject}</td><td>{item.status}</td><td>{item.attemptCount}</td><td>{["failed","blocked","retry_pending"].includes(item.status) ? <button type="button" className="secondary" onClick={() => void retryDelivery(item.queueId)}>재시도</button> : "-"}</td></tr>)}
+              {mailDeliveryQueue.length === 0 ? <tr><td colSpan={5}>표시할 외부 전달 큐가 없습니다.</td></tr> : null}
+              </tbody></table>
             </div>
-            <form className="compact-form" onSubmit={handleRelayTest}>
-              <label>
-                메일 테스트 수신자
-                <input type="email" value={relayRecipient} onChange={(e) => setRelayRecipient(e.target.value)} />
-              </label>
-              <button type="submit" disabled={loading}>{copy.relayTestAction}</button>
-            </form>
-            {relayResult ? (
-              <div className={`notice ${relayResult.status === "success" ? "success" : "warning"}`}>
-                <strong>{relayResult.status}</strong>
-                <p>{relayResult.message}</p>
-              </div>
-            ) : null}
           </section>
         );
       case "storage":

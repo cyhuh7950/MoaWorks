@@ -237,11 +237,14 @@ export type ApprovalAuditLogListResponse = {
   logs: ApprovalAuditLog[];
 };
 
-const fallbackApiBase = `${window.location.protocol}//${window.location.hostname}:8510/api/v1`;
-export const apiBase =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
-  window.localStorage.getItem("moaworks.apiBase") ??
-  fallbackApiBase;
+const defaultApiBase = "/api/v1";
+function normalizeBrowserApiBase(value: string | null | undefined) {
+  const normalized = value?.trim();
+  return normalized?.startsWith("/") ? normalized.replace(/\/$/, "") : defaultApiBase;
+}
+export const apiBase = normalizeBrowserApiBase(
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? window.localStorage.getItem("moaworks.apiBase"),
+);
 
 const tokenStorageKey = "moaworks.adminToken";
 
@@ -446,4 +449,27 @@ export async function updateUiContract(token: string, payload: UiContract): Prom
     headers: authHeaders(token),
     body: JSON.stringify(payload),
   });
+}
+
+
+export type MailDeliveryProviderView = { providerId:string; providerType:string; relayHost:string; relayPort:number; tlsMode:string; fromAddress:string|null; deliveryEnabled:boolean; lastTestStatus:string; lastConnectionAt:string|null; lastConnectionError:string|null };
+export type MailDeliveryQueueItem = { queueId:string; mailId:string; recipientEmail:string; subject:string; status:string; attemptCount:number; nextAttemptAt:string|null; leaseExpiresAt:string|null; createdAt:string };
+export type MailDeliveryStatusResponse = { provider:MailDeliveryProviderView; worker:Record<string,unknown>; summary:Record<string,number> };
+export type MailDeliveryQueueListResponse = { items:MailDeliveryQueueItem[]; total:number };
+
+export async function fetchMailDeliveryStatus(token:string):Promise<MailDeliveryStatusResponse>{
+  return request<MailDeliveryStatusResponse>("/admin/mail-delivery/status",{headers:authHeaders(token)});
+}
+export async function fetchMailDeliveryQueue(token:string,status?:string):Promise<MailDeliveryQueueListResponse>{
+  const query=status?"?status="+encodeURIComponent(status):"";
+  return request<MailDeliveryQueueListResponse>("/admin/mail-delivery/queue"+query,{headers:authHeaders(token)});
+}
+export async function updateMailDeliveryProvider(token:string,payload:Partial<{deliveryEnabled:boolean;providerType:string;relayHost:string;relayPort:number;tlsMode:string;fromAddress:string}>):Promise<MailDeliveryProviderView>{
+  return request<MailDeliveryProviderView>("/admin/mail-delivery/provider",{method:"PATCH",headers:authHeaders(token),body:JSON.stringify(payload)});
+}
+export async function testMailDeliveryProvider(token:string):Promise<MailDeliveryProviderView>{
+  return request<MailDeliveryProviderView>("/admin/mail-delivery/provider/test",{method:"POST",headers:authHeaders(token),body:JSON.stringify({timeoutSeconds:10})});
+}
+export async function retryMailDelivery(token:string,queueId:string){
+  return request("/admin/mail-delivery/queue/"+encodeURIComponent(queueId)+"/retry",{method:"POST",headers:authHeaders(token)});
 }

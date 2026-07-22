@@ -1519,10 +1519,8 @@ export default function App() {
         setMessage("메일을 임시저장했습니다.");
       } else if (action === "schedule") {
         setMessage("메일을 예약했습니다.");
-      } else if (response.deliverySummary?.externalRecipientCount) {
-        setMessage(
-          `메일을 발송했습니다. 외부 ${response.deliverySummary.externalRecipientCount}건 / sent ${response.deliverySummary.sentCount} / retry ${response.deliverySummary.retryPendingCount} / failed ${response.deliverySummary.failedCount}`,
-        );
+      } else if (response.externalCount) {
+        setMessage(`메일을 발송했습니다. 외부 ${response.externalCount}건 / 대기 ${response.queuedCount} / 운영 설정 필요 ${response.blockedCount}`);
       } else {
         setMessage("메일을 발송했습니다.");
       }
@@ -2864,6 +2862,14 @@ export default function App() {
                               </li>
                             ))}
                           </ul>
+                        </section>
+                      ) : null}
+                      {activeMailFolder === "sent" && selectedMailDetail.externalDeliveries.length ? (
+                        <section className="user-mail-read-receipt" aria-label="외부 전달 상태">
+                          <header><div><strong>외부 전달 상태</strong><small>Relay 상세 주소와 오류는 관리자에게만 표시됩니다.</small></div></header>
+                          <ul>{selectedMailDetail.externalDeliveries.map(delivery => (
+                            <li key={delivery.recipientEmail+":"+delivery.recipientKind}><span><small>{delivery.recipientKind}</small><strong>{delivery.recipientEmail}</strong></span><span>{delivery.status === "queued" ? "외부 대기" : delivery.status === "blocked" ? "운영 설정 필요" : delivery.status === "retry_pending" ? "재시도 예정" : delivery.status === "sent" ? "전달 완료" : delivery.status === "failed" ? "전달 실패" : delivery.status}</span></li>
+                          ))}</ul>
                         </section>
                       ) : null}
                       <div className="user-mail-detail-body">{selectedMailDetail.bodyText || selectedMailDetail.subject}</div>

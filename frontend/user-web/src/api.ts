@@ -377,34 +377,20 @@ export type MailComposePayload = {
   copiedAttachmentIds?: string[];
 };
 
-export type MailDeliveryOutcomeSummary = {
-  provider: string;
-  engineEnabled: boolean;
-  internalRecipientCount: number;
-  externalRecipientCount: number;
-  queuedCount: number;
-  sentCount: number;
-  failedCount: number;
-  retryPendingCount: number;
-};
-
 export type MailSendResponse = {
   mailId: string;
   status: string;
   sentAt: string | null;
-  deliverySummary?: MailDeliveryOutcomeSummary | null;
+  internalCount: number;
+  externalCount: number;
+  queuedCount: number;
+  blockedCount: number;
   scheduledAt?: string | null;
 };
 
 export type MailExternalDeliveryStatus = {
-  queueId: string;
-  recipient: string;
-  provider: string;
-  status: string;
-  attemptCount: number;
-  lastError: string | null;
-  nextRetryAt: string | null;
-  sentAt: string | null;
+  recipientEmail: string; recipientKind: string; status: string; attemptCount: number;
+  nextAttemptAt: string | null; sentAt: string | null;
 };
 
 export type MessengerParticipant = {

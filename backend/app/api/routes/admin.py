@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.dependencies import require_admin
 from app.schemas.directory import (
@@ -20,6 +20,11 @@ from app.schemas.directory import (
 from app.services.directory_store import DirectoryStore
 from app.services.domain_service import DomainService
 from app.services.relay_service import RelayService
+from app.services.mail_delivery_operations import MailDeliveryOperations
+from app.schemas.mail_messenger import (
+    MailDeliveryProviderTestRequest, MailDeliveryProviderUpdateRequest, MailDeliveryProviderView,
+    MailDeliveryQueueDetailResponse, MailDeliveryQueueListResponse, MailDeliveryStatusResponse,
+)
 
 
 router = APIRouter()
@@ -86,3 +91,44 @@ def test_relay(
     _: AuthUserSummary = Depends(require_admin),
 ) -> RelayTestResponse:
     return RelayService(DirectoryStore()).test(payload.providerConfigId, payload.testRecipient)
+
+
+def _delivery_service() -> MailDeliveryOperations:
+    return MailDeliveryOperations()
+
+def _delivery_error(exc: Exception):
+    if isinstance(exc, PermissionError):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={"code":"MAIL_DELIVERY_FORBIDDEN","userMessage":str(exc)})
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"code":"MAIL_DELIVERY_INVALID","userMessage":str(exc)})
+    raise exc
+
+@router.get("/mail-delivery/status", response_model=MailDeliveryStatusResponse)
+def get_mail_delivery_status(user: AuthUserSummary = Depends(require_admin)):
+    try: return _delivery_service().get_status(user)
+    except Exception as exc: _delivery_error(exc)
+
+@router.get("/mail-delivery/queue", response_model=MailDeliveryQueueListResponse)
+def get_mail_delivery_queue(status_filter: str | None = Query(default=None, alias="status"), limit: int = Query(default=100,ge=1,le=200), offset: int = Query(default=0,ge=0), user: AuthUserSummary = Depends(require_admin)):
+    try: return _delivery_service().list_queue(user,status_filter,limit,offset)
+    except Exception as exc: _delivery_error(exc)
+
+@router.get("/mail-delivery/queue/{queue_id}", response_model=MailDeliveryQueueDetailResponse)
+def get_mail_delivery_queue_detail(queue_id: str, user: AuthUserSummary = Depends(require_admin)):
+    try: return _delivery_service().queue_detail(user,queue_id)
+    except Exception as exc: _delivery_error(exc)
+
+@router.post("/mail-delivery/queue/{queue_id}/retry", response_model=MailDeliveryQueueDetailResponse)
+def retry_mail_delivery(queue_id: str, user: AuthUserSummary = Depends(require_admin)):
+    try: return _delivery_service().retry(user,queue_id)
+    except Exception as exc: _delivery_error(exc)
+
+@router.post("/mail-delivery/provider/test", response_model=MailDeliveryProviderView)
+def test_mail_delivery_provider(payload: MailDeliveryProviderTestRequest, user: AuthUserSummary = Depends(require_admin)):
+    try: return _delivery_service().test_provider(user,payload.timeoutSeconds)
+    except Exception as exc: _delivery_error(exc)
+
+@router.patch("/mail-delivery/provider", response_model=MailDeliveryProviderView)
+def update_mail_delivery_provider(payload: MailDeliveryProviderUpdateRequest, user: AuthUserSummary = Depends(require_admin)):
+    try: return _delivery_service().update_provider(user,payload)
+    except Exception as exc: _delivery_error(exc)

@@ -7,11 +7,13 @@ from uuid import uuid4
 
 from psycopg.types.json import Jsonb
 from app.core.config import settings
+from app.services.mail_delivery_service import MailDeliveryPolicy
 
 from app.schemas.directory import AuthUserSummary
 from app.schemas.mail_messenger import (
     MailAttachmentMeta,
     MailAttachmentView,
+    ExternalDeliveryView,
     MailBulkRequest,
     MailBulkResponse,
     MailCategoryRequest,
@@ -381,7 +383,8 @@ class MailMessengerService:
                     is_sender_view=bool(message["is_sender_view"]),
                 )
                 attachments = self._fetch_mail_attachments(cursor, mail_id)
-        return self._to_mail_detail(message, recipients, attachments)
+                external_deliveries = self._fetch_external_deliveries(cursor, mail_id) if message["is_sender_view"] else []
+        return self._to_mail_detail(message, recipients, attachments, external_deliveries)
 
     def stage_attachment(
         self,
@@ -491,8 +494,34 @@ class MailMessengerService:
                         (now, now, row["id"]),
                     )
                     cursor.execute(
-                        "UPDATE mail_recipients SET received_at = %s WHERE message_id = %s",
+                        "UPDATE mail_recipients SET received_at = %s WHERE message_id = %s AND recipient_user_id IS NOT NULL",
                         (now, row["id"]),
+                    )
+                    cursor.execute(
+                        """INSERT INTO mail_delivery_queue (
+                            id, company_id, provider_config_id, mail_id, recipient_id, status,
+                            attempt_count, next_attempt_at, created_at, updated_at
+                        )
+                        SELECT %s || '_' || r.id, m.company_id, a.provider_config_id, m.id, r.id,
+                               CASE WHEN p.delivery_enabled AND p.last_test_status = 'success' THEN 'queued' ELSE 'blocked' END,
+                               0, CASE WHEN p.delivery_enabled AND p.last_test_status = 'success' THEN %s ELSE NULL END, %s, %s
+                        FROM mail_messages m
+                        JOIN mail_accounts a ON a.id = m.sender_account_id
+                        JOIN mail_provider_configs p ON p.id = a.provider_config_id
+                        JOIN mail_recipients r ON r.message_id = m.id AND r.recipient_user_id IS NULL
+                        WHERE m.id = %s
+                        ON CONFLICT (mail_id, recipient_id) DO NOTHING""",
+                        (self._new_id("delivery"), now, now, now, row["id"]),
+                    )
+                    cursor.execute(
+                        """INSERT INTO audit_logs (
+                            id, company_id, actor_user_id, actor_user_name, target_type, target_id,
+                            event, status_before, status_after, reason, created_at
+                        )
+                        SELECT %s || '_' || q.id, q.company_id, %s, 'system', 'mail', q.mail_id,
+                               'mail.delivery.' || q.status, NULL, q.status, 'UI-021 scheduled transaction outbox', %s
+                        FROM mail_delivery_queue q WHERE q.mail_id = %s AND q.created_at = %s""",
+                        (self._new_id("audit"), row["sender_user_id"], now, row["id"], now),
                     )
                     self._write_mail_event_audit(
                         cursor,
@@ -1409,28 +1438,21 @@ class MailMessengerService:
         mail_id = self._new_id("mailmsg")
         sent_at = now if status_value == "sent" else None
         scheduled_at = payload.scheduledAt if status_value == "scheduled" else None
-        received_at = now if status_value == "sent" else None
+        internal_by_email: dict[str, str] = {}
+        external_emails: set[str] = set()
+        provider = None
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
                 account = self._fetch_mail_account(cursor, actor.userId)
                 if payload.sourceMailId:
                     if payload.copiedAttachmentIds:
-                        source_attachments = self._fetch_source_attachments(
-                            cursor,
-                            actor,
-                            payload.sourceMailId,
-                            payload.copiedAttachmentIds,
-                        )
+                        source_attachments = self._fetch_source_attachments(cursor, actor, payload.sourceMailId, payload.copiedAttachmentIds)
                         for source_attachment in source_attachments:
-                            resolved_attachments.append(
-                                self.attachment_storage.clone(
-                                    actor,
-                                    storage_key=source_attachment["storage_key"],
-                                    file_name=source_attachment["file_name"],
-                                    content_type=source_attachment["content_type"],
-                                    size_bytes=source_attachment["size_bytes"],
-                                )
-                            )
+                            resolved_attachments.append(self.attachment_storage.clone(
+                                actor, storage_key=source_attachment["storage_key"],
+                                file_name=source_attachment["file_name"], content_type=source_attachment["content_type"],
+                                size_bytes=source_attachment["size_bytes"],
+                            ))
                     else:
                         self._fetch_accessible_mail(cursor, actor, payload.sourceMailId)
                 if len(resolved_attachments) > settings.mail_attachment_max_files:
@@ -1438,82 +1460,69 @@ class MailMessengerService:
                 if sum(item["size_bytes"] for item in resolved_attachments) > settings.mail_attachment_max_total_bytes:
                     raise ValueError("첨부 파일의 전체 용량 제한을 초과했습니다.")
 
+                recipient_pairs = [("to", item) for item in payload.to] + [("cc", item) for item in payload.cc] + [("bcc", item) for item in payload.bcc]
+                if status_value != "draft":
+                    cursor.execute("SELECT domain FROM companies WHERE id = %s", (actor.companyId,))
+                    company = cursor.fetchone()
+                    cursor.execute("SELECT LOWER(email) AS email, id FROM users WHERE company_id = %s AND status = 'active'", (actor.companyId,))
+                    active_users = {row["email"]: row["id"] for row in cursor.fetchall()}
+                    classification = MailDeliveryPolicy().classify(company["domain"], active_users, recipient_pairs)
+                    internal_by_email = {email: user_id for _, email, user_id in classification.internal}
+                    external_emails = {email for _, email in classification.external}
+                    cursor.execute("SELECT * FROM mail_provider_configs WHERE id = %s AND company_id = %s", (account["provider_config_id"], actor.companyId))
+                    provider = cursor.fetchone()
+                    if external_emails and provider is None:
+                        raise ValueError("외부 발송 provider를 찾을 수 없습니다.")
+
                 cursor.execute(
-                    """
-                    INSERT INTO mail_messages (
+                    """INSERT INTO mail_messages (
                         id, company_id, sender_user_id, sender_account_id, sender_email,
                         subject, body_text, body_html, status, sent_at, scheduled_at, created_at,
-                        updated_at, retention_expires_at, attachment_count,
-                        source_message_id, source_action
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        mail_id,
-                        actor.companyId,
-                        actor.userId,
-                        account["id"],
-                        account["email"],
-                        payload.subject.strip(),
-                        payload.bodyText,
-                        payload.bodyHtml,
-                        status_value,
-                        sent_at,
-                        scheduled_at,
-                        now,
-                        now,
-                        now + timedelta(days=30),
-                        len(resolved_attachments),
-                        payload.sourceMailId,
-                        None if payload.composeAction == "new" else payload.composeAction,
-                    ),
+                        updated_at, retention_expires_at, attachment_count, source_message_id, source_action
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (mail_id, actor.companyId, actor.userId, account["id"], account["email"],
+                     payload.subject.strip(), payload.bodyText, payload.bodyHtml, status_value, sent_at, scheduled_at,
+                     now, now, now + timedelta(days=30), len(resolved_attachments), payload.sourceMailId,
+                     None if payload.composeAction == "new" else payload.composeAction),
                 )
-                recipient_pairs = [("to", item) for item in payload.to] + [("cc", item) for item in payload.cc] + [("bcc", item) for item in payload.bcc]
                 for kind, email in recipient_pairs:
-                    recipient_user_id = self._resolve_user_id_by_email(cursor, actor.companyId, email)
+                    recipient_user_id = internal_by_email.get(email) if status_value != "draft" else self._resolve_user_id_by_email(cursor, actor.companyId, email)
+                    recipient_id = self._new_id("rcpt")
                     cursor.execute(
-                        """
-                        INSERT INTO mail_recipients (
-                            id, message_id, recipient_user_id, recipient_email,
-                            recipient_kind, is_read, is_starred, received_at
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (self._new_id("rcpt"), mail_id, recipient_user_id, email, kind, False, False, received_at),
+                        """INSERT INTO mail_recipients (
+                            id, message_id, recipient_user_id, recipient_email, recipient_kind,
+                            is_read, is_starred, received_at
+                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        (recipient_id, mail_id, recipient_user_id, email, kind, False, False,
+                         now if status_value == "sent" and recipient_user_id else None),
                     )
+                    if status_value == "sent" and email in external_emails:
+                        queue_status = "queued" if provider["delivery_enabled"] and provider["last_test_status"] == "success" else "blocked"
+                        cursor.execute(
+                            """INSERT INTO mail_delivery_queue (
+                                id, company_id, provider_config_id, mail_id, recipient_id, status,
+                                attempt_count, next_attempt_at, created_at, updated_at
+                            ) VALUES (%s,%s,%s,%s,%s,%s,0,%s,%s,%s)""",
+                            (self._new_id("delivery"), actor.companyId, provider["id"], mail_id, recipient_id,
+                             queue_status, now if queue_status == "queued" else None, now, now),
+                        )
+                        self._write_mail_event_audit(
+                            cursor, company_id=actor.companyId, actor_user_id=actor.userId,
+                            actor_user_name=actor.userName, mail_id=mail_id, event=f"mail.delivery.{queue_status}",
+                            status_before=None, status_after=queue_status, now=now, reason="UI-021 transaction outbox",
+                        )
                 for attachment in resolved_attachments:
                     cursor.execute(
-                        """
-                        INSERT INTO mail_attachments (
+                        """INSERT INTO mail_attachments (
                             id, message_id, file_name, content_type, size_bytes, storage_key, created_at
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (
-                            self._new_id("attach"),
-                            mail_id,
-                            attachment["file_name"],
-                            attachment["content_type"],
-                            attachment["size_bytes"],
-                            attachment["storage_key"],
-                            now,
-                        ),
+                        ) VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                        (self._new_id("attach"), mail_id, attachment["file_name"], attachment["content_type"],
+                         attachment["size_bytes"], attachment["storage_key"], now),
                     )
-                event = {
-                    "draft": "mail.draft.saved",
-                    "scheduled": "mail.scheduled",
-                    "sent": "mail.sent",
-                }[status_value]
+                event = {"draft": "mail.draft.saved", "scheduled": "mail.scheduled", "sent": "mail.sent"}[status_value]
                 self._write_mail_event_audit(
-                    cursor,
-                    company_id=actor.companyId,
-                    actor_user_id=actor.userId,
-                    actor_user_name=actor.userName,
-                    mail_id=mail_id,
-                    event=event,
-                    status_before=None,
-                    status_after=status_value,
-                    now=now,
+                    cursor, company_id=actor.companyId, actor_user_id=actor.userId, actor_user_name=actor.userName,
+                    mail_id=mail_id, event=event, status_before=None, status_after=status_value, now=now,
                     reason="UI-018 mail compose" if payload.composeAction == "new" else f"UI-019 {payload.composeAction}",
                 )
             connection.commit()
@@ -1521,12 +1530,14 @@ class MailMessengerService:
             try:
                 self.attachment_storage.mark_attached(attachment["upload_id"])
             except (OSError, ValueError):
-                logger.exception(
-                    "Mail attachment state update failed after commit: mail_id=%s upload_id=%s",
-                    mail_id,
-                    attachment["upload_id"],
-                )
-        return MailSendResponse(mailId=mail_id, status=status_value, sentAt=sent_at, scheduledAt=scheduled_at)
+                logger.exception("Mail attachment state update failed after commit: mail_id=%s upload_id=%s", mail_id, attachment["upload_id"])
+        is_enabled = bool(provider and provider["delivery_enabled"] and provider["last_test_status"] == "success")
+        return MailSendResponse(
+            mailId=mail_id, status=status_value, sentAt=sent_at, scheduledAt=scheduled_at,
+            internalCount=len(internal_by_email), externalCount=len(external_emails),
+            queuedCount=len(external_emails) if status_value == "sent" and is_enabled else 0,
+            blockedCount=len(external_emails) if status_value == "sent" and not is_enabled else 0,
+        )
 
     def _write_mail_event_audit(
         self,
@@ -1564,7 +1575,7 @@ class MailMessengerService:
         )
 
     def _fetch_mail_account(self, cursor, user_id: str) -> dict:
-        cursor.execute("SELECT id, email, status FROM mail_accounts WHERE user_id = %s", (user_id,))
+        cursor.execute("SELECT id, email, status, provider_config_id FROM mail_accounts WHERE user_id = %s", (user_id,))
         row = cursor.fetchone()
         if row is None:
             raise ValueError("메일 계정을 찾을 수 없습니다.")
@@ -1671,6 +1682,22 @@ class MailMessengerService:
         if any(not row["storage_key"] for row in rows):
             raise ValueError("원문 첨부 파일 저장 상태가 올바르지 않습니다.")
         return [by_id[attachment_id] for attachment_id in attachment_ids]
+
+    def _fetch_external_deliveries(self, cursor, mail_id: str) -> list[ExternalDeliveryView]:
+        cursor.execute(
+            """SELECT r.recipient_email, r.recipient_kind, q.status, q.attempt_count, q.next_attempt_at, q.sent_at
+            FROM mail_delivery_queue q JOIN mail_recipients r ON r.id = q.recipient_id
+            WHERE q.mail_id = %s ORDER BY r.recipient_kind, r.recipient_email""",
+            (mail_id,),
+        )
+        return [
+            ExternalDeliveryView(
+                recipientEmail=row["recipient_email"], recipientKind=row["recipient_kind"],
+                status=row["status"], attemptCount=row["attempt_count"],
+                nextAttemptAt=row["next_attempt_at"], sentAt=row["sent_at"],
+            )
+            for row in cursor.fetchall()
+        ]
 
     def _fetch_mail_attachments(self, cursor, mail_id: str) -> list[MailAttachmentView]:
         cursor.execute(
@@ -1811,6 +1838,7 @@ class MailMessengerService:
         message: dict,
         recipients: list[MailRecipientView],
         attachments: list[MailAttachmentMeta | MailAttachmentView],
+        external_deliveries: list[ExternalDeliveryView] | None = None,
     ) -> MailDetailResponse:
         return MailDetailResponse(
             mailId=message["mail_id"],
@@ -1829,6 +1857,7 @@ class MailMessengerService:
             attachmentCount=message["attachment_count"],
             canViewReadReceipts=bool(message["is_sender_view"]),
             recipients=recipients,
+            externalDeliveries=external_deliveries or [],
             attachments=[
                 MailAttachmentView(
                     attachmentId=getattr(item, "attachmentId", None),

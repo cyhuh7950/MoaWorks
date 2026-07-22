@@ -371,6 +371,10 @@ class MailSendResponse(BaseModel):
     status: str
     sentAt: datetime | None = None
     scheduledAt: datetime | None = None
+    internalCount: int = 0
+    externalCount: int = 0
+    queuedCount: int = 0
+    blockedCount: int = 0
 
 
 class MailRecipientView(BaseModel):
@@ -433,6 +437,7 @@ class MailDetailResponse(BaseModel):
     canViewReadReceipts: bool
     recipients: list[MailRecipientView]
     attachments: list[MailAttachmentView]
+    externalDeliveries: list[ExternalDeliveryView] = Field(default_factory=list)
 
 
 class MessengerRoomCreateRequest(BaseModel):
@@ -497,3 +502,68 @@ class MessengerReadResponse(BaseModel):
     roomId: str
     readAt: datetime
     lastReadMessageId: str | None = None
+
+
+class ExternalDeliveryView(BaseModel):
+    recipientEmail: str
+    recipientKind: str
+    status: str
+    attemptCount: int = 0
+    nextAttemptAt: datetime | None = None
+    sentAt: datetime | None = None
+
+class MailDeliveryProviderUpdateRequest(BaseModel):
+    deliveryEnabled: bool | None = None
+    providerType: Literal["smtp", "ses", "oci_smtp"] | None = None
+    relayHost: str | None = Field(default=None, min_length=1, max_length=255)
+    relayPort: int | None = Field(default=None, ge=1, le=65535)
+    tlsMode: Literal["none", "starttls", "tls"] | None = None
+    fromAddress: str | None = Field(default=None, max_length=255)
+
+class MailDeliveryProviderTestRequest(BaseModel):
+    timeoutSeconds: int = Field(default=10, ge=1, le=30)
+
+class MailDeliveryProviderView(BaseModel):
+    providerId: str
+    providerType: str
+    relayHost: str
+    relayPort: int
+    tlsMode: str
+    fromAddress: str | None = None
+    deliveryEnabled: bool
+    lastTestStatus: str
+    lastConnectionAt: datetime | None = None
+    lastConnectionError: str | None = None
+
+class MailDeliveryQueueItem(BaseModel):
+    queueId: str
+    mailId: str
+    recipientEmail: str
+    subject: str
+    status: str
+    attemptCount: int
+    nextAttemptAt: datetime | None = None
+    leaseExpiresAt: datetime | None = None
+    createdAt: datetime
+
+class MailDeliveryAttemptView(BaseModel):
+    attemptNumber: int
+    result: str
+    errorMessage: str | None = None
+    relayResponse: str | None = None
+    startedAt: datetime
+    finishedAt: datetime
+
+class MailDeliveryStatusResponse(BaseModel):
+    provider: MailDeliveryProviderView
+    worker: dict
+    summary: dict[str, int]
+
+class MailDeliveryQueueListResponse(BaseModel):
+    items: list[MailDeliveryQueueItem]
+    total: int
+
+class MailDeliveryQueueDetailResponse(BaseModel):
+    item: MailDeliveryQueueItem
+    attempts: list[MailDeliveryAttemptView]
+    audits: list[dict]

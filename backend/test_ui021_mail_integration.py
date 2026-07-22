@@ -10,9 +10,9 @@ class Adapter:
 class Ui021Tests(unittest.TestCase):
  root=Path(__file__).parent
  def test_contract(self):
-  sql=(self.root/"migrations/025_mail_delivery_queue.sql").read_text().lower()
+  sql=(self.root/"migrations/025_mail_delivery_queue.sql").read_text(encoding="utf-8").lower()
   for m in ("delivery_enabled boolean not null default false","create table if not exists mail_delivery_queue","create table if not exists mail_delivery_attempts","create table if not exists mail_delivery_worker_heartbeats","unique (mail_id, recipient_id)","on delete cascade","idx_mail_delivery_queue_claim"): self.assertIn(m,sql)
-  admin=(self.root/"app/api/routes/admin.py").read_text(); schema=(self.root/"app/schemas/mail_messenger.py").read_text(); compose=(self.root.parent/"deploy/docker-compose.yml").read_text(); api=(self.root.parent/"frontend/admin-web/src/api.ts").read_text()
+  admin=(self.root/"app/api/routes/admin.py").read_text(encoding="utf-8"); schema=(self.root/"app/schemas/mail_messenger.py").read_text(encoding="utf-8"); compose=(self.root.parent/"deploy/docker-compose.yml").read_text(encoding="utf-8"); api=(self.root.parent/"frontend/admin-web/src/api.ts").read_text(encoding="utf-8")
   for m in ('/mail-delivery/status','/mail-delivery/queue','/mail-delivery/provider/test'): self.assertIn(m,admin)
   self.assertIn("externalDeliveries",schema); self.assertIn("app.workers.mail_delivery_worker",compose); self.assertIn('const defaultApiBase = "/api/v1"',api)
  def test_policy_worker_and_masking(self):

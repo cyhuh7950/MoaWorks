@@ -31,7 +31,7 @@ services:
       context: ..
       dockerfile: deploy/admin-web.Dockerfile
     environment:
-      VITE_API_BASE_URL: http://127.0.0.1:${BACKEND_PORT:-8510}/api/v1
+      VITE_API_BASE_URL: /api/v1
     ports:
       - "${FRONTEND_PORT:-3510}:3510"
     depends_on:
@@ -42,15 +42,24 @@ services:
       context: ..
       dockerfile: deploy/user-web.Dockerfile
     environment:
-      VITE_API_BASE_URL: http://127.0.0.1:${BACKEND_PORT:-8510}/api/v1
+      VITE_API_BASE_URL: /api/v1
     ports:
       - "${USER_WEB_PORT:-3520}:3520"
     depends_on:
       - server
 
   mail-layer:
-    image: alpine:3.20
-    command: ["sh", "-c", "echo 'mail-layer placeholder'; tail -f /dev/null"]
+    build:
+      context: ..
+      dockerfile: deploy/server.Dockerfile
+    command: ["python", "-m", "app.workers.mail_delivery_worker"]
+    env_file:
+      - ../.env
+    volumes:
+      - ../backend:/app
+      - ../data:/app/data
+    depends_on:
+      - postgres
 
   storage:
     image: alpine:3.20
