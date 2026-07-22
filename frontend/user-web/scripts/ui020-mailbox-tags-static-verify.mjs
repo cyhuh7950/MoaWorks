@@ -21,5 +21,11 @@ assert.match(app, /mail-purge-confirm/);
 assert.match(app, /function mailSelectionKey/);
 assert.match(app, /sourceMailbox.*inbox.*sent.*draft/);
 assert.match(app, /event\.key === "Escape"/);
+assert.match(app, /const mailWorkspaceRequestRef = useRef\(0\)/);
+assert.match(app, /const mailDetailRequestRef = useRef\(0\)/);
+assert.match(app, /requestId !== mailWorkspaceRequestRef\.current/);
+assert.match(app, /requestId !== mailDetailRequestRef\.current/);
+assert.match(app, /ui020Mailbox\(options\?\.folder \?\? activeMailFolder\)/);
+assert.match(app, /folder: preferredFolder/);
 
 console.log("UI-020 mailbox/tag static verification passed.");
