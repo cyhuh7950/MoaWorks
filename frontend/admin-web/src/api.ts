@@ -464,7 +464,7 @@ export async function fetchMailDeliveryQueue(token:string,status?:string):Promis
   const query=status?"?status="+encodeURIComponent(status):"";
   return request<MailDeliveryQueueListResponse>("/admin/mail-delivery/queue"+query,{headers:authHeaders(token)});
 }
-export async function updateMailDeliveryProvider(token:string,payload:Partial<{deliveryEnabled:boolean;providerType:string;relayHost:string;relayPort:number;tlsMode:string;fromAddress:string}>):Promise<MailDeliveryProviderView>{
+export async function updateMailDeliveryProvider(token:string,payload:Partial<{deliveryEnabled:boolean;providerType:string;relayHost:string;relayPort:number;tlsMode:string;fromAddress:string;username:string;password:string}>):Promise<MailDeliveryProviderView>{
   return request<MailDeliveryProviderView>("/admin/mail-delivery/provider",{method:"PATCH",headers:authHeaders(token),body:JSON.stringify(payload)});
 }
 export async function testMailDeliveryProvider(token:string):Promise<MailDeliveryProviderView>{

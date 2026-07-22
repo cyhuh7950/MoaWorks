@@ -519,6 +519,8 @@ class MailDeliveryProviderUpdateRequest(BaseModel):
     relayPort: int | None = Field(default=None, ge=1, le=65535)
     tlsMode: Literal["none", "starttls", "tls"] | None = None
     fromAddress: str | None = Field(default=None, max_length=255)
+    username: str | None = Field(default=None, max_length=255)
+    password: str | None = Field(default=None, min_length=1, max_length=1000)
 
 class MailDeliveryProviderTestRequest(BaseModel):
     timeoutSeconds: int = Field(default=10, ge=1, le=30)

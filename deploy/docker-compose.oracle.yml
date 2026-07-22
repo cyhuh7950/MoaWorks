@@ -30,7 +30,8 @@ services:
       context: ..
       dockerfile: deploy/admin-web.Dockerfile
     environment:
-      VITE_API_BASE_URL: https://api.moaworks.sinsan.kr/api/v1
+      VITE_API_BASE_URL: /api/v1
+      VITE_PROXY_TARGET: http://server:8000
     expose:
       - "3510"
     depends_on:
@@ -57,10 +58,22 @@ services:
 
   mail-layer:
     container_name: moaworks-mail-layer
-    image: alpine:3.20
-    command: ["sh", "-c", "echo 'mail-layer placeholder'; tail -f /dev/null"]
+    build:
+      context: ..
+      dockerfile: deploy/server.Dockerfile
+    command: ["python", "-m", "app.workers.mail_delivery_worker"]
+    env_file:
+      - ../.env
+    environment:
+      POSTGRES_HOST: shared-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+    volumes:
+      - ../data:/app/data
     networks:
       - app_net
+      - pg_net
     restart: unless-stopped
 
   storage:

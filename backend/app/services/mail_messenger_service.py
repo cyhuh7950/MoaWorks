@@ -518,7 +518,7 @@ class MailMessengerService:
                             id, company_id, actor_user_id, actor_user_name, target_type, target_id,
                             event, status_before, status_after, reason, created_at
                         )
-                        SELECT %s || '_' || q.id, q.company_id, %s, 'system', 'mail', q.mail_id,
+                        SELECT %s || '_' || q.id, q.company_id, %s, 'system', 'mail_delivery_queue', q.id,
                                'mail.delivery.' || q.status, NULL, q.status, 'UI-021 scheduled transaction outbox', %s
                         FROM mail_delivery_queue q WHERE q.mail_id = %s AND q.created_at = %s""",
                         (self._new_id("audit"), row["sender_user_id"], now, row["id"], now),
@@ -1498,18 +1498,19 @@ class MailMessengerService:
                     )
                     if status_value == "sent" and email in external_emails:
                         queue_status = "queued" if provider["delivery_enabled"] and provider["last_test_status"] == "success" else "blocked"
+                        queue_id = self._new_id("delivery")
                         cursor.execute(
                             """INSERT INTO mail_delivery_queue (
                                 id, company_id, provider_config_id, mail_id, recipient_id, status,
                                 attempt_count, next_attempt_at, created_at, updated_at
                             ) VALUES (%s,%s,%s,%s,%s,%s,0,%s,%s,%s)""",
-                            (self._new_id("delivery"), actor.companyId, provider["id"], mail_id, recipient_id,
+                            (queue_id, actor.companyId, provider["id"], mail_id, recipient_id,
                              queue_status, now if queue_status == "queued" else None, now, now),
                         )
-                        self._write_mail_event_audit(
+                        self._write_mail_delivery_audit(
                             cursor, company_id=actor.companyId, actor_user_id=actor.userId,
-                            actor_user_name=actor.userName, mail_id=mail_id, event=f"mail.delivery.{queue_status}",
-                            status_before=None, status_after=queue_status, now=now, reason="UI-021 transaction outbox",
+                            actor_user_name=actor.userName, queue_id=queue_id, event=f"mail.delivery.{queue_status}",
+                            status_before=None, status_after=queue_status, now=now,
                         )
                 for attachment in resolved_attachments:
                     cursor.execute(
@@ -1537,6 +1538,20 @@ class MailMessengerService:
             internalCount=len(internal_by_email), externalCount=len(external_emails),
             queuedCount=len(external_emails) if status_value == "sent" and is_enabled else 0,
             blockedCount=len(external_emails) if status_value == "sent" and not is_enabled else 0,
+        )
+
+    def _write_mail_delivery_audit(
+        self, cursor, *, company_id: str, actor_user_id: str | None, actor_user_name: str,
+        queue_id: str, event: str, status_before: str | None, status_after: str, now: datetime,
+        reason: str = "UI-021 transaction outbox",
+    ) -> None:
+        cursor.execute(
+            """INSERT INTO audit_logs (
+                id, company_id, actor_user_id, actor_user_name, target_type, target_id,
+                event, status_before, status_after, reason, created_at
+            ) VALUES (%s,%s,%s,%s,'mail_delivery_queue',%s,%s,%s,%s,%s,%s)""",
+            (self._new_id("audit"), company_id, actor_user_id, actor_user_name, queue_id,
+             event, status_before, status_after, reason, now),
         )
 
     def _write_mail_event_audit(
