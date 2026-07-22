@@ -650,6 +650,8 @@ export default function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const streamCursorRef = useRef<string>("");
   const streamRetryRef = useRef(0);
+  const mailWorkspaceRequestRef = useRef(0);
+  const mailDetailRequestRef = useRef(0);
 
   async function loadNotificationData(targetToken: string): Promise<void> {
     setNotificationLoading(true);
@@ -731,6 +733,8 @@ export default function App() {
   }
 
   function setMailFolder(folder: MailFolderType) {
+    mailWorkspaceRequestRef.current += 1;
+    mailDetailRequestRef.current += 1;
     setActiveMailFolder(folder);
     setSelectedMailIds([]);
     setSelectedMailId("");
@@ -1167,7 +1171,8 @@ export default function App() {
     }
   }
 
-  async function loadMailDetail(targetToken: string, mailId: string, mailbox: MailboxType, options?: { markRead?: boolean; propagateError?: boolean }) {
+  async function loadMailDetail(targetToken: string, mailId: string, mailbox: MailboxType, options?: { markRead?: boolean; propagateError?: boolean; folder?: MailFolderType }) {
+    const requestId = ++mailDetailRequestRef.current;
     setSelectedMailId(mailId);
     setSelectedMailDetail(null);
     setMailReadReceiptOpen(false);
@@ -1177,20 +1182,22 @@ export default function App() {
       if (mailbox === "inbox" && options?.markRead) {
         await markMailRead(targetToken, mailId);
       }
-      const detail = await fetchMailDetail(targetToken, mailId, ui020Mailbox(activeMailFolder));
+      const detail = await fetchMailDetail(targetToken, mailId, ui020Mailbox(options?.folder ?? activeMailFolder));
+      if (requestId !== mailDetailRequestRef.current) return;
       setSelectedMailDetail(detail);
       if (mailbox === "inbox" && options?.markRead) {
         setInboxMails((current) => current.map((item) => (item.mailId === mailId ? { ...item, isRead: true } : item)));
       }
     } catch (error) {
+      if (requestId !== mailDetailRequestRef.current) return;
       setMailDetailError(normalizeClientError(error, "메일 상세 조회 실패"));
       if (options?.propagateError) throw error;
     } finally {
-      setMailDetailLoading(false);
+      if (requestId === mailDetailRequestRef.current) setMailDetailLoading(false);
     }
   }
 
-  async function selectMail(targetToken: string, mailId: string, mailbox: MailboxType, options?: { markRead?: boolean; propagateError?: boolean }) {
+  async function selectMail(targetToken: string, mailId: string, mailbox: MailboxType, options?: { markRead?: boolean; propagateError?: boolean; folder?: MailFolderType }) {
     await loadMailDetail(targetToken, mailId, mailbox, options);
   }
 
@@ -1201,6 +1208,7 @@ export default function App() {
     preferredFolder: MailFolderType = activeMailFolder,
     query: MailListQuery = mailListQuery,
   ): Promise<boolean> {
+    const requestId = ++mailWorkspaceRequestRef.current;
     setMailLoading(true);
     setMailError("");
     try {
@@ -1224,6 +1232,7 @@ export default function App() {
       else if (preferredFolder === "spam") contextResponse = await fetchMailSpam(targetToken, effectiveQuery);
       else if (preferredFolder === "trash") contextResponse = await fetchMailTrash(targetToken, effectiveQuery);
 
+      if (requestId !== mailWorkspaceRequestRef.current) return false;
       const nextInbox = inboxResponse.mails ?? [];
       const nextSent = sentResponse.mails ?? [];
       const nextDrafts = draftResponse.mails ?? [];
@@ -1243,7 +1252,7 @@ export default function App() {
       const targetMail = resolvedMailId ? activeList.find((item) => item.mailId === resolvedMailId) ?? null : activeList[0] ?? null;
       setActiveMailbox(resolvedMailbox);
       if (targetMail) {
-        await loadMailDetail(targetToken, targetMail.mailId, resolvedMailbox);
+        await loadMailDetail(targetToken, targetMail.mailId, resolvedMailbox, { folder: preferredFolder });
       } else {
         setSelectedMailId("");
         setMailReadReceiptOpen(false);
@@ -1252,6 +1261,7 @@ export default function App() {
       }
       return true;
     } catch (error) {
+      if (requestId !== mailWorkspaceRequestRef.current) return false;
       setMailError(normalizeClientError(error, "메일 목록 조회 실패"));
       setInboxMails([]);
       setSentMails([]);
@@ -1263,7 +1273,7 @@ export default function App() {
       setSelectedMailDetail(null);
       return false;
     } finally {
-      setMailLoading(false);
+      if (requestId === mailWorkspaceRequestRef.current) setMailLoading(false);
     }
   }
   async function loadMailStorage(targetToken: string) {
@@ -2715,7 +2725,7 @@ export default function App() {
                       data-unread={item.unread}
                     >
                       <input type="checkbox" aria-label={`메일 선택: ${item.subject}`} checked={selectedMailIds.includes(item.selectionKey)} onClick={(event) => event.stopPropagation()} onChange={(event) => setSelectedMailIds((current) => event.target.checked ? [...current, item.selectionKey] : current.filter((selectionKey) => selectionKey !== item.selectionKey))} />
-                      <button className="user-mail-row__main" type="button" onClick={() => { setMailDetailExpanded(false); const mailbox = inferMailboxFromMailId(item.mailId); void selectMail(token, item.mailId, mailbox, { markRead: mailbox === "inbox" && activeMailFolder !== "trash" }); }}>
+                      <button className="user-mail-row__main" type="button" onClick={() => { setMailDetailExpanded(false); const mailbox = inferMailboxFromMailId(item.mailId); void selectMail(token, item.mailId, mailbox, { markRead: mailbox === "inbox" && activeMailFolder !== "trash", folder: activeMailFolder }); }}>
                         <div><strong>{item.sender}</strong><span>{item.time}</span></div>
                         <div><span>{item.important ? "★" : ""}{item.attachment ? " 첨부" : ""}</span><strong>{item.subject}</strong></div>
                         <p>{item.preview}</p>
@@ -2823,7 +2833,7 @@ export default function App() {
                   {mailDetailLoading ? (
                     <FeedbackState state="loading" title="메일 상세를 불러오는 중입니다." />
                   ) : mailDetailError ? (
-                    <FeedbackState state="error" title="메일 상세를 불러오지 못했습니다." message={mailDetailError} action={{ label: "다시 시도", onAction: () => void loadMailDetail(token, selectedMailId, inferMailboxFromMailId(selectedMailId)) }} />
+                    <FeedbackState state="error" title="메일 상세를 불러오지 못했습니다." message={mailDetailError} action={{ label: "다시 시도", onAction: () => void loadMailDetail(token, selectedMailId, inferMailboxFromMailId(selectedMailId), { folder: activeMailFolder }) }} />
                   ) : !selectedMailDetail ? (
                     <FeedbackState state="empty" title="메일을 선택하세요." message="목록에서 메일을 선택하면 상세 내용을 확인할 수 있습니다." />
                   ) : (
