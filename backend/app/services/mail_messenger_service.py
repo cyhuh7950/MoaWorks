@@ -17,6 +17,10 @@ from app.schemas.mail_messenger import (
     MailCategoryRequest,
     MailDetailResponse,
     MailDraftRequest,
+    MailFolderCreateRequest,
+    MailFolderListResponse,
+    MailFolderUpdateRequest,
+    MailFolderView,
     MailListQuery,
     MailRecentRecipient,
     MailRecentRecipientListResponse,
@@ -26,6 +30,10 @@ from app.schemas.mail_messenger import (
     MailSendResponse,
     MailStorageResponse,
     MailStatusResponse,
+    MailTagCreateRequest,
+    MailTagListResponse,
+    MailTagUpdateRequest,
+    MailTagView,
     MailSummary,
     MessengerMessageListResponse,
     MessengerMessageSendRequest,
@@ -77,6 +85,9 @@ class MailMessengerService:
                       AND (r.recipient_user_id = %s OR LOWER(r.recipient_email) = %s)
                       AND m.status = 'sent'
                       AND r.deleted_at IS NULL
+                      AND r.purged_at IS NULL
+                      AND r.is_spam = FALSE
+                      AND r.folder_id IS NULL
                     ORDER BY COALESCE(r.received_at, m.sent_at, m.created_at) DESC
                     """,
                     (actor.companyId, actor.userId, actor.userEmail.lower()),
@@ -111,6 +122,7 @@ class MailMessengerService:
                       AND m.sender_user_id = %s
                       AND m.status IN ('sent', 'scheduled')
                       AND m.sender_deleted_at IS NULL
+                      AND m.sender_purged_at IS NULL
                     ORDER BY COALESCE(m.scheduled_at, m.sent_at, m.created_at) DESC
                     """,
                     (actor.companyId, actor.userId),
@@ -145,6 +157,7 @@ class MailMessengerService:
                       AND m.sender_user_id = %s
                       AND m.status = 'draft'
                       AND m.sender_deleted_at IS NULL
+                      AND m.sender_purged_at IS NULL
                     ORDER BY COALESCE(m.updated_at, m.created_at) DESC
                     """,
                     (actor.companyId, actor.userId),
@@ -159,6 +172,9 @@ class MailMessengerService:
             "(r.recipient_user_id = %s OR LOWER(r.recipient_email) = %s)",
             "m.status = 'sent'",
             "r.deleted_at IS NULL",
+            "r.purged_at IS NULL",
+            "r.is_spam = FALSE",
+            "r.folder_id IS NULL",
         ]
         params: list[object] = [actor.companyId, actor.userId, actor.userEmail.lower()]
         if query.read != "all":
@@ -229,6 +245,7 @@ class MailMessengerService:
             "m.sender_user_id = %s",
             status_condition,
             "m.sender_deleted_at IS NULL",
+            "m.sender_purged_at IS NULL",
         ]
         params: list[object] = [actor.companyId, actor.userId]
         if query.attachment == "with":
@@ -352,11 +369,11 @@ class MailMessengerService:
             usagePercent=usage_percent,
         )
 
-    def get_mail(self, actor: AuthUserSummary, mail_id: str) -> MailDetailResponse:
+    def get_mail(self, actor: AuthUserSummary, mail_id: str, view: str = "inbox") -> MailDetailResponse:
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
-                message = self._fetch_accessible_mail(cursor, actor, mail_id)
+                message = self._fetch_accessible_mail(cursor, actor, mail_id, view=view)
                 recipients = self._fetch_mail_recipients(
                     cursor,
                     actor,
@@ -588,9 +605,407 @@ class MailMessengerService:
             connection.commit()
         return MailStatusResponse(mailId=mail_id, status=payload.category, isRead=row["is_read"], isStarred=row["is_starred"], category=payload.category)
 
+    def list_mail_folders(self, actor: AuthUserSummary) -> MailFolderListResponse:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT f.id, f.name, f.sort_order, COUNT(r.id) AS message_count
+                    FROM mail_user_folders f
+                    LEFT JOIN mail_recipients r ON r.folder_id = f.id
+                      AND r.deleted_at IS NULL AND r.purged_at IS NULL AND r.is_spam = FALSE
+                    WHERE f.company_id = %s AND f.user_id = %s
+                    GROUP BY f.id, f.name, f.sort_order, f.created_at
+                    ORDER BY f.sort_order, f.created_at
+                    """,
+                    (actor.companyId, actor.userId),
+                )
+                return MailFolderListResponse(folders=[
+                    MailFolderView(folderId=row["id"], name=row["name"], sortOrder=row["sort_order"], messageCount=row["message_count"])
+                    for row in cursor.fetchall()
+                ])
+
+    def create_mail_folder(self, actor: AuthUserSummary, payload: MailFolderCreateRequest) -> MailFolderView:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        folder_id = self._new_id("folder")
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT id FROM mail_user_folders WHERE company_id = %s AND user_id = %s AND LOWER(name) = LOWER(%s) FOR UPDATE",
+                    (actor.companyId, actor.userId, payload.name),
+                )
+                if cursor.fetchone():
+                    raise ValueError("같은 이름의 사용자 메일함이 이미 있습니다.")
+                cursor.execute(
+                    "SELECT COUNT(*) AS count FROM mail_user_folders WHERE company_id = %s AND user_id = %s",
+                    (actor.companyId, actor.userId),
+                )
+                if int(cursor.fetchone()["count"]) >= 50:
+                    raise ValueError("사용자 메일함은 최대 50개까지 만들 수 있습니다.")
+                cursor.execute(
+                    """
+                    INSERT INTO mail_user_folders (id, company_id, user_id, name, sort_order, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, 0, %s, %s)
+                    """,
+                    (folder_id, actor.companyId, actor.userId, payload.name, now, now),
+                )
+                self._write_mail_bulk_audit(cursor, actor, folder_id, "folder_create", {"exists": False}, {"exists": True}, "folder", self._new_id("mailfolder"))
+            connection.commit()
+        return MailFolderView(folderId=folder_id, name=payload.name)
+
+    def update_mail_folder(self, actor: AuthUserSummary, folder_id: str, payload: MailFolderUpdateRequest) -> MailFolderView:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                folder = self._lock_owned_folder(cursor, actor, folder_id)
+                cursor.execute(
+                    "SELECT id FROM mail_user_folders WHERE company_id = %s AND user_id = %s AND LOWER(name) = LOWER(%s) AND id <> %s",
+                    (actor.companyId, actor.userId, payload.name, folder_id),
+                )
+                if cursor.fetchone():
+                    raise ValueError("같은 이름의 사용자 메일함이 이미 있습니다.")
+                cursor.execute("UPDATE mail_user_folders SET name = %s, updated_at = %s WHERE id = %s", (payload.name, self._now(), folder_id))
+                self._write_mail_bulk_audit(cursor, actor, folder_id, "folder_update", {"updated": False}, {"updated": True}, "folder", self._new_id("mailfolder"))
+            connection.commit()
+        return MailFolderView(folderId=folder_id, name=payload.name, sortOrder=folder["sort_order"])
+
+    def delete_mail_folder(self, actor: AuthUserSummary, folder_id: str) -> None:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                folder = self._lock_owned_folder(cursor, actor, folder_id)
+                cursor.execute(
+                    """
+                    UPDATE mail_recipients r SET folder_id = NULL
+                    FROM mail_messages m
+                    WHERE r.message_id = m.id AND r.folder_id = %s AND m.company_id = %s
+                      AND (r.recipient_user_id = %s OR LOWER(r.recipient_email) = %s)
+                    """,
+                    (folder_id, actor.companyId, actor.userId, actor.userEmail.lower()),
+                )
+                cursor.execute("DELETE FROM mail_user_folders WHERE id = %s", (folder_id,))
+                self._write_mail_bulk_audit(cursor, actor, folder_id, "folder_delete", {"deleted": False}, {"deleted": True}, "folder", self._new_id("mailfolder"))
+            connection.commit()
+
+    def list_mail_tags(self, actor: AuthUserSummary) -> MailTagListResponse:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT t.id, t.name, t.color, t.sort_order, COUNT(r.id) AS message_count
+                    FROM mail_tags t
+                    LEFT JOIN mail_recipient_tags rt ON rt.tag_id = t.id
+                    LEFT JOIN mail_recipients r ON r.id = rt.recipient_id
+                      AND r.deleted_at IS NULL AND r.purged_at IS NULL
+                    WHERE t.company_id = %s AND t.user_id = %s
+                    GROUP BY t.id, t.name, t.color, t.sort_order, t.created_at
+                    ORDER BY t.sort_order, t.created_at
+                    """,
+                    (actor.companyId, actor.userId),
+                )
+                return MailTagListResponse(tags=[
+                    MailTagView(tagId=row["id"], name=row["name"], color=row["color"], sortOrder=row["sort_order"], messageCount=row["message_count"])
+                    for row in cursor.fetchall()
+                ])
+
+    def create_mail_tag(self, actor: AuthUserSummary, payload: MailTagCreateRequest) -> MailTagView:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        tag_id = self._new_id("tag")
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT id FROM mail_tags WHERE company_id = %s AND user_id = %s AND LOWER(name) = LOWER(%s) FOR UPDATE",
+                    (actor.companyId, actor.userId, payload.name),
+                )
+                if cursor.fetchone():
+                    raise ValueError("같은 이름의 태그가 이미 있습니다.")
+                cursor.execute("SELECT COUNT(*) AS count FROM mail_tags WHERE company_id = %s AND user_id = %s", (actor.companyId, actor.userId))
+                if int(cursor.fetchone()["count"]) >= 50:
+                    raise ValueError("태그는 최대 50개까지 만들 수 있습니다.")
+                cursor.execute(
+                    "INSERT INTO mail_tags (id, company_id, user_id, name, color, sort_order, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, 0, %s, %s)",
+                    (tag_id, actor.companyId, actor.userId, payload.name, payload.color, now, now),
+                )
+                self._write_mail_bulk_audit(cursor, actor, tag_id, "tag_create", {"exists": False}, {"exists": True}, "tag", self._new_id("mailtag"))
+            connection.commit()
+        return MailTagView(tagId=tag_id, name=payload.name, color=payload.color)
+
+    def update_mail_tag(self, actor: AuthUserSummary, tag_id: str, payload: MailTagUpdateRequest) -> MailTagView:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                tag = self._lock_owned_tag(cursor, actor, tag_id)
+                cursor.execute(
+                    "SELECT id FROM mail_tags WHERE company_id = %s AND user_id = %s AND LOWER(name) = LOWER(%s) AND id <> %s",
+                    (actor.companyId, actor.userId, payload.name, tag_id),
+                )
+                if cursor.fetchone():
+                    raise ValueError("같은 이름의 태그가 이미 있습니다.")
+                cursor.execute("UPDATE mail_tags SET name = %s, color = %s, updated_at = %s WHERE id = %s", (payload.name, payload.color, self._now(), tag_id))
+                self._write_mail_bulk_audit(cursor, actor, tag_id, "tag_update", {"updated": False}, {"updated": True}, "tag", self._new_id("mailtag"))
+            connection.commit()
+        return MailTagView(tagId=tag_id, name=payload.name, color=payload.color, sortOrder=tag["sort_order"])
+
+    def delete_mail_tag(self, actor: AuthUserSummary, tag_id: str) -> None:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                tag = self._lock_owned_tag(cursor, actor, tag_id)
+                cursor.execute("DELETE FROM mail_recipient_tags WHERE tag_id = %s", (tag_id,))
+                cursor.execute("DELETE FROM mail_tags WHERE id = %s", (tag_id,))
+                self._write_mail_bulk_audit(cursor, actor, tag_id, "tag_delete", {"deleted": False}, {"deleted": True}, "tag", self._new_id("mailtag"))
+            connection.commit()
+
+    def list_folder_messages(self, actor: AuthUserSummary, folder_id: str, query: MailListQuery) -> MailListResponse:
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                self._lock_owned_folder(cursor, actor, folder_id)
+        return self._list_ui020_recipient(actor, query, "r.folder_id = %s AND r.is_spam = FALSE", [folder_id])
+
+    def list_tag_messages(self, actor: AuthUserSummary, tag_id: str, query: MailListQuery) -> MailListResponse:
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                self._lock_owned_tag(cursor, actor, tag_id)
+        return self._list_ui020_recipient(actor, query, "EXISTS (SELECT 1 FROM mail_recipient_tags rt WHERE rt.recipient_id = r.id AND rt.tag_id = %s)", [tag_id])
+
+    def list_spam(self, actor: AuthUserSummary, query: MailListQuery) -> MailListResponse:
+        return self._list_ui020_recipient(actor, query, "r.is_spam = TRUE", [])
+
+    def list_trash(self, actor: AuthUserSummary, query: MailListQuery) -> MailListResponse:
+        self.db.ensure_migrations_applied()
+        search_recipient = ""
+        search_sender = ""
+        recipient_params: list[object] = [actor.companyId, actor.userId, actor.userEmail.lower()]
+        sender_params: list[object] = [actor.companyId, actor.userId]
+        if query.q:
+            search_recipient = " AND (m.subject ILIKE %s OR m.sender_email ILIKE %s OR m.body_text ILIKE %s)"
+            search_sender = " AND (m.subject ILIKE %s OR m.sender_email ILIKE %s OR m.body_text ILIKE %s)"
+            pattern = f"%{query.q}%"
+            recipient_params.extend([pattern, pattern, pattern])
+            sender_params.extend([pattern, pattern, pattern])
+        union_sql = f"""
+            SELECT m.id AS mail_id, m.sender_account_id AS account_id, m.sender_email, m.subject,
+              LEFT(COALESCE(m.body_text, ''), 240) AS preview_text, m.status, m.sent_at, m.scheduled_at,
+              m.retention_expires_at, m.attachment_count, r.is_read, r.is_starred, r.received_at,
+              COALESCE(r.inbox_category, 'primary') AS category, 'inbox' AS source_mailbox,
+              r.deleted_at AS trashed_at
+            FROM mail_recipients r JOIN mail_messages m ON m.id = r.message_id
+            WHERE m.company_id = %s AND (r.recipient_user_id = %s OR LOWER(r.recipient_email) = %s)
+              AND r.deleted_at IS NOT NULL AND r.purged_at IS NULL {search_recipient}
+            UNION ALL
+            SELECT m.id AS mail_id, m.sender_account_id AS account_id, m.sender_email, m.subject,
+              LEFT(COALESCE(m.body_text, ''), 240) AS preview_text, m.status, m.sent_at, m.scheduled_at,
+              m.retention_expires_at, m.attachment_count, TRUE AS is_read, FALSE AS is_starred, NULL AS received_at,
+              'primary' AS category, CASE WHEN m.status = 'draft' THEN 'draft' ELSE 'sent' END AS source_mailbox,
+              m.sender_deleted_at AS trashed_at
+            FROM mail_messages m
+            WHERE m.company_id = %s AND m.sender_user_id = %s
+              AND m.sender_deleted_at IS NOT NULL AND m.sender_purged_at IS NULL {search_sender}
+        """
+        params = recipient_params + sender_params
+        outer_conditions: list[str] = []
+        outer_params: list[object] = []
+        if query.read != "all":
+            outer_conditions.append("is_read = %s")
+            outer_params.append(query.read == "read")
+        if query.starred != "all":
+            outer_conditions.append("is_starred = %s")
+            outer_params.append(query.starred == "starred")
+        if query.attachment == "with":
+            outer_conditions.append("attachment_count > 0")
+        elif query.attachment == "without":
+            outer_conditions.append("attachment_count = 0")
+        if query.category != "all":
+            outer_conditions.append("category = %s")
+            outer_params.append(query.category)
+        outer_where = " WHERE " + " AND ".join(outer_conditions) if outer_conditions else ""
+        order_sql = {
+            "date_desc": "trashed_at DESC, mail_id DESC",
+            "date_asc": "trashed_at ASC, mail_id ASC",
+            "sender_asc": "LOWER(sender_email) ASC, trashed_at DESC",
+            "subject_asc": "LOWER(subject) ASC, trashed_at DESC",
+        }[query.sort]
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f"SELECT COUNT(*) AS total FROM ({union_sql}) trash_views{outer_where}", tuple(params + outer_params))
+                total = int(cursor.fetchone()["total"])
+                cursor.execute(
+                    f"SELECT * FROM ({union_sql}) trash_views{outer_where} ORDER BY {order_sql} LIMIT %s OFFSET %s",
+                    tuple(params + outer_params + [query.limit, query.offset]),
+                )
+                mails = [self._to_mail_summary(row) for row in cursor.fetchall()]
+        return MailListResponse(mails=mails, total=total, limit=query.limit, offset=query.offset, hasMore=query.offset + len(mails) < total)
+    def _list_ui020_recipient(self, actor: AuthUserSummary, query: MailListQuery, context_sql: str, context_params: list[object]) -> MailListResponse:
+        self.db.ensure_migrations_applied()
+        conditions = [
+            "m.company_id = %s", "(r.recipient_user_id = %s OR LOWER(r.recipient_email) = %s)",
+            "m.status = 'sent'", "r.deleted_at IS NULL", "r.purged_at IS NULL", context_sql,
+        ]
+        params: list[object] = [actor.companyId, actor.userId, actor.userEmail.lower(), *context_params]
+        if query.read != "all":
+            conditions.append("r.is_read = %s")
+            params.append(query.read == "read")
+        if query.starred != "all":
+            conditions.append("r.is_starred = %s")
+            params.append(query.starred == "starred")
+        if query.attachment == "with":
+            conditions.append("m.attachment_count > 0")
+        elif query.attachment == "without":
+            conditions.append("m.attachment_count = 0")
+        if query.category != "all":
+            conditions.append("COALESCE(r.inbox_category, 'primary') = %s")
+            params.append(query.category)
+        if query.q:
+            conditions.append("CONCAT_WS(' ', m.subject, m.sender_email, m.body_text) ILIKE %s")
+            params.append(f"%{query.q}%")
+        where = " AND ".join(conditions)
+        order_sql = self._mail_sort_sql(query.sort, mailbox="inbox")
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f"SELECT COUNT(*) AS total FROM mail_recipients r JOIN mail_messages m ON m.id = r.message_id WHERE {where}", tuple(params))
+                total = int(cursor.fetchone()["total"])
+                cursor.execute(
+                    f"""
+                    SELECT m.id AS mail_id, m.sender_account_id AS account_id, m.sender_email, m.subject,
+                      LEFT(COALESCE(m.body_text, ''), 240) AS preview_text, m.status, m.sent_at, m.scheduled_at,
+                      m.retention_expires_at, m.attachment_count, r.is_read, r.is_starred, r.received_at,
+                      COALESCE(r.inbox_category, 'primary') AS category, 'inbox' AS source_mailbox
+                    FROM mail_recipients r JOIN mail_messages m ON m.id = r.message_id
+                    WHERE {where} ORDER BY {order_sql} LIMIT %s OFFSET %s
+                    """,
+                    tuple(params + [query.limit, query.offset]),
+                )
+                mails = [self._to_mail_summary(row) for row in cursor.fetchall()]
+        return MailListResponse(mails=mails, total=total, limit=query.limit, offset=query.offset, hasMore=query.offset + len(mails) < total)
+    def _lock_owned_folder(self, cursor, actor: AuthUserSummary, folder_id: str) -> dict:
+        cursor.execute("SELECT id, name, sort_order FROM mail_user_folders WHERE id = %s AND company_id = %s AND user_id = %s FOR UPDATE", (folder_id, actor.companyId, actor.userId))
+        row = cursor.fetchone()
+        if row is None:
+            raise PermissionError("사용자 메일함에 접근할 권한이 없습니다.")
+        return row
+
+    def _lock_owned_tag(self, cursor, actor: AuthUserSummary, tag_id: str) -> dict:
+        cursor.execute("SELECT id, name, color, sort_order FROM mail_tags WHERE id = %s AND company_id = %s AND user_id = %s FOR UPDATE", (tag_id, actor.companyId, actor.userId))
+        row = cursor.fetchone()
+        if row is None:
+            raise PermissionError("태그에 접근할 권한이 없습니다.")
+        return row
+
+    def _bulk_mail_ui020(self, actor: AuthUserSummary, payload: MailBulkRequest) -> MailBulkResponse:
+        now = self._now()
+        request_id = self._new_id("mailbulk")
+        changed_count = 0
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                if payload.targetFolderId:
+                    self._lock_owned_folder(cursor, actor, payload.targetFolderId)
+                if payload.targetTagId:
+                    self._lock_owned_tag(cursor, actor, payload.targetTagId)
+                if payload.mailbox == "trash":
+                    cursor.execute(
+                        """
+                        SELECT m.id AS mail_id, m.status, m.sender_deleted_at, m.sender_purged_at
+                        FROM mail_messages m WHERE m.id = ANY(%s) AND m.company_id = %s AND m.sender_user_id = %s
+                          AND m.sender_deleted_at IS NOT NULL AND m.sender_purged_at IS NULL
+                        FOR UPDATE OF m
+                        """,
+                        (payload.mailIds, actor.companyId, actor.userId),
+                    )
+                    sender_rows = cursor.fetchall()
+                    sender_ids = {row["mail_id"] for row in sender_rows}
+                    missing = [mail_id for mail_id in payload.mailIds if mail_id not in sender_ids]
+                    recipient_rows: list[dict] = []
+                    if missing:
+                        cursor.execute(
+                            """
+                            SELECT r.id AS recipient_id, r.message_id AS mail_id, r.folder_id, r.is_spam,
+                              r.deleted_at, r.purged_at, r.is_read, r.is_starred
+                            FROM mail_recipients r JOIN mail_messages m ON m.id = r.message_id
+                            WHERE r.message_id = ANY(%s) AND m.company_id = %s
+                              AND (r.recipient_user_id = %s OR LOWER(r.recipient_email) = %s)
+                              AND r.deleted_at IS NOT NULL AND r.purged_at IS NULL FOR UPDATE OF r
+                            """,
+                            (missing, actor.companyId, actor.userId, actor.userEmail.lower()),
+                        )
+                        recipient_rows = cursor.fetchall()
+                    rows = [dict(row, view_kind="sender") for row in sender_rows] + [dict(row, view_kind="recipient") for row in recipient_rows]
+                else:
+                    context = {
+                        "inbox": "r.deleted_at IS NULL AND r.purged_at IS NULL",
+                        "folder": "r.deleted_at IS NULL AND r.purged_at IS NULL AND r.is_spam = FALSE",
+                        "tag": "r.deleted_at IS NULL AND r.purged_at IS NULL",
+                        "spam": "r.deleted_at IS NULL AND r.purged_at IS NULL AND r.is_spam = TRUE",
+                    }[payload.mailbox]
+                    cursor.execute(
+                        f"""
+                        SELECT r.id AS recipient_id, r.message_id AS mail_id, r.folder_id, r.is_spam,
+                          r.deleted_at, r.purged_at, r.is_read, r.is_starred
+                        FROM mail_recipients r JOIN mail_messages m ON m.id = r.message_id
+                        WHERE r.message_id = ANY(%s) AND m.company_id = %s
+                          AND (r.recipient_user_id = %s OR LOWER(r.recipient_email) = %s)
+                          AND {context} FOR UPDATE OF r
+                        """,
+                        (payload.mailIds, actor.companyId, actor.userId, actor.userEmail.lower()),
+                    )
+                    rows = [dict(row, view_kind="recipient") for row in cursor.fetchall()]
+                locked_ids = {row["mail_id"] for row in rows}
+                if locked_ids != set(payload.mailIds):
+                    raise PermissionError("요청한 모든 메일을 처리할 권한이 없습니다.")
+
+                for row in rows:
+                    before = {
+                        "folderId": row.get("folder_id"), "spam": bool(row.get("is_spam")),
+                        "deleted": row.get("deleted_at") is not None, "purged": row.get("purged_at") is not None,
+                    }
+                    after = dict(before)
+                    if row["view_kind"] == "sender":
+                        if payload.action == "restore":
+                            after["deleted"] = False
+                            cursor.execute("UPDATE mail_messages SET sender_deleted_at = NULL, sender_deleted_by_user_id = NULL, updated_at = %s WHERE id = %s", (now, row["mail_id"]))
+                        else:
+                            after["purged"] = True
+                            cursor.execute("UPDATE mail_messages SET sender_purged_at = %s, sender_purged_by_user_id = %s, updated_at = %s WHERE id = %s", (now, actor.userId, now, row["mail_id"]))
+                    elif payload.action == "move_folder":
+                        after["folderId"] = payload.targetFolderId
+                        cursor.execute("UPDATE mail_recipients SET folder_id = %s WHERE id = %s", (payload.targetFolderId, row["recipient_id"]))
+                    elif payload.action == "add_tag":
+                        cursor.execute("INSERT INTO mail_recipient_tags (recipient_id, tag_id, created_at) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING", (row["recipient_id"], payload.targetTagId, now))
+                        after["tagId"] = payload.targetTagId
+                    elif payload.action == "remove_tag":
+                        cursor.execute("DELETE FROM mail_recipient_tags WHERE recipient_id = %s AND tag_id = %s", (row["recipient_id"], payload.targetTagId))
+                        after["removedTagId"] = payload.targetTagId
+                    elif payload.action == "spam":
+                        after["spam"] = True
+                        cursor.execute("UPDATE mail_recipients SET is_spam = TRUE, spam_marked_at = %s WHERE id = %s", (now, row["recipient_id"]))
+                    elif payload.action == "not_spam":
+                        after["spam"] = False
+                        cursor.execute("UPDATE mail_recipients SET is_spam = FALSE, spam_marked_at = NULL WHERE id = %s", (row["recipient_id"],))
+                    elif payload.action == "delete":
+                        after["deleted"] = True
+                        cursor.execute("UPDATE mail_recipients SET deleted_at = %s, deleted_by_user_id = %s WHERE id = %s", (now, actor.userId, row["recipient_id"]))
+                    elif payload.action == "restore":
+                        after["deleted"] = False
+                        cursor.execute("UPDATE mail_recipients SET deleted_at = NULL, deleted_by_user_id = NULL WHERE id = %s", (row["recipient_id"],))
+                    elif payload.action == "purge":
+                        after["purged"] = True
+                        cursor.execute("UPDATE mail_recipients SET purged_at = %s, purged_by_user_id = %s WHERE id = %s", (now, actor.userId, row["recipient_id"]))
+                    self._write_mail_bulk_audit(cursor, actor, row["mail_id"], payload.action, before, after, payload.mailbox, request_id)
+                    changed_count += 1
+            connection.commit()
+        return MailBulkResponse(
+            action=payload.action, requestedCount=len(payload.mailIds), changedCount=changed_count,
+            unchangedCount=len(payload.mailIds) - changed_count, targetCategory=payload.targetCategory,
+            targetFolderId=payload.targetFolderId, targetTagId=payload.targetTagId,
+        )
     def bulk_mail(self, actor: AuthUserSummary, payload: MailBulkRequest) -> MailBulkResponse:
         payload.validate_contract()
         self.db.ensure_migrations_applied()
+        if payload.action in {"move_folder", "add_tag", "remove_tag", "spam", "not_spam", "restore", "purge"} or payload.mailbox in {"folder", "tag", "spam", "trash"}:
+            return self._bulk_mail_ui020(actor, payload)
         now = self._now()
         request_id = self._new_id("mailbulk")
         changed_count = 0
@@ -1139,35 +1554,34 @@ class MailMessengerService:
             raise PermissionError("메일 계정이 활성 상태가 아닙니다.")
         return row
 
-    def _fetch_accessible_mail(self, cursor, actor: AuthUserSummary, mail_id: str) -> dict:
+    def _fetch_accessible_mail(self, cursor, actor: AuthUserSummary, mail_id: str, *, view: str = "inbox") -> dict:
+        allowed_views = {"inbox", "folder", "tag", "spam", "trash", "sent", "draft"}
+        if view not in allowed_views:
+            raise ValueError("지원하지 않는 메일 상세 문맥입니다.")
+        sender_state = "m.sender_deleted_at IS NOT NULL AND m.sender_purged_at IS NULL" if view == "trash" else "m.sender_deleted_at IS NULL AND m.sender_purged_at IS NULL"
+        if view == "trash":
+            recipient_state = "r.deleted_at IS NOT NULL AND r.purged_at IS NULL"
+        elif view == "spam":
+            recipient_state = "r.deleted_at IS NULL AND r.purged_at IS NULL AND r.is_spam = TRUE"
+        elif view == "inbox":
+            recipient_state = "r.deleted_at IS NULL AND r.purged_at IS NULL AND r.is_spam = FALSE AND r.folder_id IS NULL"
+        else:
+            recipient_state = "r.deleted_at IS NULL AND r.purged_at IS NULL"
         cursor.execute(
-            """
+            f"""
             SELECT DISTINCT
-                m.id AS mail_id,
-                m.company_id,
-                m.sender_user_id,
-                m.sender_account_id AS account_id,
-                m.sender_email,
-                m.subject,
-                m.body_text,
-                m.body_html,
-                m.status,
-                m.sent_at,
-                m.scheduled_at,
-                m.created_at,
-                m.updated_at,
-                m.retention_expires_at,
-                m.attachment_count,
-                (m.sender_user_id = %s AND m.sender_deleted_at IS NULL) AS is_sender_view
+                m.id AS mail_id, m.company_id, m.sender_user_id, m.sender_account_id AS account_id,
+                m.sender_email, m.subject, m.body_text, m.body_html, m.status, m.sent_at, m.scheduled_at,
+                m.created_at, m.updated_at, m.retention_expires_at, m.attachment_count,
+                (m.sender_user_id = %s AND {sender_state}) AS is_sender_view
             FROM mail_messages m
             LEFT JOIN mail_recipients r ON r.message_id = m.id
-            WHERE m.id = %s
-              AND m.company_id = %s
+            WHERE m.id = %s AND m.company_id = %s
               AND (
-                (m.sender_user_id = %s AND m.sender_deleted_at IS NULL)
+                (m.sender_user_id = %s AND {sender_state})
                 OR (
                   (r.recipient_user_id = %s OR LOWER(r.recipient_email) = %s)
-                  AND r.deleted_at IS NULL
+                  AND {recipient_state}
                 )
               )
             """,
@@ -1177,7 +1591,6 @@ class MailMessengerService:
         if row is None:
             raise PermissionError("메일을 조회할 권한이 없습니다.")
         return row
-
     def _fetch_mail_recipients(
         self,
         cursor,
@@ -1372,6 +1785,7 @@ class MailMessengerService:
             retentionExpiresAt=row["retention_expires_at"],
             attachmentCount=row["attachment_count"],
             category=row.get("category") or "primary",
+            sourceMailbox=row.get("source_mailbox"),
         )
 
     def _to_mail_detail(

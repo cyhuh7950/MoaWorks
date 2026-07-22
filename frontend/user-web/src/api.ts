@@ -311,6 +311,23 @@ export type MailListQuery = {
   offset?: number;
 };
 
+export type MailFolder = {
+  folderId: string;
+  name: string;
+  sortOrder: number;
+  messageCount: number;
+};
+
+export type MailTag = {
+  tagId: string;
+  name: string;
+  color: "gray" | "red" | "orange" | "yellow" | "green" | "blue" | "purple";
+  sortOrder: number;
+  messageCount: number;
+};
+
+export type MailFolderListResponse = { folders: MailFolder[] };
+export type MailTagListResponse = { tags: MailTag[] };
 export type MailStorageResponse = {
   usedBytes: number;
   quotaBytes: number;
@@ -744,7 +761,7 @@ export async function fetchMailStorage(token: string): Promise<MailStorageRespon
   });
 }
 
-export type MailBulkAction = "read" | "unread" | "star" | "unstar" | "move" | "delete";
+export type MailBulkAction = "read" | "unread" | "star" | "unstar" | "move" | "delete" | "move_folder" | "add_tag" | "remove_tag" | "spam" | "not_spam" | "restore" | "purge";
 
 export type MailBulkResponse = {
   action: MailBulkAction;
@@ -752,14 +769,78 @@ export type MailBulkResponse = {
   changedCount: number;
   unchangedCount: number;
   targetCategory?: string | null;
+  targetFolderId?: string | null;
+  targetTagId?: string | null;
 };
 
 export async function setMailCategory(token: string, mailId: string, category: string): Promise<MailStatusResponse> {
   return request<MailStatusResponse>(`/mail/${mailId}/category`, { method: "POST", headers: { ...authHeaders(token), "Content-Type": "application/json" }, body: JSON.stringify({ category }) });
 }
 
-export async function bulkMailAction(token: string, mailIds: string[], action: MailBulkAction, mailbox = "inbox", targetCategory?: string): Promise<MailBulkResponse> {
-  return request<MailBulkResponse>("/mail/bulk", { method: "POST", headers: { ...authHeaders(token), "Content-Type": "application/json" }, body: JSON.stringify({ mailIds, action, mailbox, ...(targetCategory ? { targetCategory } : {}) }) });
+export async function bulkMailAction(
+  token: string,
+  mailIds: string[],
+  action: MailBulkAction,
+  mailbox = "inbox",
+  targetCategory?: string,
+  targetFolderId?: string,
+  targetTagId?: string,
+): Promise<MailBulkResponse> {
+  return request<MailBulkResponse>("/mail/bulk", {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ mailIds, action, mailbox, ...(targetCategory ? { targetCategory } : {}),
+      ...(targetFolderId ? { targetFolderId } : {}), ...(targetTagId ? { targetTagId } : {}) }),
+  });
+}
+
+export async function fetchMailFolders(token: string): Promise<MailFolderListResponse> {
+  return request<MailFolderListResponse>("/mail/folders", { headers: authHeaders(token) });
+}
+export async function createMailFolder(token: string, name: string): Promise<MailFolder> {
+  return request<MailFolder>("/mail/folders", { method: "POST", headers: { ...authHeaders(token), "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+}
+export async function updateMailFolder(token: string, folderId: string, name: string): Promise<MailFolder> {
+  return request<MailFolder>("/mail/folders/" + folderId, { method: "PATCH", headers: { ...authHeaders(token), "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+}
+export async function deleteMailFolder(token: string, folderId: string): Promise<void> {
+  await request<void>("/mail/folders/" + folderId, { method: "DELETE", headers: authHeaders(token) });
+}
+export async function fetchMailTags(token: string): Promise<MailTagListResponse> {
+  return request<MailTagListResponse>("/mail/tags", { headers: authHeaders(token) });
+}
+export async function createMailTag(token: string, name: string, color: MailTag["color"]): Promise<MailTag> {
+  return request<MailTag>("/mail/tags", { method: "POST", headers: { ...authHeaders(token), "Content-Type": "application/json" }, body: JSON.stringify({ name, color }) });
+}
+export async function updateMailTag(token: string, tagId: string, name: string, color: MailTag["color"]): Promise<MailTag> {
+  return request<MailTag>("/mail/tags/" + tagId, { method: "PATCH", headers: { ...authHeaders(token), "Content-Type": "application/json" }, body: JSON.stringify({ name, color }) });
+}
+export async function deleteMailTag(token: string, tagId: string): Promise<void> {
+  await request<void>("/mail/tags/" + tagId, { method: "DELETE", headers: authHeaders(token) });
+}
+function mailContextPath(path: string, options?: MailListQuery): string {
+  const query = new URLSearchParams();
+  if (options?.q) query.set("q", options.q);
+  if (options?.read) query.set("read", options.read);
+  if (options?.starred) query.set("starred", options.starred);
+  if (options?.attachment) query.set("attachment", options.attachment);
+  if (options?.category) query.set("category", options.category);
+  if (options?.sort) query.set("sort", options.sort);
+  if (options?.limit !== undefined) query.set("limit", String(options.limit));
+  if (options?.offset !== undefined) query.set("offset", String(options.offset));
+  return path + (query.size ? "?" + query.toString() : "");
+}
+export async function fetchMailFolderMessages(token: string, folderId: string, options?: MailListQuery): Promise<MailListResponse> {
+  return request<MailListResponse>(mailContextPath("/mail/folders/" + folderId + "/messages", options), { headers: authHeaders(token) });
+}
+export async function fetchMailTagMessages(token: string, tagId: string, options?: MailListQuery): Promise<MailListResponse> {
+  return request<MailListResponse>(mailContextPath("/mail/tags/" + tagId + "/messages", options), { headers: authHeaders(token) });
+}
+export async function fetchMailSpam(token: string, options?: MailListQuery): Promise<MailListResponse> {
+  return request<MailListResponse>(mailContextPath("/mail/spam", options), { headers: authHeaders(token) });
+}
+export async function fetchMailTrash(token: string, options?: MailListQuery): Promise<MailListResponse> {
+  return request<MailListResponse>(mailContextPath("/mail/trash", options), { headers: authHeaders(token) });
 }
 export async function fetchSentMail(token: string, options?: MailListQuery): Promise<MailListResponse> {
   return fetchMailList(token, "sent", options);
@@ -847,8 +928,14 @@ export async function downloadMailAttachment(
   }
 }
 
-export async function fetchMailDetail(token: string, mailId: string): Promise<MailDetail> {
-  return request<MailDetail>(`/mail/${mailId}`, {
+export async function fetchMailDetail(token: string, mailId: string, view = "inbox"): Promise<MailDetail> {
+  if (view === "inbox") {
+    return request<MailDetail>(`/mail/${mailId}`, {
+      headers: authHeaders(token),
+    });
+  }
+  const detailPath = `/mail/${mailId}`;
+  return request<MailDetail>(detailPath + "?view=" + encodeURIComponent(view), {
     headers: authHeaders(token),
   });
 }

@@ -9,6 +9,10 @@ import {
   changePassword,
   ApiRequestError,
   clearUserToken,
+  createMailFolder,
+  createMailTag,
+  deleteMailFolder,
+  deleteMailTag,
   downloadMailAttachment,
   createApproval,
   fetchApprovalApprovers,
@@ -18,6 +22,12 @@ import {
   fetchDraftMail,
   fetchInbox,
   fetchMailDeliveryStatus,
+  fetchMailFolderMessages,
+  fetchMailFolders,
+  fetchMailSpam,
+  fetchMailTagMessages,
+  fetchMailTags,
+  fetchMailTrash,
   fetchMailDetail,
   fetchRecentMailRecipients,
   fetchMailStorage,
@@ -53,6 +63,8 @@ import {
   toggleMailStar,
   setMailCategory,
   updateApproval,
+  updateMailFolder,
+  updateMailTag,
   type MailAttachment,
   withdrawApproval,
   type ApprovalApprover,
@@ -64,6 +76,8 @@ import {
   type MailDeliveryStatusResponse,
   type MailDetail,
   type MailListQuery,
+  type MailFolder,
+  type MailTag,
   type MailStorageResponse,
   type MailSummary,
   type MessengerMessage,
@@ -296,7 +310,7 @@ type ReasonAction = {
 type WorkspaceTab = "mail" | "approval" | "messenger";
 type UserPortalMenu = "home" | "mail" | "approval" | "messenger" | "schedule" | "contacts" | "org" | "files" | "alerts" | "notices" | "settings" | "help";
 type MailboxType = "inbox" | "sent";
-type MailFolderType = MailboxType | "starred" | "unread" | "draft" | "localArchive";
+type MailFolderType = MailboxType | "starred" | "unread" | "draft" | "spam" | "trash" | "localArchive" | string;
 
 type MailComposeContext = "new" | "reply" | "reply_all" | "forward";
 
@@ -559,6 +573,17 @@ export default function App() {
   const [selectedContactEmail, setSelectedContactEmail] = useState("");
   const [selectedOrgMember, setSelectedOrgMember] = useState("");
   const [selectedFileId, setSelectedFileId] = useState("");
+  const [mailFoldersData, setMailFoldersData] = useState<MailFolder[]>([]);
+  const [mailTagsData, setMailTagsData] = useState<MailTag[]>([]);
+  const [mailContextMails, setMailContextMails] = useState<MailSummary[]>([]);
+  const [mailResourceModal, setMailResourceModal] = useState<"none" | "folder" | "tag">("none");
+  const [mailResourceEditId, setMailResourceEditId] = useState("");
+  const [mailResourceName, setMailResourceName] = useState("");
+  const [mailTagColor, setMailTagColor] = useState<MailTag["color"]>("gray");
+  const [mailMoveFolderId, setMailMoveFolderId] = useState("");
+  const [mailTargetTagId, setMailTargetTagId] = useState("");
+  const [mailPurgeConfirmOpen, setMailPurgeConfirmOpen] = useState(false);
+  const [mailResourceDelete, setMailResourceDelete] = useState<{ kind: "folder" | "tag"; id: string; name: string } | null>(null);
   const [inboxMails, setInboxMails] = useState<MailSummary[]>([]);
   const [sentMails, setSentMails] = useState<MailSummary[]>([]);
   const [draftMails, setDraftMails] = useState<MailSummary[]>([]);
@@ -709,7 +734,9 @@ export default function App() {
     }
     if (folder === "localArchive") {
       setActiveMailbox("inbox");
+      return;
     }
+    setActiveMailbox("inbox");
   }
 
   function openMailFolder(folder: MailFolderType) {
@@ -720,24 +747,90 @@ export default function App() {
   }
 
   function getMailListByFolder(folder: MailFolderType) {
-    if (folder === "sent") {
-      return sentMails;
-    }
-    if (folder === "starred") {
-      return inboxMails;
-    }
-    if (folder === "unread") {
-      return inboxMails;
-    }
-    if (folder === "draft") {
-      return draftMails;
-    }
-    if (folder === "localArchive") {
-      return [];
-    }
-    return inboxMails;
+    if (folder === "sent") return sentMails;
+    if (folder === "starred" || folder === "unread" || folder === "inbox") return inboxMails;
+    if (folder === "draft") return draftMails;
+    if (folder === "localArchive") return [];
+    return mailContextMails;
   }
 
+  function ui020Mailbox(folder: MailFolderType): string {
+    if (folder === "spam" || folder === "trash") return folder;
+    if (folder.startsWith("folder:")) return "folder";
+    if (folder.startsWith("tag:")) return "tag";
+    return folder === "sent" ? "sent" : folder === "draft" ? "draft" : "inbox";
+  }
+
+  async function refreshMailResources(targetToken: string) {
+    const [folders, tags] = await Promise.all([fetchMailFolders(targetToken), fetchMailTags(targetToken)]);
+    setMailFoldersData(folders.folders ?? []);
+    setMailTagsData(tags.tags ?? []);
+  }
+
+  function openMailResourceModal(kind: "folder" | "tag", item?: MailFolder | MailTag) {
+    setMailResourceModal(kind);
+    setMailResourceEditId(kind === "folder" ? (item as MailFolder | undefined)?.folderId ?? "" : (item as MailTag | undefined)?.tagId ?? "");
+    setMailResourceName(item?.name ?? "");
+    setMailTagColor(kind === "tag" ? (item as MailTag | undefined)?.color ?? "gray" : "gray");
+  }
+
+  async function saveMailResource() {
+    const name = mailResourceName.trim();
+    if (!token || !name || mailBulkBusy) return;
+    setMailBulkBusy(true);
+    try {
+      if (mailResourceModal === "folder") {
+        if (mailResourceEditId) await updateMailFolder(token, mailResourceEditId, name);
+        else await createMailFolder(token, name);
+      } else if (mailResourceModal === "tag") {
+        if (mailResourceEditId) await updateMailTag(token, mailResourceEditId, name, mailTagColor);
+        else await createMailTag(token, name, mailTagColor);
+      }
+      await refreshMailResources(token);
+      setMailResourceModal("none");
+      setMessage(mailResourceEditId ? "이름을 변경했습니다." : "새 항목을 추가했습니다.");
+    } catch (error) {
+      setMailError(normalizeClientError(error, "메일함 또는 태그 저장에 실패했습니다."));
+    } finally {
+      setMailBulkBusy(false);
+    }
+  }
+
+  async function removeMailResource(kind: "folder" | "tag", id: string) {
+    if (!token || mailBulkBusy) return;
+    setMailBulkBusy(true);
+    try {
+      if (kind === "folder") await deleteMailFolder(token, id);
+      else await deleteMailTag(token, id);
+      await refreshMailResources(token);
+      if (activeMailFolder === kind + ":" + id) openMailFolder("inbox");
+      setMessage(kind === "folder" ? "메일함을 삭제하고 포함 메일을 받은편지함으로 옮겼습니다." : "태그를 삭제했습니다.");
+    } catch (error) {
+      setMailError(normalizeClientError(error, "삭제에 실패했습니다."));
+    } finally {
+      setMailBulkBusy(false);
+    }
+  }
+
+  async function runUi020BulkAction(action: "move_folder" | "add_tag" | "remove_tag" | "spam" | "not_spam" | "restore" | "purge", targetId?: string) {
+    if (!token || !selectedMailIds.length || mailBulkBusy) return false;
+    setMailBulkBusy(true);
+    setMailError("");
+    try {
+      const result = await bulkMailAction(token, selectedMailIds, action, ui020Mailbox(activeMailFolder), undefined,
+        action === "move_folder" ? targetId : undefined,
+        action === "add_tag" || action === "remove_tag" ? targetId : undefined);
+      setMessage(result.changedCount + "개 메일을 처리했습니다.");
+      setSelectedMailIds([]);
+      await Promise.all([loadMailWorkspace(token, activeMailbox, undefined, activeMailFolder, mailListQuery), refreshMailResources(token)]);
+      return true;
+    } catch (error) {
+      setMailError(normalizeClientError(error, "메일 처리에 실패했습니다."));
+      return false;
+    } finally {
+      setMailBulkBusy(false);
+    }
+  }
   function openNewMailCompose() {
     setMailComposeContext("new");
     setMailComposePosition(null);
@@ -790,7 +883,7 @@ export default function App() {
     setMailError("");
     setMailBulkReloadError("");
     try {
-      const mailbox = activeMailFolder === "sent" ? "sent" : activeMailFolder === "draft" ? "draft" : "inbox";
+      const mailbox = ui020Mailbox(activeMailFolder);
       const result = await bulkMailAction(token, selectedMailIds, action, mailbox, targetCategory);
       setMessage(`${result.changedCount}개 변경 · ${result.unchangedCount}개 유지`);
       setSelectedMailIds([]);
@@ -1059,7 +1152,7 @@ export default function App() {
       if (mailbox === "inbox" && options?.markRead) {
         await markMailRead(targetToken, mailId);
       }
-      const detail = await fetchMailDetail(targetToken, mailId);
+      const detail = await fetchMailDetail(targetToken, mailId, ui020Mailbox(activeMailFolder));
       setSelectedMailDetail(detail);
       if (mailbox === "inbox" && options?.markRead) {
         setInboxMails((current) => current.map((item) => (item.mailId === mailId ? { ...item, isRead: true } : item)));
@@ -1096,31 +1189,33 @@ export default function App() {
       const inboxQuery = ["inbox", "starred", "unread"].includes(preferredFolder) ? effectiveQuery : defaultQuery;
       const sentQuery = preferredFolder === "sent" ? effectiveQuery : defaultQuery;
       const draftQuery = preferredFolder === "draft" ? effectiveQuery : defaultQuery;
-      const [inboxResponse, sentResponse, draftResponse] = await Promise.all([
-        fetchInbox(targetToken, inboxQuery),
-        fetchSentMail(targetToken, sentQuery),
-        fetchDraftMail(targetToken, draftQuery),
+      const [inboxResponse, sentResponse, draftResponse, foldersResponse, tagsResponse] = await Promise.all([
+        fetchInbox(targetToken, inboxQuery), fetchSentMail(targetToken, sentQuery), fetchDraftMail(targetToken, draftQuery),
+        fetchMailFolders(targetToken), fetchMailTags(targetToken),
       ]);
+      let contextResponse = null;
+      if (preferredFolder.startsWith("folder:")) contextResponse = await fetchMailFolderMessages(targetToken, preferredFolder.slice(7), effectiveQuery);
+      else if (preferredFolder.startsWith("tag:")) contextResponse = await fetchMailTagMessages(targetToken, preferredFolder.slice(4), effectiveQuery);
+      else if (preferredFolder === "spam") contextResponse = await fetchMailSpam(targetToken, effectiveQuery);
+      else if (preferredFolder === "trash") contextResponse = await fetchMailTrash(targetToken, effectiveQuery);
+
       const nextInbox = inboxResponse.mails ?? [];
       const nextSent = sentResponse.mails ?? [];
       const nextDrafts = draftResponse.mails ?? [];
+      const nextContext = contextResponse?.mails ?? [];
       setInboxMails(nextInbox);
       setSentMails(nextSent);
       setDraftMails(nextDrafts);
-      const activeResponse = preferredFolder === "sent" ? sentResponse : preferredFolder === "draft" ? draftResponse : inboxResponse;
-      setMailListMeta({
-        total: activeResponse.total,
-        limit: activeResponse.limit,
-        offset: activeResponse.offset,
-        hasMore: activeResponse.hasMore,
-      });
+      setMailContextMails(nextContext);
+      setMailFoldersData(foldersResponse.folders ?? []);
+      setMailTagsData(tagsResponse.tags ?? []);
+      const activeResponse = contextResponse ?? (preferredFolder === "sent" ? sentResponse : preferredFolder === "draft" ? draftResponse : inboxResponse);
+      setMailListMeta({ total: activeResponse.total, limit: activeResponse.limit, offset: activeResponse.offset, hasMore: activeResponse.hasMore });
       const mailbox = preferredMailbox ?? activeMailbox;
-      const activeList = preferredFolder === "sent" ? nextSent : preferredFolder === "draft" ? nextDrafts : nextInbox;
-      const resolvedMailbox = preferredFolder === "sent" ? "sent" : mailbox;
+      const activeList = contextResponse ? nextContext : preferredFolder === "sent" ? nextSent : preferredFolder === "draft" ? nextDrafts : nextInbox;
+      const resolvedMailbox = preferredFolder === "sent" ? "sent" : "inbox";
       const resolvedMailId = preferredMailId ?? selectedMailId;
-      const targetMail = resolvedMailId
-        ? activeList.find((item) => item.mailId === resolvedMailId) ?? null
-        : activeList[0] ?? null;
+      const targetMail = resolvedMailId ? activeList.find((item) => item.mailId === resolvedMailId) ?? null : activeList[0] ?? null;
       setActiveMailbox(resolvedMailbox);
       if (targetMail) {
         await loadMailDetail(targetToken, targetMail.mailId, resolvedMailbox);
@@ -1136,6 +1231,7 @@ export default function App() {
       setInboxMails([]);
       setSentMails([]);
       setDraftMails([]);
+      setMailContextMails([]);
       setMailListMeta({ total: 0, limit: query.limit ?? 50, offset: query.offset ?? 0, hasMore: false });
       setSelectedMailId("");
       setMailReadReceiptOpen(false);
@@ -1145,7 +1241,6 @@ export default function App() {
       setMailLoading(false);
     }
   }
-
   async function loadMailStorage(targetToken: string) {
     setMailStorageLoading(true);
     setMailStorageError("");
@@ -2504,15 +2599,25 @@ export default function App() {
                 <button type="button" aria-pressed={activeMailFolder === "inbox"} onClick={() => openMailFolder("inbox")}>받은편지함 <span>{inboxMails.length}</span></button>
                 <button type="button" aria-pressed={activeMailFolder === "sent"} onClick={() => openMailFolder("sent")}>보낸편지함 <span>{sentMails.length}</span></button>
                 <button type="button" aria-pressed={activeMailFolder === "draft"} onClick={() => openMailFolder("draft")}>임시보관함 <span>{draftMailCount}</span></button>
-                {[
-                  ["예약메일함", "예약 발송은 UI-018에서 제공합니다."],
-                  ["스팸메일함", "스팸 메일함은 UI-020에서 제공합니다."],
-                  ["휴지통", "휴지통 관리는 UI-020에서 제공합니다."],
-                  ["사용자 메일함", "사용자 메일함 관리는 UI-020에서 제공합니다."],
-                  ["태그", "태그 관리는 UI-020에서 제공합니다."],
-                ].map(([label, tooltip]) => (
-                  <button key={label} type="button" aria-disabled="true" data-tooltip={tooltip} onClick={(event) => event.preventDefault()}>{label} <span aria-hidden="true">i</span></button>
-                ))}
+                <button type="button" aria-disabled="true" data-tooltip="예약 발송은 UI-018에서 제공합니다." onClick={(event) => event.preventDefault()}>예약메일함 <span aria-hidden="true">i</span></button>
+                <button type="button" aria-label="스팸메일함" aria-pressed={activeMailFolder === "spam"} onClick={() => openMailFolder("spam")}>스팸함</button>
+                <button type="button" aria-pressed={activeMailFolder === "trash"} onClick={() => openMailFolder("trash")}>휴지통</button>
+              </div>
+              <div className="user-mail-shell-group user-mail-resource-group" aria-label="사용자 메일함">
+                <div><strong>사용자 메일함</strong><button type="button" title="사용자 메일함 추가" onClick={() => openMailResourceModal("folder")}>+</button></div>
+                {mailFoldersData.map((folder) => <div className="user-mail-resource-row" key={folder.folderId}>
+                  <button type="button" aria-pressed={activeMailFolder === "folder:" + folder.folderId} onClick={() => openMailFolder("folder:" + folder.folderId)}>{folder.name} <span>{folder.messageCount}</span></button>
+                  <button type="button" title="메일함 이름 변경" onClick={() => openMailResourceModal("folder", folder)}>수정</button>
+                  <button type="button" title="메일함 삭제" onClick={() => setMailResourceDelete({ kind: "folder", id: folder.folderId, name: folder.name })}>삭제</button>
+                </div>)}
+              </div>
+              <div className="user-mail-shell-group user-mail-resource-group" aria-label="태그">
+                <div><strong>태그</strong><button type="button" title="태그 추가" onClick={() => openMailResourceModal("tag")}>+</button></div>
+                {mailTagsData.map((tag) => <div className="user-mail-resource-row" key={tag.tagId}>
+                  <button type="button" aria-pressed={activeMailFolder === "tag:" + tag.tagId} onClick={() => openMailFolder("tag:" + tag.tagId)}><i data-color={tag.color} />{tag.name} <span>{tag.messageCount}</span></button>
+                  <button type="button" title="태그 수정" onClick={() => openMailResourceModal("tag", tag)}>수정</button>
+                  <button type="button" title="태그 삭제" onClick={() => setMailResourceDelete({ kind: "tag", id: tag.tagId, name: tag.name })}>삭제</button>
+                </div>)}
               </div>
               <div className="user-mail-shell-group" aria-label="메일 도구">
                 <strong>도구</strong>
@@ -2547,7 +2652,19 @@ export default function App() {
                   <label title="현재 결과 페이지의 메일만 선택"><input type="checkbox" aria-label="현재 페이지 전체 선택" checked={allPageSelected} onChange={(event) => setSelectedMailIds(event.target.checked ? visibleMailList.map((item) => item.mailId) : [])} />전체</label>
                   <span aria-live="polite">선택 {selectedMailIds.length} / 전체 {mailListMeta.total}</span>
                   {inboxBulkEnabled ? <><button type="button" title="선택 메일 읽음" disabled={!selectedMailIds.length || mailBulkBusy} onClick={() => void runBulkMailAction("read")}>읽음</button><button type="button" title="선택 메일 안 읽음" disabled={!selectedMailIds.length || mailBulkBusy} onClick={() => void runBulkMailAction("unread")}>안 읽음</button><button type="button" title="선택 메일 중요" disabled={!selectedMailIds.length || mailBulkBusy} onClick={() => void runBulkMailAction("star")}>중요</button><button type="button" title="선택 메일 중요 해제" disabled={!selectedMailIds.length || mailBulkBusy} onClick={() => void runBulkMailAction("unstar")}>중요 해제</button><select aria-label="분류 이동 대상" value={mailMoveCategory} onChange={(event) => setMailMoveCategory(event.target.value)}>{MAIL_CATEGORIES.map(([category, label]) => <option key={category} value={category}>{label}</option>)}</select><button type="button" title="선택 메일 분류 이동" disabled={!selectedMailIds.length || mailBulkBusy} onClick={() => void runBulkMailAction("move", mailMoveCategory)}>분류 이동</button></> : null}
-                  <button type="button" title="선택 메일 삭제" onClick={() => setMailDeleteConfirmOpen(true)} disabled={!selectedMailIds.length || mailBulkBusy}>삭제</button>
+                  {["inbox", "starred", "unread"].includes(activeMailFolder) || activeMailFolder.startsWith("folder:") || activeMailFolder.startsWith("tag:") ? <>
+                    <select aria-label="메일함 이동 대상" value={mailMoveFolderId} onChange={(event) => setMailMoveFolderId(event.target.value)}><option value="">메일함 이동</option>{mailFoldersData.map((folder) => <option key={folder.folderId} value={folder.folderId}>{folder.name}</option>)}</select>
+                    <button type="button" disabled={!selectedMailIds.length || !mailMoveFolderId || mailBulkBusy} onClick={() => void runUi020BulkAction("move_folder", mailMoveFolderId)}>메일함 이동</button>
+                    <select aria-label="태그 대상" value={mailTargetTagId} onChange={(event) => setMailTargetTagId(event.target.value)}><option value="">태그 선택</option>{mailTagsData.map((tag) => <option key={tag.tagId} value={tag.tagId}>{tag.name}</option>)}</select>
+                    <button type="button" disabled={!selectedMailIds.length || !mailTargetTagId || mailBulkBusy} onClick={() => void runUi020BulkAction("add_tag", mailTargetTagId)}>태그 추가</button>
+                    {activeMailFolder.startsWith("tag:") ? <button type="button" disabled={!selectedMailIds.length || mailBulkBusy} onClick={() => void runUi020BulkAction("remove_tag", activeMailFolder.slice(4))}>현재 태그 제거</button> : null}
+                    <button type="button" disabled={!selectedMailIds.length || mailBulkBusy} onClick={() => void runUi020BulkAction("spam")}>스팸 지정</button>
+                  </> : null}
+                  {activeMailFolder === "spam" ? <button type="button" disabled={!selectedMailIds.length || mailBulkBusy} onClick={() => void runUi020BulkAction("not_spam")}>스팸 해제</button> : null}
+                  {activeMailFolder === "trash" ? <>
+                    <button type="button" disabled={!selectedMailIds.length || mailBulkBusy} onClick={() => void runUi020BulkAction("restore")}>복원</button>
+                    <button type="button" disabled={!selectedMailIds.length || mailBulkBusy} onClick={() => setMailPurgeConfirmOpen(true)}>영구 삭제</button>
+                  </> : <button type="button" title="선택 메일 삭제" onClick={() => setMailDeleteConfirmOpen(true)} disabled={!selectedMailIds.length || mailBulkBusy}>삭제</button>}
                   <button type="button" title="이전 페이지" disabled={mailListMeta.offset === 0 || mailLoading} onClick={() => updateMailListQuery({ offset: Math.max(0, mailListMeta.offset - mailListMeta.limit) })}>이전</button>
                   <button type="button" title="다음 페이지" disabled={!mailListMeta.hasMore || mailLoading} onClick={() => updateMailListQuery({ offset: mailListMeta.offset + mailListMeta.limit })}>다음</button>
                   {inboxBulkEnabled && selectedMailId && selectedMailSummary && inboxMails.some((item) => item.mailId === selectedMailId) ? <select aria-label="선택 메일 분류" value={selectedMailSummary.category || "primary"} disabled={mailCategoryBusy} onChange={(event) => void changeSelectedMailCategory(event.target.value)}>{MAIL_CATEGORIES.map(([category, label]) => <option key={category} value={category}>{label}</option>)}</select> : null}
@@ -2571,7 +2688,7 @@ export default function App() {
                       data-unread={item.unread}
                     >
                       <input type="checkbox" aria-label={`메일 선택: ${item.subject}`} checked={selectedMailIds.includes(item.mailId)} onClick={(event) => event.stopPropagation()} onChange={(event) => setSelectedMailIds((current) => event.target.checked ? [...current, item.mailId] : current.filter((mailId) => mailId !== item.mailId))} />
-                      <button className="user-mail-row__main" type="button" onClick={() => { setMailDetailExpanded(false); const mailbox = inferMailboxFromMailId(item.mailId); void selectMail(token, item.mailId, mailbox, { markRead: mailbox === "inbox" }); }}>
+                      <button className="user-mail-row__main" type="button" onClick={() => { setMailDetailExpanded(false); const mailbox = inferMailboxFromMailId(item.mailId); void selectMail(token, item.mailId, mailbox, { markRead: mailbox === "inbox" && activeMailFolder !== "trash" }); }}>
                         <div><strong>{item.sender}</strong><span>{item.time}</span></div>
                         <div><span>{item.important ? "★" : ""}{item.attachment ? " 첨부" : ""}</span><strong>{item.subject}</strong></div>
                         <p>{item.preview}</p>
@@ -3394,7 +3511,40 @@ export default function App() {
               if (completed) setMailDeleteConfirmOpen(false);
             }}
           />
-          {quickComposePicker}
+          {mailResourceModal !== "none" ? (
+            <div className="mail-resource-modal-backdrop" role="presentation">
+              <section className={mailResourceModal === "folder" ? "mail-resource-modal mail-folder-modal" : "mail-resource-modal mail-tag-modal"} role="dialog" aria-modal="true" aria-labelledby="mail-resource-modal-title" onKeyDown={(event) => { if (event.key === "Escape") setMailResourceModal("none"); }}>
+                <h2 id="mail-resource-modal-title">{mailResourceModal === "folder" ? "사용자 메일함" : "태그"} {mailResourceEditId ? "수정" : "추가"}</h2>
+                <label><span>이름</span><input autoFocus maxLength={mailResourceModal === "folder" ? 40 : 30} value={mailResourceName} onChange={(event) => setMailResourceName(event.target.value)} /></label>
+                {mailResourceModal === "tag" ? <label><span>색상</span><select value={mailTagColor} onChange={(event) => setMailTagColor(event.target.value as MailTag["color"])}>{["gray", "red", "orange", "yellow", "green", "blue", "purple"].map((color) => <option key={color} value={color}>{color}</option>)}</select></label> : null}
+                <div><button type="button" onClick={() => setMailResourceModal("none")}>취소</button><button type="button" disabled={!mailResourceName.trim() || mailBulkBusy} onClick={() => void saveMailResource()}>저장</button></div>
+              </section>
+            </div>
+          ) : null}
+          <ConfirmModal
+            open={Boolean(mailResourceDelete)}
+            title={mailResourceDelete?.kind === "folder" ? "사용자 메일함 삭제" : "태그 삭제"}
+            message={mailResourceDelete?.kind === "folder" ? "포함된 메일은 받은편지함으로 돌아갑니다. 삭제하시겠습니까?" : "메일은 유지되고 태그 관계만 제거됩니다."}
+            confirmLabel="삭제"
+            busy={mailBulkBusy}
+            onCancel={() => setMailResourceDelete(null)}
+            onConfirm={async () => {
+              if (!mailResourceDelete) return;
+              await removeMailResource(mailResourceDelete.kind, mailResourceDelete.id);
+              setMailResourceDelete(null);
+            }}
+          />
+          <div id="mail-purge-confirm">
+            <ConfirmModal
+              open={mailPurgeConfirmOpen}
+              title="메일 영구 삭제"
+              message={<><strong>{selectedMailIds.length}개 메일</strong>을 이 사용자 화면에서 복구할 수 없게 처리합니다. 다른 사용자의 메일 원문과 첨부는 삭제하지 않습니다.</>}
+              confirmLabel="영구 삭제"
+              busy={mailBulkBusy}
+              onCancel={() => setMailPurgeConfirmOpen(false)}
+              onConfirm={async () => { if (await runUi020BulkAction("purge")) setMailPurgeConfirmOpen(false); }}
+            />
+          </div>          {quickComposePicker}
         </div>
       </main>
     );

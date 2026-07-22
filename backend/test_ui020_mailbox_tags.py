@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from pydantic import ValidationError
 
 from app.schemas.mail_messenger import MailBulkRequest, MailFolderCreateRequest, MailTagCreateRequest
+from app.services.mail_messenger_service import MailMessengerService
+from test_ui016_mail_list import FakeDb
 
 
 class MailboxTagsContractTest(unittest.TestCase):
@@ -61,6 +64,48 @@ class MailboxTagsContractTest(unittest.TestCase):
         self.assertIn("purged_at", service)
         self.assertIn("sender_purged_at", service)
 
+
+    @staticmethod
+    def actor():
+        return SimpleNamespace(companyId="company-a", userId="user-a", userEmail="User@A.Test", userName="관리자")
+
+    def test_mixed_owner_ids_rollback_before_any_update(self):
+        service = MailMessengerService()
+        service.db = FakeDb(
+            fetchone=[{"id": "folder-1", "name": "업무", "sort_order": 0}],
+            fetchall=[[{"recipient_id": "recipient-1", "mail_id": "mail-1", "folder_id": None,
+                        "is_spam": False, "deleted_at": None, "purged_at": None,
+                        "is_read": False, "is_starred": False}]],
+        )
+        payload = MailBulkRequest(mailIds=["mail-1", "mail-other"], action="move_folder",
+                                  mailbox="inbox", targetFolderId="folder-1")
+        with self.assertRaises(PermissionError):
+            service.bulk_mail(self.actor(), payload)
+        self.assertEqual(service.db.connection.commit_count, 0)
+        sql = [statement.upper() for statement, _ in service.db.cursor_instance.executions]
+        self.assertFalse(any(statement.startswith("UPDATE MAIL_RECIPIENTS") for statement in sql))
+
+    def test_sender_purge_is_logical_and_audited(self):
+        service = MailMessengerService()
+        service.db = FakeDb(fetchall=[[{"mail_id": "mail-1", "status": "sent",
+                                       "sender_deleted_at": object(), "sender_purged_at": None}]])
+        response = service.bulk_mail(
+            self.actor(), MailBulkRequest(mailIds=["mail-1"], action="purge", mailbox="trash")
+        )
+        self.assertEqual(response.changedCount, 1)
+        executions = service.db.cursor_instance.executions
+        self.assertTrue(any("SENDER_PURGED_AT" in sql.upper() for sql, _ in executions))
+        self.assertTrue(any("INSERT INTO AUDIT_LOGS" in sql.upper() for sql, _ in executions))
+        self.assertFalse(any(sql.strip().upper().startswith("DELETE FROM MAIL_MESSAGES") for sql, _ in executions))
+
+    def test_ui020_audit_reason_contains_only_context_and_request_id(self):
+        source = (self.root / "app" / "services" / "mail_messenger_service.py").read_text(encoding="utf-8")
+        start = source.index("    def _write_mail_bulk_audit")
+        end = source.index("    def create_room", start)
+        audit = source[start:end]
+        self.assertIn('"requestId": request_id', audit)
+        for forbidden in ("recipient_email", "body_text", "token", "cookie"):
+            self.assertNotIn(forbidden, audit.lower())
 
 if __name__ == "__main__":
     unittest.main()

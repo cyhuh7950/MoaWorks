@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
 
 
@@ -13,12 +13,20 @@ from app.schemas.mail_messenger import (
     MailRecentRecipientListResponse,
     MailDetailResponse,
     MailDraftRequest,
+    MailFolderCreateRequest,
+    MailFolderListResponse,
+    MailFolderUpdateRequest,
+    MailFolderView,
     MailListQuery,
     MailListResponse,
     MailSendRequest,
     MailSendResponse,
     MailStorageResponse,
     MailStatusResponse,
+    MailTagCreateRequest,
+    MailTagListResponse,
+    MailTagUpdateRequest,
+    MailTagView,
 )
 from app.services.mail_messenger_service import MailMessengerService
 
@@ -78,6 +86,115 @@ def list_drafts(query: MailListQuery = Depends(), user: AuthUserSummary = Depend
         _handle_error(exc)
         raise
 
+
+@router.get("/folders", response_model=MailFolderListResponse)
+def list_mail_folders(user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailFolderListResponse:
+    try:
+        return _service().list_mail_folders(user)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.post("/folders", response_model=MailFolderView, status_code=status.HTTP_201_CREATED)
+def create_mail_folder(payload: MailFolderCreateRequest, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailFolderView:
+    try:
+        return _service().create_mail_folder(user, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.patch("/folders/{folder_id}", response_model=MailFolderView)
+def update_mail_folder(folder_id: str, payload: MailFolderUpdateRequest, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailFolderView:
+    try:
+        return _service().update_mail_folder(user, folder_id, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.delete("/folders/{folder_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_mail_folder(folder_id: str, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> Response:
+    try:
+        _service().delete_mail_folder(user, folder_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.get("/folders/{folder_id}/messages", response_model=MailListResponse)
+def list_folder_messages(folder_id: str, query: MailListQuery = Depends(), user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailListResponse:
+    try:
+        return _service().list_folder_messages(user, folder_id, query)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.get("/tags", response_model=MailTagListResponse)
+def list_mail_tags(user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailTagListResponse:
+    try:
+        return _service().list_mail_tags(user)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.post("/tags", response_model=MailTagView, status_code=status.HTTP_201_CREATED)
+def create_mail_tag(payload: MailTagCreateRequest, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailTagView:
+    try:
+        return _service().create_mail_tag(user, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.patch("/tags/{tag_id}", response_model=MailTagView)
+def update_mail_tag(tag_id: str, payload: MailTagUpdateRequest, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailTagView:
+    try:
+        return _service().update_mail_tag(user, tag_id, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.delete("/tags/{tag_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_mail_tag(tag_id: str, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> Response:
+    try:
+        _service().delete_mail_tag(user, tag_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.get("/tags/{tag_id}/messages", response_model=MailListResponse)
+def list_tag_messages(tag_id: str, query: MailListQuery = Depends(), user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailListResponse:
+    try:
+        return _service().list_tag_messages(user, tag_id, query)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.get("/spam", response_model=MailListResponse)
+def list_spam(query: MailListQuery = Depends(), user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailListResponse:
+    try:
+        return _service().list_spam(user, query)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.get("/trash", response_model=MailListResponse)
+def list_trash(query: MailListQuery = Depends(), user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailListResponse:
+    try:
+        return _service().list_trash(user, query)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
 
 @router.post("/bulk", response_model=MailBulkResponse)
 def bulk_mail(payload: MailBulkRequest, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailBulkResponse:
@@ -155,9 +272,9 @@ def download_attachment(
 
 
 @router.get("/{mail_id}", response_model=MailDetailResponse)
-def get_mail(mail_id: str, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailDetailResponse:
+def get_mail(mail_id: str, user: AuthUserSummary = Depends(permission_required("mail:read")), view: str = Query(default="inbox")) -> MailDetailResponse:
     try:
-        return _service().get_mail(user, mail_id)
+        return _service().get_mail(user, mail_id, view)
     except Exception as exc:
         _handle_error(exc)
         raise

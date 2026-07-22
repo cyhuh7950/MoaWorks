@@ -185,11 +185,80 @@ class MailListQuery(BaseModel):
         return normalized
 
 
+
+MAIL_TAG_COLORS = {"gray", "red", "orange", "yellow", "green", "blue", "purple"}
+
+
+class MailFolderCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("메일함 이름을 입력해 주세요.")
+        return normalized
+
+
+class MailFolderUpdateRequest(MailFolderCreateRequest):
+    pass
+
+
+class MailFolderView(BaseModel):
+    folderId: str
+    name: str
+    sortOrder: int = 0
+    messageCount: int = 0
+
+
+class MailFolderListResponse(BaseModel):
+    folders: list[MailFolderView]
+
+
+class MailTagCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=30)
+    color: str = Field(default="gray")
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("태그 이름을 입력해 주세요.")
+        return normalized
+
+    @field_validator("color")
+    @classmethod
+    def normalize_color(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in MAIL_TAG_COLORS:
+            raise ValueError("지원하지 않는 태그 색상입니다.")
+        return normalized
+
+
+class MailTagUpdateRequest(MailTagCreateRequest):
+    pass
+
+
+class MailTagView(BaseModel):
+    tagId: str
+    name: str
+    color: str
+    sortOrder: int = 0
+    messageCount: int = 0
+
+
+class MailTagListResponse(BaseModel):
+    tags: list[MailTagView]
+
 class MailBulkRequest(BaseModel):
     mailIds: list[str] = Field(min_length=1, max_length=100)
     action: str = Field(min_length=1)
     mailbox: str = Field(default="inbox")
     targetCategory: str | None = None
+    targetFolderId: str | None = None
+    targetTagId: str | None = None
 
     @field_validator("mailIds", mode="before")
     @classmethod
@@ -207,7 +276,7 @@ class MailBulkRequest(BaseModel):
     @classmethod
     def validate_action(cls, value: str) -> str:
         normalized = value.strip().lower()
-        if normalized not in {"read", "unread", "star", "unstar", "move", "delete"}:
+        if normalized not in {"read", "unread", "star", "unstar", "move", "delete", "move_folder", "add_tag", "remove_tag", "spam", "not_spam", "restore", "purge"}:
             raise ValueError("지원하지 않는 일괄 처리입니다.")
         return normalized
 
@@ -215,7 +284,7 @@ class MailBulkRequest(BaseModel):
     @classmethod
     def validate_mailbox(cls, value: str) -> str:
         normalized = value.strip().lower()
-        if normalized not in {"inbox", "sent", "draft"}:
+        if normalized not in {"inbox", "sent", "draft", "folder", "tag", "spam", "trash"}:
             raise ValueError("지원하지 않는 메일함입니다.")
         return normalized
 
@@ -229,9 +298,24 @@ class MailBulkRequest(BaseModel):
             raise ValueError("지원하지 않는 메일 분류입니다.")
         return normalized
 
+    @model_validator(mode="after")
+    def validate_ui020_context(self):
+        ui020_allowed = {
+            "folder": {"read", "unread", "star", "unstar", "delete", "move_folder", "add_tag", "spam"},
+            "tag": {"read", "unread", "star", "unstar", "delete", "move_folder", "add_tag", "remove_tag", "spam"},
+            "spam": {"not_spam", "delete"},
+            "trash": {"restore", "purge"},
+        }
+        if self.mailbox in ui020_allowed and self.action not in ui020_allowed[self.mailbox]:
+            raise ValueError("해당 메일함에서 지원하지 않는 일괄 처리입니다.")
+        return self
     def validate_contract(self) -> None:
         allowed = {
-            "inbox": {"read", "unread", "star", "unstar", "move", "delete"},
+            "inbox": {"read", "unread", "star", "unstar", "move", "delete", "move_folder", "add_tag", "spam"},
+            "folder": {"read", "unread", "star", "unstar", "delete", "move_folder", "add_tag", "spam"},
+            "tag": {"read", "unread", "star", "unstar", "delete", "move_folder", "add_tag", "remove_tag", "spam"},
+            "spam": {"not_spam", "delete"},
+            "trash": {"restore", "purge"},
             "sent": {"delete"},
             "draft": {"delete"},
         }
@@ -241,7 +325,14 @@ class MailBulkRequest(BaseModel):
             raise ValueError("분류 이동 대상이 필요합니다.")
         if self.action != "move" and self.targetCategory is not None:
             raise ValueError("분류 이동에서만 이동 대상을 지정할 수 있습니다.")
-
+        if self.action == "move_folder" and not self.targetFolderId:
+            raise ValueError("이동할 사용자 메일함이 필요합니다.")
+        if self.action != "move_folder" and self.targetFolderId is not None:
+            raise ValueError("메일함 이동에서만 대상 메일함을 지정할 수 있습니다.")
+        if self.action in {"add_tag", "remove_tag"} and not self.targetTagId:
+            raise ValueError("대상 태그가 필요합니다.")
+        if self.action not in {"add_tag", "remove_tag"} and self.targetTagId is not None:
+            raise ValueError("태그 처리에서만 대상 태그를 지정할 수 있습니다.")
 
 class MailBulkResponse(BaseModel):
     action: str
@@ -249,6 +340,8 @@ class MailBulkResponse(BaseModel):
     changedCount: int
     unchangedCount: int
     targetCategory: str | None = None
+    targetFolderId: str | None = None
+    targetTagId: str | None = None
 
 class MailSendResponse(BaseModel):
     mailId: str
@@ -282,6 +375,7 @@ class MailSummary(BaseModel):
     retentionExpiresAt: datetime | None = None
     attachmentCount: int
     category: str = "primary"
+    sourceMailbox: str | None = None
 
 
 class MailListResponse(BaseModel):
