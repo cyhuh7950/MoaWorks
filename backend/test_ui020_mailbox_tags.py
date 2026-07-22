@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from pydantic import ValidationError
 
-from app.schemas.mail_messenger import MailBulkRequest, MailFolderCreateRequest, MailTagCreateRequest
+from app.schemas.mail_messenger import MailBulkRequest, MailFolderCreateRequest, MailTagCreateRequest, MailTrashSelection
 from app.services.mail_messenger_service import MailMessengerService
 from test_ui016_mail_list import FakeDb
 
@@ -106,6 +106,55 @@ class MailboxTagsContractTest(unittest.TestCase):
         self.assertIn('"requestId": request_id', audit)
         for forbidden in ("recipient_email", "body_text", "token", "cookie"):
             self.assertNotIn(forbidden, audit.lower())
+
+    def test_trash_selection_requires_source_mailbox_and_allows_same_mail_views(self):
+        request = MailBulkRequest(
+            mailIds=["self-mail"],
+            action="restore",
+            mailbox="trash",
+            trashViews=[
+                MailTrashSelection(mailId="self-mail", sourceMailbox="inbox"),
+                MailTrashSelection(mailId="self-mail", sourceMailbox="sent"),
+            ],
+        )
+        request.validate_contract()
+        self.assertEqual(len(request.trashViews or []), 2)
+
+        invalid_requests = (
+            {"mailIds": ["self-mail"], "action": "restore", "mailbox": "trash"},
+            {"mailIds": ["self-mail"], "action": "restore", "mailbox": "trash",
+             "trashViews": [{"mailId": "self-mail", "sourceMailbox": "spam"}]},
+            {"mailIds": ["self-mail"], "action": "restore", "mailbox": "trash",
+             "trashViews": [{"mailId": "other-mail", "sourceMailbox": "inbox"}]},
+        )
+        for payload in invalid_requests:
+            with self.subTest(payload=payload), self.assertRaises((ValidationError, ValueError)):
+                request = MailBulkRequest(**payload)
+                request.validate_contract()
+
+    def test_self_mail_trash_views_are_locked_and_restored_independently(self):
+        service = MailMessengerService()
+        service.db = FakeDb(fetchone=[
+            {"recipient_id": "recipient-self", "mail_id": "self-mail", "folder_id": None,
+             "is_spam": False, "deleted_at": object(), "purged_at": None,
+             "is_read": True, "is_starred": False},
+            {"mail_id": "self-mail", "status": "sent", "sender_deleted_at": object(),
+             "sender_purged_at": None},
+        ])
+        response = service.bulk_mail(
+            self.actor(),
+            MailBulkRequest(
+                mailIds=["self-mail"], action="restore", mailbox="trash",
+                trashViews=[
+                    {"mailId": "self-mail", "sourceMailbox": "inbox"},
+                    {"mailId": "self-mail", "sourceMailbox": "sent"},
+                ],
+            ),
+        )
+        self.assertEqual((response.requestedCount, response.changedCount), (2, 2))
+        sql = [statement.upper() for statement, _ in service.db.cursor_instance.executions]
+        self.assertTrue(any("UPDATE MAIL_RECIPIENTS" in statement for statement in sql))
+        self.assertTrue(any("UPDATE MAIL_MESSAGES" in statement for statement in sql))
 
 if __name__ == "__main__":
     unittest.main()
