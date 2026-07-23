@@ -709,7 +709,7 @@ class MailMessengerService:
                     next_default = latest["id"] if latest else None
                     cursor.execute(
                         """UPDATE user_mail_signature_preferences
-                        SET default_signature_id = %s, enabled = CASE WHEN %s IS NULL THEN FALSE ELSE enabled END,
+                        SET default_signature_id = %s, enabled = CASE WHEN %s::TEXT IS NULL THEN FALSE ELSE enabled END,
                             version = version + 1, updated_at = %s
                         WHERE company_id = %s AND owner_user_id = %s AND version = %s RETURNING *""",
                         (next_default, next_default, now, actor.companyId, actor.userId, preferences["version"]),

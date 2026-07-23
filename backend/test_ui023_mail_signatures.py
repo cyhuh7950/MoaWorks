@@ -244,6 +244,24 @@ class Ui023MailSignatureTests(unittest.TestCase):
         self.assertFalse(last_response.enabled)
         self.assertEqual(last_response.version, 4)
 
+    def test_last_signature_delete_types_nullable_default_parameter_for_postgres(self):
+        actor = SimpleNamespace(companyId="company-a", userId="user-a", userName="사용자")
+        cursor = SignatureDeleteCursor([signature_row("last")], "last")
+        service = MailMessengerService()
+        service.db = SignatureDb(cursor)
+
+        service.delete_signature(actor, "last", 1)
+
+        preference_updates = [
+            (sql, params)
+            for sql, params in cursor.executions
+            if sql.strip().upper().startswith("UPDATE USER_MAIL_SIGNATURE_PREFERENCES")
+        ]
+        self.assertEqual(len(preference_updates), 1)
+        update_sql, update_params = preference_updates[0]
+        self.assertIsNone(update_params[1])
+        self.assertIn("CASE WHEN %s::TEXT IS NULL", update_sql)
+
     def test_signature_audit_contains_field_names_not_actual_name_or_body(self):
         cursor = SignatureDeleteCursor([], None)
         actor = SimpleNamespace(companyId="company-a", userId="user-a", userName="사용자")
