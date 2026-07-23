@@ -26,6 +26,8 @@ body,
 .user-mail-settings > footer span { flex: 1; }
 .user-mail-settings > footer button { height: 36px; padding: 0 15px; border: 1px solid #cbd5e1; border-radius: 10px; background: #fff; font: inherit; font-weight: 700; }
 .user-mail-settings > footer button:last-child { color: #fff; background: #0f766e; border-color: #0f766e; }
+.user-mail-compose-recipient-hint { display: block; color: #64748b; font-size: 10px; line-height: 1.5; }
+.user-mail-compose-recipients input:disabled { background: #f1f5f9; color: #64748b; cursor: not-allowed; }
 @media (max-width: 1100px) { .user-mail-settings__body { grid-template-columns: 1fr; } }
 
 *,

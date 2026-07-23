@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Literal
+import re
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -38,10 +39,12 @@ class MailBasicPreferencesBase(BaseModel):
         if value is None or not value.strip():
             return None
         normalized = value.strip().lower()
-        if "\r" in normalized or "\n" in normalized or normalized.count("@") != 1:
+        if "\r" in normalized or "\n" in normalized or normalized.count("@") != 1 or any(character.isspace() for character in normalized):
             raise ValueError("답장 주소 형식이 올바르지 않습니다.")
         local, domain = normalized.split("@")
-        if not local or "." not in domain or domain.startswith(".") or domain.endswith("."):
+        local_pattern = r"[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*"
+        domain_pattern = r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}"
+        if not re.fullmatch(local_pattern, local, re.IGNORECASE) or not re.fullmatch(domain_pattern, domain, re.IGNORECASE):
             raise ValueError("답장 주소 형식이 올바르지 않습니다.")
         return normalized
 

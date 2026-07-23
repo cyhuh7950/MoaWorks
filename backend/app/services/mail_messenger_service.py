@@ -77,6 +77,7 @@ class MailMessengerService:
                         m.id AS mail_id,
                         m.sender_account_id AS account_id,
                         m.sender_email,
+                        m.sender_display_name,
                         m.subject,
                         m.status,
                         m.sent_at,
@@ -115,6 +116,7 @@ class MailMessengerService:
                         m.id AS mail_id,
                         m.sender_account_id AS account_id,
                         m.sender_email,
+                        m.sender_display_name,
                         m.subject,
                         m.status,
                         m.sent_at,
@@ -151,6 +153,7 @@ class MailMessengerService:
                         m.id AS mail_id,
                         m.sender_account_id AS account_id,
                         m.sender_email,
+                        m.sender_display_name,
                         m.subject,
                         m.status,
                         m.sent_at,
@@ -218,6 +221,7 @@ class MailMessengerService:
                         m.id AS mail_id,
                         m.sender_account_id AS account_id,
                         m.sender_email,
+                        m.sender_display_name,
                         m.subject,
                         LEFT(COALESCE(m.body_text, ''), 240) AS preview_text,
                         m.status,
@@ -282,6 +286,7 @@ class MailMessengerService:
                         m.id AS mail_id,
                         m.sender_account_id AS account_id,
                         m.sender_email,
+                        m.sender_display_name,
                         m.subject,
                         LEFT(COALESCE(m.body_text, ''), 240) AS preview_text,
                         m.status,
@@ -515,8 +520,20 @@ class MailMessengerService:
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
                 self._ensure_basic_preferences(cursor, actor)
-                cursor.execute("DELETE FROM user_mail_basic_preferences WHERE company_id = %s AND owner_user_id = %s", (actor.companyId, actor.userId))
-                row = self._ensure_basic_preferences(cursor, actor)
+                cursor.execute(
+                    """UPDATE user_mail_basic_preferences SET
+                    sender_display_mode = 'name_email', block_remote_images = TRUE, disable_risky_tags = TRUE,
+                    show_route_country = FALSE, include_spam_trash_in_search = FALSE, show_list_preview = TRUE,
+                    recipient_input_mode = 'autocomplete', confirm_before_send = TRUE, save_sent_copy = TRUE,
+                    read_receipt_enabled = TRUE, editor_mode = 'html', compose_mode = 'normal',
+                    message_encoding = 'utf-8', draft_reminder_enabled = FALSE, sender_display_name = '',
+                    reply_to_email = NULL, vcard_enabled = FALSE, version = version + 1, updated_at = %s
+                    WHERE company_id = %s AND owner_user_id = %s RETURNING *""",
+                    (now, actor.companyId, actor.userId),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise PermissionError("메일 설정을 초기화할 권한이 없습니다.")
                 self._write_preference_audit(cursor, actor, "mail.preferences.basic.reset", ["defaults"], now)
             connection.commit()
         return self._to_basic_preferences(row)
@@ -909,7 +926,7 @@ class MailMessengerService:
             recipient_params.extend([pattern, pattern, pattern])
             sender_params.extend([pattern, pattern, pattern])
         union_sql = f"""
-            SELECT m.id AS mail_id, m.sender_account_id AS account_id, m.sender_email, m.subject,
+            SELECT m.id AS mail_id, m.sender_account_id AS account_id, m.sender_email, m.sender_display_name, m.subject,
               LEFT(COALESCE(m.body_text, ''), 240) AS preview_text, m.status, m.sent_at, m.scheduled_at,
               m.retention_expires_at, m.attachment_count, r.is_read, r.is_starred, r.received_at,
               COALESCE(r.inbox_category, 'primary') AS category, 'inbox' AS source_mailbox,
@@ -918,7 +935,7 @@ class MailMessengerService:
             WHERE m.company_id = %s AND (r.recipient_user_id = %s OR LOWER(r.recipient_email) = %s)
               AND r.deleted_at IS NOT NULL AND r.purged_at IS NULL {search_recipient}
             UNION ALL
-            SELECT m.id AS mail_id, m.sender_account_id AS account_id, m.sender_email, m.subject,
+            SELECT m.id AS mail_id, m.sender_account_id AS account_id, m.sender_email, m.sender_display_name, m.subject,
               LEFT(COALESCE(m.body_text, ''), 240) AS preview_text, m.status, m.sent_at, m.scheduled_at,
               m.retention_expires_at, m.attachment_count, TRUE AS is_read, FALSE AS is_starred, NULL AS received_at,
               'primary' AS category, CASE WHEN m.status = 'draft' THEN 'draft' ELSE 'sent' END AS source_mailbox,
@@ -991,7 +1008,7 @@ class MailMessengerService:
                 total = int(cursor.fetchone()["total"])
                 cursor.execute(
                     f"""
-                    SELECT m.id AS mail_id, m.sender_account_id AS account_id, m.sender_email, m.subject,
+                    SELECT m.id AS mail_id, m.sender_account_id AS account_id, m.sender_email, m.sender_display_name, m.subject,
                       LEFT(COALESCE(m.body_text, ''), 240) AS preview_text, m.status, m.sent_at, m.scheduled_at,
                       m.retention_expires_at, m.attachment_count, r.is_read, r.is_starred, r.received_at,
                       COALESCE(r.inbox_category, 'primary') AS category, 'inbox' AS source_mailbox

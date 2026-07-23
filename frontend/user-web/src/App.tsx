@@ -514,15 +514,17 @@ function normalizeMailRecipients(value: string, companyDomain: string): string[]
 
 const MAIL_SETTINGS_TABS = ["기본환경", "서명", "메일함", "스팸", "자동분류", "자동전달", "부재중응답", "외부메일", "최근보낸메일"] as const;
 
-function MailBasicSettingsPanel({ value, saved, loading, error, onChange, onSave, onCancel, onReset }: {
+function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChange, onSave, onCancel, onReset, onReload }: {
   value: MailBasicPreferences | null;
   saved: MailBasicPreferences | null;
   loading: boolean;
   error: string;
+  conflict: boolean;
   onChange: (patch: Partial<MailBasicPreferences>) => void;
   onSave: () => void;
   onCancel: () => void;
   onReset: () => void;
+  onReload: () => void;
 }) {
   const dirty = Boolean(value && saved && JSON.stringify(value) !== JSON.stringify(saved));
   if (loading && !value) return <FeedbackState state="loading" title="메일 기본환경을 불러오는 중입니다." />;
@@ -533,7 +535,7 @@ function MailBasicSettingsPanel({ value, saved, loading, error, onChange, onSave
   return <section className="user-mail-settings" aria-label="메일 환경설정">
     <header><div><small>메일 환경설정</small><h2>기본환경</h2></div><span aria-live="polite">{dirty ? "저장하지 않은 변경 있음" : "저장됨"}</span></header>
     <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 0 ? "page" : undefined} disabled={index !== 0} title={index === 0 ? "기본환경" : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index !== 0 ? <i>i</i> : null}</button>)}</nav>
-    {error ? <CompactWarning item={{ id: "mail-basic-preferences", source: "mail-settings", tone: "warning", title: "설정을 처리하지 못했습니다.", message: error }} /> : null}
+    {error ? <CompactWarning item={{ id: "mail-basic-preferences", source: "mail-settings", tone: "warning", title: conflict ? "다른 위치에서 설정이 변경되었습니다." : "설정을 처리하지 못했습니다.", message: error, action: conflict ? { label: "서버 최신값 다시 불러오기", onAction: onReload } : undefined }} /> : null}
     <div className="user-mail-settings__body">
       <fieldset><legend>메일 읽기 설정</legend>
         <label><span>보낸 사람 표시</span><select value={value.senderDisplayMode} onChange={(event) => onChange({ senderDisplayMode: event.target.value as MailBasicPreferences["senderDisplayMode"] })}><option value="name">이름</option><option value="name_email">이름 + 이메일</option></select></label>
@@ -693,6 +695,7 @@ export default function App() {
   const [savedMailPreferences, setSavedMailPreferences] = useState<MailBasicPreferences | null>(null);
   const [mailPreferencesLoading, setMailPreferencesLoading] = useState(false);
   const [mailPreferencesError, setMailPreferencesError] = useState("");
+  const [mailPreferencesConflict, setMailPreferencesConflict] = useState(false);
   const [messengerRoomsData, setMessengerRoomsData] = useState<MessengerRoomSummary[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState("");
   const [selectedRoomDetail, setSelectedRoomDetail] = useState<MessengerRoomDetail | null>(null);
@@ -1351,6 +1354,7 @@ export default function App() {
     setMailSettingsOpen(true);
     setMailPreferencesLoading(true);
     setMailPreferencesError("");
+    setMailPreferencesConflict(false);
     try {
       const result = await fetchMailBasicPreferences(token);
       setMailPreferences(result);
@@ -1366,6 +1370,7 @@ export default function App() {
     if (!token || !mailPreferences) return;
     setMailPreferencesLoading(true);
     setMailPreferencesError("");
+    setMailPreferencesConflict(false);
     try {
       await updateMailBasicPreferences(token, mailPreferences);
       const confirmed = await fetchMailBasicPreferences(token);
@@ -1373,6 +1378,7 @@ export default function App() {
       setSavedMailPreferences(confirmed);
       pushFeedback({ id: `mail-basic-save-${confirmed.version}`, source: "mail-settings", tone: "success", title: "메일 기본환경을 저장했습니다." });
     } catch (error) {
+      setMailPreferencesConflict(error instanceof ApiRequestError && error.status === 409);
       setMailPreferencesError(normalizeClientError(error, "메일 기본환경 저장에 실패했습니다."));
     } finally {
       setMailPreferencesLoading(false);
@@ -1391,6 +1397,22 @@ export default function App() {
       pushFeedback({ id: `mail-basic-reset-${confirmed.updatedAt}`, source: "mail-settings", tone: "success", title: "기본값을 적용했습니다." });
     } catch (error) {
       setMailPreferencesError(normalizeClientError(error, "기본값 적용에 실패했습니다."));
+    } finally {
+      setMailPreferencesLoading(false);
+    }
+  }
+
+  async function reloadMailBasicSettings() {
+    if (!token) return;
+    setMailPreferencesLoading(true);
+    try {
+      const latest = await fetchMailBasicPreferences(token);
+      setMailPreferences(latest);
+      setSavedMailPreferences(latest);
+      setMailPreferencesConflict(false);
+      setMailPreferencesError("");
+    } catch (error) {
+      setMailPreferencesError(normalizeClientError(error, "서버 최신 설정을 불러오지 못했습니다."));
     } finally {
       setMailPreferencesLoading(false);
     }
@@ -2403,6 +2425,14 @@ export default function App() {
     { title: "설치형 로컬 아카이브", count: "연결", tone: "#14532d", folder: "localArchive" as MailFolderType },
   ];
 
+  const recipientInputMode = mailPreferences?.recipientInputMode ?? "autocomplete";
+  const recipientInputLocked = recipientInputMode === "search";
+  const recipientInputHint = recipientInputMode === "search"
+    ? "검색 모드: 조직·연락처 선택으로만 수신자를 추가합니다."
+    : recipientInputMode === "name_only"
+      ? `이름 또는 계정만 입력하면 @${uiContract.company.domain} 주소로 완성됩니다.`
+      : "이메일을 직접 입력하거나 최근 수신자·조직·연락처에서 선택할 수 있습니다.";
+
   const mailListSamples = visibleMailList.map((item) => ({
     mailId: item.mailId,
     sourceMailbox: item.sourceMailbox ?? "inbox",
@@ -2802,10 +2832,12 @@ export default function App() {
                 saved={savedMailPreferences}
                 loading={mailPreferencesLoading}
                 error={mailPreferencesError}
+                conflict={mailPreferencesConflict}
                 onChange={(patch) => setMailPreferences((current) => current ? { ...current, ...patch } : current)}
                 onSave={() => void saveMailBasicSettings()}
                 onCancel={closeMailBasicSettings}
                 onReset={() => void resetMailBasicSettings()}
+                onReload={() => void reloadMailBasicSettings()}
               />
             ) : (
             <SplitView
@@ -2897,16 +2929,17 @@ export default function App() {
                   <div className="user-mail-compose-recipients">
                     <label>
                       <span>받는 사람</span>
-                      <div><input aria-label="mail-compose-to" value={mailComposeForm.to} onChange={(event) => setMailComposeForm((current) => ({ ...current, to: event.target.value }))} placeholder={`admin@${uiContract.company.domain}`} /><button type="button" title="조직·연락처에서 받는 사람 선택" onClick={() => void openRecipientPicker("to")}>선택</button></div>
+                      <div><input aria-label="mail-compose-to" disabled={recipientInputLocked} value={mailComposeForm.to} onChange={(event) => setMailComposeForm((current) => ({ ...current, to: event.target.value }))} placeholder={recipientInputMode === "name_only" ? "이름 또는 계정" : `admin@${uiContract.company.domain}`} /><button type="button" title="조직·연락처에서 받는 사람 선택" onClick={() => void openRecipientPicker("to")}>선택</button></div>
                     </label>
                     <label>
                       <span>참조</span>
-                      <div><input aria-label="mail-compose-cc" value={mailComposeForm.cc} onChange={(event) => setMailComposeForm((current) => ({ ...current, cc: event.target.value }))} placeholder="참조 이메일" /><button type="button" title="조직·연락처에서 참조 선택" onClick={() => void openRecipientPicker("cc")}>선택</button></div>
+                      <div><input aria-label="mail-compose-cc" disabled={recipientInputLocked} value={mailComposeForm.cc} onChange={(event) => setMailComposeForm((current) => ({ ...current, cc: event.target.value }))} placeholder={recipientInputMode === "name_only" ? "이름 또는 계정" : "참조 이메일"} /><button type="button" title="조직·연락처에서 참조 선택" onClick={() => void openRecipientPicker("cc")}>선택</button></div>
                     </label>
                     <label>
                       <span>숨은참조</span>
-                      <div><input aria-label="mail-compose-bcc" value={mailComposeForm.bcc} onChange={(event) => setMailComposeForm((current) => ({ ...current, bcc: event.target.value }))} placeholder="숨은참조 이메일" /><button type="button" title="조직·연락처에서 숨은참조 선택" onClick={() => void openRecipientPicker("bcc")}>선택</button></div>
+                      <div><input aria-label="mail-compose-bcc" disabled={recipientInputLocked} value={mailComposeForm.bcc} onChange={(event) => setMailComposeForm((current) => ({ ...current, bcc: event.target.value }))} placeholder={recipientInputMode === "name_only" ? "이름 또는 계정" : "숨은참조 이메일"} /><button type="button" title="조직·연락처에서 숨은참조 선택" onClick={() => void openRecipientPicker("bcc")}>선택</button></div>
                     </label>
+                    <small className="user-mail-compose-recipient-hint" aria-live="polite">{recipientInputHint}</small>
                   </div>
                   <label className="user-mail-compose-field">
                     <span>제목</span>

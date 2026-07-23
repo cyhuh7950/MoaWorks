@@ -101,6 +101,8 @@ class Ui022MailBasicSettingsTests(unittest.TestCase):
             ("senderDisplayName", "safe\r\nBcc: victim@example.test"),
             ("replyToEmail", "safe@example.test\nCc: victim@example.test"),
             ("replyToEmail", "not-an-email"),
+            ("replyToEmail", "name with space@example.test"),
+            ("replyToEmail", "name..dot@example.test"),
         ):
             with self.subTest(field=field), self.assertRaises(ValidationError):
                 MailBasicPreferencesUpdateRequest(expectedVersion=1, **{field: value})

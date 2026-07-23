@@ -32,4 +32,3 @@ ALTER TABLE mail_messages ADD COLUMN IF NOT EXISTS reply_to_email TEXT;
 ALTER TABLE mail_messages ADD COLUMN IF NOT EXISTS message_encoding TEXT NOT NULL DEFAULT 'utf-8';
 ALTER TABLE mail_messages ADD COLUMN IF NOT EXISTS sender_copy_saved BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE mail_messages ADD COLUMN IF NOT EXISTS read_receipt_requested BOOLEAN NOT NULL DEFAULT TRUE;
-
