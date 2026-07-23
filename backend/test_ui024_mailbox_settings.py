@@ -829,6 +829,30 @@ class Ui024MailboxBackupTests(unittest.TestCase):
         self.assertTrue(run_worker_iteration(busy, "worker-live"))
         self.assertEqual(busy.expire_count, 1)
 
+    def test_build_claimed_normalizes_real_database_job_for_archive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service = MailboxBackupService(storage_root=Path(directory))
+            job = {
+                "id": "job-db-row",
+                "company_id": "company-a",
+                "user_id": "user-a",
+                "mailbox_type": "folder",
+                "folder_id": "folder_1",
+                "mailbox_label": "운영 확인",
+                "snapshot_at": datetime(2026, 7, 23, tzinfo=UTC),
+                "attempt_count": 1,
+            }
+            service._snapshot_totals = lambda _job: (0, 0)
+            service._iter_job_items = lambda _job: iter(())
+            service.heartbeat = lambda _worker, _job, _processed: True
+
+            result = service.build_claimed(job, "worker-owner")
+
+            self.assertIsNotNone(result.temp_path)
+            with zipfile.ZipFile(result.temp_path) as zipped:
+                manifest = json.loads(zipped.read("manifest.json"))
+            self.assertEqual(manifest["mailboxKey"], "folder:folder_1")
+
     def test_large_attachment_heartbeat_is_monotonic_throttled_and_forced_at_boundaries(self):
         class FakeMonotonic:
             def __init__(self):
@@ -855,9 +879,12 @@ class Ui024MailboxBackupTests(unittest.TestCase):
             )
             job = {
                 **self.job(),
+                "mailbox_type": "inbox",
+                "folder_id": None,
                 "attempt_count": 1,
                 "total_count": 1,
             }
+            job.pop("mailbox_key")
             item = self.item()
             item["attachments"] = [{
                 "storage_key": "large",

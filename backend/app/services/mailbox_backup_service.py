@@ -304,8 +304,9 @@ class MailboxBackupService:
             last_processed = max(last_processed, processed)
             return True
 
+        archive_job = {**job, "mailbox_key": self._mailbox_key(job)}
         result = self.archive.build(
-            job,
+            archive_job,
             self._iter_job_items(job),
             output,
             temp_path=self.attempt_temp_path(job, worker_id),
