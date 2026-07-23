@@ -17,7 +17,7 @@ const checks = [
   ["툴팁 hover와 focus", css.includes("[data-tooltip]:hover::after") && css.includes("[data-tooltip]:focus-visible::after")],
   ["독립 용량 오류", app.includes("mailStorageError") && app.includes("mailStorageLoading")],
   ["빠른 검색 mail 필터", app.includes('setSearchFilter("mail")') && app.includes("searchInputRef.current?.focus()")],
-  ["환경설정 이동", app.includes('setPortalMenu("settings")')],
+  ["환경설정 이동", app.includes("openMailBasicSettings") && app.includes("setMailSettingsOpen(true)")],
   ["same-origin storage", api.includes('request<MailStorageResponse>("/mail/storage"')],
   ["금지 절대주소 없음", !/request<MailStorageResponse>\(\s*[`"]https?:\/\//.test(api)],
   ["정적 라우트 우선", route.indexOf('@router.get("/storage"') < route.indexOf('@router.get("/{mail_id}"')],

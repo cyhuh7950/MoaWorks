@@ -6,6 +6,55 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
+class MailBasicPreferencesBase(BaseModel):
+    senderDisplayMode: Literal["name", "name_email"] = "name_email"
+    blockRemoteImages: bool = True
+    disableRiskyTags: bool = True
+    showRouteCountry: bool = False
+    includeSpamTrashInSearch: bool = False
+    showListPreview: bool = True
+    recipientInputMode: Literal["autocomplete", "name_only", "search"] = "autocomplete"
+    confirmBeforeSend: bool = True
+    saveSentCopy: bool = True
+    readReceiptEnabled: bool = True
+    editorMode: Literal["html", "plain"] = "html"
+    composeMode: Literal["normal", "popup"] = "normal"
+    messageEncoding: Literal["utf-8", "euc-kr", "iso-2022-jp"] = "utf-8"
+    draftReminderEnabled: bool = False
+    senderDisplayName: str = Field(default="", max_length=100)
+    replyToEmail: str | None = Field(default=None, max_length=254)
+    vcardEnabled: bool = False
+
+    @field_validator("senderDisplayName")
+    @classmethod
+    def validate_sender_name(cls, value: str) -> str:
+        if "\r" in value or "\n" in value:
+            raise ValueError("발신자 이름에 줄바꿈을 사용할 수 없습니다.")
+        return " ".join(value.split())
+
+    @field_validator("replyToEmail")
+    @classmethod
+    def validate_reply_to(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        normalized = value.strip().lower()
+        if "\r" in normalized or "\n" in normalized or normalized.count("@") != 1:
+            raise ValueError("답장 주소 형식이 올바르지 않습니다.")
+        local, domain = normalized.split("@")
+        if not local or "." not in domain or domain.startswith(".") or domain.endswith("."):
+            raise ValueError("답장 주소 형식이 올바르지 않습니다.")
+        return normalized
+
+
+class MailBasicPreferencesUpdateRequest(MailBasicPreferencesBase):
+    expectedVersion: int = Field(ge=1)
+
+
+class MailBasicPreferencesResponse(MailBasicPreferencesBase):
+    version: int = Field(ge=1)
+    updatedAt: datetime
+
+
 class MailAttachmentMeta(BaseModel):
     uploadId: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
     fileName: str = Field(min_length=1, max_length=255)
@@ -46,6 +95,7 @@ class MailSendRequest(BaseModel):
     composeAction: Literal["new", "reply", "reply_all", "forward"] = "new"
     sourceMailId: str | None = Field(default=None, min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
     copiedAttachmentIds: list[str] = Field(default_factory=list, max_length=10)
+    confirmed: bool = False
 
     @field_validator("to", "cc", "bcc")
     @classmethod
@@ -391,6 +441,7 @@ class MailSummary(BaseModel):
     mailId: str
     accountId: str
     senderEmail: str
+    senderDisplayName: str = ""
     subject: str
     previewText: str = ""
     status: str
@@ -424,6 +475,7 @@ class MailDetailResponse(BaseModel):
     accountId: str
     senderUserId: str
     senderEmail: str
+    senderDisplayName: str = ""
     subject: str
     bodyText: str
     bodyHtml: str | None = None
@@ -435,6 +487,7 @@ class MailDetailResponse(BaseModel):
     retentionExpiresAt: datetime | None = None
     attachmentCount: int
     canViewReadReceipts: bool
+    effectiveReadPolicy: dict[str, bool] = Field(default_factory=dict)
     recipients: list[MailRecipientView]
     attachments: list[MailAttachmentView]
     externalDeliveries: list[ExternalDeliveryView] = Field(default_factory=list)

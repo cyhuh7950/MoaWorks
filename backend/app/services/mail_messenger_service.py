@@ -13,6 +13,8 @@ from app.schemas.directory import AuthUserSummary
 from app.schemas.mail_messenger import (
     MailAttachmentMeta,
     MailAttachmentView,
+    MailBasicPreferencesResponse,
+    MailBasicPreferencesUpdateRequest,
     ExternalDeliveryView,
     MailBulkRequest,
     MailBulkResponse,
@@ -50,6 +52,10 @@ from app.schemas.mail_messenger import (
 from app.services.postgres_service import PostgresService
 
 logger = logging.getLogger(__name__)
+
+
+class MailPreferenceConflictError(RuntimeError):
+    pass
 
 from app.services.mail_attachment_storage import MailAttachmentStorage
 
@@ -125,6 +131,7 @@ class MailMessengerService:
                       AND m.status IN ('sent', 'scheduled')
                       AND m.sender_deleted_at IS NULL
                       AND m.sender_purged_at IS NULL
+                      AND m.sender_copy_saved = TRUE
                     ORDER BY COALESCE(m.scheduled_at, m.sent_at, m.created_at) DESC
                     """,
                     (actor.companyId, actor.userId),
@@ -249,6 +256,8 @@ class MailMessengerService:
             "m.sender_deleted_at IS NULL",
             "m.sender_purged_at IS NULL",
         ]
+        if mailbox == "sent":
+            conditions.append("m.sender_copy_saved = TRUE")
         params: list[object] = [actor.companyId, actor.userId]
         if query.attachment == "with":
             conditions.append("m.attachment_count > 0")
@@ -384,7 +393,9 @@ class MailMessengerService:
                 )
                 attachments = self._fetch_mail_attachments(cursor, mail_id)
                 external_deliveries = self._fetch_external_deliveries(cursor, mail_id) if message["is_sender_view"] else []
-        return self._to_mail_detail(message, recipients, attachments, external_deliveries)
+                preferences = self._ensure_basic_preferences(cursor, actor)
+            connection.commit()
+        return self._to_mail_detail(message, recipients, attachments, external_deliveries, preferences)
 
     def stage_attachment(
         self,
@@ -459,11 +470,92 @@ class MailMessengerService:
             "sizeBytes": row["size_bytes"],
         }
 
+    def get_basic_preferences(self, actor: AuthUserSummary) -> MailBasicPreferencesResponse:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                row = self._ensure_basic_preferences(cursor, actor)
+            connection.commit()
+        return self._to_basic_preferences(row)
+
+    def update_basic_preferences(self, actor: AuthUserSummary, payload: MailBasicPreferencesUpdateRequest) -> MailBasicPreferencesResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        values = payload.model_dump(exclude={"expectedVersion"})
+        columns = {
+            "senderDisplayMode": "sender_display_mode", "blockRemoteImages": "block_remote_images",
+            "disableRiskyTags": "disable_risky_tags", "showRouteCountry": "show_route_country",
+            "includeSpamTrashInSearch": "include_spam_trash_in_search", "showListPreview": "show_list_preview",
+            "recipientInputMode": "recipient_input_mode", "confirmBeforeSend": "confirm_before_send",
+            "saveSentCopy": "save_sent_copy", "readReceiptEnabled": "read_receipt_enabled",
+            "editorMode": "editor_mode", "composeMode": "compose_mode", "messageEncoding": "message_encoding",
+            "draftReminderEnabled": "draft_reminder_enabled", "senderDisplayName": "sender_display_name",
+            "replyToEmail": "reply_to_email", "vcardEnabled": "vcard_enabled",
+        }
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                before = self._ensure_basic_preferences(cursor, actor)
+                changed = [key for key, column in columns.items() if before[column] != values[key]]
+                assignments = ", ".join(f"{column} = %s" for column in columns.values())
+                cursor.execute(
+                    f"""UPDATE user_mail_basic_preferences SET {assignments}, version = version + 1, updated_at = %s
+                    WHERE company_id = %s AND owner_user_id = %s AND version = %s RETURNING *""",
+                    tuple(values[key] for key in columns) + (now, actor.companyId, actor.userId, payload.expectedVersion),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise MailPreferenceConflictError("다른 위치에서 설정이 변경되었습니다. 최신값을 다시 불러오세요.")
+                self._write_preference_audit(cursor, actor, "mail.preferences.basic.update", changed, now)
+            connection.commit()
+        return self._to_basic_preferences(row)
+
+    def reset_basic_preferences(self, actor: AuthUserSummary) -> MailBasicPreferencesResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                self._ensure_basic_preferences(cursor, actor)
+                cursor.execute("DELETE FROM user_mail_basic_preferences WHERE company_id = %s AND owner_user_id = %s", (actor.companyId, actor.userId))
+                row = self._ensure_basic_preferences(cursor, actor)
+                self._write_preference_audit(cursor, actor, "mail.preferences.basic.reset", ["defaults"], now)
+            connection.commit()
+        return self._to_basic_preferences(row)
+
     def send_mail(self, actor: AuthUserSummary, payload: MailSendRequest) -> MailSendResponse:
         if not payload.to and not payload.cc and not payload.bcc:
             raise ValueError("수신자를 1명 이상 입력해야 합니다.")
+        preferences = self.get_basic_preferences(actor)
+        if preferences.confirmBeforeSend and not payload.confirmed:
+            raise ValueError("발송 전 확인이 필요합니다.")
         status_value = "scheduled" if payload.scheduledAt is not None else "sent"
         return self._save_mail(actor, payload, status_value=status_value)
+
+    def _ensure_basic_preferences(self, cursor, actor: AuthUserSummary) -> dict:
+        cursor.execute("INSERT INTO user_mail_basic_preferences (owner_user_id, company_id) VALUES (%s, %s) ON CONFLICT (owner_user_id) DO NOTHING", (actor.userId, actor.companyId))
+        cursor.execute("SELECT * FROM user_mail_basic_preferences WHERE company_id = %s AND owner_user_id = %s", (actor.companyId, actor.userId))
+        row = cursor.fetchone()
+        if row is None:
+            raise PermissionError("메일 설정을 조회할 권한이 없습니다.")
+        return row
+
+    @staticmethod
+    def _to_basic_preferences(row: dict) -> MailBasicPreferencesResponse:
+        return MailBasicPreferencesResponse(
+            senderDisplayMode=row["sender_display_mode"], blockRemoteImages=row["block_remote_images"], disableRiskyTags=row["disable_risky_tags"],
+            showRouteCountry=row["show_route_country"], includeSpamTrashInSearch=row["include_spam_trash_in_search"], showListPreview=row["show_list_preview"],
+            recipientInputMode=row["recipient_input_mode"], confirmBeforeSend=row["confirm_before_send"], saveSentCopy=row["save_sent_copy"],
+            readReceiptEnabled=row["read_receipt_enabled"], editorMode=row["editor_mode"], composeMode=row["compose_mode"], messageEncoding=row["message_encoding"],
+            draftReminderEnabled=row["draft_reminder_enabled"], senderDisplayName=row["sender_display_name"], replyToEmail=row["reply_to_email"],
+            vcardEnabled=row["vcard_enabled"], version=row["version"], updatedAt=row["updated_at"],
+        )
+
+    def _write_preference_audit(self, cursor, actor: AuthUserSummary, event: str, changed_fields: list[str], now: datetime) -> None:
+        field_names = json.dumps({"changedFields": changed_fields}, ensure_ascii=False, sort_keys=True)
+        cursor.execute(
+            """INSERT INTO audit_logs (id, company_id, actor_user_id, actor_user_name, target_type, target_id, event, status_before, status_after, reason, created_at)
+            VALUES (%s,%s,%s,%s,'mail_preferences',%s,%s,NULL,NULL,%s,%s)""",
+            (self._new_id("audit"), actor.companyId, actor.userId, actor.userName, actor.userId, event, field_names, now),
+        )
 
     def save_draft(self, actor: AuthUserSummary, payload: MailDraftRequest) -> MailSendResponse:
         return self._save_mail(actor, payload, status_value="draft")
@@ -1474,16 +1566,20 @@ class MailMessengerService:
                     if external_emails and provider is None:
                         raise ValueError("외부 발송 provider를 찾을 수 없습니다.")
 
+                preferences = self._ensure_basic_preferences(cursor, actor)
                 cursor.execute(
                     """INSERT INTO mail_messages (
                         id, company_id, sender_user_id, sender_account_id, sender_email,
                         subject, body_text, body_html, status, sent_at, scheduled_at, created_at,
-                        updated_at, retention_expires_at, attachment_count, source_message_id, source_action
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        updated_at, retention_expires_at, attachment_count, source_message_id, source_action,
+                        sender_display_name, reply_to_email, message_encoding, sender_copy_saved, read_receipt_requested
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                     (mail_id, actor.companyId, actor.userId, account["id"], account["email"],
                      payload.subject.strip(), payload.bodyText, payload.bodyHtml, status_value, sent_at, scheduled_at,
                      now, now, now + timedelta(days=30), len(resolved_attachments), payload.sourceMailId,
-                     None if payload.composeAction == "new" else payload.composeAction),
+                     None if payload.composeAction == "new" else payload.composeAction,
+                     preferences["sender_display_name"], preferences["reply_to_email"], preferences["message_encoding"],
+                     preferences["save_sent_copy"], preferences["read_receipt_enabled"]),
                 )
                 for kind, email in recipient_pairs:
                     recipient_user_id = internal_by_email.get(email) if status_value != "draft" else self._resolve_user_id_by_email(cursor, actor.companyId, email)
@@ -1615,8 +1711,9 @@ class MailMessengerService:
             f"""
             SELECT DISTINCT
                 m.id AS mail_id, m.company_id, m.sender_user_id, m.sender_account_id AS account_id,
-                m.sender_email, m.subject, m.body_text, m.body_html, m.status, m.sent_at, m.scheduled_at,
+                m.sender_email, m.sender_display_name, m.subject, m.body_text, m.body_html, m.status, m.sent_at, m.scheduled_at,
                 m.created_at, m.updated_at, m.retention_expires_at, m.attachment_count,
+                m.read_receipt_requested,
                 (m.sender_user_id = %s AND {sender_state}) AS is_sender_view
             FROM mail_messages m
             LEFT JOIN mail_recipients r ON r.message_id = m.id
@@ -1834,6 +1931,7 @@ class MailMessengerService:
             mailId=row["mail_id"],
             accountId=row["account_id"],
             senderEmail=row["sender_email"],
+            senderDisplayName=row.get("sender_display_name") or "",
             subject=row["subject"],
             previewText=(row.get("preview_text") or "")[:240],
             status=row["status"],
@@ -1854,12 +1952,14 @@ class MailMessengerService:
         recipients: list[MailRecipientView],
         attachments: list[MailAttachmentMeta | MailAttachmentView],
         external_deliveries: list[ExternalDeliveryView] | None = None,
+        preferences: dict | None = None,
     ) -> MailDetailResponse:
         return MailDetailResponse(
             mailId=message["mail_id"],
             accountId=message["account_id"],
             senderUserId=message["sender_user_id"],
             senderEmail=message["sender_email"],
+            senderDisplayName=message.get("sender_display_name") or "",
             subject=message["subject"],
             bodyText=message["body_text"],
             bodyHtml=message["body_html"],
@@ -1870,7 +1970,11 @@ class MailMessengerService:
             updatedAt=message["updated_at"],
             retentionExpiresAt=message["retention_expires_at"],
             attachmentCount=message["attachment_count"],
-            canViewReadReceipts=bool(message["is_sender_view"]),
+            canViewReadReceipts=bool(message["is_sender_view"] and message.get("read_receipt_requested", True)),
+            effectiveReadPolicy={
+                "blockRemoteImages": True if preferences is None else bool(preferences["block_remote_images"]),
+                "disableRiskyTags": True if preferences is None else bool(preferences["disable_risky_tags"]),
+            },
             recipients=recipients,
             externalDeliveries=external_deliveries or [],
             attachments=[

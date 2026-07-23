@@ -31,6 +31,7 @@ import {
   fetchMailDetail,
   fetchRecentMailRecipients,
   fetchMailStorage,
+  fetchMailBasicPreferences,
   fetchMe,
   fetchMessengerMessages,
   fetchMessengerRoom,
@@ -57,10 +58,12 @@ import {
   requestTranslation,
   saveMailDraft,
   sendMail,
+  resetMailBasicPreferences,
   sendMessengerMessage,
   storeUserToken,
   submitApproval,
   toggleMailStar,
+  updateMailBasicPreferences,
   setMailCategory,
   updateApproval,
   updateMailFolder,
@@ -79,6 +82,7 @@ import {
   type MailFolder,
   type MailTag,
   type MailStorageResponse,
+  type MailBasicPreferences,
   type MailSummary,
   type MessengerMessage,
   type MessengerRoomDetail,
@@ -508,6 +512,53 @@ function normalizeMailRecipients(value: string, companyDomain: string): string[]
     .map((item) => (item.includes("@") ? item : `${item}@${domain}`));
 }
 
+const MAIL_SETTINGS_TABS = ["기본환경", "서명", "메일함", "스팸", "자동분류", "자동전달", "부재중응답", "외부메일", "최근보낸메일"] as const;
+
+function MailBasicSettingsPanel({ value, saved, loading, error, onChange, onSave, onCancel, onReset }: {
+  value: MailBasicPreferences | null;
+  saved: MailBasicPreferences | null;
+  loading: boolean;
+  error: string;
+  onChange: (patch: Partial<MailBasicPreferences>) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  onReset: () => void;
+}) {
+  const dirty = Boolean(value && saved && JSON.stringify(value) !== JSON.stringify(saved));
+  if (loading && !value) return <FeedbackState state="loading" title="메일 기본환경을 불러오는 중입니다." />;
+  if (!value) return <FeedbackState state="error" title="메일 기본환경을 불러오지 못했습니다." message={error} />;
+  const toggle = (key: keyof MailBasicPreferences, label: string, title?: string) => (
+    <label className="user-mail-setting-toggle" title={title}><span>{label}{title ? <i aria-label={`${label} 설명`}>i</i> : null}</span><input type="checkbox" checked={Boolean(value[key])} onChange={(event) => onChange({ [key]: event.target.checked })} /></label>
+  );
+  return <section className="user-mail-settings" aria-label="메일 환경설정">
+    <header><div><small>메일 환경설정</small><h2>기본환경</h2></div><span aria-live="polite">{dirty ? "저장하지 않은 변경 있음" : "저장됨"}</span></header>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 0 ? "page" : undefined} disabled={index !== 0} title={index === 0 ? "기본환경" : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index !== 0 ? <i>i</i> : null}</button>)}</nav>
+    {error ? <CompactWarning item={{ id: "mail-basic-preferences", source: "mail-settings", tone: "warning", title: "설정을 처리하지 못했습니다.", message: error }} /> : null}
+    <div className="user-mail-settings__body">
+      <fieldset><legend>메일 읽기 설정</legend>
+        <label><span>보낸 사람 표시</span><select value={value.senderDisplayMode} onChange={(event) => onChange({ senderDisplayMode: event.target.value as MailBasicPreferences["senderDisplayMode"] })}><option value="name">이름</option><option value="name_email">이름 + 이메일</option></select></label>
+        {toggle("blockRemoteImages", "원격 이미지 차단", "외부 이미지 자동 로드를 차단합니다.")}
+        {toggle("disableRiskyTags", "위험 태그 비활성화", "향후 HTML 표시에서도 위험 요소를 차단합니다.")}
+        {toggle("showRouteCountry", "전달 경로 국가 표시")}
+        {toggle("includeSpamTrashInSearch", "검색에 스팸·휴지통 포함")}
+        {toggle("showListPreview", "목록 본문 미리보기")}
+      </fieldset>
+      <fieldset><legend>메일 쓰기 설정</legend>
+        <label><span>수신자 입력 방식</span><select value={value.recipientInputMode} onChange={(event) => onChange({ recipientInputMode: event.target.value as MailBasicPreferences["recipientInputMode"] })}><option value="autocomplete">자동완성</option><option value="name_only">이름만 입력</option><option value="search">검색 선택</option></select></label>
+        {toggle("confirmBeforeSend", "발송 전 확인")}{toggle("saveSentCopy", "보낸메일 저장", "끄면 발송 원문은 유지하고 보낸편지함에서만 숨깁니다.")}{toggle("readReceiptEnabled", "수신확인 요청")}
+        <label><span>편집 방식</span><select value={value.editorMode} onChange={(event) => onChange({ editorMode: event.target.value as MailBasicPreferences["editorMode"] })}><option value="html">HTML</option><option value="plain">일반 텍스트</option></select></label>
+        <label><span>작성창</span><select value={value.composeMode} onChange={(event) => onChange({ composeMode: event.target.value as MailBasicPreferences["composeMode"] })}><option value="normal">일반</option><option value="popup">팝업</option></select></label>
+        <label title="외부 MIME 본문 charset에 적용됩니다."><span>문자 인코딩 <i>i</i></span><select value={value.messageEncoding} onChange={(event) => onChange({ messageEncoding: event.target.value as MailBasicPreferences["messageEncoding"] })}><option value="utf-8">UTF-8</option><option value="euc-kr">EUC-KR</option><option value="iso-2022-jp">ISO-2022-JP</option></select></label>
+        {toggle("draftReminderEnabled", "임시저장 알림")}
+        <label><span>발신자 이름</span><input maxLength={100} value={value.senderDisplayName} onChange={(event) => onChange({ senderDisplayName: event.target.value })} /></label>
+        <label><span>답장 주소</span><input type="email" maxLength={254} value={value.replyToEmail ?? ""} onChange={(event) => onChange({ replyToEmail: event.target.value || null })} /></label>
+        {toggle("vcardEnabled", "vCard 첨부")}
+      </fieldset>
+    </div>
+    <footer><button type="button" onClick={onReset} disabled={loading}>기본값 적용</button><span /><button type="button" onClick={onCancel} disabled={loading}>취소</button><button type="button" onClick={onSave} disabled={loading || !dirty}>저장</button></footer>
+  </section>;
+}
+
 function hasExternalRecipients(recipients: string[], companyDomain: string): boolean {
   const suffix = `@${companyDomain.trim().toLowerCase()}`;
   return recipients.some((item) => !item.endsWith(suffix));
@@ -637,6 +688,11 @@ export default function App() {
   const [mailStorage, setMailStorage] = useState<MailStorageResponse | null>(null);
   const [mailStorageLoading, setMailStorageLoading] = useState(false);
   const [mailStorageError, setMailStorageError] = useState("");
+  const [mailSettingsOpen, setMailSettingsOpen] = useState(false);
+  const [mailPreferences, setMailPreferences] = useState<MailBasicPreferences | null>(null);
+  const [savedMailPreferences, setSavedMailPreferences] = useState<MailBasicPreferences | null>(null);
+  const [mailPreferencesLoading, setMailPreferencesLoading] = useState(false);
+  const [mailPreferencesError, setMailPreferencesError] = useState("");
   const [messengerRoomsData, setMessengerRoomsData] = useState<MessengerRoomSummary[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState("");
   const [selectedRoomDetail, setSelectedRoomDetail] = useState<MessengerRoomDetail | null>(null);
@@ -781,9 +837,11 @@ export default function App() {
   }
 
   async function refreshMailResources(targetToken: string) {
-    const [folders, tags] = await Promise.all([fetchMailFolders(targetToken), fetchMailTags(targetToken)]);
+    const [folders, tags, preferences] = await Promise.all([fetchMailFolders(targetToken), fetchMailTags(targetToken), fetchMailBasicPreferences(targetToken)]);
     setMailFoldersData(folders.folders ?? []);
     setMailTagsData(tags.tags ?? []);
+    setMailPreferences(preferences);
+    setSavedMailPreferences(preferences);
   }
 
   function openMailResourceModal(kind: "folder" | "tag", item?: MailFolder | MailTag) {
@@ -1288,6 +1346,63 @@ export default function App() {
     }
   }
 
+  async function openMailBasicSettings() {
+    if (!token) return;
+    setMailSettingsOpen(true);
+    setMailPreferencesLoading(true);
+    setMailPreferencesError("");
+    try {
+      const result = await fetchMailBasicPreferences(token);
+      setMailPreferences(result);
+      setSavedMailPreferences(result);
+    } catch (error) {
+      setMailPreferencesError(normalizeClientError(error, "메일 기본환경을 불러오지 못했습니다."));
+    } finally {
+      setMailPreferencesLoading(false);
+    }
+  }
+
+  async function saveMailBasicSettings() {
+    if (!token || !mailPreferences) return;
+    setMailPreferencesLoading(true);
+    setMailPreferencesError("");
+    try {
+      await updateMailBasicPreferences(token, mailPreferences);
+      const confirmed = await fetchMailBasicPreferences(token);
+      setMailPreferences(confirmed);
+      setSavedMailPreferences(confirmed);
+      pushFeedback({ id: `mail-basic-save-${confirmed.version}`, source: "mail-settings", tone: "success", title: "메일 기본환경을 저장했습니다." });
+    } catch (error) {
+      setMailPreferencesError(normalizeClientError(error, "메일 기본환경 저장에 실패했습니다."));
+    } finally {
+      setMailPreferencesLoading(false);
+    }
+  }
+
+  async function resetMailBasicSettings() {
+    if (!token || !window.confirm("메일 기본환경을 서버 기본값으로 되돌릴까요?")) return;
+    setMailPreferencesLoading(true);
+    setMailPreferencesError("");
+    try {
+      await resetMailBasicPreferences(token);
+      const confirmed = await fetchMailBasicPreferences(token);
+      setMailPreferences(confirmed);
+      setSavedMailPreferences(confirmed);
+      pushFeedback({ id: `mail-basic-reset-${confirmed.updatedAt}`, source: "mail-settings", tone: "success", title: "기본값을 적용했습니다." });
+    } catch (error) {
+      setMailPreferencesError(normalizeClientError(error, "기본값 적용에 실패했습니다."));
+    } finally {
+      setMailPreferencesLoading(false);
+    }
+  }
+
+  function closeMailBasicSettings() {
+    const dirty = Boolean(mailPreferences && savedMailPreferences && JSON.stringify(mailPreferences) !== JSON.stringify(savedMailPreferences));
+    if (dirty && !window.confirm("저장하지 않은 변경을 취소하고 메일함으로 돌아갈까요?")) return;
+    setMailPreferences(savedMailPreferences);
+    setMailSettingsOpen(false);
+  }
+
   function openMailQuickSearch() {
     setSearchFilter("mail");
     setSearchOpen(Boolean(searchText.trim()));
@@ -1502,12 +1617,25 @@ export default function App() {
       setMailError("외부 발송 상태를 아직 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.");
       return;
     }
+    let confirmed = false;
+    if (action !== "draft") {
+      try {
+        const currentPreferences = await fetchMailBasicPreferences(token);
+        setMailPreferences(currentPreferences);
+        setSavedMailPreferences(currentPreferences);
+        if (currentPreferences.confirmBeforeSend && !window.confirm(action === "schedule" ? "이 메일을 예약 발송할까요?" : "이 메일을 발송할까요?")) return;
+        confirmed = true;
+      } catch (error) {
+        setMailError(normalizeClientError(error, "발송 설정을 확인하지 못했습니다."));
+        return;
+      }
+    }
     setMailLoading(true);
     setMailError("");
     try {
       const attachments = await uploadComposeAttachments(token);
       const payload = {
-        to, cc, bcc, subject, bodyText, attachments, scheduledAt,
+        to, cc, bcc, subject, bodyText, attachments, scheduledAt, confirmed,
         composeAction: mailComposeContext,
         sourceMailId: mailComposeSourceDetail?.mailId,
         copiedAttachmentIds: mailComposeContext === "forward"
@@ -2279,9 +2407,9 @@ export default function App() {
     mailId: item.mailId,
     sourceMailbox: item.sourceMailbox ?? "inbox",
     selectionKey: mailSelectionKey(item, activeMailFolder),
-    sender: item.senderEmail,
+    sender: mailPreferences?.senderDisplayMode === "name" && item.senderDisplayName ? item.senderDisplayName : item.senderDisplayName ? `${item.senderDisplayName} <${item.senderEmail}>` : item.senderEmail,
     subject: item.subject,
-    preview:
+    preview: mailPreferences?.showListPreview === false ? "" :
       selectedMailId === item.mailId
         ? summarizeMailPreview(selectedMailDetail, item.subject)
         : item.previewText || item.subject,
@@ -2657,7 +2785,7 @@ export default function App() {
               <div className="user-mail-shell-group" aria-label="메일 도구">
                 <strong>도구</strong>
                 <button type="button" onClick={openMailQuickSearch}>빠른 검색</button>
-                <button type="button" onClick={() => setPortalMenu("settings")}>환경설정</button>
+                <button type="button" aria-pressed={mailSettingsOpen} onClick={() => void openMailBasicSettings()}>환경설정</button>
               </div>
               <div className="user-mail-storage" aria-live="polite">
                 <div><strong>메일 용량</strong>{mailStorage ? <span>{Math.round(mailStorage.usagePercent)}%</span> : null}</div>
@@ -2668,6 +2796,18 @@ export default function App() {
                 {!mailStorageLoading && mailStorageError ? <><small role="alert">{mailStorageError}</small><button type="button" onClick={() => void loadMailStorage(token)}>용량 다시 시도</button></> : null}
               </div>
             </aside>
+            {mailSettingsOpen ? (
+              <MailBasicSettingsPanel
+                value={mailPreferences}
+                saved={savedMailPreferences}
+                loading={mailPreferencesLoading}
+                error={mailPreferencesError}
+                onChange={(patch) => setMailPreferences((current) => current ? { ...current, ...patch } : current)}
+                onSave={() => void saveMailBasicSettings()}
+                onCancel={closeMailBasicSettings}
+                onReset={() => void resetMailBasicSettings()}
+              />
+            ) : (
             <SplitView
               ariaLabel="메일 목록과 상세 영역 너비 조절"
               storageKey="moaworks.user.mail.split-ratio.v1"
@@ -2886,6 +3026,7 @@ export default function App() {
             </article>
               )}
             />
+            )}
           </section>
         );
       }

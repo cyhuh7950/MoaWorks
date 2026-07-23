@@ -279,6 +279,7 @@ export type MailSummary = {
   mailId: string;
   accountId: string;
   senderEmail: string;
+  senderDisplayName: string;
   subject: string;
   previewText: string;
   status: string;
@@ -340,6 +341,7 @@ export type MailDetail = {
   accountId: string;
   senderUserId: string;
   senderEmail: string;
+  senderDisplayName: string;
   subject: string;
   bodyText: string;
   bodyHtml: string | null;
@@ -351,6 +353,7 @@ export type MailDetail = {
   retentionExpiresAt: string | null;
   attachmentCount: number;
   canViewReadReceipts: boolean;
+  effectiveReadPolicy: { blockRemoteImages: boolean; disableRiskyTags: boolean };
   recipients: MailRecipient[];
   attachments: MailAttachmentView[];
   externalDeliveries: MailExternalDeliveryStatus[];
@@ -375,6 +378,7 @@ export type MailComposePayload = {
   composeAction?: "new" | "reply" | "reply_all" | "forward";
   sourceMailId?: string;
   copiedAttachmentIds?: string[];
+  confirmed?: boolean;
 };
 
 export type MailSendResponse = {
@@ -746,6 +750,44 @@ export async function fetchMailStorage(token: string): Promise<MailStorageRespon
   return request<MailStorageResponse>("/mail/storage", {
     headers: authHeaders(token),
   });
+}
+
+export type MailBasicPreferences = {
+  senderDisplayMode: "name" | "name_email";
+  blockRemoteImages: boolean;
+  disableRiskyTags: boolean;
+  showRouteCountry: boolean;
+  includeSpamTrashInSearch: boolean;
+  showListPreview: boolean;
+  recipientInputMode: "autocomplete" | "name_only" | "search";
+  confirmBeforeSend: boolean;
+  saveSentCopy: boolean;
+  readReceiptEnabled: boolean;
+  editorMode: "html" | "plain";
+  composeMode: "normal" | "popup";
+  messageEncoding: "utf-8" | "euc-kr" | "iso-2022-jp";
+  draftReminderEnabled: boolean;
+  senderDisplayName: string;
+  replyToEmail: string | null;
+  vcardEnabled: boolean;
+  version: number;
+  updatedAt: string;
+};
+
+export async function fetchMailBasicPreferences(token: string): Promise<MailBasicPreferences> {
+  return request<MailBasicPreferences>("/mail/preferences/basic", { headers: authHeaders(token) });
+}
+
+export async function updateMailBasicPreferences(token: string, preferences: MailBasicPreferences): Promise<MailBasicPreferences> {
+  return request<MailBasicPreferences>("/mail/preferences/basic", {
+    method: "PUT",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ ...preferences, expectedVersion: preferences.version }),
+  });
+}
+
+export async function resetMailBasicPreferences(token: string): Promise<MailBasicPreferences> {
+  return request<MailBasicPreferences>("/mail/preferences/basic/reset", { method: "POST", headers: authHeaders(token) });
 }
 
 export type MailBulkAction = "read" | "unread" | "star" | "unstar" | "move" | "delete" | "move_folder" | "add_tag" | "remove_tag" | "spam" | "not_spam" | "restore" | "purge";

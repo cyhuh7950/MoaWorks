@@ -167,7 +167,7 @@ class MailDeliveryOperations:
             with connection.cursor() as cursor:
                 self.heartbeat(cursor, worker_id, "working", now)
                 cursor.execute("""SELECT q.id AS queue_id,q.attempt_count,q.company_id,q.provider_config_id,q.mail_id,q.recipient_id,
-                r.recipient_email,m.sender_email,m.subject,m.body_text,m.body_html
+                r.recipient_email,m.sender_email,m.sender_display_name,m.reply_to_email,m.message_encoding,m.subject,m.body_text,m.body_html
                 FROM mail_delivery_queue q JOIN mail_messages m ON m.id=q.mail_id
                 JOIN mail_recipients r ON r.id=q.recipient_id
                 WHERE (q.status IN ('queued','retry_pending') AND COALESCE(q.next_attempt_at,q.created_at)<=%s)

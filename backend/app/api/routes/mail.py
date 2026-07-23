@@ -10,6 +10,8 @@ from app.schemas.mail_messenger import (
     MailBulkResponse,
     MailCategoryRequest,
     MailAttachmentUploadResponse,
+    MailBasicPreferencesResponse,
+    MailBasicPreferencesUpdateRequest,
     MailRecentRecipientListResponse,
     MailDetailResponse,
     MailDraftRequest,
@@ -28,7 +30,7 @@ from app.schemas.mail_messenger import (
     MailTagUpdateRequest,
     MailTagView,
 )
-from app.services.mail_messenger_service import MailMessengerService
+from app.services.mail_messenger_service import MailMessengerService, MailPreferenceConflictError
 
 
 router = APIRouter()
@@ -39,6 +41,11 @@ def _service() -> MailMessengerService:
 
 
 def _handle_error(exc: Exception) -> None:
+    if isinstance(exc, MailPreferenceConflictError):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "MAIL_PREFERENCE_CONFLICT", "userMessage": str(exc), "adminMessage": str(exc)},
+        ) from exc
     if isinstance(exc, PermissionError):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -58,6 +65,33 @@ def _handle_error(exc: Exception) -> None:
             },
         ) from exc
     raise exc
+
+
+@router.get("/preferences/basic", response_model=MailBasicPreferencesResponse)
+def get_basic_preferences(user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailBasicPreferencesResponse:
+    try:
+        return _service().get_basic_preferences(user)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.put("/preferences/basic", response_model=MailBasicPreferencesResponse)
+def update_basic_preferences(payload: MailBasicPreferencesUpdateRequest, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailBasicPreferencesResponse:
+    try:
+        return _service().update_basic_preferences(user, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.post("/preferences/basic/reset", response_model=MailBasicPreferencesResponse)
+def reset_basic_preferences(user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailBasicPreferencesResponse:
+    try:
+        return _service().reset_basic_preferences(user)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
 
 
 @router.get("/inbox", response_model=MailListResponse)

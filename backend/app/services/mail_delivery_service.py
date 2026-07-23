@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
+from email.headerregistry import Address
 import re
 import smtplib
 import ssl
@@ -60,7 +61,7 @@ class MailDeliveryWorker:
         if not provider.get("delivery_enabled") or provider.get("last_test_status") != "success":
             return DeliveryResult("blocked", error_message="외부 발송 잠금 또는 연결 검증이 필요합니다.")
         attempt = int(_job_value(job, "attempt_count", 0)) + 1
-        envelope = {key: _job_value(job, key) for key in ("sender_email","recipient_email","subject","body_text","body_html","attachments")}
+        envelope = {key: _job_value(job, key) for key in ("sender_email","sender_display_name","reply_to_email","message_encoding","recipient_email","subject","body_text","body_html","attachments")}
         try:
             response = self.adapter.send(envelope, provider)
             return DeliveryResult("sent", relay_response=mask_delivery_error(response))
@@ -73,14 +74,23 @@ class MailDeliveryWorker:
             return DeliveryResult("failed", error_message=error)
 
 class SmtpRelayAdapter:
-    def send(self, envelope: dict, provider: dict) -> str:
+    def build_message(self, envelope: dict, provider: dict) -> EmailMessage:
         message = EmailMessage()
-        message["From"] = provider.get("from_address") or envelope["sender_email"]
+        display_name = (envelope.get("sender_display_name") or "").strip()
+        sender_email = provider.get("from_address") or envelope["sender_email"]
+        message["From"] = Address(display_name=display_name, addr_spec=sender_email) if display_name else sender_email
         message["To"] = envelope["recipient_email"]
         message["Subject"] = envelope["subject"]
-        message.set_content(envelope["body_text"])
+        if envelope.get("reply_to_email"):
+            message["Reply-To"] = envelope["reply_to_email"]
+        charset = envelope.get("message_encoding") or "utf-8"
+        message.set_content(envelope["body_text"], charset=charset)
         if envelope.get("body_html"):
-            message.add_alternative(envelope["body_html"], subtype="html")
+            message.add_alternative(envelope["body_html"], subtype="html", charset=charset)
+        return message
+
+    def send(self, envelope: dict, provider: dict) -> str:
+        message = self.build_message(envelope, provider)
         host, port = provider["relay_host"], int(provider["relay_port"])
         tls_mode = provider.get("tls_mode", "starttls")
         client_cls = smtplib.SMTP_SSL if tls_mode == "tls" else smtplib.SMTP
