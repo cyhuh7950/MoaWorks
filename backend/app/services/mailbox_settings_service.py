@@ -89,7 +89,7 @@ class MailboxSettingsService:
 
         rows = [self._to_settings_row(row) for row in [*system_rows, *folder_rows]]
         storage = self.mail.get_mail_storage(actor)
-        tags = self.mail.list_tags(actor).tags
+        tags = self.mail.list_mail_tags(actor).tags
         backup_jobs = self.backup.list_jobs(actor).jobs
         return MailMailboxSettingsResponse(
             mailboxes=rows,

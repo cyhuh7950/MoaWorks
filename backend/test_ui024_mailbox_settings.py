@@ -184,6 +184,25 @@ class Ui024MailboxSettingsServiceTests(unittest.TestCase):
         self.assertNotIn("delete from mail_messages", normalized)
         self.assertNotIn("delete from mail_attachments", normalized)
 
+    def test_get_settings_uses_mail_messenger_public_tag_contract(self):
+        service = MailboxSettingsService()
+        service.db = FakeDb(fetchall=[[], []])
+        service.mail = SimpleNamespace(
+            get_mail_storage=lambda _actor: MailStorageResponse(
+                usedBytes=0,
+                quotaBytes=1,
+                usagePercent=0,
+            ),
+            list_mail_tags=lambda _actor: SimpleNamespace(tags=[]),
+        )
+        service.backup = SimpleNamespace(
+            list_jobs=lambda _actor: MailBackupJobListResponse(jobs=[])
+        )
+
+        response = service.get_settings(self.actor())
+
+        self.assertEqual(response.tags, [])
+
     def test_overview_queries_bind_all_values_and_owner_scope_folders(self):
         service = MailboxSettingsService()
         service.db = FakeDb(fetchall=[[], []])
@@ -193,7 +212,7 @@ class Ui024MailboxSettingsServiceTests(unittest.TestCase):
                 quotaBytes=1,
                 usagePercent=0,
             ),
-            list_tags=lambda _actor: SimpleNamespace(tags=[]),
+            list_mail_tags=lambda _actor: SimpleNamespace(tags=[]),
         )
         service.backup = SimpleNamespace(
             list_jobs=lambda _actor: MailBackupJobListResponse(
