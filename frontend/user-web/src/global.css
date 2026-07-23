@@ -41,6 +41,35 @@ body,
 .user-mail-signature-editor > label { display: grid; gap: 6px; font-size: 12px; }
 .user-mail-signature-editor input:not([type="checkbox"]), .user-mail-signature-editor textarea { border: 1px solid #cbd5e1; border-radius: 9px; padding: 9px 10px; font: inherit; }
 .user-mail-signature-editor textarea { min-height: 190px; resize: vertical; }
+.user-mail-mailbox-settings { min-width: 0; height: 100%; overflow: hidden; font-size: 12px; }
+.user-mail-mailbox-settings__body { min-height: 0; overflow-y: auto; padding: 14px 20px 60px; }
+.user-mail-mailbox-settings__toolbar { min-height: 36px; display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.user-mail-mailbox-settings__info { display: inline-grid; place-items: center; min-height: 18px !important; width: 18px; height: 18px; padding: 0 !important; border: 0 !important; border-radius: 50% !important; background: #e2e8f0 !important; color: #475569 !important; font-size: 10px !important; cursor: help; }
+.user-mail-mailbox-settings button { min-height: 36px; padding: 0 11px; border: 1px solid #cbd5e1; border-radius: 9px; background: #fff; color: #1e293b; font: inherit; font-weight: 700; }
+.user-mail-mailbox-settings button.is-destructive { color: #b91c1c; }
+.user-mail-mailbox-settings button:focus-visible, .user-mail-mailbox-settings select:focus-visible, .user-mail-mailbox-settings input:focus-visible { outline: 2px solid #0f766e; outline-offset: 2px; }
+.user-mail-mailbox-settings__table-wrap { overflow: auto; border: 1px solid #dbe4ec; border-radius: 12px; }
+.user-mail-mailbox-settings table { width: 100%; min-width: 840px; border-collapse: collapse; }
+.user-mail-mailbox-settings caption { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.user-mail-mailbox-settings th, .user-mail-mailbox-settings td { padding: 9px 10px; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: middle; }
+.user-mail-mailbox-settings th { position: sticky; top: 0; z-index: 1; background: #f8fafc; color: #475569; font-size: 10px; }
+.user-mail-mailbox-settings tbody tr:last-child td { border-bottom: 0; }
+.user-mail-mailbox-settings td:first-child strong, .user-mail-mailbox-settings td:first-child small { display: block; }
+.user-mail-mailbox-settings td:first-child small { margin-top: 3px; color: #64748b; font-size: 9px; }
+.user-mail-mailbox-settings__retention, .user-mail-mailbox-settings__actions { display: flex; align-items: center; gap: 6px; }
+.user-mail-mailbox-settings__retention select { min-width: 94px; min-height: 36px; border: 1px solid #cbd5e1; border-radius: 9px; padding: 0 8px; font: inherit; }
+.user-mail-mailbox-settings__tags, .user-mail-mailbox-settings__backups { margin-top: 12px; padding: 12px; border: 1px solid #dbe4ec; border-radius: 12px; }
+.user-mail-mailbox-settings__tags h3, .user-mail-mailbox-settings__backups h3 { margin: 0 0 9px; font-size: 14px; }
+.user-mail-mailbox-settings__tags > div { min-height: 36px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; align-items: center; gap: 8px; border-top: 1px solid #f1f5f9; }
+.user-mail-mailbox-settings__tags small { color: #64748b; font-size: 10px; }
+.user-mail-tag-dot { width: 9px; height: 9px; border-radius: 50%; background: #64748b; }
+.user-mail-tag-dot.is-red { background: #dc2626; } .user-mail-tag-dot.is-orange { background: #ea580c; } .user-mail-tag-dot.is-yellow { background: #ca8a04; } .user-mail-tag-dot.is-green { background: #16a34a; } .user-mail-tag-dot.is-blue { background: #2563eb; } .user-mail-tag-dot.is-purple { background: #9333ea; }
+.user-mail-mailbox-settings__backups > article { min-height: 50px; display: grid; grid-template-columns: minmax(220px, 1fr) minmax(150px, .55fr) auto; align-items: center; gap: 12px; border-top: 1px solid #f1f5f9; }
+.user-mail-mailbox-settings__backups article > div:first-child { display: grid; grid-template-columns: minmax(100px, 1fr) auto; gap: 3px 10px; }
+.user-mail-mailbox-settings__backups article small { grid-column: 1 / -1; color: #64748b; font-size: 10px; }
+.user-mail-mailbox-settings__backups progress { width: 100%; }
+.user-mail-mailbox-settings__empty-confirm { max-width: 520px; display: grid; gap: 14px; font-size: 12px; }
+.user-mail-mailbox-settings__empty-confirm p { margin: 0; line-height: 1.6; }
 .user-mail-compose-signature-preview { display: grid; gap: 7px; padding: 10px 12px; border: 1px dashed #94a3b8; border-radius: 10px; background: #f8fafc; }
 .user-mail-compose-signature-preview > div { display: flex; justify-content: space-between; gap: 12px; }
 .user-mail-compose-signature-preview small { color: #64748b; font-size: 10px; }

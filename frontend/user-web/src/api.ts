@@ -26,12 +26,14 @@ export type ApiError = {
 export class ApiRequestError extends Error {
   status: number;
   code: string;
+  currentCount: number | null;
 
-  constructor(status: number, code: string, userMessage: string) {
+  constructor(status: number, code: string, userMessage: string, currentCount: number | null = null) {
     super(userMessage);
     this.name = "ApiRequestError";
     this.status = status;
     this.code = code;
+    this.currentCount = currentCount;
   }
 }
 
@@ -336,6 +338,43 @@ export type MailStorageResponse = {
   usagePercent: number;
 };
 
+export type MailboxSettingsRow = {
+  mailboxKey: string;
+  name: string;
+  mailboxType: string;
+  retentionDays: 30 | 90 | 180 | 365 | null;
+  retentionEditable: boolean;
+  unreadCount: number | null;
+  totalCount: number;
+  usedBytes: number;
+  version: number;
+};
+
+export type MailBackupJob = {
+  jobId: string;
+  mailboxKey: string;
+  mailboxLabel: string;
+  status: "queued" | "running" | "completed" | "failed" | "expired";
+  totalCount: number;
+  processedCount: number;
+  artifactSizeBytes: number;
+  errorCode: string | null;
+  expiresAt: string | null;
+};
+
+export type MailMailboxSettingsResponse = {
+  mailboxes: MailboxSettingsRow[];
+  tags: MailTag[];
+  storage: MailStorageResponse;
+  backupJobs: MailBackupJob[];
+};
+
+export type MailMailboxEmptyResponse = {
+  mailboxKey: string;
+  changedCount: number;
+  currentCount: number;
+};
+
 export type MailDetail = {
   mailId: string;
   accountId: string;
@@ -472,7 +511,11 @@ function extractApiError(response: Response, data: unknown): ApiRequestError {
           : response.status === 423
             ? "비활성 사용자 또는 역할로 차단되었습니다."
             : "요청 처리 실패";
-  return new ApiRequestError(response.status, code, userMessage);
+  const currentCount =
+    typeof source.currentCount === "number" && Number.isFinite(source.currentCount)
+      ? source.currentCount
+      : null;
+  return new ApiRequestError(response.status, code, userMessage, currentCount);
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -750,6 +793,82 @@ export async function fetchMailStorage(token: string): Promise<MailStorageRespon
   return request<MailStorageResponse>("/mail/storage", {
     headers: authHeaders(token),
   });
+}
+
+// UI-024 mailbox settings
+export async function fetchMailboxSettings(token: string): Promise<MailMailboxSettingsResponse> {
+  return request<MailMailboxSettingsResponse>("/mail/mailbox-settings", {
+    headers: authHeaders(token),
+  });
+}
+
+export async function updateMailboxPolicy(
+  token: string,
+  mailbox: MailboxSettingsRow,
+  retentionDays: MailboxSettingsRow["retentionDays"],
+): Promise<MailboxSettingsRow> {
+  return request<MailboxSettingsRow>(`/mail/mailbox-settings/${encodeURIComponent(mailbox.mailboxKey)}`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+    body: JSON.stringify({ retentionDays, expectedVersion: mailbox.version }),
+  });
+}
+
+export async function emptyMailbox(
+  token: string,
+  mailbox: MailboxSettingsRow,
+  confirmPermanent: boolean,
+): Promise<MailMailboxEmptyResponse> {
+  return request<MailMailboxEmptyResponse>(`/mail/mailbox-settings/${encodeURIComponent(mailbox.mailboxKey)}/empty`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ expectedCount: mailbox.totalCount, confirmPermanent }),
+  });
+}
+
+export async function createMailboxBackup(token: string, mailboxKey: string): Promise<MailBackupJob> {
+  return request<MailBackupJob>("/mail/mailbox-backups", {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ mailboxKey }),
+  });
+}
+
+export async function fetchMailboxBackups(token: string): Promise<{ jobs: MailBackupJob[] }> {
+  return request<{ jobs: MailBackupJob[] }>("/mail/mailbox-backups", {
+    headers: authHeaders(token),
+  });
+}
+
+export async function retryMailboxBackup(token: string, jobId: string): Promise<MailBackupJob> {
+  return request<MailBackupJob>(`/mail/mailbox-backups/${encodeURIComponent(jobId)}/retry`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+}
+
+export function mailboxBackupDownloadUrl(jobId: string): string {
+  return `/api/v1/mail/mailbox-backups/${encodeURIComponent(jobId)}/download`;
+}
+
+export async function downloadMailboxBackup(token: string, job: MailBackupJob): Promise<void> {
+  const response = await fetch(mailboxBackupDownloadUrl(job.jobId), {
+    headers: authHeaders(token),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw extractApiError(response, data);
+  }
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = `${job.mailboxLabel}-backup.zip`;
+    anchor.click();
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
 }
 
 export type MailBasicPreferences = {

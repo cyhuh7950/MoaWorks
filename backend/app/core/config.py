@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     mail_attachment_max_total_bytes: int = 25 * 1024 * 1024
     mail_scheduler_enabled: bool = True
     mail_scheduler_interval_seconds: int = 30
+    mail_backup_poll_seconds: int = 5
+    mail_backup_lease_minutes: int = 10
+    mail_backup_ttl_hours: int = 24
+    mail_retention_poll_seconds: int = 60
+    mail_retention_batch_size: int = 500
 
     watcher_enabled: bool = True
     watcher_interval_seconds: int = 60

@@ -20,7 +20,9 @@ import {
   deleteMailFolder,
   deleteMailTag,
   downloadMailAttachment,
+  downloadMailboxBackup,
   createApproval,
+  createMailboxBackup,
   fetchApprovalApprovers,
   fetchContacts,
   fetchApprovalLogs,
@@ -38,6 +40,8 @@ import {
   fetchRecentMailRecipients,
   fetchMailStorage,
   fetchMailBasicPreferences,
+  fetchMailboxBackups,
+  fetchMailboxSettings,
   fetchMe,
   fetchMessengerMessages,
   fetchMessengerRoom,
@@ -65,11 +69,14 @@ import {
   saveMailDraft,
   sendMail,
   resetMailBasicPreferences,
+  retryMailboxBackup,
   sendMessengerMessage,
   storeUserToken,
   submitApproval,
   toggleMailStar,
   updateMailBasicPreferences,
+  updateMailboxPolicy,
+  emptyMailbox,
   setMailCategory,
   updateApproval,
   updateMailFolder,
@@ -91,6 +98,9 @@ import {
   type MailTag,
   type MailStorageResponse,
   type MailBasicPreferences,
+  type MailBackupJob,
+  type MailboxSettingsRow,
+  type MailMailboxSettingsResponse,
   type MailSummary,
   type MessengerMessage,
   type MessengerRoomDetail,
@@ -523,7 +533,7 @@ function normalizeMailRecipients(value: string, companyDomain: string): string[]
 
 const MAIL_SETTINGS_TABS = ["기본환경", "서명", "메일함", "스팸", "자동분류", "자동전달", "부재중응답", "외부메일", "최근보낸메일"] as const;
 
-function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChange, onSave, onCancel, onReset, onReload, onOpenSignature }: {
+function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChange, onSave, onCancel, onReset, onReload, onOpenSignature, onOpenMailbox }: {
   value: MailBasicPreferences | null;
   saved: MailBasicPreferences | null;
   loading: boolean;
@@ -535,6 +545,7 @@ function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChan
   onReset: () => void;
   onReload: () => void;
   onOpenSignature: () => void;
+  onOpenMailbox: () => void;
 }) {
   const dirty = Boolean(value && saved && JSON.stringify(value) !== JSON.stringify(saved));
   if (loading && !value) return <FeedbackState state="loading" title="메일 기본환경을 불러오는 중입니다." />;
@@ -544,7 +555,7 @@ function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChan
   );
   return <section className="user-mail-settings" aria-label="메일 환경설정">
     <header><div><small>메일 환경설정</small><h2>기본환경</h2></div><span aria-live="polite">{dirty ? "저장하지 않은 변경 있음" : "저장됨"}</span></header>
-    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 0 ? "page" : undefined} disabled={index > 1} onClick={index === 1 ? onOpenSignature : undefined} title={index < 2 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 1 ? <i>i</i> : null}</button>)}</nav>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 0 ? "page" : undefined} disabled={index > 2} onClick={index === 1 ? onOpenSignature : index === 2 ? onOpenMailbox : undefined} title={index < 3 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 2 ? <i>i</i> : null}</button>)}</nav>
     {error ? <CompactWarning item={{ id: "mail-basic-preferences", source: "mail-settings", tone: "warning", title: conflict ? "다른 위치에서 설정이 변경되었습니다." : "설정을 처리하지 못했습니다.", message: error, action: conflict ? { label: "서버 최신값 다시 불러오기", onAction: onReload } : undefined }} /> : null}
     <div className="user-mail-settings__body">
       <fieldset><legend>메일 읽기 설정</legend>
@@ -573,7 +584,7 @@ function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChan
 
 function MailSignatureSettingsPanel({
   value, saved, loading, error, conflict, onChange, onSavePreferences, onCancel, onReload,
-  onSaveSignature, onDeleteSignatures, onOpenBasic,
+  onSaveSignature, onDeleteSignatures, onOpenBasic, onOpenMailbox,
 }: {
   value: MailSignaturePreferences | null;
   saved: MailSignaturePreferences | null;
@@ -587,6 +598,7 @@ function MailSignatureSettingsPanel({
   onSaveSignature: (signature: MailSignature | null, form: { name: string; contentText: string; makeDefault: boolean }) => Promise<boolean>;
   onDeleteSignatures: (signatures: MailSignature[]) => Promise<boolean>;
   onOpenBasic: () => void;
+  onOpenMailbox: () => void;
 }) {
   type MailSignatureEditorForm = { name: string; contentText: string; makeDefault: boolean };
   const emptyEditorForm: MailSignatureEditorForm = { name: "", contentText: "", makeDefault: false };
@@ -616,7 +628,7 @@ function MailSignatureSettingsPanel({
   const selected = value.signatures.filter((item) => selectedIds.includes(item.signatureId));
   return <section className="user-mail-settings user-mail-signature-settings" aria-label="메일 서명 환경설정">
     <header><div><small>메일 환경설정</small><h2>서명</h2></div><span aria-live="polite">{dirty ? "저장하지 않은 변경 있음" : "저장됨"}</span></header>
-    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 1 ? "page" : undefined} disabled={index > 1} onClick={index === 0 ? onOpenBasic : undefined} title={index < 2 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 1 ? <i>i</i> : null}</button>)}</nav>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 1 ? "page" : undefined} disabled={index > 2} onClick={index === 0 ? onOpenBasic : index === 2 ? onOpenMailbox : undefined} title={index < 3 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 2 ? <i>i</i> : null}</button>)}</nav>
     {error ? <CompactWarning item={{ id: "mail-signatures", source: "mail-settings", tone: "warning", title: conflict ? "다른 위치에서 서명이 변경되었습니다." : "서명을 처리하지 못했습니다.", message: error, action: conflict ? { label: "서버 최신값 다시 불러오기", onAction: () => void onReload() } : undefined }} /> : null}
     <div className="user-mail-settings__body user-mail-signature-settings__body">
       <fieldset>
@@ -650,6 +662,124 @@ function MailSignatureSettingsPanel({
       </div>
     </CommonPopup>
     <ConfirmModal open={deleteTargets.length > 0} title="서명 삭제 확인" message={<><strong>{deleteTargets.length}개 서명</strong>을 삭제합니다. 기본 서명이면 남은 최신 서명이 자동 승계됩니다.</>} confirmLabel="삭제" busy={loading} onCancel={() => setDeleteTargets([])} onConfirm={async () => { if (await onDeleteSignatures(deleteTargets)) { setDeleteTargets([]); setSelectedIds([]); } }} />
+  </section>;
+}
+
+const MAILBOX_LABELS: Record<string, string> = {
+  "system:inbox": "받은편지함",
+  "system:sent": "보낸편지함",
+  "system:draft": "임시보관함",
+  "system:scheduled": "예약메일함",
+  "system:spam": "스팸함",
+  "system:trash": "휴지통",
+};
+
+function formatMailboxBytes(value: number): string {
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;
+  if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${value} B`;
+}
+
+function MailboxSettingsPanel({
+  value, loading, error, busyKey, onReload, onClose, onOpenBasic, onOpenSignature,
+  onSavePolicy, onEmpty, onBackup, onRetry, onDownload,
+  onAddFolder, onEditFolder, onDeleteFolder, onAddTag, onEditTag, onDeleteTag,
+}: {
+  value: MailMailboxSettingsResponse | null;
+  loading: boolean;
+  error: string;
+  busyKey: string;
+  onReload: () => void;
+  onClose: () => void;
+  onOpenBasic: () => void;
+  onOpenSignature: () => void;
+  onSavePolicy: (mailbox: MailboxSettingsRow, retentionDays: MailboxSettingsRow["retentionDays"]) => Promise<boolean>;
+  onEmpty: (mailbox: MailboxSettingsRow, confirmPermanent: boolean) => Promise<boolean>;
+  onBackup: (mailbox: MailboxSettingsRow) => Promise<void>;
+  onRetry: (job: MailBackupJob) => Promise<void>;
+  onDownload: (job: MailBackupJob) => Promise<void>;
+  onAddFolder: () => void;
+  onEditFolder: (folder: MailFolder) => void;
+  onDeleteFolder: (folder: MailFolder) => void;
+  onAddTag: () => void;
+  onEditTag: (tag: MailTag) => void;
+  onDeleteTag: (tag: MailTag) => void;
+}) {
+  const [retentionDrafts, setRetentionDrafts] = useState<Record<string, string>>({});
+  const [emptyTarget, setEmptyTarget] = useState<MailboxSettingsRow | null>(null);
+  const [confirmPermanent, setConfirmPermanent] = useState(false);
+  useEffect(() => {
+    setRetentionDrafts(Object.fromEntries((value?.mailboxes ?? []).map((row) => [row.mailboxKey, row.retentionDays === null ? "" : String(row.retentionDays)])));
+  }, [value?.mailboxes]);
+  useEffect(() => {
+    if (!emptyTarget) return;
+    const current = value?.mailboxes.find((row) => row.mailboxKey === emptyTarget.mailboxKey);
+    if (current && current !== emptyTarget) setEmptyTarget(current);
+  }, [emptyTarget, value?.mailboxes]);
+  if (loading && !value) return <FeedbackState state="loading" title="메일함 설정을 불러오는 중입니다." />;
+  if (!value) return <FeedbackState state="error" title="메일함 설정을 불러오지 못했습니다." message={error} action={{ label: "다시 시도", onAction: onReload }} />;
+  const activeBackup = value.backupJobs.some((job) => job.status === "queued" || job.status === "running");
+  const statusLabel: Record<MailBackupJob["status"], string> = { queued: "대기", running: "진행 중", completed: "완료", failed: "실패", expired: "만료" };
+  return <section className="user-mail-settings user-mail-mailbox-settings" aria-label="메일함 환경설정">
+    <header><div><small>메일 환경설정</small><h2>메일함</h2></div><span aria-live="polite">{activeBackup ? "메일함 백업 처리 중" : "설정 확인 완료"}</span></header>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 2 ? "page" : undefined} disabled={index > 2} onClick={index === 0 ? onOpenBasic : index === 1 ? onOpenSignature : undefined} title={index < 3 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 2 ? <i>i</i> : null}</button>)}</nav>
+    {error ? <CompactWarning item={{ id: "mailbox-settings", source: "mail-settings", tone: "warning", title: "메일함 설정을 처리하지 못했습니다.", message: error, action: { label: "서버 최신값 다시 불러오기", onAction: onReload } }} /> : null}
+    <div className="user-mail-mailbox-settings__body">
+      <div className="user-mail-mailbox-settings__toolbar">
+        <button type="button" onClick={onAddFolder}>사용자 메일함 추가</button>
+        <button type="button" onClick={onAddTag}>태그 추가</button>
+        <button
+          type="button"
+          className="user-mail-mailbox-settings__info"
+          title="보관기간이 지난 메일은 휴지통으로 이동하고, 휴지통 메일은 30일 뒤 영구 삭제됩니다. 사용량은 사용자 보기 기준 논리 사용량입니다."
+          aria-label="메일함 보관기간과 사용량 설명"
+        >i</button>
+      </div>
+      <div className="user-mail-mailbox-settings__table-wrap">
+        <table>
+          <caption>메일함별 보관기간, 안 읽은 메일 수, 전체 메일 수, 사용자 보기 기준 사용량과 관리 작업</caption>
+          <thead><tr><th>메일함</th><th>보관기간</th><th>안 읽음/전체</th><th>사용량</th><th>관리</th></tr></thead>
+          <tbody>{value.mailboxes.map((row) => {
+            const folderId = row.mailboxKey.startsWith("folder:") ? row.mailboxKey.slice("folder:".length) : "";
+            const folder = folderId ? { folderId, name: row.name, sortOrder: 0, messageCount: row.totalCount } satisfies MailFolder : null;
+            const draft = retentionDrafts[row.mailboxKey] ?? "";
+            const nextRetention = draft ? Number(draft) as 30 | 90 | 180 | 365 : null;
+            const policyDirty = nextRetention !== row.retentionDays;
+            return <tr key={row.mailboxKey}>
+              <td><strong>{MAILBOX_LABELS[row.mailboxKey] ?? row.name}</strong>{row.mailboxType === "folder" ? <small>사용자 메일함</small> : null}</td>
+              <td>{row.retentionEditable ? <div className="user-mail-mailbox-settings__retention"><select aria-label={`${row.name} 보관기간`} value={draft} disabled={loading} onChange={(event) => setRetentionDrafts((current) => ({ ...current, [row.mailboxKey]: event.target.value }))}><option value="">무기한</option><option value="30">30일</option><option value="90">90일</option><option value="180">180일</option><option value="365">365일</option></select><button type="button" disabled={!policyDirty || Boolean(busyKey)} onClick={() => void onSavePolicy(row, nextRetention)}>저장</button></div> : <span>{row.retentionDays === null ? "무기한" : `${row.retentionDays}일`}</span>}</td>
+              <td>{row.unreadCount === null ? `- / ${row.totalCount}` : `${row.unreadCount} / ${row.totalCount}`}</td>
+              <td>{formatMailboxBytes(row.usedBytes)}</td>
+              <td><div className="user-mail-mailbox-settings__actions">
+                <button type="button" disabled={activeBackup || Boolean(busyKey)} onClick={() => void onBackup(row)}>백업</button>
+                <button type="button" className="is-destructive" disabled={!row.totalCount || Boolean(busyKey)} onClick={() => { setEmptyTarget(row); setConfirmPermanent(false); }}>비우기</button>
+                {folder ? <><button type="button" onClick={() => onEditFolder(folder)}>수정</button><button type="button" onClick={() => onDeleteFolder(folder)}>삭제</button></> : null}
+              </div></td>
+            </tr>;
+          })}</tbody>
+        </table>
+      </div>
+      <section className="user-mail-mailbox-settings__tags">
+        <h3>태그 관리</h3>
+        {!value.tags.length ? <p>등록된 태그가 없습니다.</p> : value.tags.map((tag) => <div key={tag.tagId}><span className={`user-mail-tag-dot is-${tag.color}`} /><strong>{tag.name}</strong><small>{tag.messageCount}개</small><button type="button" onClick={() => onEditTag(tag)}>수정</button><button type="button" onClick={() => onDeleteTag(tag)}>삭제</button></div>)}
+      </section>
+      <section className="user-mail-mailbox-settings__backups" aria-live="polite">
+        <h3>백업 작업</h3>
+        {!value.backupJobs.length ? <p>요청한 백업이 없습니다.</p> : value.backupJobs.map((job) => {
+          const downloadable = job.status === "completed" && Boolean(job.expiresAt) && new Date(job.expiresAt ?? 0).getTime() > Date.now();
+          return <article key={job.jobId}><div><strong>{job.mailboxLabel}</strong><span>{statusLabel[job.status]}</span><small>{job.processedCount}/{job.totalCount} · {formatMailboxBytes(job.artifactSizeBytes)}</small></div><progress max={Math.max(1, job.totalCount)} value={job.processedCount} /><div>{job.status === "failed" ? <button type="button" disabled={Boolean(busyKey)} onClick={() => void onRetry(job)}>재시도</button> : null}{downloadable ? <button type="button" disabled={Boolean(busyKey)} onClick={() => void onDownload(job)}>ZIP 다운로드</button> : null}{job.errorCode ? <small>{job.errorCode}</small> : null}</div></article>;
+        })}
+      </section>
+    </div>
+    <footer><span /><button type="button" onClick={onClose} disabled={Boolean(busyKey)}>닫기</button></footer>
+    <CommonPopup title={`${emptyTarget ? (MAILBOX_LABELS[emptyTarget.mailboxKey] ?? emptyTarget.name) : "메일함"} 비우기`} open={Boolean(emptyTarget)} onClose={() => setEmptyTarget(null)} saving={Boolean(busyKey)} kind="alertdialog">
+      <div className="user-mail-mailbox-settings__empty-confirm">
+        <p>현재 {emptyTarget?.totalCount ?? 0}개의 사용자 보기에서 메일을 제거합니다. 공유 원문과 첨부 원본은 삭제하지 않습니다.</p>
+        {emptyTarget?.mailboxKey === "system:trash" ? <label><input type="checkbox" checked={confirmPermanent} onChange={(event) => setConfirmPermanent(event.target.checked)} /> 휴지통 비우기는 복구할 수 없음을 확인했습니다.</label> : null}
+        <div className="feedback-confirm-actions"><button type="button" disabled={Boolean(busyKey)} onClick={() => setEmptyTarget(null)}>취소</button><button type="button" className="is-destructive" disabled={Boolean(busyKey) || (emptyTarget?.mailboxKey === "system:trash" && !confirmPermanent)} onClick={async () => { if (emptyTarget && await onEmpty(emptyTarget, confirmPermanent)) setEmptyTarget(null); }}>비우기</button></div>
+      </div>
+    </CommonPopup>
   </section>;
 }
 
@@ -788,12 +918,16 @@ export default function App() {
   const [mailPreferencesLoading, setMailPreferencesLoading] = useState(false);
   const [mailPreferencesError, setMailPreferencesError] = useState("");
   const [mailPreferencesConflict, setMailPreferencesConflict] = useState(false);
-  const [mailSettingsTab, setMailSettingsTab] = useState<"basic" | "signature">("basic");
+  const [mailSettingsTab, setMailSettingsTab] = useState<"basic" | "signature" | "mailbox">("basic");
   const [mailSignatures, setMailSignatures] = useState<MailSignaturePreferences | null>(null);
   const [savedMailSignatures, setSavedMailSignatures] = useState<MailSignaturePreferences | null>(null);
   const [mailSignaturesLoading, setMailSignaturesLoading] = useState(false);
   const [mailSignaturesError, setMailSignaturesError] = useState("");
   const [mailSignaturesConflict, setMailSignaturesConflict] = useState(false);
+  const [mailboxSettings, setMailboxSettings] = useState<MailMailboxSettingsResponse | null>(null);
+  const [mailboxSettingsLoading, setMailboxSettingsLoading] = useState(false);
+  const [mailboxSettingsError, setMailboxSettingsError] = useState("");
+  const [mailboxSettingsBusyKey, setMailboxSettingsBusyKey] = useState("");
   const [messengerRoomsData, setMessengerRoomsData] = useState<MessengerRoomSummary[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState("");
   const [selectedRoomDetail, setSelectedRoomDetail] = useState<MessengerRoomDetail | null>(null);
@@ -970,6 +1104,7 @@ export default function App() {
         else await createMailTag(token, name, mailTagColor);
       }
       await refreshMailResources(token);
+      if (mailSettingsOpen && mailSettingsTab === "mailbox") await loadMailboxSettings(token, false);
       setMailResourceModal("none");
       setMessage(mailResourceEditId ? "이름을 변경했습니다." : "새 항목을 추가했습니다.");
     } catch (error) {
@@ -986,6 +1121,7 @@ export default function App() {
       if (kind === "folder") await deleteMailFolder(token, id);
       else await deleteMailTag(token, id);
       await refreshMailResources(token);
+      if (mailSettingsOpen && mailSettingsTab === "mailbox") await loadMailboxSettings(token, false);
       if (activeMailFolder === kind + ":" + id) openMailFolder("inbox");
       setMessage(kind === "folder" ? "메일함을 삭제하고 포함 메일을 받은편지함으로 옮겼습니다." : "태그를 삭제했습니다.");
     } catch (error) {
@@ -1471,10 +1607,44 @@ export default function App() {
     }
   }
 
-  async function openMailBasicSettings() {
+  async function loadMailboxSettings(targetToken: string, showLoading = true) {
+    if (showLoading) setMailboxSettingsLoading(true);
+    setMailboxSettingsError("");
+    try {
+      const settings = await fetchMailboxSettings(targetToken);
+      setMailboxSettings(settings);
+      setMailStorage(settings.storage);
+      setMailFoldersData(settings.mailboxes.filter((row) => row.mailboxType === "folder").map((row, index) => ({
+        folderId: row.mailboxKey.slice("folder:".length),
+        name: row.name,
+        sortOrder: index,
+        messageCount: row.totalCount,
+      })));
+      setMailTagsData(settings.tags);
+    } catch (error) {
+      setMailboxSettingsError(normalizeClientError(error, "메일함 설정을 불러오지 못했습니다."));
+    } finally {
+      if (showLoading) setMailboxSettingsLoading(false);
+    }
+  }
+
+  async function refreshMailboxBackupJobs(targetToken: string) {
+    try {
+      const response = await fetchMailboxBackups(targetToken);
+      setMailboxSettings((current) => current ? { ...current, backupJobs: response.jobs } : current);
+    } catch (error) {
+      setMailboxSettingsError(normalizeClientError(error, "백업 작업 상태를 확인하지 못했습니다."));
+    }
+  }
+
+  async function openMailSettings(tab: "basic" | "signature" | "mailbox") {
     if (!token) return;
     setMailSettingsOpen(true);
-    setMailSettingsTab("basic");
+    setMailSettingsTab(tab);
+    if (tab === "mailbox") {
+      await loadMailboxSettings(token);
+      return;
+    }
     setMailPreferencesLoading(true);
     setMailSignaturesLoading(true);
     setMailPreferencesError("");
@@ -1493,6 +1663,95 @@ export default function App() {
     } finally {
       setMailPreferencesLoading(false);
       setMailSignaturesLoading(false);
+    }
+  }
+
+  async function openMailBasicSettings() {
+    await openMailSettings("basic");
+  }
+
+  async function saveMailboxPolicy(mailbox: MailboxSettingsRow, retentionDays: MailboxSettingsRow["retentionDays"]): Promise<boolean> {
+    if (!token || mailboxSettingsBusyKey) return false;
+    setMailboxSettingsBusyKey(`policy:${mailbox.mailboxKey}`);
+    setMailboxSettingsError("");
+    try {
+      await updateMailboxPolicy(token, mailbox, retentionDays);
+      await loadMailboxSettings(token, false);
+      pushFeedback({ id: `mailbox-policy-${mailbox.mailboxKey}-${Date.now()}`, source: "mail-settings", tone: "success", title: `${mailbox.name} 보관기간을 저장했습니다.` });
+      return true;
+    } catch (error) {
+      setMailboxSettingsError(normalizeClientError(error, "메일함 보관기간 저장에 실패했습니다."));
+      return false;
+    } finally {
+      setMailboxSettingsBusyKey("");
+    }
+  }
+
+  async function runEmptyMailbox(mailbox: MailboxSettingsRow, confirmPermanent: boolean): Promise<boolean> {
+    if (!token || mailboxSettingsBusyKey) return false;
+    setMailboxSettingsBusyKey(`empty:${mailbox.mailboxKey}`);
+    setMailboxSettingsError("");
+    try {
+      const result = await emptyMailbox(token, mailbox, confirmPermanent);
+      await Promise.all([
+        loadMailboxSettings(token, false),
+        loadMailWorkspace(token, activeMailbox, undefined, activeMailFolder, mailListQuery),
+        loadMailStorage(token),
+      ]);
+      pushFeedback({ id: `mailbox-empty-${mailbox.mailboxKey}-${Date.now()}`, source: "mail-settings", tone: "success", title: `${mailbox.name}에서 ${result.changedCount}개 보기를 제거했습니다.` });
+      return true;
+    } catch (error) {
+      if (error instanceof ApiRequestError && error.status === 409 && error.currentCount !== null) {
+        await loadMailboxSettings(token, false);
+        setMailboxSettingsError(`메일함 내용이 변경되었습니다. 현재 ${error.currentCount}개입니다. 최신 건수로 다시 확인해 주세요.`);
+      } else {
+        setMailboxSettingsError(normalizeClientError(error, "메일함 비우기에 실패했습니다. 최신 건수를 확인해 다시 시도하세요."));
+      }
+      return false;
+    } finally {
+      setMailboxSettingsBusyKey("");
+    }
+  }
+
+  async function startMailboxBackup(mailbox: MailboxSettingsRow) {
+    if (!token || mailboxSettingsBusyKey) return;
+    setMailboxSettingsBusyKey(`backup:${mailbox.mailboxKey}`);
+    setMailboxSettingsError("");
+    try {
+      await createMailboxBackup(token, mailbox.mailboxKey);
+      await refreshMailboxBackupJobs(token);
+      pushFeedback({ id: `mailbox-backup-${mailbox.mailboxKey}-${Date.now()}`, source: "mail-settings", tone: "success", title: `${mailbox.name} 백업을 요청했습니다.` });
+    } catch (error) {
+      setMailboxSettingsError(normalizeClientError(error, "메일함 백업 요청에 실패했습니다."));
+    } finally {
+      setMailboxSettingsBusyKey("");
+    }
+  }
+
+  async function rerunMailboxBackup(job: MailBackupJob) {
+    if (!token || mailboxSettingsBusyKey) return;
+    setMailboxSettingsBusyKey(`retry:${job.jobId}`);
+    setMailboxSettingsError("");
+    try {
+      await retryMailboxBackup(token, job.jobId);
+      await refreshMailboxBackupJobs(token);
+    } catch (error) {
+      setMailboxSettingsError(normalizeClientError(error, "메일함 백업 재시도에 실패했습니다."));
+    } finally {
+      setMailboxSettingsBusyKey("");
+    }
+  }
+
+  async function saveMailboxBackupFile(job: MailBackupJob) {
+    if (!token || mailboxSettingsBusyKey) return;
+    setMailboxSettingsBusyKey(`download:${job.jobId}`);
+    setMailboxSettingsError("");
+    try {
+      await downloadMailboxBackup(token, job);
+    } catch (error) {
+      setMailboxSettingsError(normalizeClientError(error, "백업 파일 다운로드에 실패했습니다."));
+    } finally {
+      setMailboxSettingsBusyKey("");
     }
   }
 
@@ -2169,6 +2428,14 @@ export default function App() {
     window.addEventListener("keydown", handleMailReadReceiptKeyDown);
     return () => window.removeEventListener("keydown", handleMailReadReceiptKeyDown);
   }, [mailReadReceiptOpen]);
+
+  useEffect(() => {
+    const hasActiveBackup = mailboxSettings?.backupJobs.some((job) => job.status === "queued" || job.status === "running") ?? false;
+    if (!token || !mailSettingsOpen || mailSettingsTab !== "mailbox" || !hasActiveBackup) return;
+    const pollMailboxBackups = () => void refreshMailboxBackupJobs(token);
+    const intervalId = window.setInterval(pollMailboxBackups, 3_000);
+    return () => window.clearInterval(intervalId);
+  }, [token, mailSettingsOpen, mailSettingsTab, mailboxSettings?.backupJobs]);
 
   useEffect(() => {
     const current = getUserToken();
@@ -3062,8 +3329,9 @@ export default function App() {
                 onReset={() => void resetMailBasicSettings()}
                 onReload={() => void reloadMailBasicSettings()}
                 onOpenSignature={() => setMailSettingsTab("signature")}
+                onOpenMailbox={() => void openMailSettings("mailbox")}
               />
-            ) : mailSettingsOpen ? (
+            ) : mailSettingsOpen && mailSettingsTab === "signature" ? (
               <MailSignatureSettingsPanel
                 value={mailSignatures}
                 saved={savedMailSignatures}
@@ -3077,6 +3345,29 @@ export default function App() {
                 onSaveSignature={saveMailSignature}
                 onDeleteSignatures={removeMailSignatures}
                 onOpenBasic={() => setMailSettingsTab("basic")}
+                onOpenMailbox={() => void openMailSettings("mailbox")}
+              />
+            ) : mailSettingsOpen && mailSettingsTab === "mailbox" ? (
+              <MailboxSettingsPanel
+                value={mailboxSettings}
+                loading={mailboxSettingsLoading}
+                error={mailboxSettingsError}
+                busyKey={mailboxSettingsBusyKey}
+                onReload={() => void loadMailboxSettings(token)}
+                onClose={closeMailBasicSettings}
+                onOpenBasic={() => void openMailSettings("basic")}
+                onOpenSignature={() => void openMailSettings("signature")}
+                onSavePolicy={saveMailboxPolicy}
+                onEmpty={runEmptyMailbox}
+                onBackup={startMailboxBackup}
+                onRetry={rerunMailboxBackup}
+                onDownload={saveMailboxBackupFile}
+                onAddFolder={() => openMailResourceModal("folder")}
+                onEditFolder={(folder) => openMailResourceModal("folder", folder)}
+                onDeleteFolder={(folder) => setMailResourceDelete({ kind: "folder", id: folder.folderId, name: folder.name })}
+                onAddTag={() => openMailResourceModal("tag")}
+                onEditTag={(tag) => openMailResourceModal("tag", tag)}
+                onDeleteTag={(tag) => setMailResourceDelete({ kind: "tag", id: tag.tagId, name: tag.name })}
               />
             ) : (
             <SplitView

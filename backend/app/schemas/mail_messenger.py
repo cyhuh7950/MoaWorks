@@ -388,6 +388,62 @@ class MailTagView(BaseModel):
 class MailTagListResponse(BaseModel):
     tags: list[MailTagView]
 
+
+class MailboxSettingsRow(BaseModel):
+    mailboxKey: str
+    name: str
+    mailboxType: str
+    retentionDays: Literal[30, 90, 180, 365] | None = None
+    retentionEditable: bool
+    unreadCount: int | None = Field(default=None, ge=0)
+    totalCount: int = Field(ge=0)
+    usedBytes: int = Field(ge=0)
+    version: int = Field(ge=1)
+
+
+class MailBackupJobView(BaseModel):
+    jobId: str
+    mailboxKey: str
+    mailboxLabel: str
+    status: Literal["queued", "running", "completed", "failed", "expired"]
+    totalCount: int = Field(ge=0)
+    processedCount: int = Field(ge=0)
+    artifactSizeBytes: int = Field(ge=0)
+    errorCode: str | None = None
+    expiresAt: datetime | None = None
+
+
+class MailMailboxSettingsResponse(BaseModel):
+    mailboxes: list[MailboxSettingsRow]
+    tags: list[MailTagView] = Field(default_factory=list)
+    storage: MailStorageResponse
+    backupJobs: list[MailBackupJobView] = Field(default_factory=list)
+
+
+class MailMailboxPolicyUpdateRequest(BaseModel):
+    retentionDays: Literal[30, 90, 180, 365] | None = None
+    expectedVersion: int = Field(ge=1)
+
+
+class MailMailboxEmptyRequest(BaseModel):
+    expectedCount: int = Field(ge=0)
+    confirmPermanent: bool = False
+
+
+class MailMailboxEmptyResponse(BaseModel):
+    mailboxKey: str
+    changedCount: int = Field(ge=0)
+    currentCount: int = Field(ge=0)
+
+
+class MailBackupCreateRequest(BaseModel):
+    mailboxKey: str = Field(min_length=1, max_length=120)
+
+
+class MailBackupJobListResponse(BaseModel):
+    jobs: list[MailBackupJobView]
+
+
 class MailTrashSelection(BaseModel):
     mailId: str = Field(min_length=1, max_length=200)
     sourceMailbox: Literal["inbox", "sent", "draft"]
@@ -554,6 +610,9 @@ class MailStorageResponse(BaseModel):
     usedBytes: int = Field(ge=0)
     quotaBytes: int = Field(ge=0)
     usagePercent: float = Field(ge=0)
+
+
+MailMailboxSettingsResponse.model_rebuild()
 
 
 class MailDetailResponse(BaseModel):

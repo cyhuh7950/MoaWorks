@@ -76,6 +76,46 @@ services:
       - pg_net
     restart: unless-stopped
 
+  mail-backup-worker:
+    container_name: moaworks-mail-backup-worker
+    build:
+      context: ..
+      dockerfile: deploy/server.Dockerfile
+    command: ["python", "-m", "app.workers.mail_backup_worker"]
+    env_file:
+      - ../.env
+    environment:
+      POSTGRES_HOST: shared-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+    volumes:
+      - ../data:/app/data
+    networks:
+      - app_net
+      - pg_net
+    restart: unless-stopped
+
+  mail-retention-worker:
+    container_name: moaworks-mail-retention-worker
+    build:
+      context: ..
+      dockerfile: deploy/server.Dockerfile
+    command: ["python", "-m", "app.workers.mail_retention_worker"]
+    env_file:
+      - ../.env
+    environment:
+      POSTGRES_HOST: shared-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+    volumes:
+      - ../data:/app/data
+    networks:
+      - app_net
+      - pg_net
+    restart: unless-stopped
+
   storage:
     container_name: moaworks-storage
     image: alpine:3.20

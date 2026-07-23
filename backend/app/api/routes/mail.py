@@ -10,6 +10,9 @@ from app.schemas.mail_messenger import (
     MailBulkResponse,
     MailCategoryRequest,
     MailAttachmentUploadResponse,
+    MailBackupCreateRequest,
+    MailBackupJobListResponse,
+    MailBackupJobView,
     MailBasicPreferencesResponse,
     MailBasicPreferencesUpdateRequest,
     MailRecentRecipientListResponse,
@@ -27,6 +30,10 @@ from app.schemas.mail_messenger import (
     MailFolderView,
     MailListQuery,
     MailListResponse,
+    MailMailboxEmptyRequest,
+    MailMailboxEmptyResponse,
+    MailMailboxPolicyUpdateRequest,
+    MailMailboxSettingsResponse,
     MailSendRequest,
     MailSendResponse,
     MailStorageResponse,
@@ -35,8 +42,16 @@ from app.schemas.mail_messenger import (
     MailTagListResponse,
     MailTagUpdateRequest,
     MailTagView,
+    MailboxSettingsRow,
 )
 from app.services.mail_messenger_service import MailMessengerService, MailPreferenceConflictError, MailSignatureConflictError
+from app.services.mailbox_backup_service import MailboxBackupService
+from app.services.mailbox_scope import MailboxScope
+from app.services.mailbox_settings_service import (
+    MailboxCountConflictError,
+    MailboxSettingsConflictError,
+    MailboxSettingsService,
+)
 
 
 router = APIRouter()
@@ -46,12 +61,65 @@ def _service() -> MailMessengerService:
     return MailMessengerService()
 
 
+def _mailbox_settings_service() -> MailboxSettingsService:
+    return MailboxSettingsService()
+
+
+def _mailbox_backup_service() -> MailboxBackupService:
+    return MailboxBackupService()
+
+
+def _parse_mailbox_scope(mailbox_key: str) -> MailboxScope:
+    try:
+        return MailboxScope.parse(mailbox_key)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "MAILBOX_NOT_FOUND",
+                "userMessage": "메일함을 찾을 수 없습니다.",
+                "adminMessage": "메일함 식별자가 올바르지 않습니다.",
+            },
+        ) from exc
+
+
 def _handle_error(exc: Exception) -> None:
-    if isinstance(exc, (MailPreferenceConflictError, MailSignatureConflictError)):
-        code = "MAIL_SIGNATURE_CONFLICT" if isinstance(exc, MailSignatureConflictError) else "MAIL_PREFERENCE_CONFLICT"
+    if isinstance(
+        exc,
+        (
+            MailPreferenceConflictError,
+            MailSignatureConflictError,
+            MailboxSettingsConflictError,
+            MailboxCountConflictError,
+        ),
+    ):
+        if isinstance(exc, MailSignatureConflictError):
+            code = "MAIL_SIGNATURE_CONFLICT"
+        elif isinstance(exc, MailPreferenceConflictError):
+            code = "MAIL_PREFERENCE_CONFLICT"
+        elif isinstance(exc, MailboxCountConflictError):
+            code = "MAILBOX_COUNT_CONFLICT"
+        else:
+            code = "MAILBOX_SETTINGS_CONFLICT"
+        detail = {
+            "code": code,
+            "userMessage": str(exc),
+            "adminMessage": str(exc),
+        }
+        if isinstance(exc, MailboxCountConflictError):
+            detail["currentCount"] = exc.current_count
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={"code": code, "userMessage": str(exc), "adminMessage": str(exc)},
+            detail=detail,
+        ) from exc
+    if isinstance(exc, FileNotFoundError):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "MAIL_BACKUP_NOT_FOUND",
+                "userMessage": "백업 파일을 찾을 수 없습니다.",
+                "adminMessage": "백업 artifact를 찾을 수 없습니다.",
+            },
         ) from exc
     if isinstance(exc, PermissionError):
         raise HTTPException(
@@ -299,6 +367,106 @@ def list_trash(query: MailListQuery = Depends(), user: AuthUserSummary = Depends
 def bulk_mail(payload: MailBulkRequest, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailBulkResponse:
     try:
         return _service().bulk_mail(user, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.get("/mailbox-settings", response_model=MailMailboxSettingsResponse)
+def get_mailbox_settings(
+    user: AuthUserSummary = Depends(permission_required("mail:read")),
+) -> MailMailboxSettingsResponse:
+    try:
+        return _mailbox_settings_service().get_settings(user)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.patch("/mailbox-settings/{mailbox_key}", response_model=MailboxSettingsRow)
+def update_mailbox_policy(
+    mailbox_key: str,
+    payload: MailMailboxPolicyUpdateRequest,
+    user: AuthUserSummary = Depends(permission_required("mail:read")),
+) -> MailboxSettingsRow:
+    try:
+        return _mailbox_settings_service().update_policy(
+            user,
+            _parse_mailbox_scope(mailbox_key),
+            payload,
+        )
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.post("/mailbox-settings/{mailbox_key}/empty", response_model=MailMailboxEmptyResponse)
+def empty_mailbox(
+    mailbox_key: str,
+    payload: MailMailboxEmptyRequest,
+    user: AuthUserSummary = Depends(permission_required("mail:read")),
+) -> MailMailboxEmptyResponse:
+    try:
+        return _mailbox_settings_service().empty_mailbox(
+            user,
+            _parse_mailbox_scope(mailbox_key),
+            payload,
+        )
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.post("/mailbox-backups", response_model=MailBackupJobView, status_code=status.HTTP_202_ACCEPTED)
+def create_mailbox_backup(
+    payload: MailBackupCreateRequest,
+    user: AuthUserSummary = Depends(permission_required("mail:read")),
+) -> MailBackupJobView:
+    try:
+        return _mailbox_backup_service().create_job(
+            user,
+            _parse_mailbox_scope(payload.mailboxKey),
+        )
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.get("/mailbox-backups", response_model=MailBackupJobListResponse)
+def list_mailbox_backups(
+    user: AuthUserSummary = Depends(permission_required("mail:read")),
+) -> MailBackupJobListResponse:
+    try:
+        return _mailbox_backup_service().list_jobs(user)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.post("/mailbox-backups/{job_id}/retry", response_model=MailBackupJobView, status_code=status.HTTP_202_ACCEPTED)
+def retry_mailbox_backup(
+    job_id: str,
+    user: AuthUserSummary = Depends(permission_required("mail:read")),
+) -> MailBackupJobView:
+    try:
+        return _mailbox_backup_service().retry_job(user, job_id)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.get("/mailbox-backups/{job_id}/download")
+def download_mailbox_backup(
+    job_id: str,
+    user: AuthUserSummary = Depends(permission_required("mail:read")),
+) -> FileResponse:
+    try:
+        artifact = _mailbox_backup_service().download_artifact(user, job_id)
+        return FileResponse(
+            artifact.path,
+            media_type="application/zip",
+            filename=artifact.download_name,
+        )
     except Exception as exc:
         _handle_error(exc)
         raise
