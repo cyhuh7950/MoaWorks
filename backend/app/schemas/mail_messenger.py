@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 import re
+import unicodedata
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -56,6 +57,88 @@ class MailBasicPreferencesUpdateRequest(MailBasicPreferencesBase):
 class MailBasicPreferencesResponse(MailBasicPreferencesBase):
     version: int = Field(ge=1)
     updatedAt: datetime
+
+
+class MailSignatureBase(BaseModel):
+    name: str = Field(min_length=1, max_length=50)
+    contentText: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        if any(unicodedata.category(character).startswith("C") for character in value):
+            raise ValueError("서명 이름에 제어문자를 사용할 수 없습니다.")
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("서명 이름을 입력하세요.")
+        return normalized
+
+    @field_validator("contentText")
+    @classmethod
+    def validate_content(cls, value: str) -> str:
+        normalized = value.replace("\r\n", "\n").replace("\r", "\n").strip("\n")
+        for character in normalized:
+            if character not in ("\n", "\t") and unicodedata.category(character).startswith("C"):
+                raise ValueError("서명 내용에 허용되지 않은 제어문자가 있습니다.")
+        if not normalized:
+            raise ValueError("서명 내용을 입력하세요.")
+        if len(normalized) > 4000:
+            raise ValueError("서명 내용은 4000자 이하여야 합니다.")
+        return normalized
+
+
+class MailSignatureCreateRequest(MailSignatureBase):
+    makeDefault: bool = False
+
+
+class MailSignatureUpdateRequest(MailSignatureBase):
+    expectedVersion: int = Field(ge=1)
+
+
+class MailSignatureView(MailSignatureBase):
+    signatureId: str
+    version: int = Field(ge=1)
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class MailSignaturePreferencesResponse(BaseModel):
+    enabled: bool
+    position: Literal["body_top", "body_bottom"]
+    defaultSignatureId: str | None = None
+    version: int = Field(ge=1)
+    updatedAt: datetime
+    signatures: list[MailSignatureView] = Field(default_factory=list)
+
+
+class MailSignaturePreferencesUpdateRequest(BaseModel):
+    enabled: bool
+    position: Literal["body_top", "body_bottom"]
+    defaultSignatureId: str | None = Field(default=None, min_length=1, max_length=100)
+    expectedVersion: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def require_default_when_enabled(self):
+        if self.enabled and not self.defaultSignatureId:
+            raise ValueError("서명을 사용하려면 기본 서명이 필요합니다.")
+        return self
+
+
+class MailSignatureDeleteItem(BaseModel):
+    signatureId: str = Field(min_length=1, max_length=100)
+    expectedVersion: int = Field(ge=1)
+
+
+class MailSignatureBulkDeleteRequest(BaseModel):
+    items: list[MailSignatureDeleteItem] = Field(min_length=1, max_length=20)
+
+    @field_validator("items")
+    @classmethod
+    def reject_duplicate_ids(cls, items: list[MailSignatureDeleteItem]) -> list[MailSignatureDeleteItem]:
+        ids = [item.signatureId for item in items]
+        if len(ids) != len(set(ids)):
+            raise ValueError("중복된 서명 삭제 요청입니다.")
+        return items
 
 
 class MailAttachmentMeta(BaseModel):

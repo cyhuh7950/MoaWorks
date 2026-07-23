@@ -2,6 +2,12 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   ackNotification,
+  bulkDeleteMailSignatures,
+  createMailSignature,
+  deleteMailSignature,
+  fetchMailSignatures,
+  updateMailSignature,
+  updateMailSignaturePreferences,
   bulkMailAction,
   readAllNotifications,
   apiBase,
@@ -79,6 +85,8 @@ import {
   type MailDeliveryStatusResponse,
   type MailDetail,
   type MailListQuery,
+  type MailSignature,
+  type MailSignaturePreferences,
   type MailFolder,
   type MailTag,
   type MailStorageResponse,
@@ -105,6 +113,7 @@ import { SplitView } from "./SplitView";
 import { NotificationCenter } from "./NotificationCenter";
 import { UserHome } from "./UserHome";
 import { CompactWarning, ConfirmModal, FeedbackState, ToastViewport, useFeedbackQueue } from "./components/FeedbackSystem";
+import { CommonPopup } from "./components/CommonPopup";
 
 const NOTIFICATION_POLICY = {
   retryMaxAttempts: 3,
@@ -514,7 +523,7 @@ function normalizeMailRecipients(value: string, companyDomain: string): string[]
 
 const MAIL_SETTINGS_TABS = ["기본환경", "서명", "메일함", "스팸", "자동분류", "자동전달", "부재중응답", "외부메일", "최근보낸메일"] as const;
 
-function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChange, onSave, onCancel, onReset, onReload }: {
+function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChange, onSave, onCancel, onReset, onReload, onOpenSignature }: {
   value: MailBasicPreferences | null;
   saved: MailBasicPreferences | null;
   loading: boolean;
@@ -525,6 +534,7 @@ function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChan
   onCancel: () => void;
   onReset: () => void;
   onReload: () => void;
+  onOpenSignature: () => void;
 }) {
   const dirty = Boolean(value && saved && JSON.stringify(value) !== JSON.stringify(saved));
   if (loading && !value) return <FeedbackState state="loading" title="메일 기본환경을 불러오는 중입니다." />;
@@ -534,7 +544,7 @@ function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChan
   );
   return <section className="user-mail-settings" aria-label="메일 환경설정">
     <header><div><small>메일 환경설정</small><h2>기본환경</h2></div><span aria-live="polite">{dirty ? "저장하지 않은 변경 있음" : "저장됨"}</span></header>
-    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 0 ? "page" : undefined} disabled={index !== 0} title={index === 0 ? "기본환경" : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index !== 0 ? <i>i</i> : null}</button>)}</nav>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 0 ? "page" : undefined} disabled={index > 1} onClick={index === 1 ? onOpenSignature : undefined} title={index < 2 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 1 ? <i>i</i> : null}</button>)}</nav>
     {error ? <CompactWarning item={{ id: "mail-basic-preferences", source: "mail-settings", tone: "warning", title: conflict ? "다른 위치에서 설정이 변경되었습니다." : "설정을 처리하지 못했습니다.", message: error, action: conflict ? { label: "서버 최신값 다시 불러오기", onAction: onReload } : undefined }} /> : null}
     <div className="user-mail-settings__body">
       <fieldset><legend>메일 읽기 설정</legend>
@@ -558,6 +568,88 @@ function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChan
       </fieldset>
     </div>
     <footer><button type="button" onClick={onReset} disabled={loading}>기본값 적용</button><span /><button type="button" onClick={onCancel} disabled={loading}>취소</button><button type="button" onClick={onSave} disabled={loading || !dirty}>저장</button></footer>
+  </section>;
+}
+
+function MailSignatureSettingsPanel({
+  value, saved, loading, error, conflict, onChange, onSavePreferences, onCancel, onReload,
+  onSaveSignature, onDeleteSignatures, onOpenBasic,
+}: {
+  value: MailSignaturePreferences | null;
+  saved: MailSignaturePreferences | null;
+  loading: boolean;
+  error: string;
+  conflict: boolean;
+  onChange: (patch: Partial<MailSignaturePreferences>) => void;
+  onSavePreferences: () => Promise<void>;
+  onCancel: () => void;
+  onReload: () => Promise<void>;
+  onSaveSignature: (signature: MailSignature | null, form: { name: string; contentText: string; makeDefault: boolean }) => Promise<boolean>;
+  onDeleteSignatures: (signatures: MailSignature[]) => Promise<boolean>;
+  onOpenBasic: () => void;
+}) {
+  type MailSignatureEditorForm = { name: string; contentText: string; makeDefault: boolean };
+  const emptyEditorForm: MailSignatureEditorForm = { name: "", contentText: "", makeDefault: false };
+  const isMailSignatureEditorDirty = (initial: MailSignatureEditorForm, current: MailSignatureEditorForm) =>
+    initial.name !== current.name
+    || initial.contentText !== current.contentText
+    || initial.makeDefault !== current.makeDefault;
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [editor, setEditor] = useState<MailSignature | null | false>(false);
+  const [editorInitialForm, setEditorInitialForm] = useState<MailSignatureEditorForm>(emptyEditorForm);
+  const [editorForm, setEditorForm] = useState<MailSignatureEditorForm>(emptyEditorForm);
+  const [deleteTargets, setDeleteTargets] = useState<MailSignature[]>([]);
+  const editorCloseRequestRef = useRef<(() => void) | null>(null);
+  const dirty = Boolean(value && saved && JSON.stringify(value) !== JSON.stringify(saved));
+  const openEditor = (signature: MailSignature | null) => {
+    const nextForm = {
+      name: signature?.name ?? "",
+      contentText: signature?.contentText ?? "",
+      makeDefault: signature ? value?.defaultSignatureId === signature.signatureId : false,
+    };
+    setEditor(signature);
+    setEditorInitialForm(nextForm);
+    setEditorForm(nextForm);
+  };
+  if (loading && !value) return <FeedbackState state="loading" title="메일 서명을 불러오는 중입니다." />;
+  if (!value) return <FeedbackState state="error" title="메일 서명을 불러오지 못했습니다." message={error} action={{ label: "다시 시도", onAction: () => void onReload() }} />;
+  const selected = value.signatures.filter((item) => selectedIds.includes(item.signatureId));
+  return <section className="user-mail-settings user-mail-signature-settings" aria-label="메일 서명 환경설정">
+    <header><div><small>메일 환경설정</small><h2>서명</h2></div><span aria-live="polite">{dirty ? "저장하지 않은 변경 있음" : "저장됨"}</span></header>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 1 ? "page" : undefined} disabled={index > 1} onClick={index === 0 ? onOpenBasic : undefined} title={index < 2 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 1 ? <i>i</i> : null}</button>)}</nav>
+    {error ? <CompactWarning item={{ id: "mail-signatures", source: "mail-settings", tone: "warning", title: conflict ? "다른 위치에서 서명이 변경되었습니다." : "서명을 처리하지 못했습니다.", message: error, action: conflict ? { label: "서버 최신값 다시 불러오기", onAction: () => void onReload() } : undefined }} /> : null}
+    <div className="user-mail-settings__body user-mail-signature-settings__body">
+      <fieldset>
+        <legend>서명 정책</legend>
+        <label><span>서명 사용 <i title="발송·예약·임시저장 시 서버가 최신 기본 서명을 적용합니다.">i</i></span><input type="checkbox" checked={value.enabled} disabled={!value.signatures.length} onChange={(event) => onChange({ enabled: event.target.checked })} /></label>
+        <label><span>삽입 위치</span><select value={value.position} onChange={(event) => onChange({ position: event.target.value as MailSignaturePreferences["position"] })}><option value="body_top">본문 상단</option><option value="body_bottom">본문 하단</option></select></label>
+        <label><span>기본 서명</span><select value={value.defaultSignatureId ?? ""} onChange={(event) => onChange({ defaultSignatureId: event.target.value || null, enabled: event.target.value ? value.enabled : false })}><option value="">선택 안 함</option>{value.signatures.map((item) => <option key={item.signatureId} value={item.signatureId}>{item.name}</option>)}</select></label>
+      </fieldset>
+      <fieldset className="user-mail-signature-list">
+        <legend>서명 목록</legend>
+        <div className="user-mail-signature-list__toolbar">
+          <button type="button" onClick={() => openEditor(null)} disabled={loading || value.signatures.length >= 20}>서명 추가</button>
+          <button type="button" onClick={() => setDeleteTargets(selected)} disabled={loading || !selected.length}>선택 삭제</button>
+          <small>{value.signatures.length}/20개</small>
+        </div>
+        {!value.signatures.length ? <FeedbackState state="empty" title="등록된 서명이 없습니다." message="서명 추가 버튼으로 첫 서명을 등록하세요." /> : value.signatures.map((item) => <article key={item.signatureId} className="user-mail-signature-row">
+          <input type="checkbox" aria-label={`${item.name} 선택`} checked={selectedIds.includes(item.signatureId)} onChange={(event) => setSelectedIds((current) => event.target.checked ? [...current, item.signatureId] : current.filter((id) => id !== item.signatureId))} />
+          <div><strong>{item.name}{value.defaultSignatureId === item.signatureId ? <em>기본</em> : null}</strong><pre>{item.contentText}</pre></div>
+          <button type="button" onClick={() => openEditor(item)}>수정</button>
+          <button type="button" onClick={() => setDeleteTargets([item])}>삭제</button>
+        </article>)}
+      </fieldset>
+    </div>
+    <footer><span /><button type="button" onClick={onCancel} disabled={loading}>취소</button><button type="button" onClick={() => void onSavePreferences()} disabled={loading || !dirty || (value.enabled && !value.defaultSignatureId)}>저장</button></footer>
+    <CommonPopup title={editor ? "서명 수정" : "서명 추가"} open={editor !== false} onClose={() => setEditor(false)} dirty={isMailSignatureEditorDirty(editorInitialForm, editorForm)} error={error} saving={loading} closeRequestRef={editorCloseRequestRef}>
+      <div className="user-mail-signature-editor">
+        <label><span>이름</span><input autoFocus maxLength={50} value={editorForm.name} onChange={(event) => setEditorForm((current) => ({ ...current, name: event.target.value }))} /></label>
+        <label><span>일반 텍스트 내용</span><textarea maxLength={4000} value={editorForm.contentText} onChange={(event) => setEditorForm((current) => ({ ...current, contentText: event.target.value }))} /></label>
+        <label><input type="checkbox" checked={editorForm.makeDefault} onChange={(event) => setEditorForm((current) => ({ ...current, makeDefault: event.target.checked }))} /> 기본 서명으로 지정</label>
+        <div className="feedback-confirm-actions"><button type="button" onClick={() => editorCloseRequestRef.current?.()}>취소</button><button type="button" disabled={loading || !editorForm.name.trim() || !editorForm.contentText.trim()} onClick={async () => { if (await onSaveSignature(editor || null, editorForm)) setEditor(false); }}>저장</button></div>
+      </div>
+    </CommonPopup>
+    <ConfirmModal open={deleteTargets.length > 0} title="서명 삭제 확인" message={<><strong>{deleteTargets.length}개 서명</strong>을 삭제합니다. 기본 서명이면 남은 최신 서명이 자동 승계됩니다.</>} confirmLabel="삭제" busy={loading} onCancel={() => setDeleteTargets([])} onConfirm={async () => { if (await onDeleteSignatures(deleteTargets)) { setDeleteTargets([]); setSelectedIds([]); } }} />
   </section>;
 }
 
@@ -696,6 +788,12 @@ export default function App() {
   const [mailPreferencesLoading, setMailPreferencesLoading] = useState(false);
   const [mailPreferencesError, setMailPreferencesError] = useState("");
   const [mailPreferencesConflict, setMailPreferencesConflict] = useState(false);
+  const [mailSettingsTab, setMailSettingsTab] = useState<"basic" | "signature">("basic");
+  const [mailSignatures, setMailSignatures] = useState<MailSignaturePreferences | null>(null);
+  const [savedMailSignatures, setSavedMailSignatures] = useState<MailSignaturePreferences | null>(null);
+  const [mailSignaturesLoading, setMailSignaturesLoading] = useState(false);
+  const [mailSignaturesError, setMailSignaturesError] = useState("");
+  const [mailSignaturesConflict, setMailSignaturesConflict] = useState(false);
   const [messengerRoomsData, setMessengerRoomsData] = useState<MessengerRoomSummary[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState("");
   const [selectedRoomDetail, setSelectedRoomDetail] = useState<MessengerRoomDetail | null>(null);
@@ -711,6 +809,9 @@ export default function App() {
   const streamRetryRef = useRef(0);
   const mailWorkspaceRequestRef = useRef(0);
   const mailDetailRequestRef = useRef(0);
+  const activeMailSignature = mailSignatures?.enabled
+    ? mailSignatures.signatures.find((item) => item.signatureId === mailSignatures.defaultSignatureId) ?? null
+    : null;
 
   async function loadNotificationData(targetToken: string): Promise<void> {
     setNotificationLoading(true);
@@ -840,11 +941,13 @@ export default function App() {
   }
 
   async function refreshMailResources(targetToken: string) {
-    const [folders, tags, preferences] = await Promise.all([fetchMailFolders(targetToken), fetchMailTags(targetToken), fetchMailBasicPreferences(targetToken)]);
+    const [folders, tags, preferences, signatures] = await Promise.all([fetchMailFolders(targetToken), fetchMailTags(targetToken), fetchMailBasicPreferences(targetToken), fetchMailSignatures(targetToken)]);
     setMailFoldersData(folders.folders ?? []);
     setMailTagsData(tags.tags ?? []);
     setMailPreferences(preferences);
     setSavedMailPreferences(preferences);
+    setMailSignatures(signatures);
+    setSavedMailSignatures(signatures);
   }
 
   function openMailResourceModal(kind: "folder" | "tag", item?: MailFolder | MailTag) {
@@ -922,6 +1025,7 @@ export default function App() {
     }
   }
   function openNewMailCompose() {
+    void refreshMailSignaturesForCompose();
     setMailComposeContext("new");
     setMailComposePosition(null);
     setMailComposeFiles([]);
@@ -932,6 +1036,24 @@ export default function App() {
     setMailComposeForm(createEmptyMailComposeForm());
     setMailError("");
     setQuickComposeMode("mail");
+  }
+
+  async function refreshMailSignaturesForCompose() {
+    if (!token) return;
+    try {
+      const latest = await fetchMailSignatures(token);
+      setMailSignatures(latest);
+      setSavedMailSignatures(latest);
+    } catch (error) {
+      setMailSignatures(null);
+      pushFeedback({
+        id: `mail-signature-compose-warning-${Date.now()}`,
+        source: "mail",
+        tone: "warning",
+        title: "최신 서명을 불러오지 못했습니다.",
+        message: normalizeClientError(error, "메일 작성은 계속할 수 있으며, 저장 시 서버가 최신 서명을 다시 확인합니다."),
+      });
+    }
   }
 
   function startMailComposeDrag(event: React.MouseEvent<HTMLDivElement>) {
@@ -1352,17 +1474,25 @@ export default function App() {
   async function openMailBasicSettings() {
     if (!token) return;
     setMailSettingsOpen(true);
+    setMailSettingsTab("basic");
     setMailPreferencesLoading(true);
+    setMailSignaturesLoading(true);
     setMailPreferencesError("");
+    setMailSignaturesError("");
     setMailPreferencesConflict(false);
+    setMailSignaturesConflict(false);
     try {
-      const result = await fetchMailBasicPreferences(token);
-      setMailPreferences(result);
-      setSavedMailPreferences(result);
+      const [basic, signatures] = await Promise.all([fetchMailBasicPreferences(token), fetchMailSignatures(token)]);
+      setMailPreferences(basic);
+      setSavedMailPreferences(basic);
+      setMailSignatures(signatures);
+      setSavedMailSignatures(signatures);
     } catch (error) {
       setMailPreferencesError(normalizeClientError(error, "메일 기본환경을 불러오지 못했습니다."));
+      setMailSignaturesError(normalizeClientError(error, "메일 서명을 불러오지 못했습니다."));
     } finally {
       setMailPreferencesLoading(false);
+      setMailSignaturesLoading(false);
     }
   }
 
@@ -1418,10 +1548,102 @@ export default function App() {
     }
   }
 
+  async function reloadMailSignatures() {
+    if (!token) return;
+    setMailSignaturesLoading(true);
+    try {
+      const latest = await fetchMailSignatures(token);
+      setMailSignatures(latest);
+      setSavedMailSignatures(latest);
+      setMailSignaturesConflict(false);
+      setMailSignaturesError("");
+    } catch (error) {
+      setMailSignaturesError(normalizeClientError(error, "서버 최신 서명을 불러오지 못했습니다."));
+    } finally {
+      setMailSignaturesLoading(false);
+    }
+  }
+
+  async function saveMailSignaturePreferences() {
+    if (!token || !mailSignatures) return;
+    setMailSignaturesLoading(true);
+    setMailSignaturesError("");
+    setMailSignaturesConflict(false);
+    try {
+      await updateMailSignaturePreferences(token, mailSignatures);
+      const confirmed = await fetchMailSignatures(token);
+      setMailSignatures(confirmed);
+      setSavedMailSignatures(confirmed);
+      pushFeedback({ id: `mail-signature-preferences-${confirmed.version}`, source: "mail-settings", tone: "success", title: "서명 설정을 저장했습니다." });
+    } catch (error) {
+      setMailSignaturesConflict(error instanceof ApiRequestError && error.status === 409);
+      setMailSignaturesError(normalizeClientError(error, "서명 설정 저장에 실패했습니다."));
+    } finally {
+      setMailSignaturesLoading(false);
+    }
+  }
+
+  async function saveMailSignature(signature: MailSignature | null, form: { name: string; contentText: string; makeDefault: boolean }): Promise<boolean> {
+    if (!token) return false;
+    setMailSignaturesLoading(true);
+    setMailSignaturesError("");
+    setMailSignaturesConflict(false);
+    try {
+      if (signature) {
+        await updateMailSignature(token, signature, { name: form.name, contentText: form.contentText });
+      } else {
+        await createMailSignature(token, form);
+      }
+      let confirmed = await fetchMailSignatures(token);
+      if (signature && form.makeDefault && confirmed.defaultSignatureId !== signature.signatureId) {
+        await updateMailSignaturePreferences(token, {
+          ...confirmed,
+          defaultSignatureId: signature.signatureId,
+        });
+        confirmed = await fetchMailSignatures(token);
+      }
+      setMailSignatures(confirmed);
+      setSavedMailSignatures(confirmed);
+      pushFeedback({ id: `mail-signature-save-${Date.now()}`, source: "mail-settings", tone: "success", title: signature ? "서명을 수정했습니다." : "서명을 추가했습니다." });
+      return true;
+    } catch (error) {
+      setMailSignaturesConflict(error instanceof ApiRequestError && error.status === 409);
+      setMailSignaturesError(normalizeClientError(error, "서명 저장에 실패했습니다."));
+      return false;
+    } finally {
+      setMailSignaturesLoading(false);
+    }
+  }
+
+  async function removeMailSignatures(signatures: MailSignature[]): Promise<boolean> {
+    if (!token || !signatures.length) return false;
+    setMailSignaturesLoading(true);
+    setMailSignaturesError("");
+    setMailSignaturesConflict(false);
+    try {
+      if (signatures.length === 1) await deleteMailSignature(token, signatures[0]);
+      else await bulkDeleteMailSignatures(token, signatures);
+      const confirmed = await fetchMailSignatures(token);
+      setMailSignatures(confirmed);
+      setSavedMailSignatures(confirmed);
+      pushFeedback({ id: `mail-signature-delete-${Date.now()}`, source: "mail-settings", tone: "success", title: `${signatures.length}개 서명을 삭제했습니다.` });
+      return true;
+    } catch (error) {
+      setMailSignaturesConflict(error instanceof ApiRequestError && error.status === 409);
+      setMailSignaturesError(normalizeClientError(error, "서명 삭제에 실패했습니다."));
+      return false;
+    } finally {
+      setMailSignaturesLoading(false);
+    }
+  }
+
   function closeMailBasicSettings() {
-    const dirty = Boolean(mailPreferences && savedMailPreferences && JSON.stringify(mailPreferences) !== JSON.stringify(savedMailPreferences));
+    const basicDirty = Boolean(mailPreferences && savedMailPreferences && JSON.stringify(mailPreferences) !== JSON.stringify(savedMailPreferences));
+    const signatureDirty = Boolean(mailSignatures && savedMailSignatures && JSON.stringify(mailSignatures) !== JSON.stringify(savedMailSignatures));
+    const dirty = basicDirty || signatureDirty;
     if (dirty && !window.confirm("저장하지 않은 변경을 취소하고 메일함으로 돌아갈까요?")) return;
     setMailPreferences(savedMailPreferences);
+    setMailSignatures(savedMailSignatures);
     setMailSettingsOpen(false);
   }
 
@@ -1699,6 +1921,7 @@ export default function App() {
 
   function openMailComposeFromDetail(mode: "reply" | "reply_all" | "forward") {
     if (!selectedMailDetail) return;
+    void refreshMailSignaturesForCompose();
     const replyRecipients = mode === "forward"
       ? { to: [], cc: [] }
       : buildMailReplyRecipients(selectedMailDetail, me?.userEmail || "", mode);
@@ -2826,7 +3049,7 @@ export default function App() {
                 {!mailStorageLoading && mailStorageError ? <><small role="alert">{mailStorageError}</small><button type="button" onClick={() => void loadMailStorage(token)}>용량 다시 시도</button></> : null}
               </div>
             </aside>
-            {mailSettingsOpen ? (
+            {mailSettingsOpen && mailSettingsTab === "basic" ? (
               <MailBasicSettingsPanel
                 value={mailPreferences}
                 saved={savedMailPreferences}
@@ -2838,6 +3061,22 @@ export default function App() {
                 onCancel={closeMailBasicSettings}
                 onReset={() => void resetMailBasicSettings()}
                 onReload={() => void reloadMailBasicSettings()}
+                onOpenSignature={() => setMailSettingsTab("signature")}
+              />
+            ) : mailSettingsOpen ? (
+              <MailSignatureSettingsPanel
+                value={mailSignatures}
+                saved={savedMailSignatures}
+                loading={mailSignaturesLoading}
+                error={mailSignaturesError}
+                conflict={mailSignaturesConflict}
+                onChange={(patch) => setMailSignatures((current) => current ? { ...current, ...patch } : current)}
+                onSavePreferences={saveMailSignaturePreferences}
+                onCancel={closeMailBasicSettings}
+                onReload={reloadMailSignatures}
+                onSaveSignature={saveMailSignature}
+                onDeleteSignatures={removeMailSignatures}
+                onOpenBasic={() => setMailSettingsTab("basic")}
               />
             ) : (
             <SplitView
@@ -2949,6 +3188,10 @@ export default function App() {
                     <span>본문</span>
                     <textarea aria-label="mail-compose-body" value={mailComposeForm.bodyText} onChange={(event) => setMailComposeForm((current) => ({ ...current, bodyText: event.target.value }))} placeholder="본문 입력" />
                   </label>
+                  {activeMailSignature ? <section className="user-mail-compose-signature-preview" aria-label="기본 서명 미리보기">
+                    <div><strong>기본 서명 · {activeMailSignature.name}</strong><small>{mailSignatures?.position === "body_top" ? "본문 상단" : "본문 하단"}에 서버가 저장 시 적용</small></div>
+                    <pre>{activeMailSignature.contentText}</pre>
+                  </section> : null}
                   {mailComposeContext === "forward" && mailComposeSourceDetail?.attachments.length ? (
                     <section className="user-mail-compose-attachments user-mail-compose-source-attachments" aria-label="원문 첨부" title="선택한 원문 첨부는 권한 확인 후 새 파일로 복제됩니다.">
                       <div><strong>원문 첨부</strong><small>{selectedForwardAttachments.length}/{mailComposeSourceDetail.attachments.length}개 선택</small></div>

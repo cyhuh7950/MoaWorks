@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from html import escape
 import json
 import logging
 from uuid import uuid4
 
+from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 from app.core.config import settings
 from app.services.mail_delivery_service import MailDeliveryPolicy
@@ -15,6 +17,12 @@ from app.schemas.mail_messenger import (
     MailAttachmentView,
     MailBasicPreferencesResponse,
     MailBasicPreferencesUpdateRequest,
+    MailSignatureBulkDeleteRequest,
+    MailSignatureCreateRequest,
+    MailSignaturePreferencesResponse,
+    MailSignaturePreferencesUpdateRequest,
+    MailSignatureUpdateRequest,
+    MailSignatureView,
     ExternalDeliveryView,
     MailBulkRequest,
     MailBulkResponse,
@@ -58,6 +66,10 @@ class MailPreferenceConflictError(RuntimeError):
     pass
 
 from app.services.mail_attachment_storage import MailAttachmentStorage
+
+
+class MailSignatureConflictError(RuntimeError):
+    pass
 
 
 class MailMessengerService:
@@ -573,6 +585,260 @@ class MailMessengerService:
             VALUES (%s,%s,%s,%s,'mail_preferences',%s,%s,NULL,NULL,%s,%s)""",
             (self._new_id("audit"), actor.companyId, actor.userId, actor.userName, actor.userId, event, field_names, now),
         )
+
+    def get_signatures(self, actor: AuthUserSummary) -> MailSignaturePreferencesResponse:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                preferences = self._ensure_signature_preferences(cursor, actor)
+                response = self._signature_preferences_response(cursor, actor, preferences)
+            connection.commit()
+        return response
+
+    def create_signature(self, actor: AuthUserSummary, payload: MailSignatureCreateRequest) -> MailSignatureView:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        signature_id = self._new_id("mailsig")
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                self._lock_signature_owner(cursor, actor)
+                preferences = self._ensure_signature_preferences(cursor, actor, lock=True)
+                cursor.execute(
+                    "SELECT COUNT(*)::INTEGER AS count FROM user_mail_signatures WHERE company_id = %s AND owner_user_id = %s",
+                    (actor.companyId, actor.userId),
+                )
+                count = int(cursor.fetchone()["count"])
+                if count >= 20:
+                    raise ValueError("서명은 최대 20개까지 등록할 수 있습니다.")
+                self._assert_signature_name_available(cursor, actor, payload.name)
+                try:
+                    cursor.execute(
+                        """INSERT INTO user_mail_signatures
+                        (id, company_id, owner_user_id, name, content_text, version, created_at, updated_at)
+                        VALUES (%s,%s,%s,%s,%s,1,%s,%s) RETURNING *""",
+                        (signature_id, actor.companyId, actor.userId, payload.name, payload.contentText, now, now),
+                    )
+                except UniqueViolation as exc:
+                    raise MailSignatureConflictError("같은 이름의 서명이 이미 있습니다.") from exc
+                row = cursor.fetchone()
+                if count == 0 or payload.makeDefault:
+                    cursor.execute(
+                        """UPDATE user_mail_signature_preferences
+                        SET default_signature_id = %s, version = version + 1, updated_at = %s
+                        WHERE company_id = %s AND owner_user_id = %s AND version = %s RETURNING *""",
+                        (signature_id, now, actor.companyId, actor.userId, preferences["version"]),
+                    )
+                    if cursor.fetchone() is None:
+                        raise MailSignatureConflictError("다른 위치에서 서명 설정이 변경되었습니다. 최신값을 다시 불러오세요.")
+                self._write_signature_audit(cursor, actor, signature_id, "mail.signature.created", ["name", "contentText", "default" if count == 0 or payload.makeDefault else "created"], now)
+            connection.commit()
+        return self._to_signature_view(row)
+
+    def update_signature(self, actor: AuthUserSummary, signature_id: str, payload: MailSignatureUpdateRequest) -> MailSignatureView:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM user_mail_signatures WHERE id = %s AND company_id = %s AND owner_user_id = %s FOR UPDATE",
+                    (signature_id, actor.companyId, actor.userId),
+                )
+                before = cursor.fetchone()
+                if before is None:
+                    raise PermissionError("서명을 수정할 권한이 없습니다.")
+                if before["version"] != payload.expectedVersion:
+                    raise MailSignatureConflictError("다른 위치에서 서명이 변경되었습니다. 최신값을 다시 불러오세요.")
+                self._assert_signature_name_available(cursor, actor, payload.name, exclude_id=signature_id)
+                try:
+                    cursor.execute(
+                        """UPDATE user_mail_signatures SET name = %s, content_text = %s,
+                        version = version + 1, updated_at = %s
+                        WHERE id = %s AND company_id = %s AND owner_user_id = %s AND version = %s RETURNING *""",
+                        (payload.name, payload.contentText, now, signature_id, actor.companyId, actor.userId, payload.expectedVersion),
+                    )
+                except UniqueViolation as exc:
+                    raise MailSignatureConflictError("같은 이름의 서명이 이미 있습니다.") from exc
+                row = cursor.fetchone()
+                if row is None:
+                    raise MailSignatureConflictError("다른 위치에서 서명이 변경되었습니다. 최신값을 다시 불러오세요.")
+                changed = [field for field, key in (("name", "name"), ("contentText", "content_text")) if before[key] != getattr(payload, field)]
+                self._write_signature_audit(cursor, actor, signature_id, "mail.signature.updated", changed, now)
+            connection.commit()
+        return self._to_signature_view(row)
+
+    def delete_signature(self, actor: AuthUserSummary, signature_id: str, expected_version: int) -> MailSignaturePreferencesResponse:
+        return self._delete_signatures(actor, [(signature_id, expected_version)])
+
+    def bulk_delete_signatures(self, actor: AuthUserSummary, payload: MailSignatureBulkDeleteRequest) -> MailSignaturePreferencesResponse:
+        return self._delete_signatures(actor, [(item.signatureId, item.expectedVersion) for item in payload.items])
+
+    def _delete_signatures(self, actor: AuthUserSummary, items: list[tuple[str, int]]) -> MailSignaturePreferencesResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                self._lock_signature_owner(cursor, actor)
+                preferences = self._ensure_signature_preferences(cursor, actor, lock=True)
+                rows: list[dict] = []
+                for signature_id, expected_version in items:
+                    cursor.execute(
+                        "SELECT * FROM user_mail_signatures WHERE id = %s AND company_id = %s AND owner_user_id = %s FOR UPDATE",
+                        (signature_id, actor.companyId, actor.userId),
+                    )
+                    row = cursor.fetchone()
+                    if row is None:
+                        raise PermissionError("서명을 삭제할 권한이 없습니다.")
+                    if row["version"] != expected_version:
+                        raise MailSignatureConflictError("다른 위치에서 서명이 변경되었습니다. 최신값을 다시 불러오세요.")
+                    rows.append(row)
+                for row in rows:
+                    cursor.execute(
+                        "DELETE FROM user_mail_signatures WHERE id = %s AND company_id = %s AND owner_user_id = %s AND version = %s",
+                        (row["id"], actor.companyId, actor.userId, row["version"]),
+                    )
+                    self._write_signature_audit(cursor, actor, row["id"], "mail.signature.deleted", ["deleted"], now)
+                deleted_ids = {row["id"] for row in rows}
+                if preferences["default_signature_id"] in deleted_ids:
+                    cursor.execute(
+                        """SELECT id FROM user_mail_signatures
+                        WHERE company_id = %s AND owner_user_id = %s
+                        ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT 1""",
+                        (actor.companyId, actor.userId),
+                    )
+                    latest = cursor.fetchone()
+                    next_default = latest["id"] if latest else None
+                    cursor.execute(
+                        """UPDATE user_mail_signature_preferences
+                        SET default_signature_id = %s, enabled = CASE WHEN %s IS NULL THEN FALSE ELSE enabled END,
+                            version = version + 1, updated_at = %s
+                        WHERE company_id = %s AND owner_user_id = %s AND version = %s RETURNING *""",
+                        (next_default, next_default, now, actor.companyId, actor.userId, preferences["version"]),
+                    )
+                    preferences = cursor.fetchone()
+                    if preferences is None:
+                        raise MailSignatureConflictError("다른 위치에서 서명 설정이 변경되었습니다. 최신값을 다시 불러오세요.")
+                    self._write_signature_audit(cursor, actor, actor.userId, "mail.signature.preferences.updated", ["defaultSignatureId", "enabled"], now)
+                response = self._signature_preferences_response(cursor, actor, preferences)
+            connection.commit()
+        return response
+
+    def update_signature_preferences(self, actor: AuthUserSummary, payload: MailSignaturePreferencesUpdateRequest) -> MailSignaturePreferencesResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                preferences = self._ensure_signature_preferences(cursor, actor, lock=True)
+                if preferences["version"] != payload.expectedVersion:
+                    raise MailSignatureConflictError("다른 위치에서 서명 설정이 변경되었습니다. 최신값을 다시 불러오세요.")
+                if payload.defaultSignatureId:
+                    cursor.execute(
+                        "SELECT id FROM user_mail_signatures WHERE id = %s AND company_id = %s AND owner_user_id = %s",
+                        (payload.defaultSignatureId, actor.companyId, actor.userId),
+                    )
+                    if cursor.fetchone() is None:
+                        raise PermissionError("기본 서명을 지정할 권한이 없습니다.")
+                cursor.execute(
+                    """UPDATE user_mail_signature_preferences
+                    SET enabled = %s, position = %s, default_signature_id = %s,
+                        version = version + 1, updated_at = %s
+                    WHERE company_id = %s AND owner_user_id = %s AND version = %s RETURNING *""",
+                    (payload.enabled, payload.position, payload.defaultSignatureId, now, actor.companyId, actor.userId, payload.expectedVersion),
+                )
+                updated = cursor.fetchone()
+                if updated is None:
+                    raise MailSignatureConflictError("다른 위치에서 서명 설정이 변경되었습니다. 최신값을 다시 불러오세요.")
+                changed = [field for field, key in (("enabled", "enabled"), ("position", "position"), ("defaultSignatureId", "default_signature_id")) if preferences[key] != getattr(payload, field)]
+                self._write_signature_audit(cursor, actor, actor.userId, "mail.signature.preferences.updated", changed, now)
+                response = self._signature_preferences_response(cursor, actor, updated)
+            connection.commit()
+        return response
+
+    def _lock_signature_owner(self, cursor, actor: AuthUserSummary) -> None:
+        cursor.execute("SELECT id FROM users WHERE id = %s AND company_id = %s FOR UPDATE", (actor.userId, actor.companyId))
+        if cursor.fetchone() is None:
+            raise PermissionError("서명을 관리할 권한이 없습니다.")
+
+    def _ensure_signature_preferences(self, cursor, actor: AuthUserSummary, *, lock: bool = False) -> dict:
+        cursor.execute(
+            "INSERT INTO user_mail_signature_preferences (owner_user_id, company_id) VALUES (%s, %s) ON CONFLICT (owner_user_id) DO NOTHING",
+            (actor.userId, actor.companyId),
+        )
+        suffix = " FOR UPDATE" if lock else ""
+        cursor.execute(
+            "SELECT * FROM user_mail_signature_preferences WHERE company_id = %s AND owner_user_id = %s" + suffix,
+            (actor.companyId, actor.userId),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise PermissionError("서명 설정을 조회할 권한이 없습니다.")
+        return row
+
+    def _assert_signature_name_available(self, cursor, actor: AuthUserSummary, name: str, *, exclude_id: str | None = None) -> None:
+        query = "SELECT id FROM user_mail_signatures WHERE company_id = %s AND owner_user_id = %s AND LOWER(name) = LOWER(%s)"
+        params: tuple[object, ...] = (actor.companyId, actor.userId, name)
+        if exclude_id is not None:
+            query += " AND id <> %s"
+            params += (exclude_id,)
+        cursor.execute(query, params)
+        if cursor.fetchone() is not None:
+            raise MailSignatureConflictError("같은 이름의 서명이 이미 있습니다.")
+
+    def _signature_preferences_response(self, cursor, actor: AuthUserSummary, preferences: dict) -> MailSignaturePreferencesResponse:
+        cursor.execute(
+            """SELECT * FROM user_mail_signatures WHERE company_id = %s AND owner_user_id = %s
+            ORDER BY updated_at DESC, created_at DESC, id DESC""",
+            (actor.companyId, actor.userId),
+        )
+        return MailSignaturePreferencesResponse(
+            enabled=preferences["enabled"], position=preferences["position"],
+            defaultSignatureId=preferences["default_signature_id"], version=preferences["version"],
+            updatedAt=preferences["updated_at"], signatures=[self._to_signature_view(row) for row in cursor.fetchall()],
+        )
+
+    @staticmethod
+    def _to_signature_view(row: dict) -> MailSignatureView:
+        return MailSignatureView(
+            signatureId=row["id"], name=row["name"], contentText=row["content_text"],
+            version=row["version"], createdAt=row["created_at"], updatedAt=row["updated_at"],
+        )
+
+    def _write_signature_audit(self, cursor, actor: AuthUserSummary, target_id: str, event: str, changed_fields: list[str], now: datetime) -> None:
+        reason = json.dumps({"changedFields": changed_fields}, ensure_ascii=False, sort_keys=True)
+        cursor.execute(
+            """INSERT INTO audit_logs
+            (id, company_id, actor_user_id, actor_user_name, target_type, target_id, event, status_before, status_after, reason, created_at)
+            VALUES (%s,%s,%s,%s,'mail_signature',%s,%s,NULL,NULL,%s,%s)""",
+            (self._new_id("audit"), actor.companyId, actor.userId, actor.userName, target_id, event, reason, now),
+        )
+
+    @staticmethod
+    def _fetch_enabled_signature(cursor, actor: AuthUserSummary) -> dict | None:
+        cursor.execute(
+            """SELECT s.content_text, p.position
+            FROM user_mail_signature_preferences p
+            JOIN user_mail_signatures s ON s.id = p.default_signature_id
+                AND s.company_id = p.company_id AND s.owner_user_id = p.owner_user_id
+            WHERE p.company_id = %s AND p.owner_user_id = %s AND p.enabled = TRUE""",
+            (actor.companyId, actor.userId),
+        )
+        return cursor.fetchone()
+
+    @staticmethod
+    def _compose_signature_body(body_text: str, body_html: str | None, signature: dict | None) -> tuple[str, str | None]:
+        if not signature:
+            return body_text, body_html
+        signature_text = signature["content_text"]
+        delimiter = "\n\n-- \n"
+        if signature["position"] == "body_top":
+            final_text = signature_text + delimiter + body_text
+        else:
+            final_text = body_text + delimiter + signature_text
+        if body_html is None:
+            return final_text, None
+        signature_html = '<div data-mail-signature="true"><pre>' + escape(signature_text) + "</pre></div>"
+        separator_html = '<hr data-mail-signature-separator="true">'
+        final_html = signature_html + separator_html + body_html if signature["position"] == "body_top" else body_html + separator_html + signature_html
+        return final_text, final_html
 
     def save_draft(self, actor: AuthUserSummary, payload: MailDraftRequest) -> MailSendResponse:
         return self._save_mail(actor, payload, status_value="draft")
@@ -1584,6 +1850,8 @@ class MailMessengerService:
                         raise ValueError("외부 발송 provider를 찾을 수 없습니다.")
 
                 preferences = self._ensure_basic_preferences(cursor, actor)
+                signature = self._fetch_enabled_signature(cursor, actor)
+                final_body_text, final_body_html = self._compose_signature_body(payload.bodyText, payload.bodyHtml, signature)
                 cursor.execute(
                     """INSERT INTO mail_messages (
                         id, company_id, sender_user_id, sender_account_id, sender_email,
@@ -1592,7 +1860,7 @@ class MailMessengerService:
                         sender_display_name, reply_to_email, message_encoding, sender_copy_saved, read_receipt_requested
                     ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                     (mail_id, actor.companyId, actor.userId, account["id"], account["email"],
-                     payload.subject.strip(), payload.bodyText, payload.bodyHtml, status_value, sent_at, scheduled_at,
+                     payload.subject.strip(), final_body_text, final_body_html, status_value, sent_at, scheduled_at,
                      now, now, now + timedelta(days=30), len(resolved_attachments), payload.sourceMailId,
                      None if payload.composeAction == "new" else payload.composeAction,
                      preferences["sender_display_name"], preferences["reply_to_email"], preferences["message_encoding"],

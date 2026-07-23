@@ -26,9 +26,28 @@ body,
 .user-mail-settings > footer span { flex: 1; }
 .user-mail-settings > footer button { height: 36px; padding: 0 15px; border: 1px solid #cbd5e1; border-radius: 10px; background: #fff; font: inherit; font-weight: 700; }
 .user-mail-settings > footer button:last-child { color: #fff; background: #0f766e; border-color: #0f766e; }
+.user-mail-signature-settings__body { grid-template-columns: minmax(260px, .72fr) minmax(480px, 1.28fr); }
+.user-mail-signature-list { min-width: 0; }
+.user-mail-signature-list__toolbar { display: flex; align-items: center; gap: 8px; }
+.user-mail-signature-list__toolbar button { height: 34px; padding: 0 12px; border: 1px solid #cbd5e1; border-radius: 9px; background: #fff; font: inherit; font-weight: 700; }
+.user-mail-signature-list__toolbar small { margin-left: auto; color: #64748b; font-size: 10px; }
+.user-mail-signature-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: start; gap: 10px; padding: 12px; border: 1px solid #dbe4ec; border-radius: 12px; background: #f8fafc; }
+.user-mail-signature-row > div { min-width: 0; }
+.user-mail-signature-row strong { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.user-mail-signature-row em { padding: 2px 7px; border-radius: 999px; background: #ccfbf1; color: #115e59; font-size: 9px; font-style: normal; }
+.user-mail-signature-row pre, .user-mail-compose-signature-preview pre { max-height: 82px; margin: 7px 0 0; overflow: auto; white-space: pre-wrap; word-break: break-word; color: #475569; font: 10px/1.55 "Noto Sans KR", sans-serif; }
+.user-mail-signature-row > button { height: 30px; padding: 0 9px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; font: inherit; }
+.user-mail-signature-editor { display: grid; gap: 12px; min-width: min(560px, calc(100vw - 80px)); }
+.user-mail-signature-editor > label { display: grid; gap: 6px; font-size: 12px; }
+.user-mail-signature-editor input:not([type="checkbox"]), .user-mail-signature-editor textarea { border: 1px solid #cbd5e1; border-radius: 9px; padding: 9px 10px; font: inherit; }
+.user-mail-signature-editor textarea { min-height: 190px; resize: vertical; }
+.user-mail-compose-signature-preview { display: grid; gap: 7px; padding: 10px 12px; border: 1px dashed #94a3b8; border-radius: 10px; background: #f8fafc; }
+.user-mail-compose-signature-preview > div { display: flex; justify-content: space-between; gap: 12px; }
+.user-mail-compose-signature-preview small { color: #64748b; font-size: 10px; }
+.user-mail-compose-signature-preview pre { max-height: 68px; }
 .user-mail-compose-recipient-hint { display: block; color: #64748b; font-size: 10px; line-height: 1.5; }
 .user-mail-compose-recipients input:disabled { background: #f1f5f9; color: #64748b; cursor: not-allowed; }
-@media (max-width: 1100px) { .user-mail-settings__body { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) { .user-mail-settings__body, .user-mail-signature-settings__body { grid-template-columns: 1fr; } }
 
 *,
 *::before,

@@ -13,6 +13,12 @@ from app.schemas.mail_messenger import (
     MailBasicPreferencesResponse,
     MailBasicPreferencesUpdateRequest,
     MailRecentRecipientListResponse,
+    MailSignatureBulkDeleteRequest,
+    MailSignatureCreateRequest,
+    MailSignaturePreferencesResponse,
+    MailSignaturePreferencesUpdateRequest,
+    MailSignatureUpdateRequest,
+    MailSignatureView,
     MailDetailResponse,
     MailDraftRequest,
     MailFolderCreateRequest,
@@ -30,7 +36,7 @@ from app.schemas.mail_messenger import (
     MailTagUpdateRequest,
     MailTagView,
 )
-from app.services.mail_messenger_service import MailMessengerService, MailPreferenceConflictError
+from app.services.mail_messenger_service import MailMessengerService, MailPreferenceConflictError, MailSignatureConflictError
 
 
 router = APIRouter()
@@ -41,10 +47,11 @@ def _service() -> MailMessengerService:
 
 
 def _handle_error(exc: Exception) -> None:
-    if isinstance(exc, MailPreferenceConflictError):
+    if isinstance(exc, (MailPreferenceConflictError, MailSignatureConflictError)):
+        code = "MAIL_SIGNATURE_CONFLICT" if isinstance(exc, MailSignatureConflictError) else "MAIL_PREFERENCE_CONFLICT"
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "MAIL_PREFERENCE_CONFLICT", "userMessage": str(exc), "adminMessage": str(exc)},
+            detail={"code": code, "userMessage": str(exc), "adminMessage": str(exc)},
         ) from exc
     if isinstance(exc, PermissionError):
         raise HTTPException(
@@ -89,6 +96,64 @@ def update_basic_preferences(payload: MailBasicPreferencesUpdateRequest, user: A
 def reset_basic_preferences(user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailBasicPreferencesResponse:
     try:
         return _service().reset_basic_preferences(user)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.get("/signatures", response_model=MailSignaturePreferencesResponse)
+def get_signatures(user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailSignaturePreferencesResponse:
+    try:
+        return _service().get_signatures(user)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.post("/signatures", response_model=MailSignatureView, status_code=status.HTTP_201_CREATED)
+def create_signature(payload: MailSignatureCreateRequest, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailSignatureView:
+    try:
+        return _service().create_signature(user, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.post("/signatures/bulk-delete", response_model=MailSignaturePreferencesResponse)
+def bulk_delete_signatures(payload: MailSignatureBulkDeleteRequest, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailSignaturePreferencesResponse:
+    try:
+        return _service().bulk_delete_signatures(user, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.put("/signatures/preferences", response_model=MailSignaturePreferencesResponse)
+def update_signature_preferences(payload: MailSignaturePreferencesUpdateRequest, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailSignaturePreferencesResponse:
+    try:
+        return _service().update_signature_preferences(user, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.put("/signatures/{signature_id}", response_model=MailSignatureView)
+def update_signature(signature_id: str, payload: MailSignatureUpdateRequest, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailSignatureView:
+    try:
+        return _service().update_signature(user, signature_id, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.delete("/signatures/{signature_id}", response_model=MailSignaturePreferencesResponse)
+def delete_signature(
+    signature_id: str,
+    expectedVersion: int = Query(ge=1),
+    user: AuthUserSummary = Depends(permission_required("mail:read")),
+) -> MailSignaturePreferencesResponse:
+    try:
+        return _service().delete_signature(user, signature_id, expectedVersion)
     except Exception as exc:
         _handle_error(exc)
         raise

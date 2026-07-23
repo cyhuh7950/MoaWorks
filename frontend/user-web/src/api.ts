@@ -790,6 +790,66 @@ export async function resetMailBasicPreferences(token: string): Promise<MailBasi
   return request<MailBasicPreferences>("/mail/preferences/basic/reset", { method: "POST", headers: authHeaders(token) });
 }
 
+export type MailSignature = {
+  signatureId: string;
+  name: string;
+  contentText: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MailSignaturePreferences = {
+  enabled: boolean;
+  position: "body_top" | "body_bottom";
+  defaultSignatureId: string | null;
+  version: number;
+  updatedAt: string;
+  signatures: MailSignature[];
+};
+
+export async function fetchMailSignatures(token: string): Promise<MailSignaturePreferences> {
+  return request<MailSignaturePreferences>("/mail/signatures", { headers: authHeaders(token) });
+}
+
+export async function createMailSignature(token: string, payload: { name: string; contentText: string; makeDefault: boolean }): Promise<MailSignature> {
+  return request<MailSignature>("/mail/signatures", {
+    method: "POST", headers: authHeaders(token), body: JSON.stringify(payload),
+  });
+}
+
+export async function updateMailSignature(token: string, signature: MailSignature, payload: { name: string; contentText: string }): Promise<MailSignature> {
+  return request<MailSignature>(`/mail/signatures/${encodeURIComponent(signature.signatureId)}`, {
+    method: "PUT", headers: authHeaders(token),
+    body: JSON.stringify({ ...payload, expectedVersion: signature.version }),
+  });
+}
+
+export async function deleteMailSignature(token: string, signature: MailSignature): Promise<MailSignaturePreferences> {
+  return request<MailSignaturePreferences>(`/mail/signatures/${encodeURIComponent(signature.signatureId)}?expectedVersion=${signature.version}`, {
+    method: "DELETE", headers: authHeaders(token),
+  });
+}
+
+export async function bulkDeleteMailSignatures(token: string, signatures: MailSignature[]): Promise<MailSignaturePreferences> {
+  return request<MailSignaturePreferences>("/mail/signatures/bulk-delete", {
+    method: "POST", headers: authHeaders(token),
+    body: JSON.stringify({ items: signatures.map((item) => ({ signatureId: item.signatureId, expectedVersion: item.version })) }),
+  });
+}
+
+export async function updateMailSignaturePreferences(token: string, preferences: MailSignaturePreferences): Promise<MailSignaturePreferences> {
+  return request<MailSignaturePreferences>("/mail/signatures/preferences", {
+    method: "PUT", headers: authHeaders(token),
+    body: JSON.stringify({
+      enabled: preferences.enabled,
+      position: preferences.position,
+      defaultSignatureId: preferences.defaultSignatureId,
+      expectedVersion: preferences.version,
+    }),
+  });
+}
+
 export type MailBulkAction = "read" | "unread" | "star" | "unstar" | "move" | "delete" | "move_folder" | "add_tag" | "remove_tag" | "spam" | "not_spam" | "restore" | "purge";
 
 export type MailBulkResponse = {
