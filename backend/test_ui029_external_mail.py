@@ -10,6 +10,9 @@ from app.services.mail_external_service import (
     MailExternalPop3Client,
     MailExternalService,
     parse_external_message,
+    ExternalCollectionSafety,
+    ExternalLeaseLostError,
+    RemoteDeleteState,
 )
 
 
@@ -111,6 +114,46 @@ class Ui029ExternalMailTests(unittest.TestCase):
         for token in ("FOR UPDATE SKIP LOCKED", "connection.commit()", "client.uidl()", "client.retr", "_store(", "client.dele", "client.quit()", "remote_delete_status='deleted'", "attempt_count<3"):
             self.assertIn(token, worker)
         self.assertLess(worker.index("client.quit();client=None"), worker.index("remote_delete_status='deleted'"))
+
+    def test_validated_dns_addresses_are_bound_to_connector(self):
+        calls = []
+        validator = MailExternalEndpointValidator(lambda _: ["8.8.8.8", "1.1.1.1"])
+        fake = _Pop3()
+        client = MailExternalPop3Client(lambda host, port, tls, addresses, server_hostname: calls.append((host,port,tls,addresses,server_hostname)) or fake, validator=validator)
+        client.test("mail.example.com", 995, "ssl", "owner", "secret")
+        self.assertEqual(calls[0][3], ("1.1.1.1", "8.8.8.8"))
+        self.assertEqual(calls[0][4], "mail.example.com")
+
+    def test_pending_or_failed_import_retries_delete_only(self):
+        self.assertEqual(ExternalCollectionSafety.uidl_action("pending", True), "delete_only")
+        self.assertEqual(ExternalCollectionSafety.uidl_action("failed", True), "delete_only")
+        self.assertEqual(ExternalCollectionSafety.uidl_action("deleted", True), "duplicate")
+        self.assertEqual(ExternalCollectionSafety.uidl_action(None, True), "import")
+
+    def test_quit_failure_marks_remote_delete_failed(self):
+        self.assertEqual(RemoteDeleteState.after_quit(["u1"], True), {"u1": ("deleted", None)})
+        self.assertEqual(RemoteDeleteState.after_quit(["u1"], False), {"u1": ("failed", "MAIL_EXTERNAL_QUIT_FAILED")})
+
+    def test_lease_loss_deadline_and_retr_size_gate_are_executable(self):
+        safety = ExternalCollectionSafety(job_seconds=300, command_seconds=20, raw_limit=25)
+        safety.assert_lease(lambda: True)
+        with self.assertRaises(ExternalLeaseLostError): safety.assert_lease(lambda: False)
+        with self.assertRaises(TimeoutError): safety.assert_deadline(301)
+        with self.assertRaises(ValueError): safety.assert_retr_size(26)
+
+    def test_api_and_ui_contract_expose_active_and_recent_job_results(self):
+        service = (Path(__file__).parent / "app" / "services" / "mail_external_service.py").read_text(encoding="utf-8")
+        schema = (Path(__file__).parent / "app" / "schemas" / "mail_messenger.py").read_text(encoding="utf-8")
+        for token in ("activeJobCount", "lastJob", "importedCount", "duplicateCount", "deletedCount", "failedCount", "errorCode"):
+            self.assertIn(token, service + schema)
+        self.assertNotIn('"activeJobCount": 0', service)
+
+    def test_bulk_delete_is_single_transaction_with_preflight(self):
+        service = (Path(__file__).parent / "app" / "services" / "mail_external_service.py").read_text(encoding="utf-8")
+        self.assertIn("def bulk_delete_accounts", service)
+        section = service[service.index("def bulk_delete_accounts"):service.index("def test_account")]
+        self.assertIn("FOR UPDATE", section)
+        self.assertEqual(section.count("c.commit()"), 1)
 
 
 if __name__ == "__main__": unittest.main()
