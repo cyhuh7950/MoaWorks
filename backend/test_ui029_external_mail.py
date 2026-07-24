@@ -212,5 +212,42 @@ class Ui029ExternalMailTests(unittest.TestCase):
         result=worker.run_collection_session(fake,[("1","uid-pending")],lookup_state=lambda uidl:"pending",heartbeat=lambda:False,store=lambda *args: (_ for _ in ()).throw(AssertionError("must not store")),delete_enabled=True)
         self.assertEqual(result["status"],"lease_lost")
 
+    def test_second_review_actual_run_once_pending_delete_quit_failure(self):
+        from app.workers import mail_external_worker as worker
+        events=[]; remote=[]; finalized=[]
+        class Db:
+            def ensure_migrations_applied(self): events.append("migrate")
+        class Pop:
+            sock=None
+            def user(self,value): events.append("user")
+            def pass_(self,value): events.append("pass")
+            def uidl(self): return "+OK",[b"1 uid-pending"],1
+            def dele(self,number): events.append(("dele",number))
+            def quit(self): events.append("quit"); raise RuntimeError("safe fake quit failure")
+        job={"id":"job-1","account_id":"account-1","company_id":"company-1","user_id":"user-1","attempt_count":1}
+        account={"id":"account-1","company_id":"company-1","user_id":"user-1","owner_name":"Owner","owner_email":"owner@example.com","role_id":"role-1","role_name":"User","user_type":"member","status":"active","permissions":[],"host":"mail.example.com","port":995,"tls_mode":"ssl","username":"owner","encrypted_password":"cipher","delete_from_server":True,"owner_mail_account_id":"mail-1","target_folder_id":None}
+        with patch.object(worker,"_enqueue_scheduled"),patch.object(worker,"_claim",return_value=job),patch.object(worker,"_context",return_value=account),patch.object(worker,"_heartbeat",return_value=True),patch.object(worker,"_import_state",return_value="pending"),patch.object(worker,"_set_remote_states",side_effect=lambda db,aid,states:remote.append(states)),patch.object(worker,"_finalize",side_effect=lambda db,j,status,counts,code=None:finalized.append((status,counts,code))),patch.object(worker.MailExternalEndpointValidator,"validate_target",return_value=("mail.example.com",("8.8.8.8",))),patch.object(worker.MailExternalPop3Client,"_connect",return_value=Pop()),patch.object(worker.SecurityService,"decrypt_secret",return_value="secret"):
+            self.assertTrue(worker.run_once(Db()))
+        self.assertEqual(events[:3],["migrate","user","pass"]); self.assertIn(("dele",1),events)
+        self.assertEqual(remote[0]["uid-pending"],("failed","MAIL_EXTERNAL_QUIT_FAILED"))
+        self.assertEqual(finalized[0][0],"partial"); self.assertEqual(finalized[0][1]["imported"],0)
+
+    def test_second_review_actual_run_once_stale_owner_stops_before_import(self):
+        from app.workers import mail_external_worker as worker
+        events=[]
+        class Db:
+            def ensure_migrations_applied(self): events.append("migrate")
+        class Pop:
+            sock=None
+            def user(self,value): pass
+            def pass_(self,value): pass
+            def uidl(self): return "+OK",[b"1 uid-new"],1
+            def quit(self): events.append("quit")
+        job={"id":"job-1","account_id":"account-1","company_id":"company-1","user_id":"user-1","attempt_count":1}
+        account={"id":"account-1","company_id":"company-1","user_id":"user-1","owner_name":"Owner","owner_email":"owner@example.com","role_id":"role-1","role_name":"User","user_type":"member","status":"active","permissions":[],"host":"mail.example.com","port":995,"tls_mode":"ssl","username":"owner","encrypted_password":"cipher","delete_from_server":False,"owner_mail_account_id":"mail-1","target_folder_id":None}
+        with patch.object(worker,"_enqueue_scheduled"),patch.object(worker,"_claim",return_value=job),patch.object(worker,"_context",return_value=account),patch.object(worker,"_heartbeat",return_value=False),patch.object(worker,"_store",side_effect=AssertionError("stale owner must not import")),patch.object(worker,"_finalize",side_effect=AssertionError("stale owner must not finalize")),patch.object(worker.MailExternalEndpointValidator,"validate_target",return_value=("mail.example.com",("8.8.8.8",))),patch.object(worker.MailExternalPop3Client,"_connect",return_value=Pop()),patch.object(worker.SecurityService,"decrypt_secret",return_value="secret"):
+            self.assertTrue(worker.run_once(Db()))
+        self.assertEqual(events,["migrate","quit"])
+
 
 if __name__ == "__main__": unittest.main()

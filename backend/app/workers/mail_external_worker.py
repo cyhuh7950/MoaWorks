@@ -55,6 +55,28 @@ def _set_remote_states(service, account_id, states):
             cursor.execute("UPDATE mail_external_imports SET remote_delete_status=%s,remote_delete_code=%s,remote_deleted_at=CASE WHEN %s='deleted' THEN NOW() ELSE remote_deleted_at END,updated_at=NOW() WHERE account_id=%s AND uidl=%s",(status,code,status,account_id,uidl))
         connection.commit()
 
+def run_collection_session(client, uidl_entries, *, lookup_state, heartbeat, store, delete_enabled):
+    counts={"seen":0,"imported":0,"duplicate":0,"deleted":0,"failed":0}; pending=[]
+    safety=ExternalCollectionSafety()
+    for number,uidl in uidl_entries[:100]:
+        if not heartbeat(): return {"status":"lease_lost","counts":counts,"remoteStates":{}}
+        counts["seen"]+=1; action=safety.uidl_action(lookup_state(uidl),delete_enabled)
+        try:
+            if action=="duplicate": counts["duplicate"]+=1; continue
+            if action=="delete_only": client.dele(int(number)); pending.append(uidl); counts["duplicate"]+=1; continue
+            if not store(number,uidl): counts["duplicate"]+=1; continue
+            counts["imported"]+=1
+            if delete_enabled: client.dele(int(number)); pending.append(uidl)
+        except Exception:
+            counts["failed"]+=1
+    if not heartbeat(): return {"status":"lease_lost","counts":counts,"remoteStates":{}}
+    try: client.quit(); quit_ok=True
+    except Exception: quit_ok=False
+    states=RemoteDeleteState.after_quit(pending,quit_ok)
+    counts["deleted"]=len(pending) if quit_ok else 0
+    if not quit_ok: counts["failed"]+=len(pending)
+    return {"status":"partial" if counts["failed"] else "completed","counts":counts,"remoteStates":states}
+
 def _store(service, account, uidl, parsed, actor, storage, messenger):
     staged=[]
     for attachment in parsed.attachments:
@@ -86,7 +108,7 @@ def _finalize(service, job, status, counts, code=None):
         cursor.execute("UPDATE mail_external_accounts SET last_collect_at=%s,next_collect_at=%s,updated_at=%s WHERE id=%s",(now,now+timedelta(minutes=10),now,job["account_id"]));connection.commit()
 
 def run_once(db=None) -> bool:
-    service=db or PostgresService(); _enqueue_scheduled(service); job=_claim(service)
+    service=db or PostgresService(); service.ensure_migrations_applied(); _enqueue_scheduled(service); job=_claim(service)
     if not job: return False
     counts={"seen":0,"imported":0,"duplicate":0,"deleted":0,"failed":0}; client=None; started=time.monotonic(); safety=ExternalCollectionSafety(); pending=[]
     try:

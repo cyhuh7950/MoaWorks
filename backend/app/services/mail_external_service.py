@@ -12,6 +12,7 @@ import socket
 import ssl
 import poplib
 import uuid
+from psycopg import Error as PsycopgError
 
 from app.services.postgres_service import PostgresService
 from app.services.security_service import SecurityService
@@ -175,8 +176,9 @@ class MailExternalService:
     def _audit(self, cursor, actor, account_id, event, result, now):
         cursor.execute("INSERT INTO audit_logs(id,company_id,actor_user_id,actor_user_name,target_type,target_id,event,status_before,status_after,reason,created_at) VALUES(%s,%s,%s,%s,'mail_external_account',%s,%s,NULL,%s,NULL,%s)",(self._id("audit"),actor.companyId,actor.userId,actor.userName,account_id,event,result,now))
     def prepare_secret(self, password, existing):
-        if password is None and not existing: raise ExternalMailSecretRequiredError("비밀번호를 입력해 주세요.")
-        if password is None or password == "": return existing
+        if password is None or not str(password).strip():
+            if not existing: raise ExternalMailSecretRequiredError("비밀번호를 입력해 주세요.")
+            return existing
         return self.security.encrypt_secret(password)
     @staticmethod
     def account_view(row):
@@ -199,6 +201,23 @@ class MailExternalService:
     def enforce_test_rate(last_test_at, now):
         if last_test_at and now - last_test_at < timedelta(seconds=30): raise ExternalMailRateLimitedError("잠시 후 다시 시도해 주세요.")
     @staticmethod
+    def map_integrity_error(exc):
+        constraint = getattr(getattr(exc,"diag",None),"constraint_name","") or ""
+        if constraint == "uq_mail_external_active_identity": return ExternalMailConflictError("이미 등록된 외부메일 계정입니다.")
+        if constraint == "uq_mail_external_active_job": return ExternalMailCollectionBusyError("이미 수집 작업이 진행 중입니다.")
+        return ExternalMailConflictError("외부메일 계정 충돌이 발생했습니다.")
+    @staticmethod
+    def reserve_account_slot(cursor, actor):
+        cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s),hashtext(%s))",(actor.companyId,actor.userId))
+        cursor.execute("SELECT COUNT(*) total FROM mail_external_accounts WHERE company_id=%s AND user_id=%s AND deleted_at IS NULL",(actor.companyId,actor.userId))
+        if int(cursor.fetchone()["total"]) >= 5: raise ExternalMailLimitError("외부메일 계정은 최대 5개입니다.")
+    def reserve_test_attempt(self, actor, account_id, now):
+        with self.db.connect() as c, c.cursor() as cur:
+            cur.execute("SELECT id,last_test_at FROM mail_external_accounts WHERE id=%s AND company_id=%s AND user_id=%s AND deleted_at IS NULL FOR UPDATE",(account_id,actor.companyId,actor.userId)); row=cur.fetchone()
+            if not row: raise ExternalMailNotFoundError("외부메일 계정을 찾을 수 없습니다.")
+            self.enforce_test_rate(row["last_test_at"],now)
+            cur.execute("UPDATE mail_external_accounts SET last_test_at=%s,last_test_code='MAIL_EXTERNAL_TESTING',updated_at=%s WHERE id=%s AND company_id=%s AND user_id=%s",(now,now,account_id,actor.companyId,actor.userId)); c.commit()
+    @staticmethod
     def persist_then_delete(commit_local, delete_remote, delete_enabled):
         commit_local()
         if delete_enabled: delete_remote()
@@ -216,14 +235,14 @@ class MailExternalService:
         if payload.enabled: raise ExternalMailTestRequiredError("연결 테스트를 먼저 완료해 주세요.")
         encrypted = self.prepare_secret(payload.password, None); now = datetime.now(UTC); account_id = self._id("external")
         with self.db.connect() as c, c.cursor() as cur:
-            cur.execute("SELECT COUNT(*) total FROM mail_external_accounts WHERE company_id=%s AND user_id=%s AND deleted_at IS NULL", (actor.companyId, actor.userId))
-            if int(cur.fetchone()["total"]) >= 5: raise ExternalMailLimitError("외부메일 계정은 최대 5개입니다.")
+            self.reserve_account_slot(cur,actor)
             cur.execute("SELECT id FROM mail_accounts WHERE user_id=%s",(actor.userId,)); owner=cur.fetchone()
             if not owner: raise ExternalMailForbiddenError("메일 계정을 사용할 수 없습니다.")
             if payload.targetFolderId:
                 cur.execute("SELECT id FROM mail_user_folders WHERE id=%s AND company_id=%s AND user_id=%s",(payload.targetFolderId,actor.companyId,actor.userId))
                 if not cur.fetchone(): raise ExternalMailForbiddenError("저장 메일함을 사용할 수 없습니다.")
-            cur.execute("INSERT INTO mail_external_accounts(id,company_id,user_id,owner_mail_account_id,display_name,host,port,tls_mode,username,encrypted_password,target_folder_id,delete_from_server,enabled,connection_status,version,created_at,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,FALSE,'untested',1,%s,%s)", (account_id,actor.companyId,actor.userId,owner["id"],payload.displayName.strip(),host,payload.port,payload.tlsMode,payload.username.strip(),encrypted,payload.targetFolderId,payload.deleteFromServer,now,now))
+            try: cur.execute("INSERT INTO mail_external_accounts(id,company_id,user_id,owner_mail_account_id,display_name,host,port,tls_mode,username,encrypted_password,target_folder_id,delete_from_server,enabled,connection_status,version,created_at,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,FALSE,'untested',1,%s,%s)", (account_id,actor.companyId,actor.userId,owner["id"],payload.displayName.strip(),host,payload.port,payload.tlsMode,payload.username.strip(),encrypted,payload.targetFolderId,payload.deleteFromServer,now,now))
+            except PsycopgError as exc: raise self.map_integrity_error(exc) from None
             self._audit(cur,actor,account_id,"mail.external.created","untested",now)
             c.commit()
         return self.get_account(actor, account_id)
@@ -246,7 +265,8 @@ class MailExternalService:
             new={"host":host,"port":payload.port,"tls_mode":payload.tlsMode,"username":payload.username.strip()}; reset=self.connection_state(old,new,bool(payload.password))
             status=reset.get("connection_status",old["connection_status"]); enabled=payload.enabled and status=="success"
             if payload.enabled and status!="success" and not reset: raise ExternalMailTestRequiredError("연결 테스트를 먼저 완료해 주세요.")
-            cur.execute("UPDATE mail_external_accounts SET display_name=%s,host=%s,port=%s,tls_mode=%s,username=%s,encrypted_password=%s,target_folder_id=%s,delete_from_server=%s,enabled=%s,connection_status=%s,version=version+1,updated_at=%s WHERE id=%s AND company_id=%s AND user_id=%s AND version=%s",(payload.displayName.strip(),host,payload.port,payload.tlsMode,payload.username.strip(),encrypted,payload.targetFolderId,payload.deleteFromServer,enabled,status,datetime.now(UTC),account_id,actor.companyId,actor.userId,payload.expectedVersion))
+            try: cur.execute("UPDATE mail_external_accounts SET display_name=%s,host=%s,port=%s,tls_mode=%s,username=%s,encrypted_password=%s,target_folder_id=%s,delete_from_server=%s,enabled=%s,connection_status=%s,version=version+1,updated_at=%s WHERE id=%s AND company_id=%s AND user_id=%s AND version=%s",(payload.displayName.strip(),host,payload.port,payload.tlsMode,payload.username.strip(),encrypted,payload.targetFolderId,payload.deleteFromServer,enabled,status,datetime.now(UTC),account_id,actor.companyId,actor.userId,payload.expectedVersion))
+            except PsycopgError as exc: raise self.map_integrity_error(exc) from None
             self._audit(cur,actor,account_id,"mail.external.updated",status,datetime.now(UTC)); c.commit()
         return self.get_account(actor, account_id)
 
@@ -273,7 +293,7 @@ class MailExternalService:
             c.commit()
 
     def test_account(self, actor, account_id):
-        row=self._raw_account(actor,account_id); now=datetime.now(UTC); self.enforce_test_rate(row["last_test_at"],now)
+        now=datetime.now(UTC); self.reserve_test_attempt(actor,account_id,now); row=self._raw_account(actor,account_id)
         host=self.validator.validate(row["host"],row["port"],row["tls_mode"])
         try:
             self.pop3.test(host,row["port"],row["tls_mode"],row["username"],self.security.decrypt_secret(row["encrypted_password"]))

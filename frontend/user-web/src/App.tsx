@@ -1087,10 +1087,12 @@ function MailExternalPanel({ value, folders, loading, error, busy, onReload, onC
   const [form, setForm] = useState<MailExternalAccountPayload>(emptyExternalForm());
   const [savedForm, setSavedForm] = useState<MailExternalAccountPayload>(emptyExternalForm());
   const [selected, setSelected] = useState<string[]>([]); const [formError, setFormError] = useState(""); const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [externalDeleteConfirmPopup, setExternalDeleteConfirmPopup] = useState(false);
   const externalAccountDirty = editor !== false && JSON.stringify(form) !== JSON.stringify(savedForm);
   const requestCloseEditor = () => { if (externalAccountDirty && !window.confirm("저장하지 않은 외부메일 변경을 취소할까요?")) return; setEditor(false); setFormError(""); };
   const requestLeave = (action: () => void) => { if (externalAccountDirty && !window.confirm("저장하지 않은 외부메일 변경을 취소하고 이동할까요?")) return; setEditor(false); setFormError(""); action(); };
   const lastJobLabel = (item: MailExternalAccount) => item.lastJob ? `${item.lastJob.status === "completed" ? "성공" : item.lastJob.status === "partial" ? "부분 성공" : item.lastJob.status === "failed" ? "실패" : "진행 중"} · 신규 ${item.lastJob.importedCount} · 중복 ${item.lastJob.duplicateCount} · 삭제 ${item.lastJob.deletedCount} · 실패 ${item.lastJob.failedCount}` : "실행 전";
+  const commitExternalForm = async () => { const message=await onSave(editor||null,form); if(message)setFormError(message); else { setEditor(false); setExternalDeleteConfirmPopup(false); } };
   const edit = (item: MailExternalAccount | null) => {
     const next = item ? { displayName:item.display_name, host:item.host, port:item.port, tlsMode:item.tls_mode, username:item.username, password:"", targetFolderId:item.target_folder_id, deleteFromServer:item.delete_from_server, enabled:item.enabled, expectedVersion:item.version } : emptyExternalForm();
     setEditor(item); setForm(next); setSavedForm(next); setFormError("");
@@ -1112,8 +1114,9 @@ function MailExternalPanel({ value, folders, loading, error, busy, onReload, onC
       <label>저장 메일함<select value={form.targetFolderId??""} onChange={e=>setForm(c=>({...c,targetFolderId:e.target.value||null}))}><option value="">받은편지함</option>{folders.map(f=><option key={f.folderId} value={f.folderId}>{f.name}</option>)}</select></label>
       <label className="is-inline"><input type="checkbox" checked={form.deleteFromServer} onChange={e=>setForm(c=>({...c,deleteFromServer:e.target.checked}))}/>서버 원본 삭제 <i title="로컬 저장이 완료된 메일만 서버에서 삭제합니다.">i</i></label>{form.deleteFromServer?<label className="is-inline"><input type="checkbox" checked={deleteConfirm} onChange={e=>setDeleteConfirm(e.target.checked)}/>원본 삭제 위험을 확인했습니다.</label>:null}
       <label className="is-inline"><input type="checkbox" checked={form.enabled} disabled={!editor||editor.connection_status!=="success"} onChange={e=>setForm(c=>({...c,enabled:e.target.checked}))}/>자동 수집 사용</label>
-      <div className="user-mail-settings__actions"><button type="button" onClick={requestCloseEditor}>취소</button><button type="button" disabled={busy||!form.displayName.trim()||!form.host.trim()||!form.username.trim()||(!editor&&!form.password)|| (form.deleteFromServer&&!deleteConfirm)} onClick={async()=>{const message=await onSave(editor||null,form);if(message)setFormError(message);else setEditor(false)}}>저장</button></div>
+      <div className="user-mail-settings__actions"><button type="button" onClick={requestCloseEditor}>취소</button><button type="button" disabled={busy||!form.displayName.trim()||!form.host.trim()||!form.username.trim()||(!editor&&!form.password?.trim())|| (form.deleteFromServer&&!deleteConfirm)} onClick={()=>{if(form.deleteFromServer)setExternalDeleteConfirmPopup(true);else void commitExternalForm()}}>저장</button></div>
     </div></CommonPopup>
+    <CommonPopup title="서버 원본 삭제 확인" open={externalDeleteConfirmPopup} onClose={()=>setExternalDeleteConfirmPopup(false)} saving={busy}><div className="user-mail-external__editor"><p>로컬 저장이 완료된 메일만 외부 서버에서 삭제합니다. 이 설정으로 저장할까요?</p><div className="user-mail-settings__actions"><button type="button" onClick={()=>setExternalDeleteConfirmPopup(false)}>취소</button><button type="button" disabled={busy} onClick={()=>void commitExternalForm()}>확인</button></div></div></CommonPopup>
   </section>;
 }
 

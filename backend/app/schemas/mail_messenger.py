@@ -808,6 +808,14 @@ class MailExternalAccountCreateRequest(BaseModel):
     deleteFromServer: bool = False
     enabled: bool = False
 
+    @field_validator("displayName", "username")
+    @classmethod
+    def normalize_required_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("필수 입력값을 확인해 주세요.")
+        return normalized
+
 
 class MailExternalAccountUpdateRequest(MailExternalAccountCreateRequest):
     expectedVersion: int = Field(ge=1)
