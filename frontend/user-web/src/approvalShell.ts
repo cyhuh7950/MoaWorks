@@ -2,6 +2,13 @@ import type { ApprovalDocument } from "./api";
 
 export type ApprovalActualMenuKey = "pending" | "received" | "scheduled" | "personal";
 
+export type ApprovalPostAction = "create" | "edit" | "submit" | "withdraw" | "redraft" | "approve" | "reject";
+
+export type ApprovalPostActionTarget = {
+  menu: ApprovalActualMenuKey | null;
+  documentId: string;
+};
+
 export type ApprovalDocumentGroups = Record<ApprovalActualMenuKey, ApprovalDocument[]>;
 
 export function classifyApprovalDocuments(
@@ -54,4 +61,20 @@ export function findApprovalDocumentMenu(
   const groups = classifyApprovalDocuments([document], actorUserId);
   return (["pending", "received", "scheduled", "personal"] as const)
     .find((key) => groups[key].length > 0) ?? null;
+}
+
+export function resolveApprovalPostActionTarget(
+  action: ApprovalPostAction,
+  documentId: string,
+  postActionDocument: ApprovalDocument | null,
+  actorUserId: string,
+): ApprovalPostActionTarget {
+  if (action === "create" || action === "edit" || action === "submit" || action === "withdraw" || action === "redraft") {
+    return { menu: "personal", documentId };
+  }
+
+  return {
+    menu: postActionDocument ? findApprovalDocumentMenu(postActionDocument, actorUserId) : null,
+    documentId,
+  };
 }

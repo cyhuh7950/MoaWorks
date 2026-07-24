@@ -173,7 +173,9 @@ import { CommonPopup } from "./components/CommonPopup";
 import {
   classifyApprovalDocuments,
   findApprovalDocumentMenu,
+  resolveApprovalPostActionTarget,
   type ApprovalActualMenuKey,
+  type ApprovalPostAction,
 } from "./approvalShell";
 
 const NOTIFICATION_POLICY = {
@@ -3341,6 +3343,24 @@ export default function App() {
     }
   }
 
+  async function keepApprovalPostAction(
+    action: ApprovalPostAction,
+    documentId: string,
+    postActionDocument: ApprovalDocument | null,
+  ) {
+    const target = resolveApprovalPostActionTarget(action, documentId, postActionDocument, me?.userId ?? "");
+    if (!target.menu) {
+      await reload();
+      setSelectedApprovalId("");
+      setApprovalLogs([]);
+      return;
+    }
+
+    setApprovalShellMenu(target.menu);
+    await reload();
+    await selectApprovalDocument(target.documentId, { preserveMenu: true });
+  }
+
   async function openApprovalEditor(mode: "create" | "edit", document?: ApprovalDocument) {
     if (!token) return;
     setApprovalError("");
@@ -3398,16 +3418,17 @@ export default function App() {
       const isEdit = approvalModal === "edit";
       const documentId = selectedApprovalId;
       if (isEdit && documentId) {
-        await updateApproval(token, documentId, createForm);
+        const postActionDocument = await updateApproval(token, documentId, createForm);
         setMessage("결재 초안이 수정되었습니다.");
+        await keepApprovalPostAction("edit", documentId, postActionDocument);
       } else {
         const response = await createApproval(token, createForm);
         setSelectedApprovalId(response.documentId);
         setMessage("결재 초안이 저장되었습니다.");
+        await keepApprovalPostAction("create", response.documentId, null);
       }
       setApprovalModal("none");
       setCreateForm({ title: "", content: "", approverUserIds: [] });
-      await reload();
     } catch (error) {
       setApprovalError(normalizeClientError(error, "결재 초안 저장 실패"));
     } finally {
@@ -3425,11 +3446,10 @@ export default function App() {
     setApprovalError("");
     try {
       const act = accepted ? approveApproval : rejectApproval;
-      await act(token, documentId, reasonAction.reason.trim() || "확인");
+      const postActionDocument = await act(token, documentId, reasonAction.reason.trim() || "확인");
       setReasonAction({ documentId: "", reason: "" });
       setApprovalModal("none");
-      await reload();
-      await selectApprovalDocument(documentId);
+      await keepApprovalPostAction(accepted ? "approve" : "reject", documentId, postActionDocument);
     } catch (error) {
       setApprovalError(normalizeClientError(error, "결재 처리 실패"));
     } finally {
@@ -3442,12 +3462,10 @@ export default function App() {
     setLoading(true);
     setApprovalError("");
     try {
-      if (action === "submit") await submitApproval(token, documentId);
-      else if (action === "withdraw") await withdrawApproval(token, documentId);
-      else await redraftApproval(token, documentId);
+      const act = action === "submit" ? submitApproval : action === "withdraw" ? withdrawApproval : redraftApproval;
+      const postActionDocument = await act(token, documentId);
       setApprovalModal("none");
-      await reload();
-      await selectApprovalDocument(documentId);
+      await keepApprovalPostAction(action, documentId, postActionDocument);
     } catch (error) {
       setApprovalError(normalizeClientError(error, "결재 상태 변경 실패"));
     } finally {
