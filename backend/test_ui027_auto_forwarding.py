@@ -309,5 +309,36 @@ class Ui027FirstReviewRemediationTests(unittest.TestCase):
         self.assertEqual(client.send_message.call_args.kwargs, {})
 
 
+class Ui027SecondOperationsReviewRemediationTests(unittest.TestCase):
+    def setUp(self):
+        self.actor = SimpleNamespace(companyId="company-a", userId="user-a")
+        self.cursor = Mock()
+        self.cursor.fetchone.return_value = None
+
+    def test_create_matcher_uniqueness_omits_exclude_clause_and_parameter(self):
+        MailAutoForwardingService._assert_matcher_unique(
+            self.cursor, self.actor, "sender_email", "sender@example.com",
+        )
+
+        sql, params = self.cursor.execute.call_args.args
+        self.assertEqual(
+            sql,
+            "SELECT id FROM mail_auto_forward_exceptions WHERE company_id=%s AND user_id=%s AND matcher_type=%s AND matcher_value=%s",
+        )
+        self.assertEqual(params, ("company-a", "user-a", "sender_email", "sender@example.com"))
+
+    def test_update_matcher_uniqueness_binds_explicit_exclude_id(self):
+        MailAutoForwardingService._assert_matcher_unique(
+            self.cursor, self.actor, "sender_domain", "example.com", "exception-a",
+        )
+
+        sql, params = self.cursor.execute.call_args.args
+        self.assertEqual(
+            sql,
+            "SELECT id FROM mail_auto_forward_exceptions WHERE company_id=%s AND user_id=%s AND matcher_type=%s AND matcher_value=%s AND id<>%s",
+        )
+        self.assertEqual(params, ("company-a", "user-a", "sender_domain", "example.com", "exception-a"))
+
+
 if __name__ == "__main__":
     unittest.main()

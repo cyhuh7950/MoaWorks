@@ -364,7 +364,16 @@ class MailAutoForwardingService:
 
     @staticmethod
     def _assert_matcher_unique(cursor, actor, matcher_type: str, matcher_value: str, exclude: str | None = None) -> None:
-        cursor.execute("SELECT id FROM mail_auto_forward_exceptions WHERE company_id=%s AND user_id=%s AND matcher_type=%s AND matcher_value=%s AND (%s IS NULL OR id<>%s)", (actor.companyId, actor.userId, matcher_type, matcher_value, exclude, exclude))
+        if exclude is None:
+            cursor.execute(
+                "SELECT id FROM mail_auto_forward_exceptions WHERE company_id=%s AND user_id=%s AND matcher_type=%s AND matcher_value=%s",
+                (actor.companyId, actor.userId, matcher_type, matcher_value),
+            )
+        else:
+            cursor.execute(
+                "SELECT id FROM mail_auto_forward_exceptions WHERE company_id=%s AND user_id=%s AND matcher_type=%s AND matcher_value=%s AND id<>%s",
+                (actor.companyId, actor.userId, matcher_type, matcher_value, exclude),
+            )
         if cursor.fetchone():
             raise AutoForwardConflictError("같은 발신자 예외 규칙이 있습니다.")
 
