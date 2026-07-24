@@ -414,6 +414,12 @@ export type MailAutoClassificationSettings = {
   rules: MailAutoClassificationRule[]; folders: MailFolder[]; tags: MailTag[];
 };
 
+export type MailAutoForwardLastResult = { status: "internal_delivered" | "queued" | "blocked" | "retry_pending" | "sent" | "failed"; reasonCode: string; createdAt: string };
+export type MailAutoForwardTarget = { targetId: string; email: string; targetKind: "internal" | "external"; lastResult: MailAutoForwardLastResult | null };
+export type MailAutoForwardExceptionPayload = { matcherType: "sender_email" | "sender_domain"; matcherValue: string; action: "skip" | "override"; targetEmails: string[]; enabled: boolean };
+export type MailAutoForwardException = MailAutoForwardExceptionPayload & { exceptionId: string; version: number; lastResult: MailAutoForwardLastResult | null; createdAt: string; updatedAt: string };
+export type MailAutoForwardSettings = { enabled: boolean; keepOriginal: boolean; version: number; updatedAt: string; providerLocked: boolean; targets: MailAutoForwardTarget[]; exceptions: MailAutoForwardException[] };
+
 export type MailDetail = {
   mailId: string;
   accountId: string;
@@ -976,6 +982,28 @@ export async function deleteAutoClassificationRules(token: string, ruleIds: stri
 }
 export async function reorderAutoClassificationRules(token: string, settings: MailAutoClassificationSettings, ruleIds: string[]): Promise<MailAutoClassificationSettings> {
   return request<MailAutoClassificationSettings>("/mail/settings/auto-classification/rules/order", { method: "PATCH", headers: authHeaders(token), body: JSON.stringify({ ruleIds, version: settings.version }) });
+}
+
+export async function fetchAutoForwardSettings(token: string): Promise<MailAutoForwardSettings> {
+  return request<MailAutoForwardSettings>("/mail/settings/auto-forwarding", { headers: authHeaders(token) });
+}
+export async function updateAutoForwardSettings(token: string, value: MailAutoForwardSettings): Promise<MailAutoForwardSettings> {
+  return request<MailAutoForwardSettings>("/mail/settings/auto-forwarding", { method: "PATCH", headers: authHeaders(token), body: JSON.stringify({ enabled: value.enabled, keepOriginal: value.keepOriginal, version: value.version }) });
+}
+export async function createAutoForwardTargets(token: string, emails: string[]): Promise<MailAutoForwardTarget[]> {
+  return request<MailAutoForwardTarget[]>("/mail/settings/auto-forwarding/targets", { method: "POST", headers: authHeaders(token), body: JSON.stringify({ emails }) });
+}
+export async function deleteAutoForwardTargets(token: string, targetIds: string[]): Promise<void> {
+  await request<Record<string, never>>("/mail/settings/auto-forwarding/targets/delete", { method: "POST", headers: authHeaders(token), body: JSON.stringify({ targetIds }) });
+}
+export async function createAutoForwardException(token: string, payload: MailAutoForwardExceptionPayload): Promise<MailAutoForwardException> {
+  return request<MailAutoForwardException>("/mail/settings/auto-forwarding/exceptions", { method: "POST", headers: authHeaders(token), body: JSON.stringify(payload) });
+}
+export async function updateAutoForwardException(token: string, item: MailAutoForwardException, payload: MailAutoForwardExceptionPayload): Promise<MailAutoForwardException> {
+  return request<MailAutoForwardException>(`/mail/settings/auto-forwarding/exceptions/${encodeURIComponent(item.exceptionId)}`, { method: "PATCH", headers: authHeaders(token), body: JSON.stringify({ ...payload, version: item.version }) });
+}
+export async function deleteAutoForwardExceptions(token: string, exceptionIds: string[]): Promise<void> {
+  await request<Record<string, never>>("/mail/settings/auto-forwarding/exceptions/delete", { method: "POST", headers: authHeaders(token), body: JSON.stringify({ exceptionIds }) });
 }
 
 export type MailBasicPreferences = {

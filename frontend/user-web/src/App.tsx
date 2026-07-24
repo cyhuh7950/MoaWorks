@@ -25,12 +25,19 @@ import {
   createMailboxBackup,
   createSpamRule,
   createAutoClassificationRule,
+  createAutoForwardException,
+  createAutoForwardTargets,
   deleteAutoClassificationRule,
   deleteAutoClassificationRules,
   fetchAutoClassificationSettings,
+  fetchAutoForwardSettings,
   reorderAutoClassificationRules,
   updateAutoClassificationRule,
   updateAutoClassificationSettings,
+  updateAutoForwardException,
+  updateAutoForwardSettings,
+  deleteAutoForwardExceptions,
+  deleteAutoForwardTargets,
   fetchApprovalApprovers,
   fetchContacts,
   fetchApprovalLogs,
@@ -120,6 +127,9 @@ import {
   type MailAutoClassificationRule,
   type MailAutoClassificationRulePayload,
   type MailAutoClassificationSettings,
+  type MailAutoForwardException,
+  type MailAutoForwardExceptionPayload,
+  type MailAutoForwardSettings,
   type MailSummary,
   type MessengerMessage,
   type MessengerRoomDetail,
@@ -552,7 +562,7 @@ function normalizeMailRecipients(value: string, companyDomain: string): string[]
 
 const MAIL_SETTINGS_TABS = ["기본환경", "서명", "메일함", "스팸", "자동분류", "자동전달", "부재중응답", "외부메일", "최근보낸메일"] as const;
 
-function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChange, onSave, onCancel, onReset, onReload, onOpenSignature, onOpenMailbox, onOpenSpam, onOpenClassification }: {
+function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChange, onSave, onCancel, onReset, onReload, onOpenSignature, onOpenMailbox, onOpenSpam, onOpenClassification, onOpenForwarding }: {
   value: MailBasicPreferences | null;
   saved: MailBasicPreferences | null;
   loading: boolean;
@@ -567,6 +577,7 @@ function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChan
   onOpenMailbox: () => void;
   onOpenSpam: () => void;
   onOpenClassification: () => void;
+  onOpenForwarding: () => void;
 }) {
   const dirty = Boolean(value && saved && JSON.stringify(value) !== JSON.stringify(saved));
   if (loading && !value) return <FeedbackState state="loading" title="메일 기본환경을 불러오는 중입니다." />;
@@ -576,7 +587,7 @@ function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChan
   );
   return <section className="user-mail-settings" aria-label="메일 환경설정">
     <header><div><small>메일 환경설정</small><h2>기본환경</h2></div><span aria-live="polite">{dirty ? "저장하지 않은 변경 있음" : "저장됨"}</span></header>
-    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 0 ? "page" : undefined} disabled={index > 4} onClick={index === 1 ? onOpenSignature : index === 2 ? onOpenMailbox : index === 3 ? onOpenSpam : index === 4 ? onOpenClassification : undefined} title={index <= 4 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 4 ? <i>i</i> : null}</button>)}</nav>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 0 ? "page" : undefined} disabled={index > 5} onClick={index === 1 ? onOpenSignature : index === 2 ? onOpenMailbox : index === 3 ? onOpenSpam : index === 4 ? onOpenClassification : index === 5 ? onOpenForwarding : undefined} title={index <= 5 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 5 ? <i>i</i> : null}</button>)}</nav>
     {error ? <CompactWarning item={{ id: "mail-basic-preferences", source: "mail-settings", tone: "warning", title: conflict ? "다른 위치에서 설정이 변경되었습니다." : "설정을 처리하지 못했습니다.", message: error, action: conflict ? { label: "서버 최신값 다시 불러오기", onAction: onReload } : undefined }} /> : null}
     <div className="user-mail-settings__body">
       <fieldset><legend>메일 읽기 설정</legend>
@@ -605,7 +616,7 @@ function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChan
 
 function MailSignatureSettingsPanel({
   value, saved, loading, error, conflict, onChange, onSavePreferences, onCancel, onReload,
-  onSaveSignature, onDeleteSignatures, onOpenBasic, onOpenMailbox, onOpenSpam, onOpenClassification,
+  onSaveSignature, onDeleteSignatures, onOpenBasic, onOpenMailbox, onOpenSpam, onOpenClassification, onOpenForwarding,
 }: {
   value: MailSignaturePreferences | null;
   saved: MailSignaturePreferences | null;
@@ -622,6 +633,7 @@ function MailSignatureSettingsPanel({
   onOpenMailbox: () => void;
   onOpenSpam: () => void;
   onOpenClassification: () => void;
+  onOpenForwarding: () => void;
 }) {
   type MailSignatureEditorForm = { name: string; contentText: string; makeDefault: boolean };
   const emptyEditorForm: MailSignatureEditorForm = { name: "", contentText: "", makeDefault: false };
@@ -651,7 +663,7 @@ function MailSignatureSettingsPanel({
   const selected = value.signatures.filter((item) => selectedIds.includes(item.signatureId));
   return <section className="user-mail-settings user-mail-signature-settings" aria-label="메일 서명 환경설정">
     <header><div><small>메일 환경설정</small><h2>서명</h2></div><span aria-live="polite">{dirty ? "저장하지 않은 변경 있음" : "저장됨"}</span></header>
-    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 1 ? "page" : undefined} disabled={index > 4} onClick={index === 0 ? onOpenBasic : index === 2 ? onOpenMailbox : index === 3 ? onOpenSpam : index === 4 ? onOpenClassification : undefined} title={index <= 4 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 4 ? <i>i</i> : null}</button>)}</nav>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 1 ? "page" : undefined} disabled={index > 5} onClick={index === 0 ? onOpenBasic : index === 2 ? onOpenMailbox : index === 3 ? onOpenSpam : index === 4 ? onOpenClassification : index === 5 ? onOpenForwarding : undefined} title={index <= 5 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 5 ? <i>i</i> : null}</button>)}</nav>
     {error ? <CompactWarning item={{ id: "mail-signatures", source: "mail-settings", tone: "warning", title: conflict ? "다른 위치에서 서명이 변경되었습니다." : "서명을 처리하지 못했습니다.", message: error, action: conflict ? { label: "서버 최신값 다시 불러오기", onAction: () => void onReload() } : undefined }} /> : null}
     <div className="user-mail-settings__body user-mail-signature-settings__body">
       <fieldset>
@@ -705,7 +717,7 @@ function formatMailboxBytes(value: number): string {
 }
 
 function MailboxSettingsPanel({
-  value, loading, error, busyKey, onReload, onClose, onOpenBasic, onOpenSignature, onOpenSpam, onOpenClassification,
+  value, loading, error, busyKey, onReload, onClose, onOpenBasic, onOpenSignature, onOpenSpam, onOpenClassification, onOpenForwarding,
   onSavePolicy, onEmpty, onBackup, onRetry, onDownload,
   onAddFolder, onEditFolder, onDeleteFolder, onAddTag, onEditTag, onDeleteTag,
 }: {
@@ -719,6 +731,7 @@ function MailboxSettingsPanel({
   onOpenSignature: () => void;
   onOpenSpam: () => void;
   onOpenClassification: () => void;
+  onOpenForwarding: () => void;
   onSavePolicy: (mailbox: MailboxSettingsRow, retentionDays: MailboxSettingsRow["retentionDays"]) => Promise<boolean>;
   onEmpty: (mailbox: MailboxSettingsRow, confirmPermanent: boolean) => Promise<boolean>;
   onBackup: (mailbox: MailboxSettingsRow) => Promise<void>;
@@ -748,7 +761,7 @@ function MailboxSettingsPanel({
   const statusLabel: Record<MailBackupJob["status"], string> = { queued: "대기", running: "진행 중", completed: "완료", failed: "실패", expired: "만료" };
   return <section className="user-mail-settings user-mail-mailbox-settings" aria-label="메일함 환경설정">
     <header><div><small>메일 환경설정</small><h2>메일함</h2></div><span aria-live="polite">{activeBackup ? "메일함 백업 처리 중" : "설정 확인 완료"}</span></header>
-    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 2 ? "page" : undefined} disabled={index > 4} onClick={index === 0 ? onOpenBasic : index === 1 ? onOpenSignature : index === 3 ? onOpenSpam : index === 4 ? onOpenClassification : undefined} title={index <= 4 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 4 ? <i>i</i> : null}</button>)}</nav>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 2 ? "page" : undefined} disabled={index > 5} onClick={index === 0 ? onOpenBasic : index === 1 ? onOpenSignature : index === 3 ? onOpenSpam : index === 4 ? onOpenClassification : index === 5 ? onOpenForwarding : undefined} title={index <= 5 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 5 ? <i>i</i> : null}</button>)}</nav>
     {error ? <CompactWarning item={{ id: "mailbox-settings", source: "mail-settings", tone: "warning", title: "메일함 설정을 처리하지 못했습니다.", message: error, action: { label: "서버 최신값 다시 불러오기", onAction: onReload } }} /> : null}
     <div className="user-mail-mailbox-settings__body">
       <div className="user-mail-mailbox-settings__toolbar">
@@ -818,7 +831,7 @@ function maskSpamRuleValue(rule: MailSpamRule): string {
 }
 
 function MailSpamSettingsPanel({
-  value, loading, error, busy, onReload, onClose, onOpenBasic, onOpenSignature, onOpenMailbox, onOpenClassification,
+  value, loading, error, busy, onReload, onClose, onOpenBasic, onOpenSignature, onOpenMailbox, onOpenClassification, onOpenForwarding,
   onChangePolicy, onSavePolicy, onSaveRule, onDeleteRule,
 }: {
   value: MailSpamSettingsResponse | null;
@@ -831,6 +844,7 @@ function MailSpamSettingsPanel({
   onOpenSignature: () => void;
   onOpenMailbox: () => void;
   onOpenClassification: () => void;
+  onOpenForwarding: () => void;
   onChangePolicy: (enabled: boolean) => void;
   onSavePolicy: () => Promise<void>;
   onSaveRule: (rule: MailSpamRule | null, payload: MailSpamRulePayload) => Promise<string | null>;
@@ -859,7 +873,7 @@ function MailSpamSettingsPanel({
   );
   return <section className="user-mail-settings user-mail-spam-settings" aria-label="스팸 환경설정">
     <header><div><small>메일 환경설정</small><h2>스팸</h2></div><span aria-live="polite">규칙 {value.rules.length}/200개</span></header>
-    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 3 ? "page" : undefined} disabled={index > 4} onClick={index === 0 ? onOpenBasic : index === 1 ? onOpenSignature : index === 2 ? onOpenMailbox : index === 4 ? onOpenClassification : undefined} title={index <= 4 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 4 ? <i>i</i> : null}</button>)}</nav>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 3 ? "page" : undefined} disabled={index > 5} onClick={index === 0 ? onOpenBasic : index === 1 ? onOpenSignature : index === 2 ? onOpenMailbox : index === 4 ? onOpenClassification : index === 5 ? onOpenForwarding : undefined} title={index <= 5 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 5 ? <i>i</i> : null}</button>)}</nav>
     {error ? <CompactWarning item={{ id: "spam-settings", source: "mail-settings", tone: "warning", title: "스팸 설정을 처리하지 못했습니다.", message: error, action: { label: "서버 최신값 다시 불러오기", onAction: onReload } }} /> : null}
     <div className="user-mail-spam-settings__body">
       <section className="user-mail-spam-settings__policy">
@@ -910,9 +924,9 @@ const autoOperators = (field: MailAutoClassificationCondition["field"]): MailAut
 }[field] as MailAutoClassificationCondition["operator"][]);
 const emptyAutoRule = (): MailAutoClassificationRulePayload => ({ name: "", enabled: true, conditions: [{ field: "subject", operator: "contains", value: "" }], targetFolderId: null, tagIds: [] });
 
-function MailAutoClassificationPanel({ value, loading, error, busy, onReload, onClose, onOpenBasic, onOpenSignature, onOpenMailbox, onOpenSpam, onChangePolicy, onSavePolicy, onSaveRule, onDelete, onReorder }: {
+function MailAutoClassificationPanel({ value, loading, error, busy, onReload, onClose, onOpenBasic, onOpenSignature, onOpenMailbox, onOpenSpam, onOpenForwarding, onChangePolicy, onSavePolicy, onSaveRule, onDelete, onReorder }: {
   value: MailAutoClassificationSettings | null; loading: boolean; error: string; busy: boolean;
-  onReload: () => void; onClose: () => void; onOpenBasic: () => void; onOpenSignature: () => void; onOpenMailbox: () => void; onOpenSpam: () => void;
+  onReload: () => void; onClose: () => void; onOpenBasic: () => void; onOpenSignature: () => void; onOpenMailbox: () => void; onOpenSpam: () => void; onOpenForwarding: () => void;
   onChangePolicy: (enabled: boolean) => void; onSavePolicy: () => Promise<void>;
   onSaveRule: (rule: MailAutoClassificationRule | null, payload: MailAutoClassificationRulePayload) => Promise<string | null>;
   onDelete: (ruleIds: string[]) => Promise<boolean>; onReorder: (ruleIds: string[]) => Promise<void>;
@@ -942,7 +956,7 @@ function MailAutoClassificationPanel({ value, loading, error, busy, onReload, on
   };
   return <section className="user-mail-settings user-mail-auto-classification" aria-label="자동분류 환경설정">
     <header><div><small>메일 환경설정</small><h2>자동분류</h2></div><span aria-live="polite">규칙 {value.rules.length}/100개</span></header>
-    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 4 ? "page" : undefined} disabled={index > 4} onClick={index === 0 ? onOpenBasic : index === 1 ? onOpenSignature : index === 2 ? onOpenMailbox : index === 3 ? onOpenSpam : undefined} title={index <= 4 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 4 ? <i>i</i> : null}</button>)}</nav>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 4 ? "page" : undefined} disabled={index > 5} onClick={index === 0 ? onOpenBasic : index === 1 ? onOpenSignature : index === 2 ? onOpenMailbox : index === 3 ? onOpenSpam : index === 5 ? onOpenForwarding : undefined} title={index <= 5 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 5 ? <i>i</i> : null}</button>)}</nav>
     {error ? <CompactWarning item={{ id: "auto-classification", source: "mail-settings", tone: "warning", title: "자동분류 설정을 처리하지 못했습니다.", message: error, action: { label: "서버 최신값 다시 불러오기", onAction: onReload } }} /> : null}
     <div className="user-mail-auto-classification__body">
       <section className="user-mail-auto-classification__policy"><label><span>자동분류 사용 <i title="스팸 판정 후 정상 신규 수신 메일에만 적용됩니다.">i</i></span><input type="checkbox" role="switch" checked={value.enabled} disabled={busy} onChange={(event) => onChangePolicy(event.target.checked)} /></label><button type="button" disabled={busy} onClick={() => void onSavePolicy()}>정책 저장</button></section>
@@ -960,6 +974,40 @@ function MailAutoClassificationPanel({ value, loading, error, busy, onReload, on
         <div className="feedback-confirm-actions"><button type="button" disabled={busy} onClick={() => setEditor(false)}>취소</button><button type="button" disabled={busy} onClick={async () => { if (!form.name.trim()) { setFormError("규칙명을 입력해 주세요."); return; } if (form.conditions.some((item) => item.field !== "attachment" && !item.value?.trim())) { setFormError("조건 값을 입력해 주세요."); return; } if (!form.targetFolderId && !form.tagIds.length) { setFormError("메일함 또는 태그를 선택해 주세요."); return; } const message = await onSaveRule(editor || null, form); if (message) setFormError(message); else setEditor(false); }}>저장</button></div>
       </div>
     </CommonPopup>
+  </section>;
+}
+
+const emptyAutoForwardException = (): MailAutoForwardExceptionPayload => ({ matcherType: "sender_email", matcherValue: "", action: "skip", targetEmails: [], enabled: true });
+
+function MailAutoForwardingPanel({ value, loading, error, busy, onReload, onClose, onOpenTab, onChange, onSavePolicy, onAddTargets, onDeleteTargets, onSaveException, onDeleteExceptions }: {
+  value: MailAutoForwardSettings | null; loading: boolean; error: string; busy: boolean;
+  onReload: () => void; onClose: () => void; onOpenTab: (tab: "basic" | "signature" | "mailbox" | "spam" | "classification" | "forwarding") => void;
+  onChange: (patch: Partial<MailAutoForwardSettings>) => void; onSavePolicy: () => Promise<void>;
+  onAddTargets: (emails: string[]) => Promise<string | null>; onDeleteTargets: (ids: string[]) => Promise<boolean>;
+  onSaveException: (item: MailAutoForwardException | null, payload: MailAutoForwardExceptionPayload) => Promise<string | null>;
+  onDeleteExceptions: (ids: string[]) => Promise<boolean>;
+}) {
+  const [targetEditor, setTargetEditor] = useState(false); const [targetText, setTargetText] = useState(""); const [targetError, setTargetError] = useState("");
+  const [exceptionEditor, setExceptionEditor] = useState<MailAutoForwardException | null | false>(false); const [exceptionForm, setExceptionForm] = useState<MailAutoForwardExceptionPayload>(emptyAutoForwardException()); const [exceptionError, setExceptionError] = useState("");
+  const [selectedTargets, setSelectedTargets] = useState<string[]>([]); const [selectedExceptions, setSelectedExceptions] = useState<string[]>([]); const [activationConfirm, setActivationConfirm] = useState(false);
+  if (loading && !value) return <FeedbackState state="loading" title="자동전달 설정을 불러오는 중입니다." />;
+  if (!value) return <FeedbackState state="error" title="자동전달 설정을 불러오지 못했습니다." message={error} action={{ label: "다시 시도", onAction: onReload }} />;
+  const externalCount = value.targets.filter((item) => item.targetKind === "external").length;
+  const resultLabel = (result: { status: string } | null) => result ? ({ internal_delivered: "내부 전달", queued: "대기", blocked: "외부 발송 잠금", retry_pending: "재시도", sent: "발송 완료", failed: "실패" }[result.status] ?? result.status) : "실행 전";
+  const savePolicy = async () => { if (value.enabled && value.providerLocked && externalCount > 0) setActivationConfirm(true); else await onSavePolicy(); };
+  const editException = (item: MailAutoForwardException | null) => { setExceptionEditor(item); setExceptionForm(item ? { matcherType: item.matcherType, matcherValue: item.matcherValue, action: item.action, targetEmails: item.targetEmails, enabled: item.enabled } : emptyAutoForwardException()); setExceptionError(""); };
+  return <section className="user-mail-settings user-mail-auto-forwarding" aria-label="자동전달 환경설정">
+    <header><div><small>메일 환경설정</small><h2>자동전달</h2></div><span aria-live="polite">주소 {value.targets.length}/10 · 예외 {value.exceptions.length}/100</span><button type="button" onClick={onClose}>닫기</button></header>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 5 ? "page" : undefined} disabled={index > 5} onClick={index <= 5 ? () => onOpenTab((["basic", "signature", "mailbox", "spam", "classification", "forwarding"] as const)[index]) : undefined}>{tab}</button>)}</nav>
+    {error ? <CompactWarning item={{ id: "auto-forwarding", source: "mail-settings", tone: "warning", title: "자동전달 설정을 처리하지 못했습니다.", message: error, action: { label: "서버 최신값 다시 불러오기", onAction: onReload } }} /> : null}
+    <div className="user-mail-auto-forwarding__body">
+      <section className="user-mail-auto-forwarding__policy"><label><span>자동전달 사용 <i title="스팸 판정과 자동분류 뒤 직접 수신 메일에만 적용됩니다.">i</i></span><input type="checkbox" role="switch" checked={value.enabled} disabled={busy} onChange={(event) => onChange({ enabled: event.target.checked })} /></label><label><span>원본 처리</span><select aria-label="원본 보관" value={value.keepOriginal ? "keep" : "remove"} onChange={(event) => onChange({ keepOriginal: event.target.value === "keep" })}><option value="keep">원본 보관</option><option value="remove">성공 후 원본 보관 안 함</option></select></label><button type="button" disabled={busy} onClick={() => void savePolicy()}>정책 저장</button></section>
+      <section className="user-mail-auto-forwarding__group"><div className="user-mail-auto-forwarding__toolbar"><h3>자동전달 메일 주소</h3>{value.providerLocked && externalCount ? <span className="user-mail-auto-forwarding__lock" title="provider가 잠겨 있어 외부 queue는 blocked 상태로 보존됩니다.">외부 발송 잠금</span> : null}<button type="button" disabled={busy || value.targets.length >= 10} onClick={() => { setTargetText(""); setTargetError(""); setTargetEditor(true); }}>주소 추가</button><button type="button" disabled={busy || !selectedTargets.length} onClick={async () => { if (await onDeleteTargets(selectedTargets)) setSelectedTargets([]); }}>선택 삭제</button></div><div className="user-mail-auto-forwarding__table-wrap"><table><caption>기본 자동전달 주소</caption><thead><tr><th>선택</th><th>주소</th><th>대상 구분</th><th>마지막 결과</th><th>관리</th></tr></thead><tbody>{value.targets.map((item) => <tr key={item.targetId}><td><input type="checkbox" aria-label={`${item.email} 선택`} checked={selectedTargets.includes(item.targetId)} onChange={(event) => setSelectedTargets((current) => event.target.checked ? [...current, item.targetId] : current.filter((id) => id !== item.targetId))} /></td><td>{item.email}</td><td>{item.targetKind === "internal" ? "내부" : "외부"}</td><td title={item.lastResult?.reasonCode}>{resultLabel(item.lastResult)}</td><td><button type="button" disabled={busy} onClick={() => void onDeleteTargets([item.targetId])}>삭제</button></td></tr>)}</tbody></table></div></section>
+      <section className="user-mail-auto-forwarding__group"><div className="user-mail-auto-forwarding__toolbar"><h3>예외 자동전달 규칙</h3><button type="button" disabled={busy || value.exceptions.length >= 100} onClick={() => editException(null)}>규칙 추가</button><button type="button" disabled={busy || !selectedExceptions.length} onClick={async () => { if (await onDeleteExceptions(selectedExceptions)) setSelectedExceptions([]); }}>선택 삭제</button></div><div className="user-mail-auto-forwarding__table-wrap"><table><caption>발신자 예외 자동전달 규칙</caption><thead><tr><th>선택</th><th>발신자</th><th>동작</th><th>대체 주소</th><th>상태</th><th>마지막 결과</th><th>관리</th></tr></thead><tbody>{value.exceptions.map((item) => <tr key={item.exceptionId}><td><input type="checkbox" aria-label={`${item.matcherValue} 선택`} checked={selectedExceptions.includes(item.exceptionId)} onChange={(event) => setSelectedExceptions((current) => event.target.checked ? [...current, item.exceptionId] : current.filter((id) => id !== item.exceptionId))} /></td><td>{item.matcherType === "sender_email" ? "이메일" : "도메인"} · {item.matcherValue}</td><td>{item.action === "skip" ? "전달 안 함" : "대체 주소로 전달"}</td><td title={item.targetEmails.join(", ")}>{item.targetEmails.join(", ") || "-"}</td><td>{item.enabled ? "사용" : "중지"}</td><td title={item.lastResult?.reasonCode}>{resultLabel(item.lastResult)}</td><td><button type="button" disabled={busy} onClick={() => editException(item)}>수정</button><button type="button" disabled={busy} onClick={() => void onDeleteExceptions([item.exceptionId])}>삭제</button></td></tr>)}</tbody></table></div></section>
+    </div>
+    <CommonPopup title="자동전달 메일 주소 추가" open={targetEditor} onClose={() => setTargetEditor(false)} saving={busy} error={targetError}><div className="user-mail-auto-forwarding__editor"><label>이메일 주소 (줄바꿈 또는 쉼표, 최대 10개)<textarea autoFocus value={targetText} onChange={(event) => setTargetText(event.target.value)} /></label><div className="user-mail-settings__actions"><button type="button" onClick={() => setTargetEditor(false)}>취소</button><button type="button" disabled={busy} onClick={async () => { const emails = targetText.split(/[\n,]/).map((item) => item.trim()).filter(Boolean); const result = await onAddTargets(emails); if (result) setTargetError(result); else setTargetEditor(false); }}>저장</button></div></div></CommonPopup>
+    <CommonPopup title={exceptionEditor ? "예외 자동전달 규칙 수정" : "예외 자동전달 규칙 추가"} open={exceptionEditor !== false} onClose={() => setExceptionEditor(false)} saving={busy} error={exceptionError}><div className="user-mail-auto-forwarding__editor"><label>발신자 조건<select value={exceptionForm.matcherType} onChange={(event) => setExceptionForm((current) => ({ ...current, matcherType: event.target.value as MailAutoForwardExceptionPayload["matcherType"] }))}><option value="sender_email">보낸 사람 이메일</option><option value="sender_domain">보낸 사람 도메인</option></select></label><label>조건 값<input autoFocus value={exceptionForm.matcherValue} onChange={(event) => setExceptionForm((current) => ({ ...current, matcherValue: event.target.value }))} /></label><label>동작<select value={exceptionForm.action} onChange={(event) => setExceptionForm((current) => ({ ...current, action: event.target.value as MailAutoForwardExceptionPayload["action"], targetEmails: event.target.value === "skip" ? [] : current.targetEmails }))}><option value="skip">전달 안 함</option><option value="override">대체 주소로 전달</option></select></label>{exceptionForm.action === "override" ? <label>대체 주소<textarea value={exceptionForm.targetEmails.join("\n")} onChange={(event) => setExceptionForm((current) => ({ ...current, targetEmails: event.target.value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean) }))} /></label> : null}<label className="is-inline"><input type="checkbox" checked={exceptionForm.enabled} onChange={(event) => setExceptionForm((current) => ({ ...current, enabled: event.target.checked }))} />사용</label><div className="user-mail-settings__actions"><button type="button" onClick={() => setExceptionEditor(false)}>취소</button><button type="button" disabled={busy} onClick={async () => { const result = await onSaveException(exceptionEditor || null, exceptionForm); if (result) setExceptionError(result); else setExceptionEditor(false); }}>저장</button></div></div></CommonPopup>
+    <CommonPopup title="자동전달 사용 확인" open={activationConfirm} onClose={() => setActivationConfirm(false)} saving={busy}><div className="user-mail-auto-forwarding__editor"><p>외부 주소 {externalCount}개가 포함되어 있습니다. provider 잠금 상태에서는 queue가 blocked로 남습니다.</p><div className="user-mail-settings__actions"><button type="button" onClick={() => setActivationConfirm(false)}>취소</button><button type="button" onClick={async () => { await onSavePolicy(); setActivationConfirm(false); }}>확인</button></div></div></CommonPopup>
   </section>;
 }
 
@@ -1098,7 +1146,7 @@ export default function App() {
   const [mailPreferencesLoading, setMailPreferencesLoading] = useState(false);
   const [mailPreferencesError, setMailPreferencesError] = useState("");
   const [mailPreferencesConflict, setMailPreferencesConflict] = useState(false);
-  const [mailSettingsTab, setMailSettingsTab] = useState<"basic" | "signature" | "mailbox" | "spam" | "classification">("basic");
+  const [mailSettingsTab, setMailSettingsTab] = useState<"basic" | "signature" | "mailbox" | "spam" | "classification" | "forwarding">("basic");
   const [mailSignatures, setMailSignatures] = useState<MailSignaturePreferences | null>(null);
   const [savedMailSignatures, setSavedMailSignatures] = useState<MailSignaturePreferences | null>(null);
   const [mailSignaturesLoading, setMailSignaturesLoading] = useState(false);
@@ -1116,6 +1164,10 @@ export default function App() {
   const [autoClassificationLoading, setAutoClassificationLoading] = useState(false);
   const [autoClassificationError, setAutoClassificationError] = useState("");
   const [autoClassificationBusy, setAutoClassificationBusy] = useState(false);
+  const [autoForwardSettings, setAutoForwardSettings] = useState<MailAutoForwardSettings | null>(null);
+  const [autoForwardLoading, setAutoForwardLoading] = useState(false);
+  const [autoForwardError, setAutoForwardError] = useState("");
+  const [autoForwardBusy, setAutoForwardBusy] = useState(false);
   const [messengerRoomsData, setMessengerRoomsData] = useState<MessengerRoomSummary[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState("");
   const [selectedRoomDetail, setSelectedRoomDetail] = useState<MessengerRoomDetail | null>(null);
@@ -1845,7 +1897,15 @@ export default function App() {
     finally { if (showLoading) setAutoClassificationLoading(false); }
   }
 
-  async function openMailSettings(tab: "basic" | "signature" | "mailbox" | "spam" | "classification") {
+  async function loadAutoForwardSettings(targetToken: string, showLoading = true) {
+    if (showLoading) setAutoForwardLoading(true);
+    setAutoForwardError("");
+    try { setAutoForwardSettings(await fetchAutoForwardSettings(targetToken)); }
+    catch (error) { setAutoForwardError(normalizeClientError(error, "자동전달 설정을 불러오지 못했습니다.")); }
+    finally { if (showLoading) setAutoForwardLoading(false); }
+  }
+
+  async function openMailSettings(tab: "basic" | "signature" | "mailbox" | "spam" | "classification" | "forwarding") {
     if (!token) return;
     setMailSettingsOpen(true);
     setMailSettingsTab(tab);
@@ -1859,6 +1919,10 @@ export default function App() {
     }
     if (tab === "classification") {
       await loadAutoClassificationSettings(token);
+      return;
+    }
+    if (tab === "forwarding") {
+      await loadAutoForwardSettings(token);
       return;
     }
     setMailPreferencesLoading(true);
@@ -2004,6 +2068,42 @@ export default function App() {
     try { setAutoClassificationSettings(await reorderAutoClassificationRules(token, autoClassificationSettings, ruleIds)); }
     catch (error) { await loadAutoClassificationSettings(token, false); setAutoClassificationError(normalizeClientError(error, "규칙 순서를 저장하지 못했습니다.")); }
     finally { setAutoClassificationBusy(false); }
+  }
+
+  async function saveAutoForwardPolicy() {
+    if (!token || !autoForwardSettings || autoForwardBusy) return;
+    setAutoForwardBusy(true); setAutoForwardError("");
+    try { setAutoForwardSettings(await updateAutoForwardSettings(token, autoForwardSettings)); pushFeedback({ id: `forward-policy-${Date.now()}`, source: "mail-settings", tone: "success", title: "자동전달 정책을 저장했습니다." }); }
+    catch (error) { if (error instanceof ApiRequestError && error.code === "MAIL_AUTO_FORWARD_POLICY_CONFLICT") await loadAutoForwardSettings(token, false); setAutoForwardError(normalizeClientError(error, "자동전달 정책을 저장하지 못했습니다.")); }
+    finally { setAutoForwardBusy(false); }
+  }
+  async function addAutoForwardTargets(emails: string[]): Promise<string | null> {
+    if (!token || autoForwardBusy || !emails.length) return "주소를 하나 이상 입력해 주세요.";
+    setAutoForwardBusy(true); setAutoForwardError("");
+    try { await createAutoForwardTargets(token, emails); await loadAutoForwardSettings(token, false); return null; }
+    catch (error) { return normalizeClientError(error, "자동전달 주소를 저장하지 못했습니다."); }
+    finally { setAutoForwardBusy(false); }
+  }
+  async function removeAutoForwardTargets(ids: string[]): Promise<boolean> {
+    if (!token || autoForwardBusy || !ids.length) return false;
+    setAutoForwardBusy(true); setAutoForwardError("");
+    try { await deleteAutoForwardTargets(token, ids); await loadAutoForwardSettings(token, false); return true; }
+    catch (error) { setAutoForwardError(normalizeClientError(error, "자동전달 주소를 삭제하지 못했습니다.")); return false; }
+    finally { setAutoForwardBusy(false); }
+  }
+  async function saveAutoForwardException(item: MailAutoForwardException | null, payload: MailAutoForwardExceptionPayload): Promise<string | null> {
+    if (!token || autoForwardBusy) return "처리 중입니다.";
+    setAutoForwardBusy(true); setAutoForwardError("");
+    try { if (item) await updateAutoForwardException(token, item, payload); else await createAutoForwardException(token, payload); await loadAutoForwardSettings(token, false); return null; }
+    catch (error) { return normalizeClientError(error, "예외 자동전달 규칙을 저장하지 못했습니다."); }
+    finally { setAutoForwardBusy(false); }
+  }
+  async function removeAutoForwardExceptions(ids: string[]): Promise<boolean> {
+    if (!token || autoForwardBusy || !ids.length) return false;
+    setAutoForwardBusy(true); setAutoForwardError("");
+    try { await deleteAutoForwardExceptions(token, ids); await loadAutoForwardSettings(token, false); return true; }
+    catch (error) { setAutoForwardError(normalizeClientError(error, "예외 자동전달 규칙을 삭제하지 못했습니다.")); return false; }
+    finally { setAutoForwardBusy(false); }
   }
 
   async function runEmptyMailbox(mailbox: MailboxSettingsRow, confirmPermanent: boolean): Promise<boolean> {
@@ -3650,6 +3750,7 @@ export default function App() {
                 onOpenSignature={() => setMailSettingsTab("signature")}
                 onOpenMailbox={() => void openMailSettings("mailbox")}
                 onOpenSpam={() => void openMailSettings("spam")}
+                onOpenForwarding={() => void openMailSettings("forwarding")}
                 onOpenClassification={() => void openMailSettings("classification")}
               />
             ) : mailSettingsOpen && mailSettingsTab === "signature" ? (
@@ -3669,6 +3770,7 @@ export default function App() {
                 onOpenMailbox={() => void openMailSettings("mailbox")}
                 onOpenSpam={() => void openMailSettings("spam")}
                 onOpenClassification={() => void openMailSettings("classification")}
+                onOpenForwarding={() => void openMailSettings("forwarding")}
               />
             ) : mailSettingsOpen && mailSettingsTab === "mailbox" ? (
               <MailboxSettingsPanel
@@ -3682,6 +3784,7 @@ export default function App() {
                 onOpenSignature={() => void openMailSettings("signature")}
                 onOpenSpam={() => void openMailSettings("spam")}
                 onOpenClassification={() => void openMailSettings("classification")}
+                onOpenForwarding={() => void openMailSettings("forwarding")}
                 onSavePolicy={saveMailboxPolicy}
                 onEmpty={runEmptyMailbox}
                 onBackup={startMailboxBackup}
@@ -3706,6 +3809,7 @@ export default function App() {
                 onOpenSignature={() => void openMailSettings("signature")}
                 onOpenMailbox={() => void openMailSettings("mailbox")}
                 onOpenClassification={() => void openMailSettings("classification")}
+                onOpenForwarding={() => void openMailSettings("forwarding")}
                 onChangePolicy={(enabled) => setSpamSettings((current) => current ? { ...current, filterEnabled: enabled } : current)}
                 onSavePolicy={saveSpamPolicy}
                 onSaveRule={saveSpamRule}
@@ -3723,11 +3827,28 @@ export default function App() {
                 onOpenSignature={() => void openMailSettings("signature")}
                 onOpenMailbox={() => void openMailSettings("mailbox")}
                 onOpenSpam={() => void openMailSettings("spam")}
+                onOpenForwarding={() => void openMailSettings("forwarding")}
                 onChangePolicy={(enabled) => setAutoClassificationSettings((current) => current ? { ...current, enabled } : current)}
                 onSavePolicy={saveAutoClassificationPolicy}
                 onSaveRule={saveAutoClassificationRule}
                 onDelete={removeAutoClassificationRules}
                 onReorder={reorderAutoRules}
+              />
+            ) : mailSettingsOpen && mailSettingsTab === "forwarding" ? (
+              <MailAutoForwardingPanel
+                value={autoForwardSettings}
+                loading={autoForwardLoading}
+                error={autoForwardError}
+                busy={autoForwardBusy}
+                onReload={() => void loadAutoForwardSettings(token)}
+                onClose={closeMailBasicSettings}
+                onOpenTab={(tab) => void openMailSettings(tab)}
+                onChange={(patch) => setAutoForwardSettings((current) => current ? { ...current, ...patch } : current)}
+                onSavePolicy={saveAutoForwardPolicy}
+                onAddTargets={addAutoForwardTargets}
+                onDeleteTargets={removeAutoForwardTargets}
+                onSaveException={saveAutoForwardException}
+                onDeleteExceptions={removeAutoForwardExceptions}
               />
             ) : (
             <SplitView

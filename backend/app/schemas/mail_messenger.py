@@ -617,6 +617,155 @@ class MailAutoClassificationSettingsResponse(BaseModel):
     tags: list[MailTagView] = Field(default_factory=list)
 
 
+def _normalize_forward_email_input(value: str) -> str:
+    normalized = value.strip().lower()
+    if len(normalized) > 254 or normalized.count("@") != 1:
+        raise ValueError("이메일 주소를 확인해 주세요.")
+    local, domain = normalized.rsplit("@", 1)
+    if not local or not domain or any(character.isspace() for character in normalized):
+        raise ValueError("이메일 주소를 확인해 주세요.")
+    try:
+        ascii_domain = domain.encode("idna").decode("ascii")
+    except UnicodeError as exc:
+        raise ValueError("이메일 주소를 확인해 주세요.") from exc
+    result = f"{local}@{ascii_domain}"
+    if len(result) > 254 or "." not in ascii_domain:
+        raise ValueError("이메일 주소를 확인해 주세요.")
+    return result
+
+
+class MailAutoForwardPolicyUpdateRequest(BaseModel):
+    enabled: bool
+    keepOriginal: bool
+    version: int = Field(ge=1)
+
+
+class MailAutoForwardTargetsCreateRequest(BaseModel):
+    emails: list[str] = Field(min_length=1, max_length=10)
+
+    @field_validator("emails", mode="before")
+    @classmethod
+    def normalize_emails(cls, values: list[str]) -> list[str]:
+        result: list[str] = []
+        for value in values or []:
+            normalized = _normalize_forward_email_input(str(value))
+            if normalized not in result:
+                result.append(normalized)
+        return result
+
+
+class MailAutoForwardTargetsDeleteRequest(BaseModel):
+    targetIds: list[str] = Field(min_length=1, max_length=10)
+
+    @field_validator("targetIds")
+    @classmethod
+    def unique_target_ids(cls, values: list[str]) -> list[str]:
+        normalized = [str(item).strip() for item in values]
+        if any(not item for item in normalized) or len(normalized) != len(set(normalized)):
+            raise ValueError("전달 대상 ID를 확인해 주세요.")
+        return normalized
+
+
+class MailAutoForwardExceptionBase(BaseModel):
+    matcherType: Literal["sender_email", "sender_domain"]
+    matcherValue: str = Field(min_length=1, max_length=254)
+    action: Literal["skip", "override"]
+    targetEmails: list[str] = Field(default_factory=list, max_length=10)
+    enabled: bool = True
+
+    @field_validator("matcherValue")
+    @classmethod
+    def normalize_matcher(cls, value: str, info):
+        normalized = value.strip().lower()
+        matcher_type = info.data.get("matcherType")
+        if matcher_type == "sender_email":
+            return _normalize_forward_email_input(normalized)
+        normalized = normalized.lstrip("@")
+        if not normalized or "@" in normalized or len(normalized) > 253:
+            raise ValueError("도메인을 확인해 주세요.")
+        try:
+            normalized = normalized.encode("idna").decode("ascii")
+        except UnicodeError as exc:
+            raise ValueError("도메인을 확인해 주세요.") from exc
+        if "." not in normalized:
+            raise ValueError("도메인을 확인해 주세요.")
+        return normalized
+
+    @field_validator("targetEmails", mode="before")
+    @classmethod
+    def normalize_targets(cls, values: list[str]) -> list[str]:
+        result: list[str] = []
+        for value in values or []:
+            normalized = _normalize_forward_email_input(str(value))
+            if normalized not in result:
+                result.append(normalized)
+        return result
+
+    @model_validator(mode="after")
+    def validate_action_targets(self):
+        if self.action == "override" and not self.targetEmails:
+            raise ValueError("대체 전달 주소를 하나 이상 입력해 주세요.")
+        if self.action == "skip" and self.targetEmails:
+            raise ValueError("전달 안 함 규칙에는 전달 주소를 입력할 수 없습니다.")
+        return self
+
+
+class MailAutoForwardExceptionCreateRequest(MailAutoForwardExceptionBase):
+    pass
+
+
+class MailAutoForwardExceptionUpdateRequest(MailAutoForwardExceptionBase):
+    version: int = Field(ge=1)
+
+
+class MailAutoForwardExceptionsDeleteRequest(BaseModel):
+    exceptionIds: list[str] = Field(min_length=1, max_length=100)
+
+    @field_validator("exceptionIds")
+    @classmethod
+    def unique_exception_ids(cls, values: list[str]) -> list[str]:
+        normalized = [str(item).strip() for item in values]
+        if any(not item for item in normalized) or len(normalized) != len(set(normalized)):
+            raise ValueError("예외 규칙 ID를 확인해 주세요.")
+        return normalized
+
+
+class MailAutoForwardLastResult(BaseModel):
+    status: Literal["internal_delivered", "queued", "blocked", "retry_pending", "sent", "failed"]
+    reasonCode: str
+    createdAt: datetime
+
+
+class MailAutoForwardTargetView(BaseModel):
+    targetId: str
+    email: str
+    targetKind: Literal["internal", "external"]
+    lastResult: MailAutoForwardLastResult | None = None
+
+
+class MailAutoForwardExceptionView(BaseModel):
+    exceptionId: str
+    matcherType: Literal["sender_email", "sender_domain"]
+    matcherValue: str
+    action: Literal["skip", "override"]
+    targetEmails: list[str]
+    enabled: bool
+    version: int = Field(ge=1)
+    lastResult: MailAutoForwardLastResult | None = None
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class MailAutoForwardSettingsResponse(BaseModel):
+    enabled: bool
+    keepOriginal: bool
+    version: int = Field(ge=1)
+    updatedAt: datetime
+    providerLocked: bool
+    targets: list[MailAutoForwardTargetView] = Field(default_factory=list)
+    exceptions: list[MailAutoForwardExceptionView] = Field(default_factory=list)
+
+
 class MailTrashSelection(BaseModel):
     mailId: str = Field(min_length=1, max_length=200)
     sourceMailbox: Literal["inbox", "sent", "draft"]

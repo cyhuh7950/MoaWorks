@@ -60,6 +60,7 @@ from app.schemas.mail_messenger import (
 from app.services.postgres_service import PostgresService
 from app.services.spam_settings_service import SpamDecision, SpamSettingsService, normalize_spam_email
 from app.services.mail_auto_classification_service import AutoClassificationTargetInUseError, MailAutoClassificationService
+from app.services.mail_auto_forwarding_service import MailAutoForwardingService
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,7 @@ class MailMessengerService:
         self.attachment_storage = MailAttachmentStorage()
         self.spam_settings = SpamSettingsService()
         self.auto_classification = MailAutoClassificationService()
+        self.auto_forwarding = MailAutoForwardingService()
 
     def list_inbox(self, actor: AuthUserSummary, query: MailListQuery | None = None) -> MailListResponse:
         if query is not None:
@@ -447,6 +449,7 @@ class MailMessengerService:
                         LEFT JOIN departments d ON d.id = u.department_id
                         WHERE m.company_id = %s
                           AND m.sender_user_id = %s
+                          AND r.delivery_source = 'direct'
                           AND m.status IN ('sent', 'scheduled')
                           AND m.sender_deleted_at IS NULL
                         ORDER BY LOWER(r.recipient_email), COALESCE(m.sent_at, m.scheduled_at, m.created_at) DESC
@@ -875,7 +878,7 @@ class MailMessengerService:
                     cursor.execute(
                         """SELECT id, recipient_user_id, recipient_email FROM mail_recipients
                            WHERE message_id = %s AND recipient_user_id IS NOT NULL
-                             AND received_at IS NULL
+                             AND received_at IS NULL AND delivery_source = 'direct'
                            FOR UPDATE""",
                         (row["id"],),
                     )
@@ -916,6 +919,13 @@ class MailMessengerService:
                                 actor_user_id=row["sender_user_id"], actor_user_name="system", mail_id=row["id"],
                                 recipient_id=recipient["id"], sender_email=row["sender_email"], recipient_email=recipient["recipient_email"],
                                 subject=row.get("subject") or "", body=row.get("body_text") or "", has_attachment=bool(row.get("attachment_count")), now=now,
+                            )
+                            self._apply_auto_forwarding(
+                                cursor, company_id=row["company_id"], recipient_user_id=recipient["recipient_user_id"],
+                                actor_user_id=row["sender_user_id"], actor_user_name="system", mail_id=row["id"],
+                                recipient_id=recipient["id"], sender_email=row["sender_email"], recipient_email=recipient["recipient_email"],
+                                delivery_source="direct", subject=row.get("subject") or "", body=row.get("body_text") or "",
+                                has_attachment=bool(row.get("attachment_count")), now=now,
                             )
                     cursor.execute(
                         """INSERT INTO mail_delivery_queue (
@@ -1932,8 +1942,8 @@ class MailMessengerService:
                     cursor.execute(
                         """INSERT INTO mail_recipients (
                             id, message_id, recipient_user_id, recipient_email, recipient_kind,
-                            is_read, is_starred, received_at, is_spam, spam_marked_at
-                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                            is_read, is_starred, received_at, is_spam, spam_marked_at, delivery_source
+                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'direct')""",
                         (recipient_id, mail_id, recipient_user_id, email, kind, False, False,
                          now if status_value == "sent" and recipient_user_id else None,
                          spam_decision.decision == "spam",
@@ -1954,6 +1964,13 @@ class MailMessengerService:
                                 actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id,
                                 recipient_id=recipient_id, sender_email=account["email"], recipient_email=email,
                                 subject=payload.subject.strip(), body=final_body_text,
+                                has_attachment=bool(resolved_attachments), now=now,
+                            )
+                            self._apply_auto_forwarding(
+                                cursor, company_id=actor.companyId, recipient_user_id=recipient_user_id,
+                                actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id,
+                                recipient_id=recipient_id, sender_email=account["email"], recipient_email=email,
+                                delivery_source="direct", subject=payload.subject.strip(), body=final_body_text,
                                 has_attachment=bool(resolved_attachments), now=now,
                             )
                     if status_value == "sent" and email in external_emails:
@@ -2040,6 +2057,40 @@ class MailMessengerService:
                 "has_attachment": has_attachment,
             },
             now=now,
+        )
+
+    def _apply_auto_forwarding(
+        self, cursor, *, company_id: str, recipient_user_id: str,
+        actor_user_id: str, actor_user_name: str, mail_id: str, recipient_id: str,
+        sender_email: str, recipient_email: str, delivery_source: str, now: datetime,
+        subject: str = "", body: str = "", has_attachment: bool = False,
+    ):
+        if delivery_source != "direct":
+            return None
+
+        def classify_internal(target_user_id: str, forwarded_recipient_id: str, target_email: str) -> None:
+            decision = self._evaluate_recipient_spam_for_company(cursor, company_id, target_user_id, sender_email, mail_id)
+            cursor.execute(
+                "UPDATE mail_recipients SET is_spam=%s,spam_marked_at=%s WHERE id=%s AND recipient_user_id=%s AND delivery_source='auto_forward'",
+                (decision.decision == "spam", now if decision.decision == "spam" else None, forwarded_recipient_id, target_user_id),
+            )
+            self._write_spam_classification_audit_for_actor(
+                cursor, company_id=company_id, actor_user_id=actor_user_id, actor_user_name=actor_user_name,
+                mail_id=mail_id, recipient_user_id=target_user_id, decision=decision, now=now,
+            )
+            if decision.decision != "spam":
+                self._apply_auto_classification(
+                    cursor, company_id=company_id, recipient_user_id=target_user_id,
+                    actor_user_id=actor_user_id, actor_user_name=actor_user_name, mail_id=mail_id,
+                    recipient_id=forwarded_recipient_id, sender_email=sender_email, recipient_email=target_email,
+                    subject=subject, body=body, has_attachment=has_attachment, now=now,
+                )
+
+        return self.auto_forwarding.apply_recipient(
+            cursor, company_id=company_id, user_id=recipient_user_id,
+            actor_user_id=actor_user_id, actor_user_name=actor_user_name,
+            mail_id=mail_id, recipient_id=recipient_id, sender_email=sender_email,
+            now=now, classify_internal=classify_internal,
         )
 
     def _evaluate_recipient_spam_for_company(
@@ -2228,6 +2279,7 @@ class MailMessengerService:
             SELECT recipient_email, recipient_user_id, recipient_kind, is_read, is_starred, received_at, read_at
             FROM mail_recipients
             WHERE message_id = %s
+              AND delivery_source = 'direct'
               AND (
                 recipient_kind <> 'bcc'
                 OR %s
@@ -2282,7 +2334,7 @@ class MailMessengerService:
         cursor.execute(
             """SELECT r.recipient_email, r.recipient_kind, q.status, q.attempt_count, q.next_attempt_at, q.sent_at
             FROM mail_delivery_queue q JOIN mail_recipients r ON r.id = q.recipient_id
-            WHERE q.mail_id = %s ORDER BY r.recipient_kind, r.recipient_email""",
+            WHERE q.mail_id = %s AND r.delivery_source = 'direct' ORDER BY r.recipient_kind, r.recipient_email""",
             (mail_id,),
         )
         return [

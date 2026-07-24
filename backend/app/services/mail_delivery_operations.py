@@ -167,6 +167,7 @@ class MailDeliveryOperations:
             with connection.cursor() as cursor:
                 self.heartbeat(cursor, worker_id, "working", now)
                 cursor.execute("""SELECT q.id AS queue_id,q.attempt_count,q.company_id,q.provider_config_id,q.mail_id,q.recipient_id,
+                q.delivery_kind,q.sender_email_override,q.sender_display_name_override,q.reply_to_email_override,
                 r.recipient_email,m.sender_email,m.sender_display_name,m.reply_to_email,m.message_encoding,m.subject,m.body_text,m.body_html
                 FROM mail_delivery_queue q JOIN mail_messages m ON m.id=q.mail_id
                 JOIN mail_recipients r ON r.id=q.recipient_id
@@ -208,6 +209,14 @@ class MailDeliveryOperations:
                 ) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (self._id("attempt"), job["queue_id"], attempt, result.status, result.error_message,
                  result.relay_response, now, datetime.now(UTC)))
+                cursor.execute("""UPDATE mail_auto_forward_deliveries SET status=%s,reason_code=%s,updated_at=%s,
+                    completed_at=CASE WHEN %s='sent' THEN %s ELSE completed_at END
+                    WHERE delivery_queue_id=%s RETURNING origin_recipient_id""",
+                    (result.status, f"WORKER_{result.status.upper()}", now, result.status, now, job["queue_id"]))
+                forwarded = cursor.fetchone()
+                if forwarded:
+                    from app.services.mail_auto_forwarding_service import MailAutoForwardingService
+                    MailAutoForwardingService.reconcile_original_retention(cursor, forwarded["origin_recipient_id"], now)
                 self._audit(cursor, job["company_id"], None, "mail-worker", "mail_delivery_queue", job["queue_id"],
                             f"mail.delivery.{result.status}", "processing", result.status, now)
                 self.heartbeat(cursor, worker_id, "idle", datetime.now(UTC), last_success=result.status == "sent", error=result.error_message)

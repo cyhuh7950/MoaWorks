@@ -61,7 +61,11 @@ class MailDeliveryWorker:
         if not provider.get("delivery_enabled") or provider.get("last_test_status") != "success":
             return DeliveryResult("blocked", error_message="외부 발송 잠금 또는 연결 검증이 필요합니다.")
         attempt = int(_job_value(job, "attempt_count", 0)) + 1
-        envelope = {key: _job_value(job, key) for key in ("sender_email","sender_display_name","reply_to_email","message_encoding","recipient_email","subject","body_text","body_html","attachments")}
+        envelope = {key: _job_value(job, key) for key in ("delivery_kind","sender_email","sender_display_name","reply_to_email","message_encoding","recipient_email","subject","body_text","body_html","attachments")}
+        if _job_value(job, "delivery_kind") == "auto_forward":
+            envelope["sender_email"] = _job_value(job, "sender_email_override") or envelope["sender_email"]
+            envelope["sender_display_name"] = _job_value(job, "sender_display_name_override") or envelope["sender_display_name"]
+            envelope["reply_to_email"] = _job_value(job, "reply_to_email_override") or envelope["reply_to_email"]
         try:
             response = self.adapter.send(envelope, provider)
             return DeliveryResult("sent", relay_response=mask_delivery_error(response))
@@ -101,7 +105,10 @@ class SmtpRelayAdapter:
                     client.starttls(context=ssl.create_default_context()); client.ehlo()
                 if provider.get("username"):
                     client.login(provider["username"], provider["password"])
-                refused = client.send_message(message)
+                if envelope.get("delivery_kind") == "auto_forward":
+                    refused = client.send_message(message, from_addr=envelope["sender_email"], to_addrs=[envelope["recipient_email"]])
+                else:
+                    refused = client.send_message(message)
                 if refused:
                     raise RelayDeliveryError("relay recipient refused", transient=False)
                 return "relay accepted"

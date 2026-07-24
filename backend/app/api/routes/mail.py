@@ -50,6 +50,11 @@ from app.schemas.mail_messenger import (
     MailAutoClassificationRulesDeleteRequest,
     MailAutoClassificationRulesOrderRequest,
     MailAutoClassificationSettingsResponse,
+    MailAutoForwardExceptionCreateRequest, MailAutoForwardExceptionUpdateRequest,
+    MailAutoForwardExceptionView, MailAutoForwardExceptionsDeleteRequest,
+    MailAutoForwardPolicyUpdateRequest, MailAutoForwardSettingsResponse,
+    MailAutoForwardTargetView, MailAutoForwardTargetsCreateRequest,
+    MailAutoForwardTargetsDeleteRequest,
     MailTagCreateRequest,
     MailTagListResponse,
     MailTagUpdateRequest,
@@ -72,6 +77,12 @@ from app.services.mail_auto_classification_service import (
     AutoClassificationTargetForbiddenError,
     AutoClassificationTargetInUseError,
     MailAutoClassificationService,
+)
+from app.services.mail_auto_forwarding_service import (
+    AutoForwardConflictError, AutoForwardInvalidInternalTargetError,
+    AutoForwardLimitError, AutoForwardPolicyConflictError,
+    AutoForwardSelfTargetError, AutoForwardTargetForbiddenError,
+    MailAutoForwardingService,
 )
 
 
@@ -96,6 +107,10 @@ def _spam_settings_service() -> SpamSettingsService:
 
 def _auto_classification_service() -> MailAutoClassificationService:
     return MailAutoClassificationService()
+
+
+def _auto_forwarding_service() -> MailAutoForwardingService:
+    return MailAutoForwardingService()
 
 
 def _parse_mailbox_scope(mailbox_key: str) -> MailboxScope:
@@ -123,9 +138,16 @@ def _handle_error(exc: Exception) -> None:
             SpamRuleConflictError,
             SpamSettingsConflictError,
             AutoClassificationConflictError,
+            AutoForwardConflictError,
         ),
     ):
-        if isinstance(exc, AutoClassificationTargetInUseError):
+        if isinstance(exc, AutoForwardLimitError):
+            code = "MAIL_AUTO_FORWARD_LIMIT_EXCEEDED"
+        elif isinstance(exc, AutoForwardPolicyConflictError):
+            code = "MAIL_AUTO_FORWARD_POLICY_CONFLICT"
+        elif isinstance(exc, AutoForwardConflictError):
+            code = "MAIL_AUTO_FORWARD_EXCEPTION_CONFLICT"
+        elif isinstance(exc, AutoClassificationTargetInUseError):
             code = "MAIL_AUTO_CLASSIFICATION_TARGET_IN_USE"
         elif isinstance(exc, AutoClassificationLimitError):
             code = "MAIL_AUTO_CLASSIFICATION_LIMIT_EXCEEDED"
@@ -166,7 +188,7 @@ def _handle_error(exc: Exception) -> None:
             },
         ) from exc
     if isinstance(exc, PermissionError):
-        forbidden_code = "MAIL_AUTO_CLASSIFICATION_TARGET_FORBIDDEN" if isinstance(exc, AutoClassificationTargetForbiddenError) else "MAIL_FORBIDDEN"
+        forbidden_code = "MAIL_AUTO_FORWARD_TARGET_FORBIDDEN" if isinstance(exc, AutoForwardTargetForbiddenError) else ("MAIL_AUTO_CLASSIFICATION_TARGET_FORBIDDEN" if isinstance(exc, AutoClassificationTargetForbiddenError) else "MAIL_FORBIDDEN")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
@@ -176,10 +198,11 @@ def _handle_error(exc: Exception) -> None:
             },
         ) from exc
     if isinstance(exc, ValueError):
+        invalid_code = "MAIL_AUTO_FORWARD_SELF_TARGET" if isinstance(exc, AutoForwardSelfTargetError) else ("MAIL_AUTO_FORWARD_INVALID_INTERNAL_TARGET" if isinstance(exc, AutoForwardInvalidInternalTargetError) else "MAIL_REQUEST_INVALID")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
-                "code": "MAIL_REQUEST_INVALID",
+                "code": invalid_code,
                 "userMessage": str(exc),
                 "adminMessage": str(exc),
             },
@@ -642,6 +665,46 @@ def delete_auto_classification_rule(rule_id: str, user: AuthUserSummary = Depend
         _handle_error(exc)
         raise
 
+
+@router.get("/settings/auto-forwarding", response_model=MailAutoForwardSettingsResponse)
+def get_auto_forwarding_settings(user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailAutoForwardSettingsResponse:
+    try: return _auto_forwarding_service().get_settings(user)
+    except Exception as exc: _handle_error(exc); raise
+
+@router.patch("/settings/auto-forwarding", response_model=MailAutoForwardSettingsResponse)
+def update_auto_forwarding_settings(payload: MailAutoForwardPolicyUpdateRequest, user: AuthUserSummary = Depends(permission_required("mail:send"))) -> MailAutoForwardSettingsResponse:
+    try: return _auto_forwarding_service().update_policy(user, payload)
+    except Exception as exc: _handle_error(exc); raise
+
+@router.post("/settings/auto-forwarding/targets", response_model=list[MailAutoForwardTargetView], status_code=status.HTTP_201_CREATED)
+def create_auto_forwarding_targets(payload: MailAutoForwardTargetsCreateRequest, user: AuthUserSummary = Depends(permission_required("mail:send"))) -> list[MailAutoForwardTargetView]:
+    try: return _auto_forwarding_service().create_targets(user, payload)
+    except Exception as exc: _handle_error(exc); raise
+
+@router.post("/settings/auto-forwarding/targets/delete", status_code=status.HTTP_204_NO_CONTENT)
+def delete_auto_forwarding_targets(payload: MailAutoForwardTargetsDeleteRequest, user: AuthUserSummary = Depends(permission_required("mail:send"))) -> Response:
+    try: _auto_forwarding_service().delete_targets(user, payload); return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except Exception as exc: _handle_error(exc); raise
+
+@router.post("/settings/auto-forwarding/exceptions", response_model=MailAutoForwardExceptionView, status_code=status.HTTP_201_CREATED)
+def create_auto_forwarding_exception(payload: MailAutoForwardExceptionCreateRequest, user: AuthUserSummary = Depends(permission_required("mail:send"))) -> MailAutoForwardExceptionView:
+    try: return _auto_forwarding_service().create_exception(user, payload)
+    except Exception as exc: _handle_error(exc); raise
+
+@router.post("/settings/auto-forwarding/exceptions/delete", status_code=status.HTTP_204_NO_CONTENT)
+def delete_auto_forwarding_exceptions(payload: MailAutoForwardExceptionsDeleteRequest, user: AuthUserSummary = Depends(permission_required("mail:send"))) -> Response:
+    try: _auto_forwarding_service().delete_exceptions(user, payload); return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except Exception as exc: _handle_error(exc); raise
+
+@router.patch("/settings/auto-forwarding/exceptions/{exception_id}", response_model=MailAutoForwardExceptionView)
+def update_auto_forwarding_exception(exception_id: str, payload: MailAutoForwardExceptionUpdateRequest, user: AuthUserSummary = Depends(permission_required("mail:send"))) -> MailAutoForwardExceptionView:
+    try: return _auto_forwarding_service().update_exception(user, exception_id, payload)
+    except Exception as exc: _handle_error(exc); raise
+
+@router.delete("/settings/auto-forwarding/exceptions/{exception_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_auto_forwarding_exception(exception_id: str, user: AuthUserSummary = Depends(permission_required("mail:send"))) -> Response:
+    try: _auto_forwarding_service().delete_exception(user, exception_id); return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except Exception as exc: _handle_error(exc); raise
 
 @router.post("/{mail_id}/category", response_model=MailStatusResponse)
 def set_category(mail_id: str, payload: MailCategoryRequest, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailStatusResponse:
