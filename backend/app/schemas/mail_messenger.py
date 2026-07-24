@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 import re
 import unicodedata
@@ -764,6 +764,37 @@ class MailAutoForwardSettingsResponse(BaseModel):
     providerLocked: bool
     targets: list[MailAutoForwardTargetView] = Field(default_factory=list)
     exceptions: list[MailAutoForwardExceptionView] = Field(default_factory=list)
+
+
+class MailOutOfOfficePolicyUpdateRequest(BaseModel):
+    enabled: bool
+    startDate: date | None
+    endDate: date | None
+    subject: str = Field(max_length=200)
+    message: str = Field(max_length=4000)
+    targetScope: Literal["all", "internal", "external"]
+    version: int = Field(ge=1)
+
+
+class MailOutOfOfficeLastResult(BaseModel):
+    status: Literal["internal_delivered", "queued", "blocked", "retry_pending", "sent", "failed"]
+    reasonCode: str
+    createdAt: datetime
+
+
+class MailOutOfOfficeSettingsResponse(BaseModel):
+    enabled: bool
+    startDate: date | None = None
+    endDate: date | None = None
+    subject: str
+    message: str
+    targetScope: Literal["all", "internal", "external"]
+    version: int = Field(ge=1)
+    state: Literal["disabled", "scheduled", "active", "expired"]
+    lastResult: MailOutOfOfficeLastResult | None = None
+    responseCount: int = Field(ge=0)
+    providerLocked: bool
+    updatedAt: datetime
 
 
 class MailTrashSelection(BaseModel):

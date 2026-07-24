@@ -61,6 +61,7 @@ from app.services.postgres_service import PostgresService
 from app.services.spam_settings_service import SpamDecision, SpamSettingsService, normalize_spam_email
 from app.services.mail_auto_classification_service import AutoClassificationTargetInUseError, MailAutoClassificationService
 from app.services.mail_auto_forwarding_service import MailAutoForwardingService
+from app.services.mail_out_of_office_service import MailOutOfOfficeService
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,7 @@ class MailMessengerService:
         self.spam_settings = SpamSettingsService()
         self.auto_classification = MailAutoClassificationService()
         self.auto_forwarding = MailAutoForwardingService()
+        self.out_of_office = MailOutOfOfficeService()
 
     def list_inbox(self, actor: AuthUserSummary, query: MailListQuery | None = None) -> MailListResponse:
         if query is not None:
@@ -858,7 +860,7 @@ class MailMessengerService:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT id, company_id, sender_user_id, sender_email, subject, body_text, attachment_count
+                    SELECT id, company_id, sender_user_id, sender_email, subject, body_text, attachment_count, is_auto_generated
                     FROM mail_messages
                     WHERE status = 'scheduled'
                       AND scheduled_at <= %s
@@ -926,6 +928,12 @@ class MailMessengerService:
                                 recipient_id=recipient["id"], sender_email=row["sender_email"], recipient_email=recipient["recipient_email"],
                                 delivery_source="direct", subject=row.get("subject") or "", body=row.get("body_text") or "",
                                 has_attachment=bool(row.get("attachment_count")), now=now,
+                            )
+                            self._apply_out_of_office(
+                                cursor, company_id=row["company_id"], recipient_user_id=recipient["recipient_user_id"],
+                                actor_user_id=row["sender_user_id"], actor_user_name="system", mail_id=row["id"],
+                                recipient_id=recipient["id"], sender_email=row["sender_email"], delivery_source="direct",
+                                is_auto_generated=bool(row.get("is_auto_generated")), is_spam=False, now=now,
                             )
                     cursor.execute(
                         """INSERT INTO mail_delivery_queue (
@@ -1973,6 +1981,12 @@ class MailMessengerService:
                                 delivery_source="direct", subject=payload.subject.strip(), body=final_body_text,
                                 has_attachment=bool(resolved_attachments), now=now,
                             )
+                            self._apply_out_of_office(
+                                cursor, company_id=actor.companyId, recipient_user_id=recipient_user_id,
+                                actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id,
+                                recipient_id=recipient_id, sender_email=account["email"], delivery_source="direct",
+                                is_auto_generated=False, is_spam=False, now=now,
+                            )
                     if status_value == "sent" and email in external_emails:
                         queue_status = "queued" if provider["delivery_enabled"] and provider["last_test_status"] == "success" else "blocked"
                         queue_id = self._new_id("delivery")
@@ -2091,6 +2105,22 @@ class MailMessengerService:
             actor_user_id=actor_user_id, actor_user_name=actor_user_name,
             mail_id=mail_id, recipient_id=recipient_id, sender_email=sender_email,
             now=now, classify_internal=classify_internal,
+        )
+
+    def _apply_out_of_office(
+        self, cursor, *, company_id: str, recipient_user_id: str,
+        actor_user_id: str, actor_user_name: str, mail_id: str, recipient_id: str,
+        sender_email: str, delivery_source: str, is_auto_generated: bool,
+        is_spam: bool, now: datetime,
+    ):
+        if delivery_source != "direct" or is_spam:
+            return None
+        return self.out_of_office.apply_recipient(
+            cursor, company_id=company_id, user_id=recipient_user_id,
+            actor_user_id=actor_user_id, actor_user_name=actor_user_name,
+            mail_id=mail_id, recipient_id=recipient_id, sender_email=sender_email,
+            delivery_source=delivery_source, is_auto_generated=is_auto_generated,
+            is_spam=is_spam, now=now,
         )
 
     def _evaluate_recipient_spam_for_company(

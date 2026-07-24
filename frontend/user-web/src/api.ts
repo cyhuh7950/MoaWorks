@@ -419,6 +419,21 @@ export type MailAutoForwardTarget = { targetId: string; email: string; targetKin
 export type MailAutoForwardExceptionPayload = { matcherType: "sender_email" | "sender_domain"; matcherValue: string; action: "skip" | "override"; targetEmails: string[]; enabled: boolean };
 export type MailAutoForwardException = MailAutoForwardExceptionPayload & { exceptionId: string; version: number; lastResult: MailAutoForwardLastResult | null; createdAt: string; updatedAt: string };
 export type MailAutoForwardSettings = { enabled: boolean; keepOriginal: boolean; version: number; updatedAt: string; providerLocked: boolean; targets: MailAutoForwardTarget[]; exceptions: MailAutoForwardException[] };
+export type MailOutOfOfficeLastResult = { status: "internal_delivered" | "queued" | "blocked" | "retry_pending" | "sent" | "failed"; reasonCode: string; createdAt: string };
+export type MailOutOfOfficeSettings = {
+  enabled: boolean;
+  startDate: string | null;
+  endDate: string | null;
+  subject: string;
+  message: string;
+  targetScope: "all" | "internal" | "external";
+  version: number;
+  state: "disabled" | "scheduled" | "active" | "expired";
+  lastResult: MailOutOfOfficeLastResult | null;
+  responseCount: number;
+  providerLocked: boolean;
+  updatedAt: string;
+};
 
 export type MailDetail = {
   mailId: string;
@@ -1004,6 +1019,26 @@ export async function updateAutoForwardException(token: string, item: MailAutoFo
 }
 export async function deleteAutoForwardExceptions(token: string, exceptionIds: string[]): Promise<void> {
   await request<Record<string, never>>("/mail/settings/auto-forwarding/exceptions/delete", { method: "POST", headers: authHeaders(token), body: JSON.stringify({ exceptionIds }) });
+}
+
+export async function fetchOutOfOfficeSettings(token: string): Promise<MailOutOfOfficeSettings> {
+  return request<MailOutOfOfficeSettings>("/mail/settings/out-of-office", { headers: authHeaders(token) });
+}
+
+export async function updateOutOfOfficeSettings(token: string, value: MailOutOfOfficeSettings): Promise<MailOutOfOfficeSettings> {
+  return request<MailOutOfOfficeSettings>("/mail/settings/out-of-office", {
+    method: "PATCH",
+    headers: authHeaders(token),
+    body: JSON.stringify({
+      enabled: value.enabled,
+      startDate: value.startDate,
+      endDate: value.endDate,
+      subject: value.subject,
+      message: value.message,
+      targetScope: value.targetScope,
+      version: value.version,
+    }),
+  });
 }
 
 export type MailBasicPreferences = {

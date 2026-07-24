@@ -217,6 +217,10 @@ class MailDeliveryOperations:
                 if forwarded:
                     from app.services.mail_auto_forwarding_service import MailAutoForwardingService
                     MailAutoForwardingService.reconcile_original_retention(cursor, forwarded["origin_recipient_id"], now)
+                cursor.execute("""UPDATE mail_out_of_office_deliveries SET status=%s,reason_code=%s,updated_at=%s,
+                    completed_at=CASE WHEN %s='sent' THEN %s ELSE completed_at END
+                    WHERE delivery_queue_id=%s""",
+                    (result.status, f"WORKER_{result.status.upper()}", now, result.status, now, job["queue_id"]))
                 self._audit(cursor, job["company_id"], None, "mail-worker", "mail_delivery_queue", job["queue_id"],
                             f"mail.delivery.{result.status}", "processing", result.status, now)
                 self.heartbeat(cursor, worker_id, "idle", datetime.now(UTC), last_success=result.status == "sent", error=result.error_message)

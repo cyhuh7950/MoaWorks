@@ -55,6 +55,7 @@ from app.schemas.mail_messenger import (
     MailAutoForwardPolicyUpdateRequest, MailAutoForwardSettingsResponse,
     MailAutoForwardTargetView, MailAutoForwardTargetsCreateRequest,
     MailAutoForwardTargetsDeleteRequest,
+    MailOutOfOfficePolicyUpdateRequest, MailOutOfOfficeSettingsResponse,
     MailTagCreateRequest,
     MailTagListResponse,
     MailTagUpdateRequest,
@@ -83,6 +84,11 @@ from app.services.mail_auto_forwarding_service import (
     AutoForwardLimitError, AutoForwardPolicyConflictError,
     AutoForwardSelfTargetError, AutoForwardTargetForbiddenError,
     MailAutoForwardingService,
+)
+from app.services.mail_out_of_office_service import (
+    MailOutOfOfficePolicyConflictError, MailOutOfOfficeService,
+    OutOfOfficeInvalidPeriodError, OutOfOfficeRequiredContentError,
+    OutOfOfficeTargetForbiddenError,
 )
 
 
@@ -113,6 +119,10 @@ def _auto_forwarding_service() -> MailAutoForwardingService:
     return MailAutoForwardingService()
 
 
+def _out_of_office_service() -> MailOutOfOfficeService:
+    return MailOutOfOfficeService()
+
+
 def _parse_mailbox_scope(mailbox_key: str) -> MailboxScope:
     try:
         return MailboxScope.parse(mailbox_key)
@@ -139,9 +149,12 @@ def _handle_error(exc: Exception) -> None:
             SpamSettingsConflictError,
             AutoClassificationConflictError,
             AutoForwardConflictError,
+            MailOutOfOfficePolicyConflictError,
         ),
     ):
-        if isinstance(exc, AutoForwardLimitError):
+        if isinstance(exc, MailOutOfOfficePolicyConflictError):
+            code = "MAIL_OUT_OF_OFFICE_POLICY_CONFLICT"
+        elif isinstance(exc, AutoForwardLimitError):
             code = "MAIL_AUTO_FORWARD_LIMIT_EXCEEDED"
         elif isinstance(exc, AutoForwardPolicyConflictError):
             code = "MAIL_AUTO_FORWARD_POLICY_CONFLICT"
@@ -188,7 +201,7 @@ def _handle_error(exc: Exception) -> None:
             },
         ) from exc
     if isinstance(exc, PermissionError):
-        forbidden_code = "MAIL_AUTO_FORWARD_TARGET_FORBIDDEN" if isinstance(exc, AutoForwardTargetForbiddenError) else ("MAIL_AUTO_CLASSIFICATION_TARGET_FORBIDDEN" if isinstance(exc, AutoClassificationTargetForbiddenError) else "MAIL_FORBIDDEN")
+        forbidden_code = "MAIL_OUT_OF_OFFICE_FORBIDDEN" if isinstance(exc, OutOfOfficeTargetForbiddenError) else ("MAIL_AUTO_FORWARD_TARGET_FORBIDDEN" if isinstance(exc, AutoForwardTargetForbiddenError) else ("MAIL_AUTO_CLASSIFICATION_TARGET_FORBIDDEN" if isinstance(exc, AutoClassificationTargetForbiddenError) else "MAIL_FORBIDDEN"))
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
@@ -198,7 +211,7 @@ def _handle_error(exc: Exception) -> None:
             },
         ) from exc
     if isinstance(exc, ValueError):
-        invalid_code = "MAIL_AUTO_FORWARD_SELF_TARGET" if isinstance(exc, AutoForwardSelfTargetError) else ("MAIL_AUTO_FORWARD_INVALID_INTERNAL_TARGET" if isinstance(exc, AutoForwardInvalidInternalTargetError) else "MAIL_REQUEST_INVALID")
+        invalid_code = "MAIL_OUT_OF_OFFICE_INVALID_PERIOD" if isinstance(exc, OutOfOfficeInvalidPeriodError) else ("MAIL_OUT_OF_OFFICE_REQUIRED_CONTENT" if isinstance(exc, OutOfOfficeRequiredContentError) else ("MAIL_AUTO_FORWARD_SELF_TARGET" if isinstance(exc, AutoForwardSelfTargetError) else ("MAIL_AUTO_FORWARD_INVALID_INTERNAL_TARGET" if isinstance(exc, AutoForwardInvalidInternalTargetError) else "MAIL_REQUEST_INVALID")))
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -661,6 +674,24 @@ def delete_auto_classification_rule(rule_id: str, user: AuthUserSummary = Depend
     try:
         _auto_classification_service().delete_rule(user, rule_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.get("/settings/out-of-office", response_model=MailOutOfOfficeSettingsResponse)
+def get_out_of_office_settings(user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailOutOfOfficeSettingsResponse:
+    try:
+        return _out_of_office_service().get_settings(user)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.patch("/settings/out-of-office", response_model=MailOutOfOfficeSettingsResponse)
+def update_out_of_office_settings(payload: MailOutOfOfficePolicyUpdateRequest, user: AuthUserSummary = Depends(permission_required("mail:send"))) -> MailOutOfOfficeSettingsResponse:
+    try:
+        return _out_of_office_service().update_policy(user, payload)
     except Exception as exc:
         _handle_error(exc)
         raise

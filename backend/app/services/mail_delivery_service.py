@@ -62,7 +62,7 @@ class MailDeliveryWorker:
             return DeliveryResult("blocked", error_message="외부 발송 잠금 또는 연결 검증이 필요합니다.")
         attempt = int(_job_value(job, "attempt_count", 0)) + 1
         envelope = {key: _job_value(job, key) for key in ("delivery_kind","sender_email","sender_display_name","reply_to_email","message_encoding","recipient_email","subject","body_text","body_html","attachments")}
-        if _job_value(job, "delivery_kind") == "auto_forward":
+        if _job_value(job, "delivery_kind") == "auto_forward" or _job_value(job, "delivery_kind") == "out_of_office":
             envelope["sender_email"] = _job_value(job, "sender_email_override") or envelope["sender_email"]
             envelope["sender_display_name"] = _job_value(job, "sender_display_name_override") or envelope["sender_display_name"]
             envelope["reply_to_email"] = _job_value(job, "reply_to_email_override") or envelope["reply_to_email"]
@@ -81,7 +81,7 @@ class SmtpRelayAdapter:
     def build_message(self, envelope: dict, provider: dict) -> EmailMessage:
         message = EmailMessage()
         display_name = (envelope.get("sender_display_name") or "").strip()
-        sender_email = provider.get("from_address") or envelope["sender_email"]
+        sender_email = envelope["sender_email"] if envelope.get("delivery_kind") in {"auto_forward", "out_of_office"} else (provider.get("from_address") or envelope["sender_email"])
         message["From"] = Address(display_name=display_name, addr_spec=sender_email) if display_name else sender_email
         message["To"] = envelope["recipient_email"]
         message["Subject"] = envelope["subject"]
@@ -105,7 +105,7 @@ class SmtpRelayAdapter:
                     client.starttls(context=ssl.create_default_context()); client.ehlo()
                 if provider.get("username"):
                     client.login(provider["username"], provider["password"])
-                if envelope.get("delivery_kind") == "auto_forward":
+                if envelope.get("delivery_kind") in {"auto_forward", "out_of_office"}:
                     refused = client.send_message(message, from_addr=envelope["sender_email"], to_addrs=[envelope["recipient_email"]])
                 else:
                     refused = client.send_message(message)
