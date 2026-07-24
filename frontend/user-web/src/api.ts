@@ -395,6 +395,25 @@ export type MailSpamSettingsResponse = {
 
 export type MailSpamRulePayload = Pick<MailSpamRule, "ruleType" | "matchType" | "matchValue" | "enabled">;
 
+export type MailAutoClassificationCondition = {
+  field: "sender_email" | "sender_domain" | "recipient_email" | "subject" | "body" | "attachment";
+  operator: "equals" | "contains" | "subdomain" | "starts_with" | "ends_with" | "exists" | "missing";
+  value: string | null;
+};
+export type MailAutoClassificationRulePayload = {
+  name: string; enabled: boolean; conditions: MailAutoClassificationCondition[];
+  targetFolderId: string | null; tagIds: string[];
+};
+export type MailAutoClassificationRule = MailAutoClassificationRulePayload & {
+  ruleId: string; priority: number; version: number;
+  lastEvent: { result: "applied" | "matched_noop" | "failed"; folderApplied: boolean; tagCount: number; reasonCode: string; createdAt: string } | null;
+  createdAt: string; updatedAt: string;
+};
+export type MailAutoClassificationSettings = {
+  enabled: boolean; version: number; updatedAt: string;
+  rules: MailAutoClassificationRule[]; folders: MailFolder[]; tags: MailTag[];
+};
+
 export type MailDetail = {
   mailId: string;
   accountId: string;
@@ -934,6 +953,29 @@ export async function deleteSpamRule(token: string, ruleId: string): Promise<voi
     method: "DELETE",
     headers: authHeaders(token),
   });
+}
+
+// UI-026 auto classification
+export async function fetchAutoClassificationSettings(token: string): Promise<MailAutoClassificationSettings> {
+  return request<MailAutoClassificationSettings>("/mail/settings/auto-classification", { headers: authHeaders(token) });
+}
+export async function updateAutoClassificationSettings(token: string, settings: MailAutoClassificationSettings): Promise<MailAutoClassificationSettings> {
+  return request<MailAutoClassificationSettings>("/mail/settings/auto-classification", { method: "PATCH", headers: authHeaders(token), body: JSON.stringify({ enabled: settings.enabled, version: settings.version }) });
+}
+export async function createAutoClassificationRule(token: string, payload: MailAutoClassificationRulePayload): Promise<MailAutoClassificationRule> {
+  return request<MailAutoClassificationRule>("/mail/settings/auto-classification/rules", { method: "POST", headers: authHeaders(token), body: JSON.stringify(payload) });
+}
+export async function updateAutoClassificationRule(token: string, rule: MailAutoClassificationRule, payload: MailAutoClassificationRulePayload): Promise<MailAutoClassificationRule> {
+  return request<MailAutoClassificationRule>(`/mail/settings/auto-classification/rules/${encodeURIComponent(rule.ruleId)}`, { method: "PATCH", headers: authHeaders(token), body: JSON.stringify({ ...payload, version: rule.version }) });
+}
+export async function deleteAutoClassificationRule(token: string, ruleId: string): Promise<void> {
+  await request<Record<string, never>>(`/mail/settings/auto-classification/rules/${encodeURIComponent(ruleId)}`, { method: "DELETE", headers: authHeaders(token) });
+}
+export async function deleteAutoClassificationRules(token: string, ruleIds: string[]): Promise<void> {
+  await request<Record<string, never>>("/mail/settings/auto-classification/rules/delete", { method: "POST", headers: authHeaders(token), body: JSON.stringify({ ruleIds }) });
+}
+export async function reorderAutoClassificationRules(token: string, settings: MailAutoClassificationSettings, ruleIds: string[]): Promise<MailAutoClassificationSettings> {
+  return request<MailAutoClassificationSettings>("/mail/settings/auto-classification/rules/order", { method: "PATCH", headers: authHeaders(token), body: JSON.stringify({ ruleIds, version: settings.version }) });
 }
 
 export type MailBasicPreferences = {

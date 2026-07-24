@@ -493,6 +493,130 @@ class MailSpamSettingsResponse(BaseModel):
     rules: list[MailSpamRuleView] = Field(default_factory=list)
 
 
+AutoConditionField = Literal["sender_email", "sender_domain", "recipient_email", "subject", "body", "attachment"]
+AutoConditionOperator = Literal["equals", "contains", "subdomain", "starts_with", "ends_with", "exists", "missing"]
+
+
+class MailAutoClassificationCondition(BaseModel):
+    field: AutoConditionField
+    operator: AutoConditionOperator
+    value: str | None = Field(default=None, max_length=254)
+
+    @model_validator(mode="after")
+    def validate_combination(self):
+        allowed = {
+            "sender_email": {"equals", "contains"}, "recipient_email": {"equals", "contains"},
+            "sender_domain": {"equals", "subdomain"},
+            "subject": {"contains", "equals", "starts_with", "ends_with"},
+            "body": {"contains"}, "attachment": {"exists", "missing"},
+        }
+        if self.operator not in allowed[self.field]:
+            raise ValueError("지원하지 않는 자동분류 조건입니다.")
+        if self.field == "attachment":
+            if self.value not in (None, ""):
+                raise ValueError("첨부 조건에는 값을 입력할 수 없습니다.")
+            self.value = None
+        elif not (self.value or "").strip():
+            raise ValueError("조건 값을 입력해 주세요.")
+        else:
+            self.value = self.value.strip()
+        return self
+
+
+class MailAutoClassificationPolicyUpdateRequest(BaseModel):
+    enabled: bool
+    version: int = Field(ge=1)
+
+
+class MailAutoClassificationRuleBase(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    enabled: bool = True
+    conditions: list[MailAutoClassificationCondition] = Field(min_length=1, max_length=5)
+    targetFolderId: str | None = Field(default=None, min_length=1, max_length=200)
+    tagIds: list[str] = Field(default_factory=list, max_length=5)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or any(unicodedata.category(ch).startswith("C") for ch in normalized):
+            raise ValueError("규칙명을 확인해 주세요.")
+        return normalized
+
+    @field_validator("tagIds", mode="before")
+    @classmethod
+    def normalize_tags(cls, values: list[str]) -> list[str]:
+        result: list[str] = []
+        for value in values or []:
+            normalized = str(value).strip()
+            if not normalized:
+                raise ValueError("태그 ID는 비어 있을 수 없습니다.")
+            if normalized not in result:
+                result.append(normalized)
+        return result
+
+    @model_validator(mode="after")
+    def require_action(self):
+        if not self.targetFolderId and not self.tagIds:
+            raise ValueError("메일함 또는 태그 동작이 하나 이상 필요합니다.")
+        return self
+
+
+class MailAutoClassificationRuleCreateRequest(MailAutoClassificationRuleBase):
+    pass
+
+
+class MailAutoClassificationRuleUpdateRequest(MailAutoClassificationRuleBase):
+    version: int = Field(ge=1)
+
+
+class MailAutoClassificationRulesDeleteRequest(BaseModel):
+    ruleIds: list[str] = Field(min_length=1, max_length=100)
+
+    @field_validator("ruleIds")
+    @classmethod
+    def unique_ids(cls, values: list[str]) -> list[str]:
+        normalized = [str(item).strip() for item in values]
+        if any(not item for item in normalized) or len(normalized) != len(set(normalized)):
+            raise ValueError("규칙 ID를 확인해 주세요.")
+        return normalized
+
+
+class MailAutoClassificationRulesOrderRequest(MailAutoClassificationRulesDeleteRequest):
+    version: int = Field(ge=1)
+
+
+class MailAutoClassificationLastEvent(BaseModel):
+    result: Literal["applied", "matched_noop", "failed"]
+    folderApplied: bool
+    tagCount: int = Field(ge=0)
+    reasonCode: str
+    createdAt: datetime
+
+
+class MailAutoClassificationRuleView(BaseModel):
+    ruleId: str
+    name: str
+    enabled: bool
+    priority: int
+    version: int
+    conditions: list[MailAutoClassificationCondition]
+    targetFolderId: str | None
+    tagIds: list[str]
+    lastEvent: MailAutoClassificationLastEvent | None = None
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class MailAutoClassificationSettingsResponse(BaseModel):
+    enabled: bool
+    version: int = Field(ge=1)
+    updatedAt: datetime
+    rules: list[MailAutoClassificationRuleView] = Field(default_factory=list)
+    folders: list[MailFolderView] = Field(default_factory=list)
+    tags: list[MailTagView] = Field(default_factory=list)
+
+
 class MailTrashSelection(BaseModel):
     mailId: str = Field(min_length=1, max_length=200)
     sourceMailbox: Literal["inbox", "sent", "draft"]

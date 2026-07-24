@@ -43,6 +43,13 @@ from app.schemas.mail_messenger import (
     MailSpamRuleUpdateRequest,
     MailSpamRuleView,
     MailSpamSettingsResponse,
+    MailAutoClassificationPolicyUpdateRequest,
+    MailAutoClassificationRuleCreateRequest,
+    MailAutoClassificationRuleUpdateRequest,
+    MailAutoClassificationRuleView,
+    MailAutoClassificationRulesDeleteRequest,
+    MailAutoClassificationRulesOrderRequest,
+    MailAutoClassificationSettingsResponse,
     MailTagCreateRequest,
     MailTagListResponse,
     MailTagUpdateRequest,
@@ -58,6 +65,14 @@ from app.services.mailbox_settings_service import (
     MailboxSettingsService,
 )
 from app.services.spam_settings_service import SpamRuleConflictError, SpamSettingsConflictError, SpamSettingsService
+from app.services.mail_auto_classification_service import (
+    AutoClassificationConflictError,
+    AutoClassificationLimitError,
+    AutoClassificationPolicyConflictError,
+    AutoClassificationTargetForbiddenError,
+    AutoClassificationTargetInUseError,
+    MailAutoClassificationService,
+)
 
 
 router = APIRouter()
@@ -77,6 +92,10 @@ def _mailbox_backup_service() -> MailboxBackupService:
 
 def _spam_settings_service() -> SpamSettingsService:
     return SpamSettingsService()
+
+
+def _auto_classification_service() -> MailAutoClassificationService:
+    return MailAutoClassificationService()
 
 
 def _parse_mailbox_scope(mailbox_key: str) -> MailboxScope:
@@ -103,9 +122,18 @@ def _handle_error(exc: Exception) -> None:
             MailboxCountConflictError,
             SpamRuleConflictError,
             SpamSettingsConflictError,
+            AutoClassificationConflictError,
         ),
     ):
-        if isinstance(exc, SpamRuleConflictError):
+        if isinstance(exc, AutoClassificationTargetInUseError):
+            code = "MAIL_AUTO_CLASSIFICATION_TARGET_IN_USE"
+        elif isinstance(exc, AutoClassificationLimitError):
+            code = "MAIL_AUTO_CLASSIFICATION_LIMIT_EXCEEDED"
+        elif isinstance(exc, AutoClassificationPolicyConflictError):
+            code = "MAIL_AUTO_CLASSIFICATION_POLICY_CONFLICT"
+        elif isinstance(exc, AutoClassificationConflictError):
+            code = "MAIL_AUTO_CLASSIFICATION_RULE_CONFLICT"
+        elif isinstance(exc, SpamRuleConflictError):
             code = "MAIL_SPAM_RULE_CONFLICT"
         elif isinstance(exc, SpamSettingsConflictError):
             code = "MAIL_SPAM_SETTINGS_CONFLICT"
@@ -138,10 +166,11 @@ def _handle_error(exc: Exception) -> None:
             },
         ) from exc
     if isinstance(exc, PermissionError):
+        forbidden_code = "MAIL_AUTO_CLASSIFICATION_TARGET_FORBIDDEN" if isinstance(exc, AutoClassificationTargetForbiddenError) else "MAIL_FORBIDDEN"
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
-                "code": "MAIL_FORBIDDEN",
+                "code": forbidden_code,
                 "userMessage": str(exc),
                 "adminMessage": str(exc),
             },
@@ -543,6 +572,71 @@ def delete_spam_rule(
 ) -> Response:
     try:
         _spam_settings_service().delete_rule(user, rule_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.get("/settings/auto-classification", response_model=MailAutoClassificationSettingsResponse)
+def get_auto_classification_settings(user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailAutoClassificationSettingsResponse:
+    try:
+        return _auto_classification_service().get_settings(user)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.patch("/settings/auto-classification", response_model=MailAutoClassificationSettingsResponse)
+def update_auto_classification_settings(payload: MailAutoClassificationPolicyUpdateRequest, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailAutoClassificationSettingsResponse:
+    try:
+        return _auto_classification_service().update_policy(user, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.post("/settings/auto-classification/rules", response_model=MailAutoClassificationRuleView, status_code=status.HTTP_201_CREATED)
+def create_auto_classification_rule(payload: MailAutoClassificationRuleCreateRequest, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailAutoClassificationRuleView:
+    try:
+        return _auto_classification_service().create_rule(user, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.patch("/settings/auto-classification/rules/order", response_model=MailAutoClassificationSettingsResponse)
+def reorder_auto_classification_rules(payload: MailAutoClassificationRulesOrderRequest, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailAutoClassificationSettingsResponse:
+    try:
+        return _auto_classification_service().reorder_rules(user, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.post("/settings/auto-classification/rules/delete", status_code=status.HTTP_204_NO_CONTENT)
+def delete_auto_classification_rules(payload: MailAutoClassificationRulesDeleteRequest, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> Response:
+    try:
+        _auto_classification_service().delete_rules(user, payload)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.patch("/settings/auto-classification/rules/{rule_id}", response_model=MailAutoClassificationRuleView)
+def update_auto_classification_rule(rule_id: str, payload: MailAutoClassificationRuleUpdateRequest, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailAutoClassificationRuleView:
+    try:
+        return _auto_classification_service().update_rule(user, rule_id, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.delete("/settings/auto-classification/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_auto_classification_rule(rule_id: str, user: AuthUserSummary = Depends(permission_required("mail:read"))) -> Response:
+    try:
+        _auto_classification_service().delete_rule(user, rule_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     except Exception as exc:
         _handle_error(exc)

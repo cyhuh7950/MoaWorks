@@ -58,7 +58,8 @@ from app.schemas.mail_messenger import (
     MessengerRoomSummary,
 )
 from app.services.postgres_service import PostgresService
-from app.services.spam_settings_service import SpamDecision, SpamSettingsService
+from app.services.spam_settings_service import SpamDecision, SpamSettingsService, normalize_spam_email
+from app.services.mail_auto_classification_service import AutoClassificationTargetInUseError, MailAutoClassificationService
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,7 @@ class MailMessengerService:
         self.db = PostgresService()
         self.attachment_storage = MailAttachmentStorage()
         self.spam_settings = SpamSettingsService()
+        self.auto_classification = MailAutoClassificationService()
 
     def list_inbox(self, actor: AuthUserSummary, query: MailListQuery | None = None) -> MailListResponse:
         if query is not None:
@@ -853,7 +855,7 @@ class MailMessengerService:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT id, company_id, sender_user_id, sender_email
+                    SELECT id, company_id, sender_user_id, sender_email, subject, body_text, attachment_count
                     FROM mail_messages
                     WHERE status = 'scheduled'
                       AND scheduled_at <= %s
@@ -871,8 +873,9 @@ class MailMessengerService:
                         (now, now, row["id"]),
                     )
                     cursor.execute(
-                        """SELECT id, recipient_user_id FROM mail_recipients
+                        """SELECT id, recipient_user_id, recipient_email FROM mail_recipients
                            WHERE message_id = %s AND recipient_user_id IS NOT NULL
+                             AND received_at IS NULL
                            FOR UPDATE""",
                         (row["id"],),
                     )
@@ -907,6 +910,13 @@ class MailMessengerService:
                             decision=spam_decision,
                             now=now,
                         )
+                        if spam_decision.decision != "spam":
+                            self._apply_auto_classification(
+                                cursor, company_id=row["company_id"], recipient_user_id=recipient["recipient_user_id"],
+                                actor_user_id=row["sender_user_id"], actor_user_name="system", mail_id=row["id"],
+                                recipient_id=recipient["id"], sender_email=row["sender_email"], recipient_email=recipient["recipient_email"],
+                                subject=row.get("subject") or "", body=row.get("body_text") or "", has_attachment=bool(row.get("attachment_count")), now=now,
+                            )
                     cursor.execute(
                         """INSERT INTO mail_delivery_queue (
                             id, company_id, provider_config_id, mail_id, recipient_id, status,
@@ -1115,6 +1125,9 @@ class MailMessengerService:
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
                 folder = self._lock_owned_folder(cursor, actor, folder_id)
+                cursor.execute("SELECT id FROM mail_auto_classification_rules WHERE company_id = %s AND user_id = %s AND target_folder_id = %s LIMIT 1", (actor.companyId, actor.userId, folder_id))
+                if cursor.fetchone():
+                    raise AutoClassificationTargetInUseError("자동분류 규칙에서 사용하는 메일함은 삭제할 수 없습니다.")
                 cursor.execute(
                     """
                     UPDATE mail_recipients r SET folder_id = NULL
@@ -1194,6 +1207,9 @@ class MailMessengerService:
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
                 tag = self._lock_owned_tag(cursor, actor, tag_id)
+                cursor.execute("SELECT r.id FROM mail_auto_classification_rule_tags rt JOIN mail_auto_classification_rules r ON r.id = rt.rule_id WHERE r.company_id = %s AND r.user_id = %s AND rt.tag_id = %s LIMIT 1", (actor.companyId, actor.userId, tag_id))
+                if cursor.fetchone():
+                    raise AutoClassificationTargetInUseError("자동분류 규칙에서 사용하는 태그는 삭제할 수 없습니다.")
                 cursor.execute("DELETE FROM mail_recipient_tags WHERE tag_id = %s", (tag_id,))
                 cursor.execute("DELETE FROM mail_tags WHERE id = %s", (tag_id,))
                 self._write_mail_bulk_audit(cursor, actor, tag_id, "tag_delete", {"deleted": False}, {"deleted": True}, "tag", self._new_id("mailtag"))
@@ -1932,6 +1948,14 @@ class MailMessengerService:
                             decision=spam_decision,
                             now=now,
                         )
+                        if spam_decision.decision != "spam":
+                            self._apply_auto_classification(
+                                cursor, company_id=actor.companyId, recipient_user_id=recipient_user_id,
+                                actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id,
+                                recipient_id=recipient_id, sender_email=account["email"], recipient_email=email,
+                                subject=payload.subject.strip(), body=final_body_text,
+                                has_attachment=bool(resolved_attachments), now=now,
+                            )
                     if status_value == "sent" and email in external_emails:
                         queue_status = "queued" if provider["delivery_enabled"] and provider["last_test_status"] == "success" else "blocked"
                         queue_id = self._new_id("delivery")
@@ -1990,6 +2014,32 @@ class MailMessengerService:
             recipient_user_id,
             sender_email,
             mail_id,
+        )
+
+    def _apply_auto_classification(
+        self, cursor, *, company_id: str, recipient_user_id: str,
+        actor_user_id: str, actor_user_name: str, mail_id: str, recipient_id: str,
+        sender_email: str, recipient_email: str, subject: str, body: str,
+        has_attachment: bool, now: datetime,
+    ):
+        normalized_sender = normalize_spam_email(sender_email)
+        return self.auto_classification.apply_recipient(
+            cursor,
+            company_id=company_id,
+            user_id=recipient_user_id,
+            actor_user_id=actor_user_id,
+            actor_user_name=actor_user_name,
+            mail_id=mail_id,
+            recipient_id=recipient_id,
+            context={
+                "sender_email": normalized_sender,
+                "sender_domain": normalized_sender.rsplit("@", 1)[1],
+                "recipient_email": normalize_spam_email(recipient_email),
+                "subject": subject,
+                "body": body,
+                "has_attachment": has_attachment,
+            },
+            now=now,
         )
 
     def _evaluate_recipient_spam_for_company(

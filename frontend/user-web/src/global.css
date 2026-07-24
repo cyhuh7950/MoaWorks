@@ -106,6 +106,33 @@ body,
 .user-mail-spam-settings__delete { display: grid; gap: 16px; min-height: 120px; }
 .user-mail-spam-settings__delete p { margin: 0; line-height: 1.6; }
 @media (max-width: 1100px) { .user-mail-spam-settings__policy, .user-mail-spam-settings__toolbar { grid-template-columns: 1fr 1fr; } }
+.user-mail-auto-classification { min-width: 0; height: 100%; overflow: hidden; font-size: 12px; }
+.user-mail-auto-classification__body { min-height: 0; overflow: hidden; padding: 14px 20px 20px; display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 10px; }
+.user-mail-auto-classification__policy { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid #dbe4ec; border-radius: 12px; background: #f8fafc; }
+.user-mail-auto-classification__policy label { display: flex; align-items: center; gap: 10px; font-weight: 800; }
+.user-mail-auto-classification__toolbar { display: grid; grid-template-columns: minmax(240px, 1fr) 140px auto auto; gap: 8px; }
+.user-mail-auto-classification button { min-height: 34px; padding: 0 10px; border: 1px solid #cbd5e1; border-radius: 9px; background: #fff; color: #1e293b; font: inherit; font-weight: 700; }
+.user-mail-auto-classification button.is-destructive { color: #b91c1c; }
+.user-mail-auto-classification button:disabled { cursor: not-allowed; opacity: .55; }
+.user-mail-auto-classification__table-wrap { min-height: 0; overflow: auto; border: 1px solid #dbe4ec; border-radius: 12px; }
+.user-mail-auto-classification table { width: 100%; min-width: 1240px; border-collapse: collapse; }
+.user-mail-auto-classification caption { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); }
+.user-mail-auto-classification th, .user-mail-auto-classification td { padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: middle; }
+.user-mail-auto-classification th { position: sticky; top: 0; z-index: 1; background: #f8fafc; color: #475569; font-size: 10px; }
+.user-mail-auto-classification td:nth-child(4) { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-mail-auto-classification td:last-child { display: flex; gap: 4px; }
+.user-mail-auto-classification__empty { min-height: 180px; display: grid; place-content: center; justify-items: center; gap: 10px; color: #64748b; }
+.user-mail-auto-classification__event { display: inline-block; padding: 3px 7px; border-radius: 999px; background: #e2e8f0; color: #475569; font-size: 10px; font-weight: 800; }
+.user-mail-auto-classification__event.is-applied { background: #dcfce7; color: #166534; }
+.user-mail-auto-classification__event.is-failed { background: #fee2e2; color: #991b1b; }
+.user-mail-auto-classification__editor { width: min(520px, 78vw); height: min(590px, 76vh); overflow: auto; display: grid; align-content: start; gap: 12px; font-size: 12px; }
+.user-mail-auto-classification__editor > label:not(.is-inline) { display: grid; grid-template-columns: 110px minmax(0, 1fr); align-items: center; gap: 8px; }
+.user-mail-auto-classification__editor .is-inline { display: flex; align-items: center; gap: 8px; }
+.user-mail-auto-classification__editor fieldset { padding: 10px; border: 1px solid #dbe4ec; border-radius: 10px; display: grid; gap: 8px; }
+.user-mail-auto-classification__condition { display: grid; grid-template-columns: 150px 130px minmax(120px, 1fr) auto; gap: 6px; align-items: center; }
+.user-mail-auto-classification__tags { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.user-mail-auto-classification__tags label { display: flex; gap: 6px; align-items: center; }
+@media (max-width: 1100px) { .user-mail-auto-classification__toolbar { grid-template-columns: 1fr 1fr; } .user-mail-auto-classification__condition { grid-template-columns: 1fr 1fr; } }
 
 *,
 *::before,

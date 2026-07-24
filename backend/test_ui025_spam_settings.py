@@ -59,10 +59,10 @@ class ScheduledDispatchCursor:
         now = datetime(2026, 7, 24, 4, 0, tzinfo=UTC)
         self.messages = [{"id": "scheduled-1", "company_id": "company-a", "sender_user_id": "sender-a", "sender_email": "bad@example.com"}]
         self.recipients = [
-            {"id": "rcpt-deny", "recipient_user_id": "user-deny"},
-            {"id": "rcpt-allow", "recipient_user_id": "user-allow"},
-            {"id": "rcpt-off", "recipient_user_id": "user-off"},
-            {"id": "rcpt-error", "recipient_user_id": "user-error"},
+            {"id": "rcpt-deny", "recipient_user_id": "user-deny", "recipient_email": "deny@example.test"},
+            {"id": "rcpt-allow", "recipient_user_id": "user-allow", "recipient_email": "allow@example.test"},
+            {"id": "rcpt-off", "recipient_user_id": "user-off", "recipient_email": "off@example.test"},
+            {"id": "rcpt-error", "recipient_user_id": "user-error", "recipient_email": "error@example.test"},
         ]
         self.policies = {"user-off": {"filter_enabled": False}}
         self.rules = {
@@ -90,7 +90,7 @@ class ScheduledDispatchCursor:
         self.next_all = []
         if upper.startswith("SELECT ID, COMPANY_ID, SENDER_USER_ID"):
             self.next_all = [dict(row) for row in self.messages]
-        elif upper.startswith("SELECT ID, RECIPIENT_USER_ID FROM MAIL_RECIPIENTS"):
+        elif upper.startswith("SELECT ID, RECIPIENT_USER_ID, RECIPIENT_EMAIL FROM MAIL_RECIPIENTS"):
             self.next_all = [dict(row) for row in self.recipients]
         elif upper.startswith("SELECT FILTER_ENABLED FROM USER_SPAM_POLICIES"):
             user_id = params[1]
