@@ -1,5 +1,6 @@
 import unittest
 from email.message import EmailMessage
+from pathlib import Path
 
 from app.services.mail_external_service import (
     ExternalMailInvalidEndpointError,
@@ -89,6 +90,27 @@ class Ui029ExternalMailTests(unittest.TestCase):
         self.assertEqual(calls, ["local_commit", "DELE"])
         calls.clear(); service.persist_then_delete(lambda: calls.append("local_commit"), lambda: calls.append("DELE"), False)
         self.assertEqual(calls, ["local_commit"])
+
+    def test_migration_has_owner_unique_lease_uidl_and_local_first_metadata(self):
+        sql = (Path(__file__).parent / "migrations" / "033_mail_external_accounts.sql").read_text(encoding="utf-8")
+        for token in ("mail_external_accounts", "mail_external_collection_jobs", "mail_external_imports", "uq_mail_external_active_identity", "uq_mail_external_active_job", "UNIQUE(account_id,uidl)", "external_pop3", "ON DELETE SET NULL"):
+            self.assertIn(token, sql)
+
+    def test_routes_are_owner_actor_scoped_and_secret_is_never_a_response_field(self):
+        routes = (Path(__file__).parent / "app" / "api" / "routes" / "mail.py").read_text(encoding="utf-8")
+        schemas = (Path(__file__).parent / "app" / "schemas" / "mail_messenger.py").read_text(encoding="utf-8")
+        for endpoint in ('/settings/external-accounts', '/{account_id}/test', '/{account_id}/collect'):
+            self.assertIn(endpoint, routes)
+        self.assertIn('_external_read_permission = permission_required("mail:read")', routes)
+        self.assertIn('_external_send_permission = permission_required("mail:send")', routes)
+        view = schemas[schemas.index("class MailExternalAccountView"):schemas.index("class MailExternalAccountListResponse")]
+        self.assertNotIn("password:", view); self.assertNotIn("encrypted_password", view)
+
+    def test_worker_contract_has_short_claim_uidl_dedup_and_quit_before_delete_finalize(self):
+        worker = (Path(__file__).parent / "app" / "workers" / "mail_external_worker.py").read_text(encoding="utf-8")
+        for token in ("FOR UPDATE SKIP LOCKED", "connection.commit()", "client.uidl()", "client.retr", "_store(", "client.dele", "client.quit()", "remote_delete_status='deleted'", "attempt_count<3"):
+            self.assertIn(token, worker)
+        self.assertLess(worker.index("client.quit();client=None"), worker.index("remote_delete_status='deleted'"))
 
 
 if __name__ == "__main__": unittest.main()

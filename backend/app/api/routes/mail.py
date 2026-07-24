@@ -56,6 +56,9 @@ from app.schemas.mail_messenger import (
     MailAutoForwardTargetView, MailAutoForwardTargetsCreateRequest,
     MailAutoForwardTargetsDeleteRequest,
     MailOutOfOfficePolicyUpdateRequest, MailOutOfOfficeSettingsResponse,
+    MailExternalAccountCreateRequest, MailExternalAccountUpdateRequest,
+    MailExternalAccountView, MailExternalAccountListResponse,
+    MailExternalCollectResponse, MailExternalBulkDeleteRequest,
     MailTagCreateRequest,
     MailTagListResponse,
     MailTagUpdateRequest,
@@ -90,9 +93,17 @@ from app.services.mail_out_of_office_service import (
     OutOfOfficeInvalidPeriodError, OutOfOfficeRequiredContentError,
     OutOfOfficeTargetForbiddenError,
 )
+from app.services.mail_external_service import (
+    MailExternalService, ExternalMailError, ExternalMailInvalidEndpointError, ExternalMailSecretRequiredError,
+    ExternalMailRateLimitedError, ExternalMailConflictError, ExternalMailLimitError,
+    ExternalMailTestRequiredError, ExternalMailCollectionBusyError,
+    ExternalMailNotFoundError, ExternalMailForbiddenError,
+)
 
 
 router = APIRouter()
+_external_read_permission = permission_required("mail:read")
+_external_send_permission = permission_required("mail:send")
 
 
 def _service() -> MailMessengerService:
@@ -122,6 +133,9 @@ def _auto_forwarding_service() -> MailAutoForwardingService:
 def _out_of_office_service() -> MailOutOfOfficeService:
     return MailOutOfOfficeService()
 
+def _external_mail_service() -> MailExternalService:
+    return MailExternalService()
+
 
 def _parse_mailbox_scope(mailbox_key: str) -> MailboxScope:
     try:
@@ -138,6 +152,20 @@ def _parse_mailbox_scope(mailbox_key: str) -> MailboxScope:
 
 
 def _handle_error(exc: Exception) -> None:
+    if isinstance(exc, ExternalMailRateLimitedError):
+        raise HTTPException(status_code=429, detail={"code":"MAIL_EXTERNAL_TEST_RATE_LIMITED","userMessage":str(exc)}) from exc
+    if isinstance(exc, (ExternalMailConflictError, ExternalMailLimitError, ExternalMailTestRequiredError, ExternalMailCollectionBusyError)):
+        code = "MAIL_EXTERNAL_ACCOUNT_CONFLICT" if isinstance(exc, ExternalMailConflictError) else "MAIL_EXTERNAL_ACCOUNT_LIMIT" if isinstance(exc, ExternalMailLimitError) else "MAIL_EXTERNAL_TEST_REQUIRED" if isinstance(exc, ExternalMailTestRequiredError) else "MAIL_EXTERNAL_COLLECTION_BUSY"
+        raise HTTPException(status_code=409, detail={"code":code,"userMessage":str(exc)}) from exc
+    if isinstance(exc, ExternalMailNotFoundError):
+        raise HTTPException(status_code=404, detail={"code":"MAIL_EXTERNAL_NOT_FOUND","userMessage":str(exc)}) from exc
+    if isinstance(exc, ExternalMailForbiddenError):
+        raise HTTPException(status_code=403, detail={"code":"MAIL_EXTERNAL_FORBIDDEN","userMessage":str(exc)}) from exc
+    if isinstance(exc, (ExternalMailInvalidEndpointError, ExternalMailSecretRequiredError)):
+        code = "MAIL_EXTERNAL_INVALID_ENDPOINT" if isinstance(exc, ExternalMailInvalidEndpointError) else "MAIL_EXTERNAL_SECRET_REQUIRED"
+        raise HTTPException(status_code=400, detail={"code":code,"userMessage":str(exc)}) from exc
+    if isinstance(exc, ExternalMailError):
+        raise HTTPException(status_code=400, detail={"code":"MAIL_EXTERNAL_CONNECTION_FAILED","userMessage":"외부메일 연결 테스트에 실패했습니다."}) from exc
     if isinstance(
         exc,
         (
@@ -696,6 +724,43 @@ def update_out_of_office_settings(payload: MailOutOfOfficePolicyUpdateRequest, u
         _handle_error(exc)
         raise
 
+
+@router.get("/settings/external-accounts", response_model=MailExternalAccountListResponse)
+def list_external_accounts(user: AuthUserSummary = Depends(_external_read_permission)):
+    try: return _external_mail_service().list_accounts(user)
+    except Exception as exc: _handle_error(exc); raise
+
+@router.post("/settings/external-accounts", response_model=MailExternalAccountView, status_code=201)
+def create_external_account(payload: MailExternalAccountCreateRequest, user: AuthUserSummary = Depends(_external_send_permission)):
+    try: return _external_mail_service().create_account(user, payload)
+    except Exception as exc: _handle_error(exc); raise
+
+@router.post("/settings/external-accounts/bulk-delete", status_code=204)
+def bulk_delete_external_accounts(payload: MailExternalBulkDeleteRequest, user: AuthUserSummary = Depends(_external_send_permission)):
+    try:
+        for account_id in payload.accountIds: _external_mail_service().delete_account(user, account_id)
+        return Response(status_code=204)
+    except Exception as exc: _handle_error(exc); raise
+
+@router.patch("/settings/external-accounts/{account_id}", response_model=MailExternalAccountView)
+def update_external_account(account_id: str, payload: MailExternalAccountUpdateRequest, user: AuthUserSummary = Depends(_external_send_permission)):
+    try: return _external_mail_service().update_account(user, account_id, payload)
+    except Exception as exc: _handle_error(exc); raise
+
+@router.delete("/settings/external-accounts/{account_id}", status_code=204)
+def delete_external_account(account_id: str, user: AuthUserSummary = Depends(_external_send_permission)):
+    try: _external_mail_service().delete_account(user, account_id); return Response(status_code=204)
+    except Exception as exc: _handle_error(exc); raise
+
+@router.post("/settings/external-accounts/{account_id}/test", response_model=MailExternalAccountView)
+def test_external_account(account_id: str, user: AuthUserSummary = Depends(_external_send_permission)):
+    try: return _external_mail_service().test_account(user, account_id)
+    except Exception as exc: _handle_error(exc); raise
+
+@router.post("/settings/external-accounts/{account_id}/collect", response_model=MailExternalCollectResponse, status_code=202)
+def collect_external_account(account_id: str, user: AuthUserSummary = Depends(_external_send_permission)):
+    try: return _external_mail_service().queue_collect(user, account_id)
+    except Exception as exc: _handle_error(exc); raise
 
 @router.get("/settings/auto-forwarding", response_model=MailAutoForwardSettingsResponse)
 def get_auto_forwarding_settings(user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailAutoForwardSettingsResponse:

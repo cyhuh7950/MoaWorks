@@ -797,6 +797,57 @@ class MailOutOfOfficeSettingsResponse(BaseModel):
     updatedAt: datetime
 
 
+class MailExternalAccountCreateRequest(BaseModel):
+    displayName: str = Field(min_length=1, max_length=50)
+    host: str = Field(min_length=1, max_length=253)
+    port: int
+    tlsMode: Literal["ssl", "starttls"]
+    username: str = Field(min_length=1, max_length=254)
+    password: str | None = Field(default=None, max_length=1000)
+    targetFolderId: str | None = Field(default=None, max_length=200)
+    deleteFromServer: bool = False
+    enabled: bool = False
+
+
+class MailExternalAccountUpdateRequest(MailExternalAccountCreateRequest):
+    expectedVersion: int = Field(ge=1)
+
+
+class MailExternalAccountView(BaseModel):
+    id: str
+    display_name: str
+    host: str
+    port: int
+    tls_mode: Literal["ssl", "starttls"]
+    username: str
+    target_folder_id: str | None = None
+    delete_from_server: bool
+    enabled: bool
+    connection_status: Literal["untested", "success", "failed"]
+    passwordConfigured: bool
+    last_test_at: datetime | None = None
+    last_test_code: str | None = None
+    last_collect_at: datetime | None = None
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class MailExternalAccountListResponse(BaseModel):
+    accounts: list[MailExternalAccountView]
+    accountCount: int = Field(ge=0, le=5)
+    activeJobCount: int = Field(ge=0)
+
+
+class MailExternalCollectResponse(BaseModel):
+    jobId: str
+    status: Literal["queued"]
+
+
+class MailExternalBulkDeleteRequest(BaseModel):
+    accountIds: list[str] = Field(min_length=1, max_length=5)
+
+
 class MailTrashSelection(BaseModel):
     mailId: str = Field(min_length=1, max_length=200)
     sourceMailbox: Literal["inbox", "sent", "draft"]

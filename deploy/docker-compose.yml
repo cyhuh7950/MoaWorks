@@ -63,6 +63,19 @@ services:
     depends_on:
       - postgres
 
+  mail-external-worker:
+    build:
+      context: ..
+      dockerfile: deploy/server.Dockerfile
+    command: ["python", "-m", "app.workers.mail_external_worker"]
+    env_file:
+      - ../.env
+    volumes:
+      - ../backend:/app
+      - ../data:/app/data
+    depends_on:
+      - postgres
+
   storage:
     image: alpine:3.20
     command: ["sh", "-c", "mkdir -p /storage/runtime /storage/files && tail -f /dev/null"]

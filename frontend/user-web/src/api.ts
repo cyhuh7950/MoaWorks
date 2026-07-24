@@ -435,6 +435,19 @@ export type MailOutOfOfficeSettings = {
   updatedAt: string;
 };
 
+export type MailExternalAccount = {
+  id: string; display_name: string; host: string; port: 110 | 995; tls_mode: "ssl" | "starttls";
+  username: string; target_folder_id: string | null; delete_from_server: boolean; enabled: boolean;
+  connection_status: "untested" | "success" | "failed"; passwordConfigured: boolean;
+  last_test_at: string | null; last_test_code: string | null; last_collect_at: string | null;
+  version: number; created_at: string; updated_at: string;
+};
+export type MailExternalAccountList = { accounts: MailExternalAccount[]; accountCount: number; activeJobCount: number };
+export type MailExternalAccountPayload = {
+  displayName: string; host: string; port: 110 | 995; tlsMode: "ssl" | "starttls"; username: string;
+  password?: string | null; targetFolderId: string | null; deleteFromServer: boolean; enabled: boolean; expectedVersion?: number;
+};
+
 export type MailDetail = {
   mailId: string;
   accountId: string;
@@ -1039,6 +1052,28 @@ export async function updateOutOfOfficeSettings(token: string, value: MailOutOfO
       version: value.version,
     }),
   });
+}
+
+export async function fetchExternalMailAccounts(token: string): Promise<MailExternalAccountList> {
+  return request<MailExternalAccountList>("/mail/settings/external-accounts", { headers: authHeaders(token) });
+}
+export async function createExternalMailAccount(token: string, payload: MailExternalAccountPayload): Promise<MailExternalAccount> {
+  return request<MailExternalAccount>("/mail/settings/external-accounts", { method: "POST", headers: authHeaders(token), body: JSON.stringify(payload) });
+}
+export async function updateExternalMailAccount(token: string, id: string, payload: MailExternalAccountPayload): Promise<MailExternalAccount> {
+  return request<MailExternalAccount>(`/mail/settings/external-accounts/${encodeURIComponent(id)}`, { method: "PATCH", headers: authHeaders(token), body: JSON.stringify(payload) });
+}
+export async function deleteExternalMailAccount(token: string, id: string): Promise<void> {
+  await request<void>(`/mail/settings/external-accounts/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders(token) });
+}
+export async function bulkDeleteExternalMailAccounts(token: string, ids: string[]): Promise<void> {
+  await request<void>("/mail/settings/external-accounts/bulk-delete", { method: "POST", headers: authHeaders(token), body: JSON.stringify({ accountIds: ids }) });
+}
+export async function testExternalMailAccount(token: string, id: string): Promise<MailExternalAccount> {
+  return request<MailExternalAccount>(`/mail/settings/external-accounts/${encodeURIComponent(id)}/test`, { method: "POST", headers: authHeaders(token) });
+}
+export async function collectExternalMailAccount(token: string, id: string): Promise<{ jobId: string; status: "queued" }> {
+  return request(`/mail/settings/external-accounts/${encodeURIComponent(id)}/collect`, { method: "POST", headers: authHeaders(token) });
 }
 
 export type MailBasicPreferences = {

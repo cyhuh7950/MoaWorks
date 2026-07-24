@@ -14,7 +14,7 @@ for (const component of ["MailSignatureSettingsPanel", "MailboxSettingsPanel", "
   const section = app.slice(start, end > start ? end : app.length);
   if (start < 0) throw new Error(`App.tsx missing ${component}`);
   if (!section.includes("onOpenForwarding")) throw new Error(`${component} missing auto-forward navigation callback`);
-  if (!section.includes("disabled={index > 6}")) throw new Error(`${component} must preserve tabs 0-5 and enable out-of-office tab 6`);
+  if (!/disabled=\{index > [67]\}/.test(section)) throw new Error(`${component} must preserve completed settings tabs`);
 }
 for (const component of ["MailSignatureSettingsPanel", "MailboxSettingsPanel", "MailSpamSettingsPanel"]) {
   const marker = `<${component}`;
