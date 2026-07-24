@@ -58,6 +58,7 @@ from app.schemas.mail_messenger import (
     MessengerRoomSummary,
 )
 from app.services.postgres_service import PostgresService
+from app.services.spam_settings_service import SpamDecision, SpamSettingsService
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,7 @@ class MailMessengerService:
     def __init__(self) -> None:
         self.db = PostgresService()
         self.attachment_storage = MailAttachmentStorage()
+        self.spam_settings = SpamSettingsService()
 
     def list_inbox(self, actor: AuthUserSummary, query: MailListQuery | None = None) -> MailListResponse:
         if query is not None:
@@ -851,7 +853,7 @@ class MailMessengerService:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT id, company_id, sender_user_id
+                    SELECT id, company_id, sender_user_id, sender_email
                     FROM mail_messages
                     WHERE status = 'scheduled'
                       AND scheduled_at <= %s
@@ -869,9 +871,42 @@ class MailMessengerService:
                         (now, now, row["id"]),
                     )
                     cursor.execute(
-                        "UPDATE mail_recipients SET received_at = %s WHERE message_id = %s AND recipient_user_id IS NOT NULL",
-                        (now, row["id"]),
+                        """SELECT id, recipient_user_id FROM mail_recipients
+                           WHERE message_id = %s AND recipient_user_id IS NOT NULL
+                           FOR UPDATE""",
+                        (row["id"],),
                     )
+                    internal_recipients = cursor.fetchall()
+                    for recipient in internal_recipients:
+                        spam_decision = self._evaluate_recipient_spam_for_company(
+                            cursor,
+                            row["company_id"],
+                            recipient["recipient_user_id"],
+                            row["sender_email"],
+                            row["id"],
+                        )
+                        cursor.execute(
+                            """UPDATE mail_recipients SET received_at = %s, is_spam = %s, spam_marked_at = %s
+                               WHERE id = %s AND message_id = %s AND recipient_user_id = %s""",
+                            (
+                                now,
+                                spam_decision.decision == "spam",
+                                now if spam_decision.decision == "spam" else None,
+                                recipient["id"],
+                                row["id"],
+                                recipient["recipient_user_id"],
+                            ),
+                        )
+                        self._write_spam_classification_audit_for_actor(
+                            cursor,
+                            company_id=row["company_id"],
+                            actor_user_id=row["sender_user_id"],
+                            actor_user_name="system",
+                            mail_id=row["id"],
+                            recipient_user_id=recipient["recipient_user_id"],
+                            decision=spam_decision,
+                            now=now,
+                        )
                     cursor.execute(
                         """INSERT INTO mail_delivery_queue (
                             id, company_id, provider_config_id, mail_id, recipient_id, status,
@@ -1869,14 +1904,34 @@ class MailMessengerService:
                 for kind, email in recipient_pairs:
                     recipient_user_id = internal_by_email.get(email) if status_value != "draft" else self._resolve_user_id_by_email(cursor, actor.companyId, email)
                     recipient_id = self._new_id("rcpt")
+                    spam_decision = SpamDecision("inbox")
+                    if status_value == "sent" and recipient_user_id:
+                        spam_decision = self._evaluate_recipient_spam(
+                            cursor,
+                            actor,
+                            recipient_user_id,
+                            account["email"],
+                            mail_id,
+                        )
                     cursor.execute(
                         """INSERT INTO mail_recipients (
                             id, message_id, recipient_user_id, recipient_email, recipient_kind,
-                            is_read, is_starred, received_at
-                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                            is_read, is_starred, received_at, is_spam, spam_marked_at
+                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                         (recipient_id, mail_id, recipient_user_id, email, kind, False, False,
-                         now if status_value == "sent" and recipient_user_id else None),
+                         now if status_value == "sent" and recipient_user_id else None,
+                         spam_decision.decision == "spam",
+                         now if spam_decision.decision == "spam" else None),
                     )
+                    if status_value == "sent" and recipient_user_id:
+                        self._write_spam_classification_audit(
+                            cursor,
+                            actor=actor,
+                            mail_id=mail_id,
+                            recipient_user_id=recipient_user_id,
+                            decision=spam_decision,
+                            now=now,
+                        )
                     if status_value == "sent" and email in external_emails:
                         queue_status = "queued" if provider["delivery_enabled"] and provider["last_test_status"] == "success" else "blocked"
                         queue_id = self._new_id("delivery")
@@ -1919,6 +1974,99 @@ class MailMessengerService:
             internalCount=len(internal_by_email), externalCount=len(external_emails),
             queuedCount=len(external_emails) if status_value == "sent" and is_enabled else 0,
             blockedCount=len(external_emails) if status_value == "sent" and not is_enabled else 0,
+        )
+
+    def _evaluate_recipient_spam(
+        self,
+        cursor,
+        actor: AuthUserSummary,
+        recipient_user_id: str,
+        sender_email: str,
+        mail_id: str,
+    ) -> SpamDecision:
+        return self._evaluate_recipient_spam_for_company(
+            cursor,
+            actor.companyId,
+            recipient_user_id,
+            sender_email,
+            mail_id,
+        )
+
+    def _evaluate_recipient_spam_for_company(
+        self,
+        cursor,
+        company_id: str,
+        recipient_user_id: str,
+        sender_email: str,
+        mail_id: str,
+    ) -> SpamDecision:
+        cursor.execute("SAVEPOINT spam_evaluation")
+        try:
+            return self.spam_settings.evaluate_sender(
+                cursor,
+                company_id,
+                recipient_user_id,
+                sender_email,
+            )
+        except Exception:
+            try:
+                cursor.execute("ROLLBACK TO SAVEPOINT spam_evaluation")
+            except Exception:
+                raise
+            logger.exception(
+                "Spam evaluation failed open: company_id=%s recipient_user_id=%s mail_id=%s",
+                company_id,
+                recipient_user_id,
+                mail_id,
+            )
+            return SpamDecision("inbox")
+        finally:
+            cursor.execute("RELEASE SAVEPOINT spam_evaluation")
+
+    def _write_spam_classification_audit(
+        self,
+        cursor,
+        *,
+        actor: AuthUserSummary,
+        mail_id: str,
+        recipient_user_id: str,
+        decision: SpamDecision,
+        now: datetime,
+    ) -> None:
+        self._write_spam_classification_audit_for_actor(
+            cursor,
+            company_id=actor.companyId,
+            actor_user_id=actor.userId,
+            actor_user_name=actor.userName,
+            mail_id=mail_id,
+            recipient_user_id=recipient_user_id,
+            decision=decision,
+            now=now,
+        )
+
+    def _write_spam_classification_audit_for_actor(
+        self,
+        cursor,
+        *,
+        company_id: str,
+        actor_user_id: str,
+        actor_user_name: str,
+        mail_id: str,
+        recipient_user_id: str,
+        decision: SpamDecision,
+        now: datetime,
+    ) -> None:
+        reason = json.dumps(
+            {"recipientUserId": recipient_user_id, "matchedRuleId": decision.matchedRuleId},
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+        cursor.execute(
+            """INSERT INTO audit_logs (
+                id, company_id, actor_user_id, actor_user_name, target_type, target_id,
+                event, status_before, status_after, reason, created_at
+            ) VALUES (%s,%s,%s,%s,'mail',%s,'mail.spam.message.classified',NULL,%s,%s,%s)""",
+            (self._new_id("audit"), company_id, actor_user_id, actor_user_name, mail_id, decision.decision, reason, now),
         )
 
     def _write_mail_delivery_audit(

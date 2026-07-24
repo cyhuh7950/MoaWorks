@@ -38,6 +38,11 @@ from app.schemas.mail_messenger import (
     MailSendResponse,
     MailStorageResponse,
     MailStatusResponse,
+    MailSpamPolicyUpdateRequest,
+    MailSpamRuleCreateRequest,
+    MailSpamRuleUpdateRequest,
+    MailSpamRuleView,
+    MailSpamSettingsResponse,
     MailTagCreateRequest,
     MailTagListResponse,
     MailTagUpdateRequest,
@@ -52,6 +57,7 @@ from app.services.mailbox_settings_service import (
     MailboxSettingsConflictError,
     MailboxSettingsService,
 )
+from app.services.spam_settings_service import SpamRuleConflictError, SpamSettingsConflictError, SpamSettingsService
 
 
 router = APIRouter()
@@ -67,6 +73,10 @@ def _mailbox_settings_service() -> MailboxSettingsService:
 
 def _mailbox_backup_service() -> MailboxBackupService:
     return MailboxBackupService()
+
+
+def _spam_settings_service() -> SpamSettingsService:
+    return SpamSettingsService()
 
 
 def _parse_mailbox_scope(mailbox_key: str) -> MailboxScope:
@@ -91,9 +101,15 @@ def _handle_error(exc: Exception) -> None:
             MailSignatureConflictError,
             MailboxSettingsConflictError,
             MailboxCountConflictError,
+            SpamRuleConflictError,
+            SpamSettingsConflictError,
         ),
     ):
-        if isinstance(exc, MailSignatureConflictError):
+        if isinstance(exc, SpamRuleConflictError):
+            code = "MAIL_SPAM_RULE_CONFLICT"
+        elif isinstance(exc, SpamSettingsConflictError):
+            code = "MAIL_SPAM_SETTINGS_CONFLICT"
+        elif isinstance(exc, MailSignatureConflictError):
             code = "MAIL_SIGNATURE_CONFLICT"
         elif isinstance(exc, MailPreferenceConflictError):
             code = "MAIL_PREFERENCE_CONFLICT"
@@ -467,6 +483,67 @@ def download_mailbox_backup(
             media_type="application/zip",
             filename=artifact.download_name,
         )
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.get("/spam-settings", response_model=MailSpamSettingsResponse)
+def get_spam_settings(
+    user: AuthUserSummary = Depends(permission_required("mail:read")),
+) -> MailSpamSettingsResponse:
+    try:
+        return _spam_settings_service().get_settings(user)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.patch("/spam-settings", response_model=MailSpamSettingsResponse)
+def update_spam_settings(
+    payload: MailSpamPolicyUpdateRequest,
+    user: AuthUserSummary = Depends(permission_required("mail:read")),
+) -> MailSpamSettingsResponse:
+    try:
+        return _spam_settings_service().update_policy(user, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.post("/spam-settings/rules", response_model=MailSpamRuleView, status_code=status.HTTP_201_CREATED)
+def create_spam_rule(
+    payload: MailSpamRuleCreateRequest,
+    user: AuthUserSummary = Depends(permission_required("mail:read")),
+) -> MailSpamRuleView:
+    try:
+        return _spam_settings_service().create_rule(user, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.patch("/spam-settings/rules/{rule_id}", response_model=MailSpamRuleView)
+def update_spam_rule(
+    rule_id: str,
+    payload: MailSpamRuleUpdateRequest,
+    user: AuthUserSummary = Depends(permission_required("mail:read")),
+) -> MailSpamRuleView:
+    try:
+        return _spam_settings_service().update_rule(user, rule_id, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.delete("/spam-settings/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_spam_rule(
+    rule_id: str,
+    user: AuthUserSummary = Depends(permission_required("mail:read")),
+) -> Response:
+    try:
+        _spam_settings_service().delete_rule(user, rule_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except Exception as exc:
         _handle_error(exc)
         raise

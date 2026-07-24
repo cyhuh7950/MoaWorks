@@ -375,6 +375,26 @@ export type MailMailboxEmptyResponse = {
   currentCount: number;
 };
 
+export type MailSpamRule = {
+  ruleId: string;
+  ruleType: "allow" | "deny";
+  matchType: "email" | "domain";
+  matchValue: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MailSpamSettingsResponse = {
+  filterEnabled: boolean;
+  blockedAction: "move_to_spam";
+  version: number;
+  updatedAt: string;
+  rules: MailSpamRule[];
+};
+
+export type MailSpamRulePayload = Pick<MailSpamRule, "ruleType" | "matchType" | "matchValue" | "enabled">;
+
 export type MailDetail = {
   mailId: string;
   accountId: string;
@@ -869,6 +889,51 @@ export async function downloadMailboxBackup(token: string, job: MailBackupJob): 
   } finally {
     URL.revokeObjectURL(objectUrl);
   }
+}
+
+// UI-025 spam settings
+export async function fetchSpamSettings(token: string): Promise<MailSpamSettingsResponse> {
+  return request<MailSpamSettingsResponse>("/mail/spam-settings", {
+    headers: authHeaders(token),
+  });
+}
+
+export async function updateSpamSettings(
+  token: string,
+  settings: MailSpamSettingsResponse,
+): Promise<MailSpamSettingsResponse> {
+  return request<MailSpamSettingsResponse>("/mail/spam-settings", {
+    method: "PATCH",
+    headers: authHeaders(token),
+    body: JSON.stringify({
+      filterEnabled: settings.filterEnabled,
+      blockedAction: settings.blockedAction,
+      expectedVersion: settings.version,
+    }),
+  });
+}
+
+export async function createSpamRule(token: string, payload: MailSpamRulePayload): Promise<MailSpamRule> {
+  return request<MailSpamRule>("/mail/spam-settings/rules", {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateSpamRule(token: string, ruleId: string, payload: MailSpamRulePayload): Promise<MailSpamRule> {
+  return request<MailSpamRule>(`/mail/spam-settings/rules/${encodeURIComponent(ruleId)}`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteSpamRule(token: string, ruleId: string): Promise<void> {
+  await request<Record<string, never>>(`/mail/spam-settings/rules/${encodeURIComponent(ruleId)}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
 }
 
 export type MailBasicPreferences = {

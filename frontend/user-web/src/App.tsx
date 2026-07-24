@@ -23,6 +23,7 @@ import {
   downloadMailboxBackup,
   createApproval,
   createMailboxBackup,
+  createSpamRule,
   fetchApprovalApprovers,
   fetchContacts,
   fetchApprovalLogs,
@@ -42,6 +43,7 @@ import {
   fetchMailBasicPreferences,
   fetchMailboxBackups,
   fetchMailboxSettings,
+  fetchSpamSettings,
   fetchMe,
   fetchMessengerMessages,
   fetchMessengerRoom,
@@ -70,12 +72,15 @@ import {
   sendMail,
   resetMailBasicPreferences,
   retryMailboxBackup,
+  deleteSpamRule,
   sendMessengerMessage,
   storeUserToken,
   submitApproval,
   toggleMailStar,
   updateMailBasicPreferences,
   updateMailboxPolicy,
+  updateSpamRule,
+  updateSpamSettings,
   emptyMailbox,
   setMailCategory,
   updateApproval,
@@ -101,6 +106,9 @@ import {
   type MailBackupJob,
   type MailboxSettingsRow,
   type MailMailboxSettingsResponse,
+  type MailSpamRule,
+  type MailSpamRulePayload,
+  type MailSpamSettingsResponse,
   type MailSummary,
   type MessengerMessage,
   type MessengerRoomDetail,
@@ -533,7 +541,7 @@ function normalizeMailRecipients(value: string, companyDomain: string): string[]
 
 const MAIL_SETTINGS_TABS = ["기본환경", "서명", "메일함", "스팸", "자동분류", "자동전달", "부재중응답", "외부메일", "최근보낸메일"] as const;
 
-function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChange, onSave, onCancel, onReset, onReload, onOpenSignature, onOpenMailbox }: {
+function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChange, onSave, onCancel, onReset, onReload, onOpenSignature, onOpenMailbox, onOpenSpam }: {
   value: MailBasicPreferences | null;
   saved: MailBasicPreferences | null;
   loading: boolean;
@@ -546,6 +554,7 @@ function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChan
   onReload: () => void;
   onOpenSignature: () => void;
   onOpenMailbox: () => void;
+  onOpenSpam: () => void;
 }) {
   const dirty = Boolean(value && saved && JSON.stringify(value) !== JSON.stringify(saved));
   if (loading && !value) return <FeedbackState state="loading" title="메일 기본환경을 불러오는 중입니다." />;
@@ -555,7 +564,7 @@ function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChan
   );
   return <section className="user-mail-settings" aria-label="메일 환경설정">
     <header><div><small>메일 환경설정</small><h2>기본환경</h2></div><span aria-live="polite">{dirty ? "저장하지 않은 변경 있음" : "저장됨"}</span></header>
-    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 0 ? "page" : undefined} disabled={index > 2} onClick={index === 1 ? onOpenSignature : index === 2 ? onOpenMailbox : undefined} title={index < 3 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 2 ? <i>i</i> : null}</button>)}</nav>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 0 ? "page" : undefined} disabled={index > 3} onClick={index === 1 ? onOpenSignature : index === 2 ? onOpenMailbox : index === 3 ? onOpenSpam : undefined} title={index < 4 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 3 ? <i>i</i> : null}</button>)}</nav>
     {error ? <CompactWarning item={{ id: "mail-basic-preferences", source: "mail-settings", tone: "warning", title: conflict ? "다른 위치에서 설정이 변경되었습니다." : "설정을 처리하지 못했습니다.", message: error, action: conflict ? { label: "서버 최신값 다시 불러오기", onAction: onReload } : undefined }} /> : null}
     <div className="user-mail-settings__body">
       <fieldset><legend>메일 읽기 설정</legend>
@@ -584,7 +593,7 @@ function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChan
 
 function MailSignatureSettingsPanel({
   value, saved, loading, error, conflict, onChange, onSavePreferences, onCancel, onReload,
-  onSaveSignature, onDeleteSignatures, onOpenBasic, onOpenMailbox,
+  onSaveSignature, onDeleteSignatures, onOpenBasic, onOpenMailbox, onOpenSpam,
 }: {
   value: MailSignaturePreferences | null;
   saved: MailSignaturePreferences | null;
@@ -599,6 +608,7 @@ function MailSignatureSettingsPanel({
   onDeleteSignatures: (signatures: MailSignature[]) => Promise<boolean>;
   onOpenBasic: () => void;
   onOpenMailbox: () => void;
+  onOpenSpam: () => void;
 }) {
   type MailSignatureEditorForm = { name: string; contentText: string; makeDefault: boolean };
   const emptyEditorForm: MailSignatureEditorForm = { name: "", contentText: "", makeDefault: false };
@@ -628,7 +638,7 @@ function MailSignatureSettingsPanel({
   const selected = value.signatures.filter((item) => selectedIds.includes(item.signatureId));
   return <section className="user-mail-settings user-mail-signature-settings" aria-label="메일 서명 환경설정">
     <header><div><small>메일 환경설정</small><h2>서명</h2></div><span aria-live="polite">{dirty ? "저장하지 않은 변경 있음" : "저장됨"}</span></header>
-    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 1 ? "page" : undefined} disabled={index > 2} onClick={index === 0 ? onOpenBasic : index === 2 ? onOpenMailbox : undefined} title={index < 3 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 2 ? <i>i</i> : null}</button>)}</nav>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 1 ? "page" : undefined} disabled={index > 3} onClick={index === 0 ? onOpenBasic : index === 2 ? onOpenMailbox : index === 3 ? onOpenSpam : undefined} title={index < 4 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 3 ? <i>i</i> : null}</button>)}</nav>
     {error ? <CompactWarning item={{ id: "mail-signatures", source: "mail-settings", tone: "warning", title: conflict ? "다른 위치에서 서명이 변경되었습니다." : "서명을 처리하지 못했습니다.", message: error, action: conflict ? { label: "서버 최신값 다시 불러오기", onAction: () => void onReload() } : undefined }} /> : null}
     <div className="user-mail-settings__body user-mail-signature-settings__body">
       <fieldset>
@@ -682,7 +692,7 @@ function formatMailboxBytes(value: number): string {
 }
 
 function MailboxSettingsPanel({
-  value, loading, error, busyKey, onReload, onClose, onOpenBasic, onOpenSignature,
+  value, loading, error, busyKey, onReload, onClose, onOpenBasic, onOpenSignature, onOpenSpam,
   onSavePolicy, onEmpty, onBackup, onRetry, onDownload,
   onAddFolder, onEditFolder, onDeleteFolder, onAddTag, onEditTag, onDeleteTag,
 }: {
@@ -694,6 +704,7 @@ function MailboxSettingsPanel({
   onClose: () => void;
   onOpenBasic: () => void;
   onOpenSignature: () => void;
+  onOpenSpam: () => void;
   onSavePolicy: (mailbox: MailboxSettingsRow, retentionDays: MailboxSettingsRow["retentionDays"]) => Promise<boolean>;
   onEmpty: (mailbox: MailboxSettingsRow, confirmPermanent: boolean) => Promise<boolean>;
   onBackup: (mailbox: MailboxSettingsRow) => Promise<void>;
@@ -723,7 +734,7 @@ function MailboxSettingsPanel({
   const statusLabel: Record<MailBackupJob["status"], string> = { queued: "대기", running: "진행 중", completed: "완료", failed: "실패", expired: "만료" };
   return <section className="user-mail-settings user-mail-mailbox-settings" aria-label="메일함 환경설정">
     <header><div><small>메일 환경설정</small><h2>메일함</h2></div><span aria-live="polite">{activeBackup ? "메일함 백업 처리 중" : "설정 확인 완료"}</span></header>
-    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 2 ? "page" : undefined} disabled={index > 2} onClick={index === 0 ? onOpenBasic : index === 1 ? onOpenSignature : undefined} title={index < 3 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 2 ? <i>i</i> : null}</button>)}</nav>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 2 ? "page" : undefined} disabled={index > 3} onClick={index === 0 ? onOpenBasic : index === 1 ? onOpenSignature : index === 3 ? onOpenSpam : undefined} title={index < 4 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 3 ? <i>i</i> : null}</button>)}</nav>
     {error ? <CompactWarning item={{ id: "mailbox-settings", source: "mail-settings", tone: "warning", title: "메일함 설정을 처리하지 못했습니다.", message: error, action: { label: "서버 최신값 다시 불러오기", onAction: onReload } }} /> : null}
     <div className="user-mail-mailbox-settings__body">
       <div className="user-mail-mailbox-settings__toolbar">
@@ -779,6 +790,94 @@ function MailboxSettingsPanel({
         {emptyTarget?.mailboxKey === "system:trash" ? <label><input type="checkbox" checked={confirmPermanent} onChange={(event) => setConfirmPermanent(event.target.checked)} /> 휴지통 비우기는 복구할 수 없음을 확인했습니다.</label> : null}
         <div className="feedback-confirm-actions"><button type="button" disabled={Boolean(busyKey)} onClick={() => setEmptyTarget(null)}>취소</button><button type="button" className="is-destructive" disabled={Boolean(busyKey) || (emptyTarget?.mailboxKey === "system:trash" && !confirmPermanent)} onClick={async () => { if (emptyTarget && await onEmpty(emptyTarget, confirmPermanent)) setEmptyTarget(null); }}>비우기</button></div>
       </div>
+    </CommonPopup>
+  </section>;
+}
+
+function maskSpamRuleValue(rule: MailSpamRule): string {
+  if (rule.matchType === "email") {
+    const [local, domain] = rule.matchValue.split("@");
+    return `${local.slice(0, 2)}***@${domain}`;
+  }
+  const labels = rule.matchValue.split(".");
+  return `${labels[0].slice(0, 2)}***.${labels.slice(1).join(".")}`;
+}
+
+function MailSpamSettingsPanel({
+  value, loading, error, busy, onReload, onClose, onOpenBasic, onOpenSignature, onOpenMailbox,
+  onChangePolicy, onSavePolicy, onSaveRule, onDeleteRule,
+}: {
+  value: MailSpamSettingsResponse | null;
+  loading: boolean;
+  error: string;
+  busy: boolean;
+  onReload: () => void;
+  onClose: () => void;
+  onOpenBasic: () => void;
+  onOpenSignature: () => void;
+  onOpenMailbox: () => void;
+  onChangePolicy: (enabled: boolean) => void;
+  onSavePolicy: () => Promise<void>;
+  onSaveRule: (rule: MailSpamRule | null, payload: MailSpamRulePayload) => Promise<string | null>;
+  onDeleteRule: (rule: MailSpamRule) => Promise<boolean>;
+}) {
+  const emptyForm: MailSpamRulePayload = { ruleType: "deny", matchType: "email", matchValue: "", enabled: true };
+  const [search, setSearch] = useState("");
+  const [ruleTypeFilter, setRuleTypeFilter] = useState<"all" | "allow" | "deny">("all");
+  const [matchTypeFilter, setMatchTypeFilter] = useState<"all" | "email" | "domain">("all");
+  const [editor, setEditor] = useState<MailSpamRule | null | false>(false);
+  const [form, setForm] = useState<MailSpamRulePayload>(emptyForm);
+  const [fieldError, setFieldError] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<MailSpamRule | null>(null);
+  const openEditor = (rule: MailSpamRule | null) => {
+    setEditor(rule);
+    setForm(rule ? { ruleType: rule.ruleType, matchType: rule.matchType, matchValue: rule.matchValue, enabled: rule.enabled } : emptyForm);
+    setFieldError("");
+  };
+  if (loading && !value) return <FeedbackState state="loading" title="스팸 설정을 불러오는 중입니다." />;
+  if (!value) return <FeedbackState state="error" title="스팸 설정을 불러오지 못했습니다." message={error} action={{ label: "다시 시도", onAction: onReload }} />;
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredRules = value.rules.filter((rule) =>
+    (ruleTypeFilter === "all" || rule.ruleType === ruleTypeFilter)
+    && (matchTypeFilter === "all" || rule.matchType === matchTypeFilter)
+    && (!normalizedSearch || rule.matchValue.includes(normalizedSearch))
+  );
+  return <section className="user-mail-settings user-mail-spam-settings" aria-label="스팸 환경설정">
+    <header><div><small>메일 환경설정</small><h2>스팸</h2></div><span aria-live="polite">규칙 {value.rules.length}/200개</span></header>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 3 ? "page" : undefined} disabled={index > 3} onClick={index === 0 ? onOpenBasic : index === 1 ? onOpenSignature : index === 2 ? onOpenMailbox : undefined} title={index < 4 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 3 ? <i>i</i> : null}</button>)}</nav>
+    {error ? <CompactWarning item={{ id: "spam-settings", source: "mail-settings", tone: "warning", title: "스팸 설정을 처리하지 못했습니다.", message: error, action: { label: "서버 최신값 다시 불러오기", onAction: onReload } }} /> : null}
+    <div className="user-mail-spam-settings__body">
+      <section className="user-mail-spam-settings__policy">
+        <label><span>스팸 필터 사용 <i title="허용 규칙은 모든 거부 규칙보다 우선하며 새로 받는 메일부터 적용됩니다.">i</i></span><input type="checkbox" role="switch" checked={value.filterEnabled} disabled={busy} onChange={(event) => onChangePolicy(event.target.checked)} /></label>
+        <span>거부 일치 처리: <strong>스팸함 이동</strong></span>
+        <button type="button" disabled={busy} onClick={() => void onSavePolicy()}>정책 저장</button>
+      </section>
+      <div className="user-mail-spam-settings__toolbar">
+        <input aria-label="스팸 규칙 검색" placeholder="이메일 또는 도메인 검색" value={search} onChange={(event) => setSearch(event.target.value.toLowerCase())} />
+        <select aria-label="구분 필터" value={ruleTypeFilter} onChange={(event) => setRuleTypeFilter(event.target.value as typeof ruleTypeFilter)}><option value="all">구분 전체</option><option value="allow">허용</option><option value="deny">거부</option></select>
+        <select aria-label="대상 필터" value={matchTypeFilter} onChange={(event) => setMatchTypeFilter(event.target.value as typeof matchTypeFilter)}><option value="all">대상 전체</option><option value="email">이메일</option><option value="domain">도메인</option></select>
+        <button type="button" disabled={busy || value.rules.length >= 200} onClick={() => openEditor(null)}>규칙 추가</button>
+      </div>
+      <div className="user-mail-spam-settings__table-wrap">
+        {!filteredRules.length ? <div className="user-mail-spam-settings__empty"><span>{value.rules.length ? "조건에 맞는 규칙이 없습니다." : "등록된 스팸 규칙이 없습니다."}</span><button type="button" disabled={busy || value.rules.length >= 200} onClick={() => openEditor(null)}>규칙 추가</button></div> : <table>
+          <caption>스팸 허용 및 거부 규칙</caption>
+          <thead><tr><th>구분</th><th>대상</th><th>값</th><th>활성</th><th>생성일</th><th>관리</th></tr></thead>
+          <tbody>{filteredRules.map((rule) => <tr key={rule.ruleId}><td><span className={`user-mail-spam-settings__badge is-${rule.ruleType}`}>{rule.ruleType === "allow" ? "허용" : "거부"}</span></td><td>{rule.matchType === "email" ? "이메일" : "도메인"}</td><td>{rule.matchValue}</td><td>{rule.enabled ? "사용" : "중지"}</td><td>{formatMailDate(rule.createdAt)}</td><td><button type="button" disabled={busy} onClick={() => openEditor(rule)}>수정</button><button type="button" className="is-destructive" disabled={busy} onClick={() => setDeleteTarget(rule)}>삭제</button></td></tr>)}</tbody>
+        </table>}
+      </div>
+    </div>
+    <footer><span /><button type="button" disabled={busy} onClick={onClose}>닫기</button></footer>
+    <CommonPopup title={editor ? "스팸 규칙 수정" : "스팸 규칙 추가"} open={editor !== false} onClose={() => setEditor(false)} saving={busy} error="">
+      <div className="user-mail-spam-settings__editor">
+        <label><span>구분</span><select value={form.ruleType} disabled={busy} onChange={(event) => setForm((current) => ({ ...current, ruleType: event.target.value as MailSpamRulePayload["ruleType"] }))}><option value="allow">허용</option><option value="deny">거부</option></select></label>
+        <label><span>대상</span><select value={form.matchType} disabled={busy} onChange={(event) => setForm((current) => ({ ...current, matchType: event.target.value as MailSpamRulePayload["matchType"] }))}><option value="email">이메일</option><option value="domain">도메인</option></select></label>
+        <label><span>값</span><input autoFocus maxLength={320} value={form.matchValue} disabled={busy} placeholder={form.matchType === "email" ? "user@example.com" : "example.com"} aria-invalid={Boolean(fieldError)} onChange={(event) => { setForm((current) => ({ ...current, matchValue: event.target.value })); setFieldError(""); }} />{fieldError ? <small role="alert">{fieldError}</small> : null}</label>
+        <label className="user-mail-spam-settings__enabled"><input type="checkbox" checked={form.enabled} disabled={busy} onChange={(event) => setForm((current) => ({ ...current, enabled: event.target.checked }))} /> 활성</label>
+        <div className="feedback-confirm-actions"><button type="button" disabled={busy} onClick={() => setEditor(false)}>취소</button><button type="button" disabled={busy || !form.matchValue.trim()} onClick={async () => { const message = await onSaveRule(editor || null, form); if (message) setFieldError(message); else setEditor(false); }}>저장</button></div>
+      </div>
+    </CommonPopup>
+    <CommonPopup title="스팸 규칙 삭제" open={Boolean(deleteTarget)} onClose={() => setDeleteTarget(null)} saving={busy} kind="alertdialog">
+      <div className="user-mail-spam-settings__delete"><p><strong>{deleteTarget?.ruleType === "allow" ? "허용" : "거부"}</strong> · {deleteTarget?.matchType === "email" ? "이메일" : "도메인"} · {deleteTarget ? maskSpamRuleValue(deleteTarget) : ""}</p><div className="feedback-confirm-actions"><button type="button" disabled={busy} onClick={() => setDeleteTarget(null)}>취소</button><button type="button" className="is-destructive" disabled={busy} onClick={async () => { if (deleteTarget && await onDeleteRule(deleteTarget)) setDeleteTarget(null); }}>삭제</button></div></div>
     </CommonPopup>
   </section>;
 }
@@ -918,7 +1017,7 @@ export default function App() {
   const [mailPreferencesLoading, setMailPreferencesLoading] = useState(false);
   const [mailPreferencesError, setMailPreferencesError] = useState("");
   const [mailPreferencesConflict, setMailPreferencesConflict] = useState(false);
-  const [mailSettingsTab, setMailSettingsTab] = useState<"basic" | "signature" | "mailbox">("basic");
+  const [mailSettingsTab, setMailSettingsTab] = useState<"basic" | "signature" | "mailbox" | "spam">("basic");
   const [mailSignatures, setMailSignatures] = useState<MailSignaturePreferences | null>(null);
   const [savedMailSignatures, setSavedMailSignatures] = useState<MailSignaturePreferences | null>(null);
   const [mailSignaturesLoading, setMailSignaturesLoading] = useState(false);
@@ -928,6 +1027,10 @@ export default function App() {
   const [mailboxSettingsLoading, setMailboxSettingsLoading] = useState(false);
   const [mailboxSettingsError, setMailboxSettingsError] = useState("");
   const [mailboxSettingsBusyKey, setMailboxSettingsBusyKey] = useState("");
+  const [spamSettings, setSpamSettings] = useState<MailSpamSettingsResponse | null>(null);
+  const [spamSettingsLoading, setSpamSettingsLoading] = useState(false);
+  const [spamSettingsError, setSpamSettingsError] = useState("");
+  const [spamSettingsBusy, setSpamSettingsBusy] = useState(false);
   const [messengerRoomsData, setMessengerRoomsData] = useState<MessengerRoomSummary[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState("");
   const [selectedRoomDetail, setSelectedRoomDetail] = useState<MessengerRoomDetail | null>(null);
@@ -1637,12 +1740,28 @@ export default function App() {
     }
   }
 
-  async function openMailSettings(tab: "basic" | "signature" | "mailbox") {
+  async function loadSpamSettings(targetToken: string, showLoading = true) {
+    if (showLoading) setSpamSettingsLoading(true);
+    setSpamSettingsError("");
+    try {
+      setSpamSettings(await fetchSpamSettings(targetToken));
+    } catch (error) {
+      setSpamSettingsError(normalizeClientError(error, "스팸 설정을 불러오지 못했습니다."));
+    } finally {
+      if (showLoading) setSpamSettingsLoading(false);
+    }
+  }
+
+  async function openMailSettings(tab: "basic" | "signature" | "mailbox" | "spam") {
     if (!token) return;
     setMailSettingsOpen(true);
     setMailSettingsTab(tab);
     if (tab === "mailbox") {
       await loadMailboxSettings(token);
+      return;
+    }
+    if (tab === "spam") {
+      await loadSpamSettings(token);
       return;
     }
     setMailPreferencesLoading(true);
@@ -1684,6 +1803,61 @@ export default function App() {
       return false;
     } finally {
       setMailboxSettingsBusyKey("");
+    }
+  }
+
+  async function saveSpamPolicy() {
+    if (!token || !spamSettings || spamSettingsBusy) return;
+    setSpamSettingsBusy(true);
+    setSpamSettingsError("");
+    try {
+      await updateSpamSettings(token, spamSettings);
+      await loadSpamSettings(token, false);
+      pushFeedback({ id: `spam-policy-${Date.now()}`, source: "mail-settings", tone: "success", title: "스팸 필터 정책을 저장했습니다." });
+    } catch (error) {
+      if (error instanceof ApiRequestError && error.code === "MAIL_SPAM_SETTINGS_CONFLICT") {
+        await loadSpamSettings(token, false);
+        setSpamSettingsError("다른 위치에서 정책이 변경되었습니다. 서버 최신값을 확인해 주세요.");
+      } else {
+        setSpamSettingsError(normalizeClientError(error, "스팸 필터 정책 저장에 실패했습니다."));
+      }
+    } finally {
+      setSpamSettingsBusy(false);
+    }
+  }
+
+  async function saveSpamRule(rule: MailSpamRule | null, payload: MailSpamRulePayload): Promise<string | null> {
+    if (!token || spamSettingsBusy) return "처리 중입니다.";
+    setSpamSettingsBusy(true);
+    setSpamSettingsError("");
+    try {
+      if (rule) await updateSpamRule(token, rule.ruleId, payload);
+      else await createSpamRule(token, payload);
+      await loadSpamSettings(token, false);
+      pushFeedback({ id: `spam-rule-${Date.now()}`, source: "mail-settings", tone: "success", title: rule ? "스팸 규칙을 수정했습니다." : "스팸 규칙을 추가했습니다." });
+      return null;
+    } catch (error) {
+      if (error instanceof ApiRequestError && error.code === "MAIL_SPAM_RULE_CONFLICT") return "같은 이메일 또는 도메인 규칙이 이미 등록되어 있습니다.";
+      return normalizeClientError(error, "규칙 값을 확인해 주세요.");
+    } finally {
+      setSpamSettingsBusy(false);
+    }
+  }
+
+  async function removeSpamRule(rule: MailSpamRule): Promise<boolean> {
+    if (!token || spamSettingsBusy) return false;
+    setSpamSettingsBusy(true);
+    setSpamSettingsError("");
+    try {
+      await deleteSpamRule(token, rule.ruleId);
+      await loadSpamSettings(token, false);
+      pushFeedback({ id: `spam-rule-delete-${Date.now()}`, source: "mail-settings", tone: "success", title: "스팸 규칙을 삭제했습니다." });
+      return true;
+    } catch (error) {
+      setSpamSettingsError(normalizeClientError(error, "스팸 규칙 삭제에 실패했습니다."));
+      return false;
+    } finally {
+      setSpamSettingsBusy(false);
     }
   }
 
@@ -3330,6 +3504,7 @@ export default function App() {
                 onReload={() => void reloadMailBasicSettings()}
                 onOpenSignature={() => setMailSettingsTab("signature")}
                 onOpenMailbox={() => void openMailSettings("mailbox")}
+                onOpenSpam={() => void openMailSettings("spam")}
               />
             ) : mailSettingsOpen && mailSettingsTab === "signature" ? (
               <MailSignatureSettingsPanel
@@ -3346,6 +3521,7 @@ export default function App() {
                 onDeleteSignatures={removeMailSignatures}
                 onOpenBasic={() => setMailSettingsTab("basic")}
                 onOpenMailbox={() => void openMailSettings("mailbox")}
+                onOpenSpam={() => void openMailSettings("spam")}
               />
             ) : mailSettingsOpen && mailSettingsTab === "mailbox" ? (
               <MailboxSettingsPanel
@@ -3357,6 +3533,7 @@ export default function App() {
                 onClose={closeMailBasicSettings}
                 onOpenBasic={() => void openMailSettings("basic")}
                 onOpenSignature={() => void openMailSettings("signature")}
+                onOpenSpam={() => void openMailSettings("spam")}
                 onSavePolicy={saveMailboxPolicy}
                 onEmpty={runEmptyMailbox}
                 onBackup={startMailboxBackup}
@@ -3368,6 +3545,22 @@ export default function App() {
                 onAddTag={() => openMailResourceModal("tag")}
                 onEditTag={(tag) => openMailResourceModal("tag", tag)}
                 onDeleteTag={(tag) => setMailResourceDelete({ kind: "tag", id: tag.tagId, name: tag.name })}
+              />
+            ) : mailSettingsOpen && mailSettingsTab === "spam" ? (
+              <MailSpamSettingsPanel
+                value={spamSettings}
+                loading={spamSettingsLoading}
+                error={spamSettingsError}
+                busy={spamSettingsBusy}
+                onReload={() => void loadSpamSettings(token)}
+                onClose={closeMailBasicSettings}
+                onOpenBasic={() => void openMailSettings("basic")}
+                onOpenSignature={() => void openMailSettings("signature")}
+                onOpenMailbox={() => void openMailSettings("mailbox")}
+                onChangePolicy={(enabled) => setSpamSettings((current) => current ? { ...current, filterEnabled: enabled } : current)}
+                onSavePolicy={saveSpamPolicy}
+                onSaveRule={saveSpamRule}
+                onDeleteRule={removeSpamRule}
               />
             ) : (
             <SplitView

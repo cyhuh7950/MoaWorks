@@ -444,6 +444,55 @@ class MailBackupJobListResponse(BaseModel):
     jobs: list[MailBackupJobView]
 
 
+class MailSpamPolicyUpdateRequest(BaseModel):
+    filterEnabled: bool
+    blockedAction: Literal["move_to_spam"] = "move_to_spam"
+    expectedVersion: int = Field(ge=1)
+
+
+class MailSpamRuleBase(BaseModel):
+    ruleType: Literal["allow", "deny"]
+    matchType: Literal["email", "domain"]
+    matchValue: str = Field(min_length=1, max_length=320)
+    enabled: bool = True
+
+    @field_validator("matchValue")
+    @classmethod
+    def normalize_match_value_input(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("규칙 값을 입력해 주세요.")
+        if any(unicodedata.category(character).startswith("C") for character in normalized):
+            raise ValueError("규칙 값에 제어문자를 사용할 수 없습니다.")
+        return normalized
+
+
+class MailSpamRuleCreateRequest(MailSpamRuleBase):
+    pass
+
+
+class MailSpamRuleUpdateRequest(MailSpamRuleBase):
+    pass
+
+
+class MailSpamRuleView(BaseModel):
+    ruleId: str
+    ruleType: Literal["allow", "deny"]
+    matchType: Literal["email", "domain"]
+    matchValue: str
+    enabled: bool
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class MailSpamSettingsResponse(BaseModel):
+    filterEnabled: bool
+    blockedAction: Literal["move_to_spam"]
+    version: int = Field(ge=1)
+    updatedAt: datetime
+    rules: list[MailSpamRuleView] = Field(default_factory=list)
+
+
 class MailTrashSelection(BaseModel):
     mailId: str = Field(min_length=1, max_length=200)
     sourceMailbox: Literal["inbox", "sent", "draft"]
