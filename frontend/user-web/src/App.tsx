@@ -170,6 +170,11 @@ import { NotificationCenter } from "./NotificationCenter";
 import { UserHome } from "./UserHome";
 import { CompactWarning, ConfirmModal, FeedbackState, ToastViewport, useFeedbackQueue } from "./components/FeedbackSystem";
 import { CommonPopup } from "./components/CommonPopup";
+import {
+  classifyApprovalDocuments,
+  findApprovalDocumentMenu,
+  type ApprovalActualMenuKey,
+} from "./approvalShell";
 
 const NOTIFICATION_POLICY = {
   retryMaxAttempts: 3,
@@ -190,6 +195,48 @@ const MAIL_CATEGORIES = [
   ["updates", "업데이트"],
   ["forums", "포럼"],
 ] as const;
+
+type ApprovalShellMenuKey = ApprovalActualMenuKey | "reference" | "department" | "settings";
+
+type ApprovalShellMenuItem = {
+  key: ApprovalShellMenuKey;
+  label: string;
+  description: string;
+  group: "work" | "library" | "footer";
+  readyMessage?: string;
+};
+
+const APPROVAL_SHELL_MENU_ITEMS: ApprovalShellMenuItem[] = [
+  { key: "pending", label: "결재 대기", description: "지금 내가 처리할 순번인 문서", group: "work" },
+  { key: "received", label: "수신", description: "내 결재 처리가 끝난 문서", group: "work" },
+  {
+    key: "reference",
+    label: "참조·열람 대기",
+    description: "참조 또는 열람을 기다리는 문서",
+    group: "work",
+    readyMessage: "참조자·열람자 모델의 후속 데이터 계약이 필요합니다. 현재는 결재 대기·수신·예정·개인 문서함을 이용해 주세요.",
+  },
+  { key: "scheduled", label: "예정", description: "내 결재 순번을 기다리는 문서", group: "work" },
+  { key: "personal", label: "개인 문서함", description: "내가 작성한 결재 문서", group: "library" },
+  {
+    key: "department",
+    label: "부서 문서함",
+    description: "부서 권한으로 공유되는 문서",
+    group: "library",
+    readyMessage: "부서 문서 권한 모델의 후속 데이터 계약이 필요합니다. 현재는 개인 문서함에서 작성 문서를 확인해 주세요.",
+  },
+  {
+    key: "settings",
+    label: "환경설정",
+    description: "결재 작성·부재·위임 설정",
+    group: "footer",
+    readyMessage: "결재 환경설정은 UI-035~036에서 제공합니다. 현재 설정값이나 임시 화면은 추가하지 않습니다.",
+  },
+];
+
+function isApprovalActualMenuKey(key: ApprovalShellMenuKey): key is ApprovalActualMenuKey {
+  return key === "pending" || key === "received" || key === "scheduled" || key === "personal";
+}
 
 const DEFAULT_MAIL_LIST_QUERY: MailListQuery = {
   q: "",
@@ -1192,6 +1239,7 @@ export default function App() {
     approverUserIds: [],
   });
   const [approvalModal, setApprovalModal] = useState<ApprovalModalMode>("none");
+  const [approvalShellMenu, setApprovalShellMenu] = useState<ApprovalShellMenuKey>("pending");
   const [selectedApprovalId, setSelectedApprovalId] = useState("");
   const [approvalStatusFilter, setApprovalStatusFilter] = useState("all");
   const [approvalSearch, setApprovalSearch] = useState("");
@@ -3273,7 +3321,15 @@ export default function App() {
     }
   }
 
-  async function selectApprovalDocument(documentId: string) {
+  async function selectApprovalDocument(documentId: string, options?: { preserveMenu?: boolean }) {
+    const targetDocument = documents.find((document) => document.id === documentId);
+    if (targetDocument && me && !options?.preserveMenu) {
+      const targetGroups = classifyApprovalDocuments([targetDocument], me.userId);
+      const belongsToCurrentMenu = isApprovalActualMenuKey(approvalShellMenu)
+        && targetGroups[approvalShellMenu].length > 0;
+      const targetMenu = belongsToCurrentMenu ? null : findApprovalDocumentMenu(targetDocument, me.userId);
+      if (targetMenu) setApprovalShellMenu(targetMenu);
+    }
     setSelectedApprovalId(documentId);
     if (!token) return;
     try {
@@ -3482,6 +3538,29 @@ export default function App() {
       rework: actionSet.has("approval:rework"),
     };
   }, [me]);
+
+  const approvalDocumentsByMenu = useMemo(
+    () => classifyApprovalDocuments(documents, me?.userId ?? ""),
+    [documents, me?.userId],
+  );
+
+  function openApprovalShellMenu(nextMenu: ApprovalShellMenuKey) {
+    setApprovalShellMenu(nextMenu);
+    if (!isApprovalActualMenuKey(nextMenu)) {
+      setSelectedApprovalId("");
+      setApprovalLogs([]);
+      return;
+    }
+
+    const menuDocuments = approvalDocumentsByMenu[nextMenu];
+    const nextDocument = menuDocuments.find((document) => document.id === selectedApprovalId) ?? menuDocuments[0];
+    if (!nextDocument) {
+      setSelectedApprovalId("");
+      setApprovalLogs([]);
+      return;
+    }
+    if (nextDocument.id !== selectedApprovalId) void selectApprovalDocument(nextDocument.id, { preserveMenu: true });
+  }
 
   const dashboardStats = useMemo(() => {
     const unreadCount = notificationSummary?.unreadCount ?? 0;
@@ -4557,12 +4636,16 @@ export default function App() {
       }
 
       if (activePortalMenu === "approval") {
-        const filteredDocuments = documents.filter((document) => {
+        const activeApprovalMenu = APPROVAL_SHELL_MENU_ITEMS.find((item) => item.key === approvalShellMenu) ?? APPROVAL_SHELL_MENU_ITEMS[0];
+        const menuDocuments = isApprovalActualMenuKey(approvalShellMenu)
+          ? approvalDocumentsByMenu[approvalShellMenu]
+          : [];
+        const filteredDocuments = menuDocuments.filter((document) => {
           const statusMatches = approvalStatusFilter === "all" || document.status === approvalStatusFilter;
           const keyword = approvalSearch.trim().toLowerCase();
           return statusMatches && (!keyword || `${document.title} ${document.creatorUserName}`.toLowerCase().includes(keyword));
         });
-        const selectedDocument = documents.find((document) => document.id === selectedApprovalId) ?? filteredDocuments[0] ?? null;
+        const selectedDocument = menuDocuments.find((document) => document.id === selectedApprovalId) ?? filteredDocuments[0] ?? null;
         const selectedApprovers = createForm.approverUserIds
           .map((userId) => approvalApprovers.find((user) => user.userId === userId))
           .filter((user): user is ApprovalApprover => Boolean(user));
@@ -4576,28 +4659,72 @@ export default function App() {
           setApprovalError("");
           setApprovalModal(mode);
         };
+        const renderApprovalMenuItem = (item: ApprovalShellMenuItem) => {
+          const isCurrent = approvalShellMenu === item.key;
+          const count = isApprovalActualMenuKey(item.key) ? approvalDocumentsByMenu[item.key].length : null;
+          return (
+            <button
+              key={item.key}
+              type="button"
+              className="ui031-menu-item"
+              aria-current={isCurrent ? "page" : undefined}
+              onClick={() => openApprovalShellMenu(item.key)}
+            >
+              <span><strong>{item.label}</strong><small>{item.description}</small></span>
+              <em>{count == null ? "준비" : count}</em>
+            </button>
+          );
+        };
         return (
-          <section style={{ display: "grid", gridTemplateRows: "auto minmax(0, 1fr)", gap: 14, minHeight: 0, height: "100%" }}>
-            <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "14px 16px", borderRadius: 18, border: "1px solid #dbe4ec", background: "#fff" }}>
-              <div>
-                <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800 }}>전자결재</div>
-                <strong style={{ display: "block", marginTop: 4, fontSize: 20 }}>문서 목록과 선택 상세</strong>
+          <section className="ui031-shell">
+            <aside className="ui031-shell__sidebar" aria-label="전자결재 보조 메뉴">
+              <header className="ui031-shell__intro">
+                <span>업무 탐색</span>
+                <div><h1>전자결재</h1><i className="ui031-help" tabIndex={0} data-tooltip="결재 문서를 처리 순서와 보관 관점으로 나누어 확인합니다." aria-label="전자결재 도움말">i</i></div>
+                <p>처리할 문서와 보관 문서를 빠르게 오갑니다.</p>
+              </header>
+              <span
+                className="ui031-primary-wrap"
+                tabIndex={canAct.create ? -1 : 0}
+                data-tooltip={canAct.create ? "새 결재 작성 창을 엽니다." : "현재 계정은 결재 작성 권한이 없습니다."}
+              >
+                <button aria-label="새 결재 진행" type="button" disabled={!canAct.create} onClick={() => void openApprovalEditor("create")}>새 결재 진행</button>
+              </span>
+              <nav className="ui031-menu-group" aria-label="전자결재 업무 메뉴">
+                <strong>업무</strong>
+                {APPROVAL_SHELL_MENU_ITEMS.filter((item) => item.group === "work").map(renderApprovalMenuItem)}
+              </nav>
+              <nav className="ui031-menu-group" aria-label="전자결재 문서함">
+                <strong>문서함</strong>
+                {APPROVAL_SHELL_MENU_ITEMS.filter((item) => item.group === "library").map(renderApprovalMenuItem)}
+              </nav>
+              <div className="ui031-menu-footer">
+                {APPROVAL_SHELL_MENU_ITEMS.filter((item) => item.group === "footer").map(renderApprovalMenuItem)}
               </div>
-              <button aria-label="새 결재 작성" type="button" disabled={!canAct.create} onClick={() => void openApprovalEditor("create")} style={{ height: 36, borderRadius: 12, border: 0, background: uiContract.brand.primary, color: "#fff", padding: "0 14px", fontWeight: 800 }}>새 결재 작성</button>
+            </aside>
+            <main className="ui031-shell__main" aria-labelledby="ui031-content-title">
+            <header className="ui031-shell__header">
+              <div>
+                <span>전자결재</span>
+                <h2 id="ui031-content-title">{activeApprovalMenu.label}</h2>
+                <p>{activeApprovalMenu.description}</p>
+              </div>
+              <strong>{isApprovalActualMenuKey(approvalShellMenu) ? `${menuDocuments.length}건` : "준비 상태"}</strong>
             </header>
             {approvalError && approvalModal === "none" ? <FeedbackState state="error" title="결재 정보를 처리하지 못했습니다." message={approvalError} action={{ label: "다시 시도", onAction: () => void reload() }} /> : null}
-            <div style={{ display: "grid", gridTemplateColumns: "minmax(360px, 0.9fr) minmax(420px, 1.1fr)", gap: 14, minHeight: 0 }}>
-              <section aria-label="결재 목록" style={{ minHeight: 0, display: "grid", gridTemplateRows: "auto auto minmax(0, 1fr)", gap: 10, padding: 14, borderRadius: 20, border: "1px solid #dbe4ec", background: "#fff" }}>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {isApprovalActualMenuKey(approvalShellMenu) ? (
+            <div className="ui031-shell__body">
+              <section className="ui031-list" aria-label="결재 목록">
+                <div className="ui031-list__filters">
                   {[["all", "전체"], ["draft", "초안"], ["submitted", "상신"], ["rejected", "반려"], ["approved", "완료"]].map(([value, label]) => (
-                    <button key={value} type="button" onClick={() => setApprovalStatusFilter(value)} style={{ height: 30, borderRadius: 999, border: approvalStatusFilter === value ? `1px solid ${uiContract.brand.primary}` : "1px solid #cbd5e1", background: approvalStatusFilter === value ? "#ecfdf5" : "#fff", padding: "0 10px", fontSize: 12, fontWeight: 700 }}>{label}</button>
+                    <button key={value} type="button" className={approvalStatusFilter === value ? "is-active" : ""} onClick={() => setApprovalStatusFilter(value)}>{label}</button>
                   ))}
                 </div>
-                <input aria-label="결재 검색" value={approvalSearch} onChange={(event) => setApprovalSearch(event.target.value)} placeholder="제목 또는 기안자 검색" style={{ height: 34, borderRadius: 10, border: "1px solid #cbd5e1", padding: "0 10px" }} />
-                <div style={{ minHeight: 0, overflowY: "auto", display: "grid", gap: 8, alignContent: "start" }}>
+                <input className="ui031-list__search" aria-label="결재 검색" value={approvalSearch} onChange={(event) => setApprovalSearch(event.target.value)} placeholder="제목 또는 기안자 검색" />
+                <div className="ui031-list__items">
                   {filteredDocuments.map((document) => {
                     const currentLine = document.lines.find((line) => line.sequence === document.currentLineIndex);
-                    return <button key={document.id} type="button" onDoubleClick={() => void selectApprovalDocument(document.id)} onClick={() => void selectApprovalDocument(document.id)} style={{ textAlign: "left", padding: 12, borderRadius: 14, border: selectedDocument?.id === document.id ? `1px solid ${uiContract.brand.primary}` : "1px solid #dbe4ec", background: selectedDocument?.id === document.id ? "#f0fdfa" : "#fff", cursor: "pointer" }}>
+                    return <button className={selectedDocument?.id === document.id ? "is-active" : ""} key={document.id} type="button" onDoubleClick={() => void selectApprovalDocument(document.id)} onClick={() => void selectApprovalDocument(document.id)}>
                       <strong>{document.title}</strong>
                       <div style={{ marginTop: 5, display: "flex", justifyContent: "space-between", gap: 8, color: "#475569", fontSize: 12 }}><span>{document.creatorUserName}</span><span>{document.status}</span></div>
                       <div style={{ marginTop: 4, color: "#64748b", fontSize: 11 }}>현재 결재자: {currentLine?.approverUserName ?? "-"} · {formatDateLabel(document.updatedAt)}</div>
@@ -4606,7 +4733,7 @@ export default function App() {
                   {!filteredDocuments.length ? <div style={{ padding: 16, border: "1px dashed #cbd5e1", borderRadius: 12, color: "#64748b" }}>표시할 결재 문서가 없습니다.</div> : null}
                 </div>
               </section>
-              <section aria-label="결재 상세" style={{ minHeight: 0, overflowY: "auto", padding: 18, borderRadius: 20, border: "1px solid #dbe4ec", background: "#fff" }}>
+              <section className="ui031-detail" aria-label="결재 상세">
                 {selectedDocument ? <>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}><div><div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800 }}>선택 문서</div><h2 style={{ margin: "6px 0 0", fontSize: 22 }}>{selectedDocument.title}</h2></div><span style={{ padding: "5px 9px", borderRadius: 999, background: "#e2e8f0", fontSize: 12, fontWeight: 800 }}>{selectedDocument.status}</span></div>
                   <p style={{ whiteSpace: "pre-wrap", color: "#334155", lineHeight: 1.6 }}>{selectedDocument.content}</p>
@@ -4623,6 +4750,15 @@ export default function App() {
                 </> : <div style={{ color: "#64748b" }}>목록에서 결재 문서를 선택하세요.</div>}
               </section>
             </div>
+            ) : (
+              <section className="ui031-ready" role="status" aria-live="polite">
+                <span aria-hidden="true">i</span>
+                <h3>{activeApprovalMenu.label} 준비 중</h3>
+                <p>{activeApprovalMenu.readyMessage}</p>
+                <small>현재 사용할 수 있는 메뉴: 결재 대기 · 수신 · 예정 · 개인 문서함</small>
+              </section>
+            )}
+            </main>
             {approvalModal !== "none" ? <div role="dialog" aria-modal="true" aria-label={`결재 ${approvalModal} 팝업`} style={{ position: "fixed", inset: 0, zIndex: 30, display: "grid", placeItems: "center", padding: 20, background: "rgba(15, 23, 42, 0.42)" }}>
               <div style={{ width: "min(760px, 92vw)", maxHeight: "88vh", overflowY: "auto", borderRadius: 20, padding: 20, background: "#fff", boxShadow: "0 24px 64px rgba(15,23,42,.25)" }}>
                 {(approvalModal === "create" || approvalModal === "edit") ? <form onSubmit={handleCreate} style={{ display: "grid", gap: 12 }}><div style={{ display: "flex", justifyContent: "space-between" }}><strong>{approvalModal === "create" ? "새 결재 작성" : "초안 수정"}</strong><button type="button" onClick={closeApprovalModal}>닫기</button></div><input aria-label="결재 제목" required value={createForm.title} onChange={(event) => setCreateForm((current) => ({ ...current, title: event.target.value }))} placeholder="결재 제목" style={{ height: 36, borderRadius: 10, border: "1px solid #cbd5e1", padding: "0 10px" }} /><textarea aria-label="결재 본문" required value={createForm.content} onChange={(event) => setCreateForm((current) => ({ ...current, content: event.target.value }))} placeholder="내용" style={{ minHeight: 120, borderRadius: 10, border: "1px solid #cbd5e1", padding: 10 }} /><div><strong>결재선</strong><input aria-label="결재선 사용자 검색" value={approverSearch} onChange={(event) => setApproverSearch(event.target.value)} placeholder="이름, 부서, 이메일 검색" style={{ display: "block", width: "100%", boxSizing: "border-box", height: 34, marginTop: 8, borderRadius: 10, border: "1px solid #cbd5e1", padding: "0 10px" }} /><div style={{ maxHeight: 120, overflowY: "auto", marginTop: 8, display: "grid", gap: 6 }}>{availableApprovers.map((user) => <button type="button" key={user.userId} onClick={() => selectApprovalApprover(user.userId)} style={{ textAlign: "left", padding: 8, border: "1px solid #dbe4ec", borderRadius: 8, background: "#fff" }}>{user.userName} · {user.departmentName} · {user.userEmail}</button>)}</div><div aria-label="선택된 결재선" style={{ marginTop: 10, display: "grid", gap: 6 }}>{selectedApprovers.map((user, index) => <div key={user.userId} style={{ display: "flex", gap: 6, alignItems: "center", padding: 8, borderRadius: 8, background: "#f0fdfa" }}><span style={{ flex: 1 }}>{index + 1}. {user.userName} ({user.departmentName})</span><button type="button" onClick={() => moveApprovalApprover(user.userId, -1)}>위</button><button type="button" onClick={() => moveApprovalApprover(user.userId, 1)}>아래</button><button type="button" onClick={() => setCreateForm((current) => ({ ...current, approverUserIds: current.approverUserIds.filter((id) => id !== user.userId) }))}>제거</button></div>)}</div></div>{approvalError ? <div role="alert" className="common-popup-error">{approvalError}</div> : null}<div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={closeApprovalModal}>취소</button><button type="submit" disabled={loading}>{approvalModal === "create" ? "초안 저장" : "수정 저장"}</button></div></form> : <div style={{ display: "grid", gap: 12 }}><strong>{({ submit: "상신 확인", approve: "승인", reject: "반려", withdraw: "회수 확인", redraft: "재기안 확인" } as Record<string, string>)[approvalModal]}</strong><div>{selectedDocument?.title}</div>{(approvalModal === "approve" || approvalModal === "reject") ? <textarea aria-label="처리 의견" value={reasonAction.reason} onChange={(event) => setReasonAction((current) => ({ ...current, reason: event.target.value }))} placeholder={approvalModal === "reject" ? "반려 의견 (필수)" : "처리 의견"} style={{ minHeight: 96, borderRadius: 10, border: "1px solid #cbd5e1", padding: 10 }} /> : null}{approvalError ? <div role="alert" className="common-popup-error">{approvalError}</div> : null}<div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={closeApprovalModal}>취소</button><button type="button" disabled={loading} onClick={() => { if (!selectedDocument) return; if (approvalModal === "approve") void executeApprove(selectedDocument.id, true); else if (approvalModal === "reject") void executeApprove(selectedDocument.id, false); else void executeSubmit(selectedDocument.id, approvalModal as "submit" | "withdraw" | "redraft"); }}>{approvalModal === "approve" ? "승인" : approvalModal === "reject" ? "반려" : "확인"}</button></div></div>}
