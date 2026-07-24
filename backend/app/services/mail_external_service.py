@@ -27,6 +27,31 @@ class ExternalMailTestRequiredError(ExternalMailError): pass
 class ExternalMailCollectionBusyError(ExternalMailError): pass
 class ExternalMailNotFoundError(FileNotFoundError): pass
 class ExternalMailForbiddenError(PermissionError): pass
+class ExternalLeaseLostError(ExternalMailError): pass
+
+
+@dataclass(frozen=True)
+class RemoteDeleteState:
+    @staticmethod
+    def after_quit(uidls: list[str], quit_ok: bool) -> dict[str, tuple[str, str | None]]:
+        state = ("deleted", None) if quit_ok else ("failed", "MAIL_EXTERNAL_QUIT_FAILED")
+        return {uidl: state for uidl in uidls}
+
+
+class ExternalCollectionSafety:
+    def __init__(self, *, job_seconds: int = 300, command_seconds: int = 20, raw_limit: int = 25 * 1024 * 1024):
+        self.job_seconds = job_seconds; self.command_seconds = command_seconds; self.raw_limit = raw_limit
+    @staticmethod
+    def uidl_action(status: str | None, delete_enabled: bool) -> str:
+        if status in {"pending", "failed"}: return "delete_only" if delete_enabled else "duplicate"
+        return "duplicate" if status else "import"
+    @staticmethod
+    def assert_lease(heartbeat) -> None:
+        if not heartbeat(): raise ExternalLeaseLostError("MAIL_EXTERNAL_LEASE_LOST")
+    def assert_deadline(self, elapsed_seconds: float) -> None:
+        if elapsed_seconds > self.job_seconds: raise TimeoutError("MAIL_EXTERNAL_JOB_TIMEOUT")
+    def assert_retr_size(self, size_bytes: int) -> None:
+        if size_bytes > self.raw_limit: raise ValueError("MAIL_EXTERNAL_MESSAGE_TOO_LARGE")
 
 
 class MailExternalEndpointValidator:
@@ -55,6 +80,10 @@ class MailExternalEndpointValidator:
         return value
 
     def validate(self, host: str, port: int, tls_mode: str) -> str:
+        value, _ = self.validate_target(host, port, tls_mode)
+        return value
+
+    def validate_target(self, host: str, port: int, tls_mode: str) -> tuple[str, tuple[str, ...]]:
         value = self.validate_syntax(host, port, tls_mode)
         try: addresses = self.resolver(value)
         except Exception as exc: raise ExternalMailInvalidEndpointError("외부메일 서버를 확인할 수 없습니다.") from exc
@@ -65,7 +94,7 @@ class MailExternalEndpointValidator:
             except ValueError as exc: raise ExternalMailInvalidEndpointError("외부메일 서버 주소를 확인해 주세요.") from exc
             if not parsed.is_global:
                 raise ExternalMailInvalidEndpointError("공용 외부메일 서버만 사용할 수 있습니다.")
-        return value
+        return value, tuple(sorted(addresses))
 
 
 class MailExternalPop3Client:
@@ -73,15 +102,21 @@ class MailExternalPop3Client:
         self.factory = factory
         self.validator = validator or MailExternalEndpointValidator()
 
-    def _connect(self, host: str, port: int, tls_mode: str):
+    def _connect(self, host: str, port: int, tls_mode: str, addresses: tuple[str, ...] | None = None):
         context = ssl.create_default_context()
-        if self.factory: return self.factory(host, port, tls_mode)
-        if tls_mode == "ssl": return poplib.POP3_SSL(host, port, timeout=10, context=context)
-        client = poplib.POP3(host, port, timeout=10); client.stls(context=context); return client
+        target = (addresses or (host,))[0]
+        if self.factory: return self.factory(host, port, tls_mode, tuple(addresses or (host,)), host)
+        if tls_mode == "ssl":
+            class BoundPOP3SSL(poplib.POP3_SSL):
+                def _create_socket(self, timeout):
+                    raw = socket.create_connection((target, port), timeout)
+                    return context.wrap_socket(raw, server_hostname=host)
+            return BoundPOP3SSL(host, port, timeout=10, context=context)
+        client = poplib.POP3(target, port, timeout=10); client.host = host; client.stls(context=context); return client
 
     def test(self, host: str, port: int, tls_mode: str, username: str, password: str) -> str:
-        if not self.factory: host = self.validator.validate(host, port, tls_mode)
-        client = self._connect(host, port, tls_mode)
+        host, addresses = self.validator.validate_target(host, port, tls_mode)
+        client = self._connect(host, port, tls_mode, addresses)
         try:
             client.user(username); client.pass_(password); client.uidl()
         finally:
@@ -146,7 +181,16 @@ class MailExternalService:
     @staticmethod
     def account_view(row):
         result = {k: v for k, v in dict(row).items() if k not in {"encrypted_password", "password"}}
-        result["passwordConfigured"] = bool(row.get("encrypted_password")); return result
+        result["passwordConfigured"] = bool(row.get("encrypted_password"))
+        job_status = result.pop("job_status", None)
+        result["lastJob"] = None if not job_status else {
+            "status": job_status, "importedCount": result.pop("job_imported_count", 0),
+            "duplicateCount": result.pop("job_duplicate_count", 0), "deletedCount": result.pop("job_deleted_count", 0),
+            "failedCount": result.pop("job_failed_count", 0), "errorCode": result.pop("job_error_code", None),
+            "completedAt": result.pop("job_completed_at", None),
+        }
+        for key in ("job_imported_count","job_duplicate_count","job_deleted_count","job_failed_count","job_error_code","job_completed_at"): result.pop(key,None)
+        return result
     def connection_state(self, old, new, password_changed):
         if password_changed or any(old.get(k) != new.get(k) for k in self.CONNECTION_FIELDS):
             return {"connection_status": "untested", "enabled": False}
@@ -162,9 +206,10 @@ class MailExternalService:
     def list_accounts(self, actor):
         self.db.ensure_migrations_applied()
         with self.db.connect() as c, c.cursor() as cur:
-            cur.execute("SELECT * FROM mail_external_accounts WHERE company_id=%s AND user_id=%s AND deleted_at IS NULL ORDER BY created_at,id", (actor.companyId, actor.userId))
+            cur.execute("SELECT a.*,j.status job_status,j.imported_count job_imported_count,j.duplicate_count job_duplicate_count,j.deleted_count job_deleted_count,j.failed_count job_failed_count,j.error_code job_error_code,j.completed_at job_completed_at FROM mail_external_accounts a LEFT JOIN LATERAL (SELECT status,imported_count,duplicate_count,deleted_count,failed_count,error_code,completed_at FROM mail_external_collection_jobs WHERE account_id=a.id ORDER BY created_at DESC,id DESC LIMIT 1) j ON TRUE WHERE a.company_id=%s AND a.user_id=%s AND a.deleted_at IS NULL ORDER BY a.created_at,a.id", (actor.companyId, actor.userId))
             rows = cur.fetchall()
-        return {"accounts": [self.account_view(r) for r in rows], "accountCount": len(rows), "activeJobCount": 0}
+            cur.execute("SELECT COUNT(*) total FROM mail_external_collection_jobs WHERE company_id=%s AND user_id=%s AND status IN ('queued','running')",(actor.companyId,actor.userId)); active=int(cur.fetchone()["total"])
+        return {"accounts": [self.account_view(r) for r in rows], "accountCount": len(rows), "activeJobCount": active}
 
     def create_account(self, actor, payload):
         host = self.validator.validate_syntax(payload.host, payload.port, payload.tlsMode)
@@ -212,6 +257,19 @@ class MailExternalService:
             cur.execute("UPDATE mail_external_accounts SET enabled=FALSE,deleted_at=%s,updated_at=%s,version=version+1 WHERE id=%s AND company_id=%s AND user_id=%s AND deleted_at IS NULL RETURNING id",(datetime.now(UTC),datetime.now(UTC),account_id,actor.companyId,actor.userId))
             if not cur.fetchone(): raise ExternalMailNotFoundError("외부메일 계정을 찾을 수 없습니다.")
             self._audit(cur,actor,account_id,"mail.external.deleted","deleted",datetime.now(UTC))
+            c.commit()
+
+    def bulk_delete_accounts(self, actor, account_ids):
+        ids = list(dict.fromkeys(account_ids))
+        now = datetime.now(UTC)
+        with self.db.connect() as c, c.cursor() as cur:
+            cur.execute("SELECT id FROM mail_external_accounts WHERE id=ANY(%s) AND company_id=%s AND user_id=%s AND deleted_at IS NULL FOR UPDATE",(ids,actor.companyId,actor.userId))
+            owned = {row["id"] for row in cur.fetchall()}
+            if owned != set(ids): raise ExternalMailNotFoundError("외부메일 계정을 찾을 수 없습니다.")
+            cur.execute("SELECT account_id FROM mail_external_collection_jobs WHERE account_id=ANY(%s) AND status IN ('queued','running') FOR UPDATE",(ids,))
+            if cur.fetchone(): raise ExternalMailCollectionBusyError("수집 작업 중에는 계정을 삭제할 수 없습니다.")
+            cur.execute("UPDATE mail_external_accounts SET enabled=FALSE,deleted_at=%s,updated_at=%s,version=version+1 WHERE id=ANY(%s) AND company_id=%s AND user_id=%s AND deleted_at IS NULL",(now,now,ids,actor.companyId,actor.userId))
+            for account_id in ids: self._audit(cur,actor,account_id,"mail.external.deleted","deleted",now)
             c.commit()
 
     def test_account(self, actor, account_id):

@@ -738,7 +738,7 @@ def create_external_account(payload: MailExternalAccountCreateRequest, user: Aut
 @router.post("/settings/external-accounts/bulk-delete", status_code=204)
 def bulk_delete_external_accounts(payload: MailExternalBulkDeleteRequest, user: AuthUserSummary = Depends(_external_send_permission)):
     try:
-        for account_id in payload.accountIds: _external_mail_service().delete_account(user, account_id)
+        _external_mail_service().bulk_delete_accounts(user, payload.accountIds)
         return Response(status_code=204)
     except Exception as exc: _handle_error(exc); raise
 

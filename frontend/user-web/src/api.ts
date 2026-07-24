@@ -441,6 +441,7 @@ export type MailExternalAccount = {
   connection_status: "untested" | "success" | "failed"; passwordConfigured: boolean;
   last_test_at: string | null; last_test_code: string | null; last_collect_at: string | null;
   version: number; created_at: string; updated_at: string;
+  lastJob: null | { status: "queued" | "running" | "completed" | "partial" | "failed"; importedCount: number; duplicateCount: number; deletedCount: number; failedCount: number; errorCode: string | null; completedAt: string | null };
 };
 export type MailExternalAccountList = { accounts: MailExternalAccount[]; accountCount: number; activeJobCount: number };
 export type MailExternalAccountPayload = {

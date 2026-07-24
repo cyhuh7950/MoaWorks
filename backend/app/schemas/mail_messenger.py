@@ -813,6 +813,16 @@ class MailExternalAccountUpdateRequest(MailExternalAccountCreateRequest):
     expectedVersion: int = Field(ge=1)
 
 
+class MailExternalJobResultView(BaseModel):
+    status: Literal["queued", "running", "completed", "partial", "failed"]
+    importedCount: int = 0
+    duplicateCount: int = 0
+    deletedCount: int = 0
+    failedCount: int = 0
+    errorCode: str | None = None
+    completedAt: datetime | None = None
+
+
 class MailExternalAccountView(BaseModel):
     id: str
     display_name: str
@@ -831,6 +841,7 @@ class MailExternalAccountView(BaseModel):
     version: int
     created_at: datetime
     updated_at: datetime
+    lastJob: MailExternalJobResultView | None = None
 
 
 class MailExternalAccountListResponse(BaseModel):

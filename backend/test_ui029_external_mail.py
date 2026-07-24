@@ -46,7 +46,7 @@ class Ui029ExternalMailTests(unittest.TestCase):
 
     def test_connection_test_authenticates_and_uidl_without_retr_or_dele(self):
         fake = _Pop3()
-        result = MailExternalPop3Client(lambda *_: fake).test("mail.example.com", 995, "ssl", "owner", "secret")
+        result = MailExternalPop3Client(lambda *_: fake, validator=MailExternalEndpointValidator(lambda _: ["8.8.8.8"])).test("mail.example.com", 995, "ssl", "owner", "secret")
         self.assertEqual(result, "success")
         self.assertEqual([call[0] for call in fake.calls], ["USER", "PASS", "UIDL", "QUIT"])
 
@@ -111,9 +111,9 @@ class Ui029ExternalMailTests(unittest.TestCase):
 
     def test_worker_contract_has_short_claim_uidl_dedup_and_quit_before_delete_finalize(self):
         worker = (Path(__file__).parent / "app" / "workers" / "mail_external_worker.py").read_text(encoding="utf-8")
-        for token in ("FOR UPDATE SKIP LOCKED", "connection.commit()", "client.uidl()", "client.retr", "_store(", "client.dele", "client.quit()", "remote_delete_status='deleted'", "attempt_count<3"):
+        for token in ("FOR UPDATE SKIP LOCKED", "connection.commit()", "client.uidl()", "client.retr", "_store(", "client.dele", "client.quit()", "RemoteDeleteState.after_quit", "attempt_count<3"):
             self.assertIn(token, worker)
-        self.assertLess(worker.index("client.quit();client=None"), worker.index("remote_delete_status='deleted'"))
+        self.assertLess(worker.index("client.quit(); quit_ok=True"), worker.index("RemoteDeleteState.after_quit"))
 
     def test_validated_dns_addresses_are_bound_to_connector(self):
         calls = []
