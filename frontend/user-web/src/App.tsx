@@ -62,6 +62,9 @@ import {
   fetchMailTrash,
   fetchMailDetail,
   fetchRecentMailRecipients,
+  fetchRecentMailRecipientSettings,
+  deleteRecentMailRecipient,
+  bulkDeleteRecentMailRecipients,
   fetchMailStorage,
   fetchMailBasicPreferences,
   fetchMailboxBackups,
@@ -113,6 +116,7 @@ import {
   withdrawApproval,
   type ApprovalApprover,
   type MailRecentRecipient,
+  type MailRecentRecipientSettingsResponse,
   type ApprovalDocument,
   type AuditLog,
   type AuthUser,
@@ -574,8 +578,9 @@ function normalizeMailRecipients(value: string, companyDomain: string): string[]
 }
 
 const MAIL_SETTINGS_TABS = ["기본환경", "서명", "메일함", "스팸", "자동분류", "자동전달", "부재중응답", "외부메일", "최근보낸메일"] as const;
-type MailSettingsTab = "basic" | "signature" | "mailbox" | "spam" | "classification" | "forwarding" | "outOfOffice" | "external";
+type MailSettingsTab = "basic" | "signature" | "mailbox" | "spam" | "classification" | "forwarding" | "outOfOffice" | "external" | "recent";
 const openExternalMailTab = () => window.dispatchEvent(new Event("moaworks:open-external-mail"));
+const openRecentMailTab = () => window.dispatchEvent(new Event("moaworks:open-recent-mail"));
 
 function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChange, onSave, onCancel, onReset, onReload, onOpenSignature, onOpenMailbox, onOpenSpam, onOpenClassification, onOpenForwarding, onOpenOutOfOffice }: {
   value: MailBasicPreferences | null;
@@ -603,7 +608,7 @@ function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChan
   );
   return <section className="user-mail-settings" aria-label="메일 환경설정">
     <header><div><small>메일 환경설정</small><h2>기본환경</h2></div><span aria-live="polite">{dirty ? "저장하지 않은 변경 있음" : "저장됨"}</span></header>
-    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 0 ? "page" : undefined} disabled={index > 7} onClick={index === 1 ? onOpenSignature : index === 2 ? onOpenMailbox : index === 3 ? onOpenSpam : index === 4 ? onOpenClassification : index === 5 ? onOpenForwarding : index === 6 ? onOpenOutOfOffice : index === 7 ? openExternalMailTab : undefined} title={index <= 7 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 7 ? <i>i</i> : null}</button>)}</nav>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 0 ? "page" : undefined} onClick={index === 1 ? onOpenSignature : index === 2 ? onOpenMailbox : index === 3 ? onOpenSpam : index === 4 ? onOpenClassification : index === 5 ? onOpenForwarding : index === 6 ? onOpenOutOfOffice : index === 7 ? openExternalMailTab : index === 8 ? openRecentMailTab : undefined}>{tab}</button>)}</nav>
     {error ? <CompactWarning item={{ id: "mail-basic-preferences", source: "mail-settings", tone: "warning", title: conflict ? "다른 위치에서 설정이 변경되었습니다." : "설정을 처리하지 못했습니다.", message: error, action: conflict ? { label: "서버 최신값 다시 불러오기", onAction: onReload } : undefined }} /> : null}
     <div className="user-mail-settings__body">
       <fieldset><legend>메일 읽기 설정</legend>
@@ -680,7 +685,7 @@ function MailSignatureSettingsPanel({
   const selected = value.signatures.filter((item) => selectedIds.includes(item.signatureId));
   return <section className="user-mail-settings user-mail-signature-settings" aria-label="메일 서명 환경설정">
     <header><div><small>메일 환경설정</small><h2>서명</h2></div><span aria-live="polite">{dirty ? "저장하지 않은 변경 있음" : "저장됨"}</span></header>
-    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 1 ? "page" : undefined} disabled={index > 7} onClick={index === 0 ? onOpenBasic : index === 2 ? onOpenMailbox : index === 3 ? onOpenSpam : index === 4 ? onOpenClassification : index === 5 ? onOpenForwarding : index === 6 ? onOpenOutOfOffice : index === 7 ? openExternalMailTab : undefined} title={index <= 7 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 7 ? <i>i</i> : null}</button>)}</nav>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 1 ? "page" : undefined} onClick={index === 0 ? onOpenBasic : index === 2 ? onOpenMailbox : index === 3 ? onOpenSpam : index === 4 ? onOpenClassification : index === 5 ? onOpenForwarding : index === 6 ? onOpenOutOfOffice : index === 7 ? openExternalMailTab : index === 8 ? openRecentMailTab : undefined}>{tab}</button>)}</nav>
     {error ? <CompactWarning item={{ id: "mail-signatures", source: "mail-settings", tone: "warning", title: conflict ? "다른 위치에서 서명이 변경되었습니다." : "서명을 처리하지 못했습니다.", message: error, action: conflict ? { label: "서버 최신값 다시 불러오기", onAction: () => void onReload() } : undefined }} /> : null}
     <div className="user-mail-settings__body user-mail-signature-settings__body">
       <fieldset>
@@ -779,7 +784,7 @@ function MailboxSettingsPanel({
   const statusLabel: Record<MailBackupJob["status"], string> = { queued: "대기", running: "진행 중", completed: "완료", failed: "실패", expired: "만료" };
   return <section className="user-mail-settings user-mail-mailbox-settings" aria-label="메일함 환경설정">
     <header><div><small>메일 환경설정</small><h2>메일함</h2></div><span aria-live="polite">{activeBackup ? "메일함 백업 처리 중" : "설정 확인 완료"}</span></header>
-    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 2 ? "page" : undefined} disabled={index > 7} onClick={index === 0 ? onOpenBasic : index === 1 ? onOpenSignature : index === 3 ? onOpenSpam : index === 4 ? onOpenClassification : index === 5 ? onOpenForwarding : index === 6 ? onOpenOutOfOffice : index === 7 ? openExternalMailTab : undefined} title={index <= 7 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 7 ? <i>i</i> : null}</button>)}</nav>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 2 ? "page" : undefined} onClick={index === 0 ? onOpenBasic : index === 1 ? onOpenSignature : index === 3 ? onOpenSpam : index === 4 ? onOpenClassification : index === 5 ? onOpenForwarding : index === 6 ? onOpenOutOfOffice : index === 7 ? openExternalMailTab : index === 8 ? openRecentMailTab : undefined}>{tab}</button>)}</nav>
     {error ? <CompactWarning item={{ id: "mailbox-settings", source: "mail-settings", tone: "warning", title: "메일함 설정을 처리하지 못했습니다.", message: error, action: { label: "서버 최신값 다시 불러오기", onAction: onReload } }} /> : null}
     <div className="user-mail-mailbox-settings__body">
       <div className="user-mail-mailbox-settings__toolbar">
@@ -892,7 +897,7 @@ function MailSpamSettingsPanel({
   );
   return <section className="user-mail-settings user-mail-spam-settings" aria-label="스팸 환경설정">
     <header><div><small>메일 환경설정</small><h2>스팸</h2></div><span aria-live="polite">규칙 {value.rules.length}/200개</span></header>
-    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 3 ? "page" : undefined} disabled={index > 7} onClick={index === 0 ? onOpenBasic : index === 1 ? onOpenSignature : index === 2 ? onOpenMailbox : index === 4 ? onOpenClassification : index === 5 ? onOpenForwarding : index === 6 ? onOpenOutOfOffice : index === 7 ? openExternalMailTab : undefined} title={index <= 7 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 7 ? <i>i</i> : null}</button>)}</nav>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 3 ? "page" : undefined} onClick={index === 0 ? onOpenBasic : index === 1 ? onOpenSignature : index === 2 ? onOpenMailbox : index === 4 ? onOpenClassification : index === 5 ? onOpenForwarding : index === 6 ? onOpenOutOfOffice : index === 7 ? openExternalMailTab : index === 8 ? openRecentMailTab : undefined}>{tab}</button>)}</nav>
     {error ? <CompactWarning item={{ id: "spam-settings", source: "mail-settings", tone: "warning", title: "스팸 설정을 처리하지 못했습니다.", message: error, action: { label: "서버 최신값 다시 불러오기", onAction: onReload } }} /> : null}
     <div className="user-mail-spam-settings__body">
       <section className="user-mail-spam-settings__policy">
@@ -975,7 +980,7 @@ function MailAutoClassificationPanel({ value, loading, error, busy, onReload, on
   };
   return <section className="user-mail-settings user-mail-auto-classification" aria-label="자동분류 환경설정">
     <header><div><small>메일 환경설정</small><h2>자동분류</h2></div><span aria-live="polite">규칙 {value.rules.length}/100개</span></header>
-    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 4 ? "page" : undefined} disabled={index > 7} onClick={index === 0 ? onOpenBasic : index === 1 ? onOpenSignature : index === 2 ? onOpenMailbox : index === 3 ? onOpenSpam : index === 5 ? onOpenForwarding : index === 6 ? onOpenOutOfOffice : index === 7 ? openExternalMailTab : undefined} title={index <= 7 ? tab : `UI-${String(22 + index).padStart(3, "0")}에서 제공합니다.`}>{tab}{index > 7 ? <i>i</i> : null}</button>)}</nav>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 4 ? "page" : undefined} onClick={index === 0 ? onOpenBasic : index === 1 ? onOpenSignature : index === 2 ? onOpenMailbox : index === 3 ? onOpenSpam : index === 5 ? onOpenForwarding : index === 6 ? onOpenOutOfOffice : index === 7 ? openExternalMailTab : index === 8 ? openRecentMailTab : undefined}>{tab}</button>)}</nav>
     {error ? <CompactWarning item={{ id: "auto-classification", source: "mail-settings", tone: "warning", title: "자동분류 설정을 처리하지 못했습니다.", message: error, action: { label: "서버 최신값 다시 불러오기", onAction: onReload } }} /> : null}
     <div className="user-mail-auto-classification__body">
       <section className="user-mail-auto-classification__policy"><label><span>자동분류 사용 <i title="스팸 판정 후 정상 신규 수신 메일에만 적용됩니다.">i</i></span><input type="checkbox" role="switch" checked={value.enabled} disabled={busy} onChange={(event) => onChangePolicy(event.target.checked)} /></label><button type="button" disabled={busy} onClick={() => void onSavePolicy()}>정책 저장</button></section>
@@ -1017,7 +1022,7 @@ function MailAutoForwardingPanel({ value, loading, error, busy, onReload, onClos
   const editException = (item: MailAutoForwardException | null) => { setExceptionEditor(item); setExceptionForm(item ? { matcherType: item.matcherType, matcherValue: item.matcherValue, action: item.action, targetEmails: item.targetEmails, enabled: item.enabled } : emptyAutoForwardException()); setExceptionError(""); };
   return <section className="user-mail-settings user-mail-auto-forwarding" aria-label="자동전달 환경설정">
     <header><div><small>메일 환경설정</small><h2>자동전달</h2></div><span aria-live="polite">주소 {value.targets.length}/10 · 예외 {value.exceptions.length}/100</span><button type="button" onClick={onClose}>닫기</button></header>
-    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 5 ? "page" : undefined} disabled={index > 7} onClick={index <= 7 ? () => onOpenTab((["basic", "signature", "mailbox", "spam", "classification", "forwarding", "outOfOffice", "external"] as const)[index]) : undefined}>{tab}</button>)}</nav>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 5 ? "page" : undefined} onClick={() => onOpenTab((["basic", "signature", "mailbox", "spam", "classification", "forwarding", "outOfOffice", "external", "recent"] as const)[index])}>{tab}</button>)}</nav>
     {error ? <CompactWarning item={{ id: "auto-forwarding", source: "mail-settings", tone: "warning", title: "자동전달 설정을 처리하지 못했습니다.", message: error, action: { label: "서버 최신값 다시 불러오기", onAction: onReload } }} /> : null}
     <div className="user-mail-auto-forwarding__body">
       <section className="user-mail-auto-forwarding__policy"><label><span>자동전달 사용 <i title="스팸 판정과 자동분류 뒤 직접 수신 메일에만 적용됩니다.">i</i></span><input type="checkbox" role="switch" checked={value.enabled} disabled={busy} onChange={(event) => onChange({ enabled: event.target.checked })} /></label><label><span>원본 처리</span><select aria-label="원본 보관" value={value.keepOriginal ? "keep" : "remove"} onChange={(event) => onChange({ keepOriginal: event.target.value === "keep" })}><option value="keep">원본 보관</option><option value="remove">성공 후 원본 보관 안 함</option></select></label><button type="button" disabled={busy} onClick={() => void savePolicy()}>정책 저장</button></section>
@@ -1055,7 +1060,7 @@ function MailOutOfOfficePanel({ value, saved, loading, error, busy, onReload, on
   };
   return <section className="user-mail-settings user-mail-out-of-office" aria-label="부재중응답 환경설정">
     <header><div><small>메일 환경설정 / 부재중응답</small><h2>부재중응답</h2></div><span className={`user-mail-out-of-office__state is-${value.state}`}>{stateLabel}</span><button type="button" onClick={onClose}>닫기</button></header>
-    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 6 ? "page" : undefined} disabled={index > 7} onClick={index <= 7 ? () => onOpenTab((["basic", "signature", "mailbox", "spam", "classification", "forwarding", "outOfOffice", "external"] as const)[index]) : undefined}>{tab}</button>)}</nav>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 6 ? "page" : undefined} onClick={() => onOpenTab((["basic", "signature", "mailbox", "spam", "classification", "forwarding", "outOfOffice", "external", "recent"] as const)[index])}>{tab}</button>)}</nav>
     {error ? <CompactWarning item={{ id: "out-of-office", source: "mail-settings", tone: "warning", title: error.includes("변경") ? "다른 위치에서 설정이 변경되었습니다." : "부재중응답 설정을 처리하지 못했습니다.", message: error, action: { label: "서버 최신값 다시 불러오기", onAction: onReload } }} /> : null}
     <div className="user-mail-out-of-office__body">
       <section className="user-mail-out-of-office__summary"><div><strong>마지막 응답 결과</strong><span title={value.lastResult?.reasonCode}>{resultLabel}</span></div><div><strong>누적 응답 수</strong><span>{value.responseCount}건</span></div>{value.providerLocked ? <span className="user-mail-out-of-office__lock" title="provider가 잠겨 있어 외부 응답 queue는 blocked 상태로 보존됩니다.">외부 발송 잠금</span> : null}</section>
@@ -1101,7 +1106,7 @@ function MailExternalPanel({ value, folders, loading, error, busy, onReload, onC
   if (!value) return <FeedbackState state="error" title="외부메일 설정을 불러오지 못했습니다." message={error} action={{ label:"다시 시도", onAction:onReload }} />;
   return <section className="user-mail-settings user-mail-external" aria-label="외부메일 환경설정">
     <header><div><small>메일 환경설정 / 외부메일</small><h2>외부메일</h2></div><span>계정 {value.accountCount}/5 · 동작 중 {value.activeJobCount}</span><button type="button" onClick={()=>requestLeave(onClose)}>닫기</button></header>
-    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab,index)=><button key={tab} type="button" aria-current={index===7?"page":undefined} disabled={index>7} onClick={index<=7?()=>requestLeave(()=>onOpenTab((["basic","signature","mailbox","spam","classification","forwarding","outOfOffice","external"] as const)[index])):undefined}>{tab}</button>)}</nav>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab,index)=><button key={tab} type="button" aria-current={index===7?"page":undefined} onClick={()=>requestLeave(()=>onOpenTab((["basic","signature","mailbox","spam","classification","forwarding","outOfOffice","external","recent"] as const)[index]))}>{tab}</button>)}</nav>
     {error ? <CompactWarning item={{id:"external-mail",source:"mail-settings",tone:"warning",title:"외부메일 설정을 처리하지 못했습니다.",message:error,action:{label:"새로고침",onAction:onReload}}} /> : null}
     <div className="user-mail-external__toolbar"><button type="button" disabled={busy||value.accountCount>=5} onClick={()=>edit(null)}>추가</button><button type="button" disabled={busy||!selected.length} onClick={()=>void onBulkDelete(selected).then(()=>setSelected([]))}>전체삭제</button><button type="button" disabled={busy} onClick={onReload}>새로고침</button><i title="POP3 SSL(995) 또는 STARTTLS(110)만 지원하며 비밀번호는 화면에 다시 표시하지 않습니다.">i</i></div>
     {value.accounts.some(item=>item.lastJob) ? <div className="user-mail-external__results" aria-label="최근 수집 결과">{value.accounts.filter(item=>item.lastJob).map(item=><span key={item.id} title={item.lastJob?.errorCode??""}><strong>{item.display_name}</strong> {lastJobLabel(item)} · {item.lastJob?.completedAt?formatMailDate(item.lastJob.completedAt):"-"}</span>)}</div> : null}
@@ -1117,6 +1122,48 @@ function MailExternalPanel({ value, folders, loading, error, busy, onReload, onC
       <div className="user-mail-settings__actions"><button type="button" onClick={requestCloseEditor}>취소</button><button type="button" disabled={busy||!form.displayName.trim()||!form.host.trim()||!form.username.trim()||(!editor&&!form.password?.trim())|| (form.deleteFromServer&&!deleteConfirm)} onClick={()=>{if(form.deleteFromServer)setExternalDeleteConfirmPopup(true);else void commitExternalForm()}}>저장</button></div>
     </div></CommonPopup>
     <CommonPopup title="서버 원본 삭제 확인" open={externalDeleteConfirmPopup} onClose={()=>setExternalDeleteConfirmPopup(false)} saving={busy}><div className="user-mail-external__editor"><p>로컬 저장이 완료된 메일만 외부 서버에서 삭제합니다. 이 설정으로 저장할까요?</p><div className="user-mail-settings__actions"><button type="button" onClick={()=>setExternalDeleteConfirmPopup(false)}>취소</button><button type="button" disabled={busy} onClick={()=>void commitExternalForm()}>확인</button></div></div></CommonPopup>
+  </section>;
+}
+
+function MailRecentRecipientsPanel({ value, loading, error, busy, onReload, onClose, onOpenTab, onDelete }: {
+  value: MailRecentRecipientSettingsResponse | null;
+  loading: boolean;
+  error: string;
+  busy: boolean;
+  onReload: () => void;
+  onClose: () => void;
+  onOpenTab: (tab: MailSettingsTab) => void;
+  onDelete: (payload: { recipientIds?: string[]; deleteAll?: boolean }) => Promise<boolean>;
+}) {
+  const [selected, setSelected] = useState<string[]>([]);
+  const [deleteTarget, setDeleteTarget] = useState<{ recipientIds?: string[]; deleteAll?: boolean; label: string } | null>(null);
+  const recipients = value?.recipients ?? [];
+  const selectedExisting = selected.filter((id) => recipients.some((item) => item.recipientId === id));
+  const allSelected = recipients.length > 0 && selectedExisting.length === recipients.length;
+  const tabs: MailSettingsTab[] = ["basic", "signature", "mailbox", "spam", "classification", "forwarding", "outOfOffice", "external", "recent"];
+  if (loading && !value) return <FeedbackState state="loading" title="최근 보낸 메일주소를 불러오는 중입니다." />;
+  if (!value) return <FeedbackState state="error" title="최근 보낸 메일주소를 불러오지 못했습니다." message={error} action={{ label: "다시 시도", onAction: onReload }} />;
+  return <section className="user-mail-settings user-mail-recent" aria-label="최근보낸메일 환경설정">
+    <header><div><small>메일 환경설정 / 최근보낸메일</small><h2>최근보낸메일</h2></div><span aria-live="polite">주소 {value.totalCount}개</span><button type="button" onClick={onClose}>닫기</button></header>
+    <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab,index)=><button key={tab} type="button" aria-current={index===8?"page":undefined} onClick={()=>onOpenTab(tabs[index])}>{tab}</button>)}</nav>
+    {error ? <CompactWarning item={{ id: "recent-mail", source: "mail-settings", tone: "warning", title: "최근 주소를 처리하지 못했습니다.", message: error, action: { label: "새로고침", onAction: onReload } }} /> : null}
+    <div className="user-mail-recent__body">
+      <div className="user-mail-recent__toolbar">
+        <label title="현재 최근 주소 전체 선택"><input type="checkbox" aria-label="전체 선택" checked={allSelected} disabled={busy || !recipients.length} onChange={(event) => setSelected(event.target.checked ? recipients.flatMap((item) => item.recipientId ? [item.recipientId] : []) : [])} />전체 선택</label>
+        <button type="button" disabled={busy || !selectedExisting.length} onClick={() => setDeleteTarget({ recipientIds: selectedExisting, label: `선택한 ${selectedExisting.length}개 주소` })}>선택 삭제</button>
+        <button type="button" className="is-destructive" disabled={busy || !recipients.length} onClick={() => setDeleteTarget({ deleteAll: true, label: `최근 주소 ${recipients.length}개 전체` })}>전체 삭제</button>
+        <button type="button" disabled={busy} onClick={onReload}>새로고침</button>
+        <i title="최근 주소는 실제 발송 완료 시 등록되며 삭제해도 원본 메일과 수신확인에는 영향이 없습니다.">i</i>
+      </div>
+      <div className="user-mail-recent__table-wrap"><table><caption>최근 보낸메일 주소 목록</caption><thead><tr><th>선택</th><th>이메일 주소</th><th>이름 / 부서</th><th>마지막 사용</th><th>사용 횟수</th><th>관리</th></tr></thead><tbody>
+        {!recipients.length ? <tr><td colSpan={6}><div className="user-mail-recent__empty">최근 보낸 메일주소가 없습니다.</div></td></tr> : recipients.map((item) => <tr key={item.recipientId ?? item.email}>
+          <td><input type="checkbox" aria-label={`${item.email} 선택`} checked={Boolean(item.recipientId && selectedExisting.includes(item.recipientId))} disabled={busy || !item.recipientId} onChange={(event) => item.recipientId && setSelected((current) => event.target.checked ? [...current, item.recipientId as string] : current.filter((id) => id !== item.recipientId))} /></td>
+          <td><strong>{item.email}</strong></td><td>{item.name ?? "-"}<small>{item.departmentName ?? "외부 주소"}</small></td><td>{formatMailDate(item.lastUsedAt)}</td><td>{item.useCount}회</td>
+          <td><button type="button" disabled={busy || !item.recipientId} onClick={() => item.recipientId && setDeleteTarget({ recipientIds: [item.recipientId], label: item.email })}>삭제</button></td>
+        </tr>)}
+      </tbody></table></div>
+    </div>
+    <ConfirmModal open={deleteTarget !== null} title="최근 주소 삭제 확인" message={<><strong>{deleteTarget?.label}</strong>을 최근 목록에서 삭제합니다. 원본 메일은 유지됩니다.</>} confirmLabel="삭제" busy={busy} onCancel={() => setDeleteTarget(null)} onConfirm={async () => { if (deleteTarget && await onDelete(deleteTarget)) { setDeleteTarget(null); setSelected([]); } }} />
   </section>;
 }
 
@@ -1286,6 +1333,10 @@ export default function App() {
   const [externalAccountsLoading, setExternalAccountsLoading] = useState(false);
   const [externalAccountsError, setExternalAccountsError] = useState("");
   const [externalAccountsBusy, setExternalAccountsBusy] = useState(false);
+  const [recentRecipients, setRecentRecipients] = useState<MailRecentRecipientSettingsResponse | null>(null);
+  const [recentRecipientsLoading, setRecentRecipientsLoading] = useState(false);
+  const [recentRecipientsError, setRecentRecipientsError] = useState("");
+  const [recentRecipientsBusy, setRecentRecipientsBusy] = useState(false);
   const [messengerRoomsData, setMessengerRoomsData] = useState<MessengerRoomSummary[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState("");
   const [selectedRoomDetail, setSelectedRoomDetail] = useState<MessengerRoomDetail | null>(null);
@@ -2044,6 +2095,14 @@ export default function App() {
     finally { if (showLoading) setExternalAccountsLoading(false); }
   }
 
+  async function loadRecentRecipients(targetToken: string, showLoading = true) {
+    if (showLoading) setRecentRecipientsLoading(true);
+    setRecentRecipientsError("");
+    try { setRecentRecipients(await fetchRecentMailRecipientSettings(targetToken)); }
+    catch (error) { setRecentRecipientsError(normalizeClientError(error, "최근 보낸 메일주소를 불러오지 못했습니다.")); }
+    finally { if (showLoading) setRecentRecipientsLoading(false); }
+  }
+
   async function openMailSettings(tab: MailSettingsTab) {
     if (!token) return;
     const outOfOfficeNavigationDirty = Boolean(
@@ -2082,6 +2141,10 @@ export default function App() {
       await loadExternalAccounts(token);
       return;
     }
+    if (tab === "recent") {
+      await loadRecentRecipients(token);
+      return;
+    }
     setMailPreferencesLoading(true);
     setMailSignaturesLoading(true);
     setMailPreferencesError("");
@@ -2109,6 +2172,12 @@ export default function App() {
     return () => window.removeEventListener("moaworks:open-external-mail", handler);
   }, [token]);
 
+  useEffect(() => {
+    const handler = () => { if (token) void openMailSettings("recent"); };
+    window.addEventListener("moaworks:open-recent-mail", handler);
+    return () => window.removeEventListener("moaworks:open-recent-mail", handler);
+  }, [token]);
+
   async function saveExternalAccount(item: MailExternalAccount | null, form: MailExternalAccountPayload): Promise<string | null> {
     if (!token || externalAccountsBusy) return "처리 중입니다.";
     setExternalAccountsBusy(true); setExternalAccountsError("");
@@ -2123,6 +2192,23 @@ export default function App() {
   async function removeExternalAccounts(ids: string[]) { if(!token||externalAccountsBusy)return;if(!window.confirm(`${ids.length}개 외부메일 계정을 삭제할까요?`))return;setExternalAccountsBusy(true);try{await bulkDeleteExternalMailAccounts(token,ids);await loadExternalAccounts(token,false)}catch(error){setExternalAccountsError(normalizeClientError(error,"외부메일 계정을 삭제하지 못했습니다."))}finally{setExternalAccountsBusy(false)} }
   async function runExternalTest(id: string) { if(!token||externalAccountsBusy)return;setExternalAccountsBusy(true);try{await testExternalMailAccount(token,id);await loadExternalAccounts(token,false)}catch(error){setExternalAccountsError(normalizeClientError(error,"연결 테스트에 실패했습니다."))}finally{setExternalAccountsBusy(false)} }
   async function runExternalCollect(id: string) { if(!token||externalAccountsBusy)return;setExternalAccountsBusy(true);try{await collectExternalMailAccount(token,id);await loadExternalAccounts(token,false)}catch(error){setExternalAccountsError(normalizeClientError(error,"수집 작업을 시작하지 못했습니다."))}finally{setExternalAccountsBusy(false)} }
+
+  async function removeRecentRecipients(payload: { recipientIds?: string[]; deleteAll?: boolean }): Promise<boolean> {
+    if (!token || recentRecipientsBusy) return false;
+    setRecentRecipientsBusy(true);
+    setRecentRecipientsError("");
+    try {
+      if (payload.recipientIds?.length === 1) await deleteRecentMailRecipient(token, payload.recipientIds[0]);
+      else await bulkDeleteRecentMailRecipients(token, payload);
+      await loadRecentRecipients(token, false);
+      return true;
+    } catch (error) {
+      setRecentRecipientsError(normalizeClientError(error, "최근 주소를 삭제하지 못했습니다."));
+      return false;
+    } finally {
+      setRecentRecipientsBusy(false);
+    }
+  }
 
   async function openMailBasicSettings() {
     await openMailSettings("basic");
@@ -4070,6 +4156,10 @@ export default function App() {
               <MailExternalPanel value={externalAccounts} folders={mailFoldersData} loading={externalAccountsLoading} error={externalAccountsError} busy={externalAccountsBusy}
                 onReload={()=>void loadExternalAccounts(token)} onClose={closeMailBasicSettings} onOpenTab={(tab)=>void openMailSettings(tab)}
                 onSave={saveExternalAccount} onDelete={removeExternalAccount} onBulkDelete={removeExternalAccounts} onTest={runExternalTest} onCollect={runExternalCollect} />
+            ) : mailSettingsOpen && mailSettingsTab === "recent" ? (
+              <MailRecentRecipientsPanel value={recentRecipients} loading={recentRecipientsLoading} error={recentRecipientsError} busy={recentRecipientsBusy}
+                onReload={() => void loadRecentRecipients(token)} onClose={closeMailBasicSettings} onOpenTab={(tab) => void openMailSettings(tab)}
+                onDelete={removeRecentRecipients} />
             ) : (
             <SplitView
               ariaLabel="메일 목록과 상세 영역 너비 조절"

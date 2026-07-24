@@ -16,6 +16,9 @@ from app.schemas.mail_messenger import (
     MailBasicPreferencesResponse,
     MailBasicPreferencesUpdateRequest,
     MailRecentRecipientListResponse,
+    MailRecentRecipientBulkDeleteRequest,
+    MailRecentRecipientDeleteResponse,
+    MailRecentRecipientSettingsResponse,
     MailSignatureBulkDeleteRequest,
     MailSignatureCreateRequest,
     MailSignaturePreferencesResponse,
@@ -707,6 +710,42 @@ def delete_auto_classification_rule(rule_id: str, user: AuthUserSummary = Depend
         raise
 
 
+@router.get("/settings/recent-recipients", response_model=MailRecentRecipientSettingsResponse)
+def list_recent_recipient_settings(
+    limit: int = Query(default=200, ge=1, le=200),
+    user: AuthUserSummary = Depends(permission_required("mail:read")),
+) -> MailRecentRecipientSettingsResponse:
+    try:
+        return _service().list_recent_recipient_settings(user, limit)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.post("/settings/recent-recipients/bulk-delete", response_model=MailRecentRecipientDeleteResponse)
+def bulk_delete_recent_recipients(
+    payload: MailRecentRecipientBulkDeleteRequest,
+    user: AuthUserSummary = Depends(permission_required("mail:send")),
+) -> MailRecentRecipientDeleteResponse:
+    try:
+        return _service().bulk_delete_recent_recipients(user, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.delete("/settings/recent-recipients/{recipient_id}", response_model=MailRecentRecipientDeleteResponse)
+def delete_recent_recipient(
+    recipient_id: str,
+    user: AuthUserSummary = Depends(permission_required("mail:send")),
+) -> MailRecentRecipientDeleteResponse:
+    try:
+        return _service().delete_recent_recipient(user, recipient_id)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
 @router.get("/settings/out-of-office", response_model=MailOutOfOfficeSettingsResponse)
 def get_out_of_office_settings(user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailOutOfOfficeSettingsResponse:
     try:
@@ -729,6 +768,7 @@ def update_out_of_office_settings(payload: MailOutOfOfficePolicyUpdateRequest, u
 def list_external_accounts(user: AuthUserSummary = Depends(_external_read_permission)):
     try: return _external_mail_service().list_accounts(user)
     except Exception as exc: _handle_error(exc); raise
+
 
 @router.post("/settings/external-accounts", response_model=MailExternalAccountView, status_code=201)
 def create_external_account(payload: MailExternalAccountCreateRequest, user: AuthUserSummary = Depends(_external_send_permission)):

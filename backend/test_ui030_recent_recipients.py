@@ -36,7 +36,7 @@ class Ui030RecentRecipientsTests(unittest.TestCase):
 
         self.assertEqual(MailRecentRecipientBulkDeleteRequest(recipientIds=["r1"]).recipientIds, ["r1"])
         self.assertTrue(MailRecentRecipientBulkDeleteRequest(deleteAll=True).deleteAll)
-        for payload in ({}, {"recipientIds": []}, {"recipientIds": ["r1", "r1"]}, {"recipientIds": ["r1"], "deleteAll": True}):
+        for payload in ({}, {"recipientIds": []}, {"recipientIds": [" "]}, {"recipientIds": ["r1", "r1"]}, {"recipientIds": ["r1"], "deleteAll": True}, {"recipientIds": [f"r{i}" for i in range(201)]}):
             with self.subTest(payload=payload), self.assertRaises(ValidationError):
                 MailRecentRecipientBulkDeleteRequest(**payload)
 
@@ -50,7 +50,7 @@ class Ui030RecentRecipientsTests(unittest.TestCase):
         self.assertNotIn("mail_messages", helper)
         recent = source[source.index("def list_recent_recipients"):source.index("def ", source.index("def list_recent_recipients") + 5)]
         self.assertIn("user_recent_mail_recipients", recent)
-        self.assertNotIn("mail_recipients", recent)
+        self.assertNotIn("FROM mail_recipients", recent)
         self.assertNotIn("scheduled", recent)
 
     def test_immediate_and_scheduled_sent_paths_call_upsert_but_draft_does_not(self):
@@ -102,7 +102,66 @@ class Ui030RecentRecipientsTests(unittest.TestCase):
         )
         reason = json.loads(calls[0][1][-2])
         self.assertEqual(reason, {"count": 2})
-        self.assertNotIn("email", calls[0][0].lower() + json.dumps(calls[0][1]).lower())
+        self.assertNotIn("email", calls[0][0].lower() + json.dumps(calls[0][1], default=str).lower())
+
+    def test_upsert_normalizes_and_deduplicates_addresses_before_bounded_write(self):
+        from app.services.mail_messenger_service import MailMessengerService
+
+        class Cursor:
+            def __init__(self): self.calls = []; self._rows = []
+            def execute(self, sql, params):
+                self.calls.append((sql, params))
+                self._rows = [{"email": "one@example.com", "name": "One", "department_name": "개발"}] if "FROM users u" in sql else []
+            def fetchall(self): return self._rows
+
+        cursor = Cursor()
+        MailMessengerService()._upsert_recent_recipients(
+            cursor,
+            company_id="company-a",
+            owner_user_id="owner-a",
+            recipient_emails=[" One@Example.com ", "one@example.com", "TWO@example.com"],
+            now=datetime(2026, 7, 24, tzinfo=UTC),
+        )
+        inserts = [(sql, params) for sql, params in cursor.calls if "INSERT INTO user_recent_mail_recipients" in sql]
+        self.assertEqual([params[3] for _, params in inserts], ["one@example.com", "two@example.com"])
+        self.assertTrue(all("ON CONFLICT" in sql for sql, _ in inserts))
+        self.assertIn("OFFSET 200", cursor.calls[-1][0])
+
+    def test_mixed_owner_bulk_fails_before_delete_and_commit(self):
+        from app.schemas.mail_messenger import MailRecentRecipientBulkDeleteRequest
+        from app.services.mail_messenger_service import MailMessengerService
+
+        class Cursor:
+            rowcount = 0
+            def __init__(self): self.calls = []; self._rows = []
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def execute(self, sql, params):
+                self.calls.append((sql, params))
+                self._rows = [{"id": "owned"}] if "SELECT id FROM user_recent_mail_recipients" in sql else []
+            def fetchall(self): return self._rows
+        class Connection:
+            def __init__(self, cursor): self._cursor = cursor; self.committed = False
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def cursor(self): return self._cursor
+            def commit(self): self.committed = True
+        class Db:
+            def __init__(self): self.cursor_value = Cursor(); self.connection = Connection(self.cursor_value)
+            def ensure_migrations_applied(self): pass
+            def connect(self): return self.connection
+
+        service = MailMessengerService()
+        service.db = Db()
+        actor = SimpleNamespace(companyId="company-a", userId="owner-a", userName="Owner")
+        with self.assertRaises(PermissionError):
+            service.bulk_delete_recent_recipients(
+                actor,
+                MailRecentRecipientBulkDeleteRequest(recipientIds=["owned", "foreign"]),
+            )
+        sql = "\n".join(item[0] for item in service.db.cursor_value.calls)
+        self.assertNotIn("DELETE FROM user_recent_mail_recipients", sql)
+        self.assertFalse(service.db.connection.committed)
 
 
 if __name__ == "__main__":

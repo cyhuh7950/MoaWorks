@@ -35,7 +35,10 @@ from app.schemas.mail_messenger import (
     MailFolderView,
     MailListQuery,
     MailRecentRecipient,
+    MailRecentRecipientBulkDeleteRequest,
+    MailRecentRecipientDeleteResponse,
     MailRecentRecipientListResponse,
+    MailRecentRecipientSettingsResponse,
     MailListResponse,
     MailRecipientView,
     MailSendRequest,
@@ -438,39 +441,143 @@ class MailMessengerService:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT email, name, department_name, last_used_at
-                    FROM (
-                        SELECT DISTINCT ON (LOWER(r.recipient_email))
-                            LOWER(r.recipient_email) AS email,
-                            u.name,
-                            d.name AS department_name,
-                            COALESCE(m.sent_at, m.scheduled_at, m.created_at) AS last_used_at
-                        FROM mail_recipients r
-                        JOIN mail_messages m ON m.id = r.message_id
-                        LEFT JOIN users u ON u.company_id = m.company_id AND LOWER(u.email) = LOWER(r.recipient_email)
-                        LEFT JOIN departments d ON d.id = u.department_id
-                        WHERE m.company_id = %s
-                          AND m.sender_user_id = %s
-                          AND r.delivery_source = 'direct'
-                          AND m.status IN ('sent', 'scheduled')
-                          AND m.sender_deleted_at IS NULL
-                        ORDER BY LOWER(r.recipient_email), COALESCE(m.sent_at, m.scheduled_at, m.created_at) DESC
-                    ) recent
-                    ORDER BY last_used_at DESC
+                    SELECT id, recipient_email AS email, recipient_name AS name,
+                           department_name, last_used_at, use_count
+                    FROM user_recent_mail_recipients
+                    WHERE company_id = %s AND owner_user_id = %s
+                    ORDER BY last_used_at DESC, id
                     LIMIT %s
                     """,
                     (actor.companyId, actor.userId, limit),
                 )
                 recipients = [
                     MailRecentRecipient(
+                        recipientId=row["id"],
                         email=row["email"],
                         name=row["name"],
                         departmentName=row["department_name"],
                         lastUsedAt=row["last_used_at"],
+                        useCount=row["use_count"],
                     )
                     for row in cursor.fetchall()
                 ]
         return MailRecentRecipientListResponse(recipients=recipients)
+
+    def list_recent_recipient_settings(self, actor: AuthUserSummary, limit: int = 200) -> MailRecentRecipientSettingsResponse:
+        response = self.list_recent_recipients(actor, limit)
+        return MailRecentRecipientSettingsResponse(recipients=response.recipients, totalCount=len(response.recipients))
+
+    def delete_recent_recipient(self, actor: AuthUserSummary, recipient_id: str) -> MailRecentRecipientDeleteResponse:
+        payload = MailRecentRecipientBulkDeleteRequest(recipientIds=[recipient_id])
+        return self.bulk_delete_recent_recipients(actor, payload)
+
+    def bulk_delete_recent_recipients(
+        self,
+        actor: AuthUserSummary,
+        payload: MailRecentRecipientBulkDeleteRequest,
+    ) -> MailRecentRecipientDeleteResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                if payload.deleteAll:
+                    cursor.execute(
+                        """SELECT id FROM user_recent_mail_recipients
+                        WHERE company_id = %s AND owner_user_id = %s FOR UPDATE""",
+                        (actor.companyId, actor.userId),
+                    )
+                    locked_ids = [row["id"] for row in cursor.fetchall()]
+                else:
+                    requested_ids = payload.recipientIds or []
+                    cursor.execute(
+                        """SELECT id FROM user_recent_mail_recipients
+                        WHERE company_id = %s AND owner_user_id = %s AND id = ANY(%s)
+                        FOR UPDATE""",
+                        (actor.companyId, actor.userId, requested_ids),
+                    )
+                    locked_ids = [row["id"] for row in cursor.fetchall()]
+                    if len(locked_ids) != len(requested_ids):
+                        raise PermissionError("최근 주소를 삭제할 권한이 없습니다.")
+                requested_count = len(locked_ids) if payload.deleteAll else len(payload.recipientIds or [])
+                changed_count = 0
+                if locked_ids:
+                    cursor.execute(
+                        """DELETE FROM user_recent_mail_recipients
+                        WHERE company_id = %s AND owner_user_id = %s AND id = ANY(%s)""",
+                        (actor.companyId, actor.userId, locked_ids),
+                    )
+                    changed_count = cursor.rowcount
+                self._write_recent_recipient_audit(
+                    cursor, actor, "mail.recent_recipients.deleted", changed_count, now
+                )
+            connection.commit()
+        return MailRecentRecipientDeleteResponse(
+            requestedCount=requested_count,
+            changedCount=changed_count,
+        )
+
+    def _write_recent_recipient_audit(
+        self,
+        cursor,
+        actor: AuthUserSummary,
+        event: str,
+        count: int,
+        now: datetime,
+    ) -> None:
+        reason = json.dumps({"count": count}, ensure_ascii=True, separators=(",", ":"))
+        cursor.execute(
+            """INSERT INTO audit_logs (
+                id, company_id, actor_user_id, actor_user_name, target_type, target_id,
+                event, status_before, status_after, reason, created_at
+            ) VALUES (%s,%s,%s,%s,'mail_recent_recipients',%s,%s,NULL,NULL,%s,%s)""",
+            (self._new_id("audit"), actor.companyId, actor.userId, actor.userName, actor.userId, event, reason, now),
+        )
+
+    def _upsert_recent_recipients(
+        self,
+        cursor,
+        *,
+        company_id: str,
+        owner_user_id: str,
+        recipient_emails: list[str],
+        now: datetime,
+    ) -> None:
+        normalized = list(dict.fromkeys(email.strip().lower() for email in recipient_emails if email.strip()))
+        if not normalized:
+            return
+        cursor.execute(
+            """SELECT LOWER(u.email) AS email, u.name, d.name AS department_name
+            FROM users u LEFT JOIN departments d ON d.id = u.department_id
+            WHERE u.company_id = %s AND LOWER(u.email) = ANY(%s)""",
+            (company_id, normalized),
+        )
+        directory = {row["email"]: row for row in cursor.fetchall()}
+        for email in normalized:
+            person = directory.get(email, {})
+            cursor.execute(
+                """INSERT INTO user_recent_mail_recipients (
+                    id, company_id, owner_user_id, recipient_email, recipient_name,
+                    department_name, last_used_at, use_count, created_at, updated_at
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,1,%s,%s)
+                ON CONFLICT (company_id, owner_user_id, (LOWER(recipient_email))) DO UPDATE SET
+                    recipient_name = COALESCE(EXCLUDED.recipient_name, user_recent_mail_recipients.recipient_name),
+                    department_name = COALESCE(EXCLUDED.department_name, user_recent_mail_recipients.department_name),
+                    last_used_at = EXCLUDED.last_used_at,
+                    use_count = user_recent_mail_recipients.use_count + 1,
+                    updated_at = EXCLUDED.updated_at""",
+                (
+                    self._new_id("recent"), company_id, owner_user_id, email,
+                    person.get("name"), person.get("department_name"), now, now, now,
+                ),
+            )
+        cursor.execute(
+            """DELETE FROM user_recent_mail_recipients WHERE id IN (
+                SELECT id FROM user_recent_mail_recipients
+                WHERE company_id = %s AND owner_user_id = %s
+                ORDER BY last_used_at DESC, id OFFSET 200
+            )""",
+            (company_id, owner_user_id),
+        )
 
     def download_attachment(self, actor: AuthUserSummary, mail_id: str, attachment_id: str) -> dict:
         self.db.ensure_migrations_applied()
@@ -876,6 +983,18 @@ class MailMessengerService:
                     cursor.execute(
                         "UPDATE mail_messages SET status = 'sent', sent_at = %s, updated_at = %s WHERE id = %s",
                         (now, now, row["id"]),
+                    )
+                    cursor.execute(
+                        """SELECT recipient_email FROM mail_recipients
+                        WHERE message_id = %s AND delivery_source = 'direct'""",
+                        (row["id"],),
+                    )
+                    self._upsert_recent_recipients(
+                        cursor,
+                        company_id=row["company_id"],
+                        owner_user_id=row["sender_user_id"],
+                        recipient_emails=[item["recipient_email"] for item in cursor.fetchall()],
+                        now=now,
                     )
                     cursor.execute(
                         """SELECT id, recipient_user_id, recipient_email FROM mail_recipients
@@ -2003,6 +2122,14 @@ class MailMessengerService:
                             actor_user_name=actor.userName, queue_id=queue_id, event=f"mail.delivery.{queue_status}",
                             status_before=None, status_after=queue_status, now=now,
                         )
+                if status_value == "sent":
+                    self._upsert_recent_recipients(
+                        cursor,
+                        company_id=actor.companyId,
+                        owner_user_id=actor.userId,
+                        recipient_emails=[email for _, email in recipient_pairs],
+                        now=now,
+                    )
                 for attachment in resolved_attachments:
                     cursor.execute(
                         """INSERT INTO mail_attachments (

@@ -255,14 +255,45 @@ class MailDraftRequest(MailSendRequest):
 
 
 class MailRecentRecipient(BaseModel):
+    recipientId: str | None = None
     email: str
     name: str | None = None
     departmentName: str | None = None
     lastUsedAt: datetime
+    useCount: int = Field(default=1, ge=1)
 
 
 class MailRecentRecipientListResponse(BaseModel):
     recipients: list[MailRecentRecipient]
+
+
+class MailRecentRecipientSettingsResponse(BaseModel):
+    recipients: list[MailRecentRecipient]
+    totalCount: int = Field(ge=0)
+
+
+class MailRecentRecipientBulkDeleteRequest(BaseModel):
+    recipientIds: list[str] | None = Field(default=None, max_length=200)
+    deleteAll: bool = False
+
+    @model_validator(mode="after")
+    def validate_selector(self):
+        has_ids = self.recipientIds is not None
+        if has_ids == self.deleteAll:
+            raise ValueError("recipientIds 또는 deleteAll 중 하나만 지정해야 합니다.")
+        if has_ids:
+            if not self.recipientIds:
+                raise ValueError("삭제할 최근 주소를 선택해야 합니다.")
+            if any(not recipient_id.strip() or len(recipient_id) > 100 for recipient_id in self.recipientIds):
+                raise ValueError("최근 주소 ID 형식이 올바르지 않습니다.")
+            if len(self.recipientIds) != len(set(self.recipientIds)):
+                raise ValueError("같은 최근 주소를 중복 선택할 수 없습니다.")
+        return self
+
+
+class MailRecentRecipientDeleteResponse(BaseModel):
+    requestedCount: int = Field(ge=0)
+    changedCount: int = Field(ge=0)
 
 
 class MailStatusResponse(BaseModel):

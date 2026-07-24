@@ -141,7 +141,10 @@ class Ui027PipelineAndPrivacyTests(unittest.TestCase):
         recent = source[source.index("    def list_recent_recipients"):source.index("    def download_attachment")]
         recipient_view = source[source.index("    def _fetch_mail_recipients"):source.index("    def _fetch_source_attachments")]
         external = source[source.index("    def _fetch_external_deliveries"):source.index("    def _fetch_mail_attachments")]
-        for section in (recent, recipient_view, external):
+        self.assertIn("user_recent_mail_recipients", recent)
+        migration = (self.root / "migrations" / "034_recent_mail_recipients.sql").read_text(encoding="utf-8")
+        self.assertIn("r.delivery_source = 'direct'", migration)
+        for section in (recipient_view, external):
             self.assertIn("delivery_source = 'direct'", section)
 
     def test_wrapper_never_reenters_for_auto_forward_source(self):

@@ -38,7 +38,7 @@ for (const component of ["MailBasicSettingsPanel", "MailSignatureSettingsPanel",
   if (component === "MailAutoForwardingPanel") {
     if (!section.includes('"outOfOffice"')) throw new Error(`${component} missing out-of-office tab route`);
   } else if (!section.includes("onOpenOutOfOffice")) throw new Error(`${component} missing out-of-office navigation callback`);
-  if (!/disabled=\{index > [67]\}/.test(section)) throw new Error(`${component} must enable completed mail settings tabs`);
+  if (!/disabled=\{index > [67]\}/.test(section) && !section.includes(component === "MailAutoForwardingPanel" ? '"recent"' : "openRecentMailTab")) throw new Error(`${component} must enable completed mail settings tabs`);
 }
 if (!api.includes('/mail/settings/out-of-office')) throw new Error("api.ts missing out-of-office endpoint");
 for (const forbidden of ["http://localhost", "http://127.0.0.1", "NEXT_PUBLIC_API_BASE_URL"]) {

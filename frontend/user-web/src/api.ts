@@ -1296,15 +1296,51 @@ export type MailDeliveryStatusResponse = {
 };
 
 export type MailRecentRecipient = {
+  recipientId: string | null;
   email: string;
   name: string | null;
   departmentName: string | null;
   lastUsedAt: string;
+  useCount: number;
+};
+
+export type MailRecentRecipientSettingsResponse = {
+  recipients: MailRecentRecipient[];
+  totalCount: number;
+};
+
+export type MailRecentRecipientDeleteResponse = {
+  requestedCount: number;
+  changedCount: number;
 };
 
 export async function fetchRecentMailRecipients(token: string, limit = 20): Promise<{ recipients: MailRecentRecipient[] }> {
   return request<{ recipients: MailRecentRecipient[] }>(`/mail/recent-recipients?limit=${limit}`, {
     headers: authHeaders(token),
+  });
+}
+
+export async function fetchRecentMailRecipientSettings(token: string): Promise<MailRecentRecipientSettingsResponse> {
+  return request<MailRecentRecipientSettingsResponse>("/mail/settings/recent-recipients", {
+    headers: authHeaders(token),
+  });
+}
+
+export async function deleteRecentMailRecipient(token: string, recipientId: string): Promise<MailRecentRecipientDeleteResponse> {
+  return request<MailRecentRecipientDeleteResponse>(`/mail/settings/recent-recipients/${recipientId}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+}
+
+export async function bulkDeleteRecentMailRecipients(
+  token: string,
+  payload: { recipientIds?: string[]; deleteAll?: boolean },
+): Promise<MailRecentRecipientDeleteResponse> {
+  return request<MailRecentRecipientDeleteResponse>("/mail/settings/recent-recipients/bulk-delete", {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
   });
 }
 
