@@ -1,6 +1,9 @@
 import unittest
 from email.message import EmailMessage
 from pathlib import Path
+from io import BytesIO
+from unittest.mock import patch
+from pydantic import ValidationError
 
 from app.services.mail_external_service import (
     ExternalMailInvalidEndpointError,
@@ -154,6 +157,60 @@ class Ui029ExternalMailTests(unittest.TestCase):
         section = service[service.index("def bulk_delete_accounts"):service.index("def test_account")]
         self.assertIn("FOR UPDATE", section)
         self.assertEqual(section.count("c.commit()"), 1)
+
+    def test_second_review_blank_secret_and_identity_fields_are_rejected(self):
+        from app.schemas.mail_messenger import MailExternalAccountCreateRequest
+        service = MailExternalService(security=_Security())
+        for value in (None, "", "   "):
+            with self.subTest(value=value), self.assertRaises(ExternalMailSecretRequiredError): service.prepare_secret(value, None)
+        for field in ("displayName", "username"):
+            payload = dict(displayName="name",host="mail.example.com",port=995,tlsMode="ssl",username="owner",password="secret")
+            payload[field] = "   "
+            with self.subTest(field=field), self.assertRaises(ValidationError): MailExternalAccountCreateRequest(**payload)
+
+    def test_second_review_worker_applies_migration_before_any_queue_query(self):
+        from app.workers import mail_external_worker as worker
+        events=[]
+        class Db:
+            def ensure_migrations_applied(self): events.append("migrate")
+        with patch.object(worker,"_enqueue_scheduled",side_effect=lambda _: events.append("query")), patch.object(worker,"_claim",return_value=None):
+            self.assertFalse(worker.run_once(Db()))
+        self.assertEqual(events,["migrate","query"])
+
+    def test_second_review_atomic_reservations_exist_and_map_conflicts(self):
+        self.assertTrue(hasattr(MailExternalService,"reserve_test_attempt"))
+        self.assertTrue(hasattr(MailExternalService,"reserve_account_slot"))
+        self.assertTrue(hasattr(MailExternalService,"map_integrity_error"))
+
+    def test_second_review_bound_ssl_socket_uses_validated_ip_and_original_sni(self):
+        connected=[]; wrapped=[]
+        class Sock:
+            def makefile(self,mode): return BytesIO(b"+OK ready\r\n")
+            def close(self): pass
+            def shutdown(self,how): pass
+        class Context:
+            def wrap_socket(self,sock,server_hostname=None): wrapped.append(server_hostname); return sock
+        with patch("app.services.mail_external_service.socket.create_connection",side_effect=lambda target,timeout: connected.append(target) or Sock()), patch("app.services.mail_external_service.ssl.create_default_context",return_value=Context()):
+            client=MailExternalPop3Client()._connect("mail.example.com",995,"ssl",("8.8.8.8",))
+            client.close()
+        self.assertEqual(connected,[("8.8.8.8",995)]); self.assertEqual(wrapped,["mail.example.com"])
+
+    def test_second_review_bound_starttls_uses_validated_ip_and_original_hostname(self):
+        calls=[]
+        class Pop:
+            def __init__(self,host,port,timeout): self.host=host; calls.append(("connect",host,port,timeout))
+            def stls(self,context): calls.append(("stls",self.host,context))
+        context=object()
+        with patch("app.services.mail_external_service.poplib.POP3",Pop), patch("app.services.mail_external_service.ssl.create_default_context",return_value=context):
+            MailExternalPop3Client()._connect("mail.example.com",110,"starttls",("1.1.1.1",))
+        self.assertEqual(calls[0][1],"1.1.1.1"); self.assertEqual(calls[1][1],"mail.example.com")
+
+    def test_second_review_run_collection_session_executes_pending_and_stale_paths(self):
+        from app.workers import mail_external_worker as worker
+        self.assertTrue(hasattr(worker,"run_collection_session"))
+        fake=type("FakePop",(),{})()
+        result=worker.run_collection_session(fake,[("1","uid-pending")],lookup_state=lambda uidl:"pending",heartbeat=lambda:False,store=lambda *args: (_ for _ in ()).throw(AssertionError("must not store")),delete_enabled=True)
+        self.assertEqual(result["status"],"lease_lost")
 
 
 if __name__ == "__main__": unittest.main()

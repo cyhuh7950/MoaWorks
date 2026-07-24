@@ -5,6 +5,7 @@ const css = fs.readFileSync(new URL("../src/global.css", import.meta.url), "utf8
 for (const token of ["MailExternalPanel", "설정된 외부메일이 없습니다.", "연결 테스트", "지금 수집", "서버 원본 삭제", "passwordConfigured", "expectedVersion", "externalAccountDirty", "신규", "중복", "삭제", "실패", "errorCode"]) {
   if (!app.includes(token)) throw new Error(`UI-029 missing: ${token}`);
 }
+if (!app.includes("externalDeleteConfirmPopup")) throw new Error("UI-029 missing common delete confirmation popup");
 for (const token of ["/mail/settings/external-accounts", "testExternalMailAccount", "collectExternalMailAccount"]) {
   if (!api.includes(token)) throw new Error(`UI-029 API missing: ${token}`);
 }
