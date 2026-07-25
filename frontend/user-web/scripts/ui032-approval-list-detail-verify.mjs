@@ -74,6 +74,12 @@ await check("attachment download failure is isolated from loaded detail", () => 
   assert.doesNotMatch(app, /downloadApprovalAttachment[\s\S]{0,300}setApprovalDetailError/);
 });
 
+await check("approval split view owns the full actual-menu body width", () => {
+  assert.match(css, /#root \.ui031-shell__body\.ui032-approval-split\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  assert.match(css, /\.ui032-approval-split\s*>\s*\.user-split-view\s*\{[^}]*width:\s*100%/);
+  assert.doesNotMatch(css, /#root \.ui031-shell__body\.ui032-approval-split\s*\{[^}]*45fr[^}]*55fr/);
+});
+
 const results = await Promise.all(checks.map(async ([name, passed, error]) => ({ name, passed, error })));
 for (const item of results) console.log(`${item.passed ? "PASS" : "FAIL"} ${item.name}${item.error ? `: ${item.error}` : ""}`);
 const failures = results.filter((item) => !item.passed);
