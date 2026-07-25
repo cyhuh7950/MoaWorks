@@ -6,10 +6,12 @@ from uuid import uuid4
 
 from app.schemas.directory import (
     ApprovalActionReason,
+    ApprovalAttachmentView,
     ApprovalApproverListResponse,
     ApprovalApproverView,
     ApprovalCreateResponse,
     ApprovalDocumentCreateRequest,
+    ApprovalDocumentDetailResponse,
     ApprovalDocumentResponse,
     ApprovalLineRecord,
     ApprovalLineActionRequest,
@@ -36,6 +38,7 @@ from app.services.observability_service import ObservabilityService
 from app.schemas.setup import SetupInitializeRequest
 from app.services.postgres_service import PostgresService
 from app.services.security_service import SecurityService
+from app.services.approval_attachment_storage import ApprovalAttachmentStorage
 
 
 class DirectoryStore:
@@ -697,14 +700,38 @@ class DirectoryStore:
                 rows = cursor.fetchall()
         return AuditLogListResponse(logs=[self._to_audit_view(row) for row in rows])
 
-    def get_approval_document(self, actor_id: str, document_id: str) -> ApprovalDocumentResponse:
+    def get_approval_document(self, actor_id: str, document_id: str) -> ApprovalDocumentDetailResponse:
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
                 actor = self._fetch_actor_summary(cursor, actor_id)
                 row = self._fetch_required_approval_document(cursor, document_id)
                 self._assert_approval_visible(cursor, actor, row)
-                return self._to_approval_document_response(cursor, row)
+                return self._to_approval_document_detail_response(cursor, row)
+
+    def get_approval_attachment(self, actor_id: str, document_id: str, attachment_id: str) -> dict[str, object]:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                actor = self._fetch_actor_summary(cursor, actor_id)
+                document = self._fetch_required_approval_document(cursor, document_id)
+                self._assert_approval_visible(cursor, actor, document)
+                cursor.execute(
+                    """
+                    SELECT id, file_name, content_type, size_bytes, storage_key, created_at
+                    FROM approval_attachments
+                    WHERE document_id = %s AND id = %s
+                    """,
+                    (document_id, attachment_id),
+                )
+                row = cursor.fetchone()
+        if row is None:
+            raise ValueError("대상 결재 첨부를 찾을 수 없습니다.")
+        return {
+            "path": ApprovalAttachmentStorage().stored_path(row["storage_key"]),
+            "fileName": row["file_name"],
+            "contentType": row["content_type"],
+        }
 
     def create_approval_document(self, actor_id: str, payload: ApprovalDocumentCreateRequest) -> ApprovalCreateResponse:
         self.db.ensure_migrations_applied()
@@ -1125,6 +1152,8 @@ class DirectoryStore:
         return list(cursor.fetchall())
 
     def _assert_approval_visible(self, cursor, actor: AuthUserSummary, document: dict) -> None:
+        if document["company_id"] != actor.companyId:
+            raise PermissionError("대상 결재 문서에 접근할 수 없습니다.")
         if self._can_view_all_approvals(actor):
             return
         if document["creator_user_id"] == actor.userId:
@@ -1165,6 +1194,34 @@ class DirectoryStore:
             submittedAt=row["submitted_at"],
             currentLineIndex=row["current_line_index"],
             lines=lines,
+        )
+
+    def _fetch_approval_attachments(self, cursor, document_id: str) -> list[ApprovalAttachmentView]:
+        cursor.execute(
+            """
+            SELECT id, file_name, content_type, size_bytes, created_at
+            FROM approval_attachments
+            WHERE document_id = %s
+            ORDER BY created_at ASC, id ASC
+            """,
+            (document_id,),
+        )
+        return [
+            ApprovalAttachmentView(
+                attachmentId=row["id"],
+                fileName=row["file_name"],
+                contentType=row["content_type"],
+                sizeBytes=row["size_bytes"],
+                createdAt=row["created_at"],
+            )
+            for row in cursor.fetchall()
+        ]
+
+    def _to_approval_document_detail_response(self, cursor, row: dict) -> ApprovalDocumentDetailResponse:
+        document = self._to_approval_document_response(cursor, row)
+        return ApprovalDocumentDetailResponse(
+            **document.model_dump(),
+            attachments=self._fetch_approval_attachments(cursor, row["id"]),
         )
 
     def _assert_creator(self, actor: AuthUserSummary, document: dict) -> None:

@@ -204,6 +204,18 @@ class ApprovalDocumentResponse(BaseModel):
     lines: list[ApprovalLineRecord]
 
 
+class ApprovalAttachmentView(BaseModel):
+    attachmentId: str
+    fileName: str
+    contentType: str
+    sizeBytes: int
+    createdAt: datetime
+
+
+class ApprovalDocumentDetailResponse(ApprovalDocumentResponse):
+    attachments: list[ApprovalAttachmentView]
+
+
 class ApprovalListResponse(BaseModel):
     documents: list[ApprovalDocumentResponse]
 

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import FileResponse
 
 from app.api.dependencies import get_current_user, permission_required
 from app.schemas.directory import (
@@ -6,6 +7,7 @@ from app.schemas.directory import (
     ApprovalApproverListResponse,
     ApprovalCreateResponse,
     ApprovalDocumentCreateRequest,
+    ApprovalDocumentDetailResponse,
     ApprovalDocumentResponse,
     ApprovalLineActionRequest,
     ApprovalListResponse,
@@ -39,8 +41,21 @@ def list_approval_approvers(
     return DirectoryStore().list_active_approval_approvers(user.userId)
 
 
-@router.get("/{document_id}", response_model=ApprovalDocumentResponse)
-def get_approval(document_id: str, user: AuthUserSummary = Depends(get_current_user)) -> ApprovalDocumentResponse:
+@router.get("/{document_id}/attachments/{attachment_id}")
+def download_approval_attachment(
+    document_id: str,
+    attachment_id: str,
+    user: AuthUserSummary = Depends(permission_required("approval:read")),
+) -> FileResponse:
+    item = DirectoryStore().get_approval_attachment(user.userId, document_id, attachment_id)
+    return FileResponse(path=item["path"], media_type=item["contentType"], filename=item["fileName"])
+
+
+@router.get("/{document_id}", response_model=ApprovalDocumentDetailResponse)
+def get_approval(
+    document_id: str,
+    user: AuthUserSummary = Depends(permission_required("approval:read")),
+) -> ApprovalDocumentDetailResponse:
     return DirectoryStore().get_approval_document(user.userId, document_id)
 
 
