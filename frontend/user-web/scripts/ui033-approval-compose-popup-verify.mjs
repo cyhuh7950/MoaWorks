@@ -41,13 +41,13 @@ await check("compose uses CommonPopup 960x760 with document and approval-line ta
 await check("editor identity and latest edit detail are independent from list selection", () => {
   assert.ok(app.includes("approvalEditorDocumentId"));
   assert.match(app, /openApprovalEditor[\s\S]*fetchApprovalDetail\(token,\s*document\.id\)/);
-  const editorBlock = app.split("async function openApprovalEditor", 1)[1].split("function closeApprovalModal", 1)[0];
+  const editorBlock = app.split("async function openApprovalEditor")[1].split("function closeApprovalModal")[0];
   assert.doesNotMatch(editorBlock, /setSelectedApprovalId/);
 });
 
 await check("dirty close and saving use CommonPopup without browser confirm", () => {
   assert.match(app, /<CommonPopup[\s\S]*dirty=\{approvalComposeDirty\}[\s\S]*saving=\{loading\}/);
-  const closeBlock = app.split("function closeApprovalModal", 1)[1].split("function selectApprovalApprover", 1)[0];
+  const closeBlock = app.split("function closeApprovalModal")[1].split("function selectApprovalApprover")[0];
   assert.doesNotMatch(closeBlock, /window\.confirm/);
 });
 
@@ -61,7 +61,7 @@ await check("attachment upload and draft create-update use same-origin API", () 
 });
 
 await check("draft save allows zero approvers and retains search-select-reorder", () => {
-  const saveBlock = app.split("async function handleCreate", 1)[1].split("async function executeApprove", 1)[0];
+  const saveBlock = app.split("async function handleCreate")[1].split("async function executeApprove")[0];
   assert.doesNotMatch(saveBlock, /approverUserIds\.length\)/);
   for (const token of ["approverSearch", "selectApprovalApprover", "moveApprovalApprover", "제거"]) assert.ok(app.includes(token), token);
 });

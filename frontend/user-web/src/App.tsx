@@ -93,6 +93,7 @@ import {
   readMessengerRoom,
   readWorkspaceNotice,
   redraftApproval,
+  uploadApprovalAttachment,
   uploadMailAttachment,
   rejectApproval,
   requestTranslation,
@@ -117,6 +118,7 @@ import {
   type MailAttachment,
   withdrawApproval,
   type ApprovalApprover,
+  type ApprovalAttachment,
   type MailRecentRecipient,
   type MailRecentRecipientSettingsResponse,
   type ApprovalDocument,
@@ -181,6 +183,7 @@ import {
   type ApprovalPostAction,
 } from "./approvalShell";
 import { approvalLineStatusLabel, approvalStatusLabel, filterApprovalDocuments, resolveApprovalSelection } from "./approvalDetail";
+import { buildApprovalComposeSnapshot, moveApprovalApprover as moveApprovalApproverOrder, validateApprovalDraft, validateApprovalFiles } from "./approvalCompose";
 
 const NOTIFICATION_POLICY = {
   retryMaxAttempts: 3,
@@ -374,6 +377,11 @@ type CreateForm = {
   title: string;
   content: string;
   approverUserIds: string[];
+};
+
+type ApprovalPendingFile = {
+  id: string;
+  file: File;
 };
 
 type ApprovalModalMode = "none" | "create" | "edit" | "submit" | "approve" | "reject" | "withdraw" | "redraft";
@@ -1245,6 +1253,11 @@ export default function App() {
     approverUserIds: [],
   });
   const [approvalModal, setApprovalModal] = useState<ApprovalModalMode>("none");
+  const [approvalEditorDocumentId, setApprovalEditorDocumentId] = useState("");
+  const [approvalComposeTab, setApprovalComposeTab] = useState<"document" | "line">("document");
+  const [approvalRetainedAttachments, setApprovalRetainedAttachments] = useState<ApprovalAttachment[]>([]);
+  const [approvalPendingFiles, setApprovalPendingFiles] = useState<ApprovalPendingFile[]>([]);
+  const [approvalComposeBaseline, setApprovalComposeBaseline] = useState("");
   const [approvalShellMenu, setApprovalShellMenu] = useState<ApprovalShellMenuKey>("pending");
   const [selectedApprovalId, setSelectedApprovalId] = useState("");
   const [approvalStatusFilter, setApprovalStatusFilter] = useState("all");
@@ -1262,6 +1275,15 @@ export default function App() {
   const approvalRequestSequence = useRef(0);
   const [loading, setLoading] = useState(false);
   const [approvalError, setApprovalError] = useState("");
+  const approvalComposeSnapshot = useMemo(
+    () => buildApprovalComposeSnapshot(
+      createForm,
+      approvalRetainedAttachments.map((item) => item.attachmentId),
+      approvalPendingFiles.map((item) => ({ name: item.file.name, size: item.file.size })),
+    ),
+    [approvalPendingFiles, approvalRetainedAttachments, createForm],
+  );
+  const approvalComposeDirty = Boolean(approvalComposeBaseline) && approvalComposeSnapshot !== approvalComposeBaseline;
   const [documents, setDocuments] = useState<ApprovalDocument[]>([]);
   const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
   const [notificationSummary, setNotificationSummary] = useState<NotificationSummary | null>(null);
@@ -3426,29 +3448,38 @@ export default function App() {
   async function openApprovalEditor(mode: "create" | "edit", document?: ApprovalDocument) {
     if (!token) return;
     setApprovalError("");
+    setLoading(true);
     try {
-      const response = await fetchApprovalApprovers(token);
+      const [response, detail] = await Promise.all([
+        fetchApprovalApprovers(token),
+        document ? fetchApprovalDetail(token, document.id) : Promise.resolve(null),
+      ]);
+      const form = detail
+        ? { title: detail.title, content: detail.content, approverUserIds: detail.lines.map((line) => line.approverUserId) }
+        : { title: "", content: "", approverUserIds: [] };
+      const retained = detail?.attachments ?? [];
       setApprovalApprovers(response.users);
       setApproverSearch("");
-      setCreateForm(
-        document
-          ? { title: document.title, content: document.content, approverUserIds: document.lines.map((line) => line.approverUserId) }
-          : { title: "", content: "", approverUserIds: [] },
-      );
-      if (document) {
-        setSelectedApprovalId(document.id);
-      }
+      setCreateForm(form);
+      setApprovalEditorDocumentId(detail?.id ?? "");
+      setApprovalRetainedAttachments(retained);
+      setApprovalPendingFiles([]);
+      setApprovalComposeTab("document");
+      setApprovalComposeBaseline(buildApprovalComposeSnapshot(form, retained.map((item) => item.attachmentId), []));
       setApprovalModal(mode);
     } catch (error) {
-      setApprovalError(normalizeClientError(error, "결재선 사용자 조회 실패"));
+      setApprovalError(normalizeClientError(error, "결재 작성 정보를 불러오지 못했습니다."));
+    } finally {
+      setLoading(false);
     }
   }
 
   function closeApprovalModal() {
-    if ((approvalModal === "create" || approvalModal === "edit") && (createForm.title || createForm.content || createForm.approverUserIds.length)) {
-      if (!window.confirm("작성 중인 내용이 있습니다. 닫으시겠습니까?")) return;
-    }
     setApprovalModal("none");
+    setApprovalEditorDocumentId("");
+    setApprovalRetainedAttachments([]);
+    setApprovalPendingFiles([]);
+    setApprovalComposeBaseline("");
     setReasonAction({ documentId: "", reason: "" });
   }
 
@@ -3457,39 +3488,75 @@ export default function App() {
   }
 
   function moveApprovalApprover(userId: string, direction: -1 | 1) {
-    setCreateForm((current) => {
-      const index = current.approverUserIds.indexOf(userId);
-      const nextIndex = index + direction;
-      if (index < 0 || nextIndex < 0 || nextIndex >= current.approverUserIds.length) return current;
-      const approverUserIds = [...current.approverUserIds];
-      [approverUserIds[index], approverUserIds[nextIndex]] = [approverUserIds[nextIndex], approverUserIds[index]];
-      return { ...current, approverUserIds };
-    });
+    setCreateForm((current) => ({ ...current, approverUserIds: moveApprovalApproverOrder(current.approverUserIds, userId, direction) }));
+  }
+
+  function addApprovalFiles(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.currentTarget.files ?? []);
+    event.currentTarget.value = "";
+    if (!files.length) return;
+    const retainedBytes = approvalRetainedAttachments.reduce((sum, item) => sum + item.sizeBytes, 0);
+    const pendingBytes = approvalPendingFiles.reduce((sum, item) => sum + item.file.size, 0);
+    const validation = validateApprovalFiles(
+      files,
+      approvalRetainedAttachments.length + approvalPendingFiles.length,
+      retainedBytes + pendingBytes,
+    );
+    if (!validation.ok) {
+      setApprovalError(validation.message);
+      return;
+    }
+    setApprovalError("");
+    setApprovalPendingFiles((current) => [
+      ...current,
+      ...files.map((file) => ({ id: `${file.name}:${file.size}:${file.lastModified}:${crypto.randomUUID()}`, file })),
+    ]);
   }
 
   async function handleCreate(event: FormEvent) {
     event.preventDefault();
     if (!token) return;
-    if (!createForm.approverUserIds.length) {
-      setApprovalError("상신 전 결재선을 최소 1명 이상 선택하세요.");
+    const retainedBytes = approvalRetainedAttachments.reduce((sum, item) => sum + item.sizeBytes, 0);
+    const pendingBytes = approvalPendingFiles.reduce((sum, item) => sum + item.file.size, 0);
+    const validationErrors = validateApprovalDraft({
+      title: createForm.title,
+      content: createForm.content,
+      attachmentCount: approvalRetainedAttachments.length + approvalPendingFiles.length,
+      attachmentBytes: retainedBytes + pendingBytes,
+    });
+    if (validationErrors.length) {
+      setApprovalError(validationErrors[0]);
       return;
     }
     setLoading(true);
     setApprovalError("");
     try {
       const isEdit = approvalModal === "edit";
-      const documentId = selectedApprovalId;
+      const documentId = approvalEditorDocumentId;
+      const attachments = [];
+      for (const item of approvalPendingFiles) {
+        attachments.push(await uploadApprovalAttachment(token, item.file));
+      }
+      const payload = {
+        title: createForm.title.trim(),
+        content: createForm.content.trim(),
+        approverUserIds: createForm.approverUserIds,
+        attachments,
+      };
       if (isEdit && documentId) {
-        const postActionDocument = await updateApproval(token, documentId, createForm);
+        const postActionDocument = await updateApproval(token, documentId, {
+          ...payload,
+          retainedAttachmentIds: approvalRetainedAttachments.map((item) => item.attachmentId),
+        });
         setMessage("결재 초안이 수정되었습니다.");
         await keepApprovalPostAction("edit", documentId, postActionDocument);
       } else {
-        const response = await createApproval(token, createForm);
+        const response = await createApproval(token, payload);
         setSelectedApprovalId(response.documentId);
         setMessage("결재 초안이 저장되었습니다.");
         await keepApprovalPostAction("create", response.documentId, null);
       }
-      setApprovalModal("none");
+      closeApprovalModal();
       setCreateForm({ title: "", content: "", approverUserIds: [] });
     } catch (error) {
       setApprovalError(normalizeClientError(error, "결재 초안 저장 실패"));
@@ -4870,9 +4937,46 @@ export default function App() {
               </section>
             )}
             </main>
-            {approvalModal !== "none" ? <div role="dialog" aria-modal="true" aria-label={`결재 ${approvalModal} 팝업`} style={{ position: "fixed", inset: 0, zIndex: 30, display: "grid", placeItems: "center", padding: 20, background: "rgba(15, 23, 42, 0.42)" }}>
+            <CommonPopup
+              title={approvalModal === "edit" ? "결재 초안 수정" : "새 결재 작성"}
+              open={approvalModal === "create" || approvalModal === "edit"}
+              onClose={closeApprovalModal}
+              dirty={approvalComposeDirty}
+              saving={loading}
+              error={approvalError}
+              className="ui033-compose-popup"
+            >
+              <form className="ui033-compose" onSubmit={handleCreate}>
+                <div className="ui033-compose__tabs" role="tablist" aria-label="결재 작성 단계">
+                  <button type="button" role="tab" aria-selected={approvalComposeTab === "document"} onClick={() => setApprovalComposeTab("document")}>문서</button>
+                  <button type="button" role="tab" aria-selected={approvalComposeTab === "line"} onClick={() => setApprovalComposeTab("line")}>결재선 <span>{createForm.approverUserIds.length}</span></button>
+                </div>
+                {approvalComposeTab === "document" ? (
+                  <section className="ui033-compose__panel" role="tabpanel" aria-label="문서 입력">
+                    <label>제목<input aria-label="결재 제목" required maxLength={200} value={createForm.title} onChange={(event) => setCreateForm((current) => ({ ...current, title: event.target.value }))} placeholder="결재 제목을 입력하세요." /></label>
+                    <label className="ui033-compose__content">본문<textarea aria-label="결재 본문" required maxLength={20000} value={createForm.content} onChange={(event) => setCreateForm((current) => ({ ...current, content: event.target.value }))} placeholder="결재 내용을 입력하세요." /></label>
+                    <section className="ui033-compose__attachments">
+                      <header><div><strong>첨부</strong><span>최대 10개 · 파일당 10MB · 합계 25MB</span></div><label className="ui033-file-button">파일 선택<input type="file" accept="*/*" multiple onChange={addApprovalFiles} /></label></header>
+                      <div className="ui033-file-summary">총 {approvalRetainedAttachments.length + approvalPendingFiles.length}개 · {formatFileSize(approvalRetainedAttachments.reduce((sum, item) => sum + item.sizeBytes, 0) + approvalPendingFiles.reduce((sum, item) => sum + item.file.size, 0))}</div>
+                      <div className="ui033-file-list">
+                        {approvalRetainedAttachments.map((attachment) => <article key={attachment.attachmentId}><div><strong>{attachment.fileName}</strong><span>기존 첨부 · {formatFileSize(attachment.sizeBytes)}</span></div><button type="button" onClick={() => setApprovalRetainedAttachments((current) => current.filter((item) => item.attachmentId !== attachment.attachmentId))}>제거</button></article>)}
+                        {approvalPendingFiles.map((item) => <article key={item.id}><div><strong>{item.file.name}</strong><span>새 첨부 · {formatFileSize(item.file.size)}</span></div><button type="button" onClick={() => setApprovalPendingFiles((current) => current.filter((file) => file.id !== item.id))}>제거</button></article>)}
+                        {!approvalRetainedAttachments.length && !approvalPendingFiles.length ? <p>첨부 파일이 없습니다.</p> : null}
+                      </div>
+                    </section>
+                  </section>
+                ) : (
+                  <section className="ui033-compose__panel ui033-compose__line" role="tabpanel" aria-label="결재선 설정">
+                    <div className="ui033-approver-search"><label>사용자 검색<input aria-label="결재선 사용자 검색" value={approverSearch} onChange={(event) => setApproverSearch(event.target.value)} placeholder="이름, 부서, 이메일 검색" /></label><div>{availableApprovers.map((user) => <button type="button" key={user.userId} onClick={() => selectApprovalApprover(user.userId)}><strong>{user.userName}</strong><span>{user.departmentName} · {user.userEmail}</span></button>)}</div></div>
+                    <div className="ui033-approver-selected" aria-label="선택된 결재선"><header><strong>선택된 결재선</strong><span>{selectedApprovers.length}명</span></header>{selectedApprovers.map((user, index) => <article key={user.userId}><i>{index + 1}</i><div><strong>{user.userName}</strong><span>{user.departmentName} · {user.userEmail}</span></div><button type="button" disabled={index === 0} onClick={() => moveApprovalApprover(user.userId, -1)}>위</button><button type="button" disabled={index === selectedApprovers.length - 1} onClick={() => moveApprovalApprover(user.userId, 1)}>아래</button><button type="button" onClick={() => setCreateForm((current) => ({ ...current, approverUserIds: current.approverUserIds.filter((id) => id !== user.userId) }))}>제거</button></article>)}{!selectedApprovers.length ? <p>임시저장은 결재선 없이 가능하며, 상신 전에 1명 이상 지정해야 합니다.</p> : null}</div>
+                  </section>
+                )}
+                <footer className="ui033-compose__footer"><button type="button" onClick={closeApprovalModal}>취소</button><button type="submit" disabled={loading}>{approvalModal === "edit" ? "수정 저장" : "임시저장"}</button></footer>
+              </form>
+            </CommonPopup>
+            {approvalModal !== "none" && approvalModal !== "create" && approvalModal !== "edit" ? <div role="dialog" aria-modal="true" aria-label={`결재 ${approvalModal} 팝업`} style={{ position: "fixed", inset: 0, zIndex: 30, display: "grid", placeItems: "center", padding: 20, background: "rgba(15, 23, 42, 0.42)" }}>
               <div style={{ width: "min(760px, 92vw)", maxHeight: "88vh", overflowY: "auto", borderRadius: 20, padding: 20, background: "#fff", boxShadow: "0 24px 64px rgba(15,23,42,.25)" }}>
-                {(approvalModal === "create" || approvalModal === "edit") ? <form onSubmit={handleCreate} style={{ display: "grid", gap: 12 }}><div style={{ display: "flex", justifyContent: "space-between" }}><strong>{approvalModal === "create" ? "새 결재 작성" : "초안 수정"}</strong><button type="button" onClick={closeApprovalModal}>닫기</button></div><input aria-label="결재 제목" required value={createForm.title} onChange={(event) => setCreateForm((current) => ({ ...current, title: event.target.value }))} placeholder="결재 제목" style={{ height: 36, borderRadius: 10, border: "1px solid #cbd5e1", padding: "0 10px" }} /><textarea aria-label="결재 본문" required value={createForm.content} onChange={(event) => setCreateForm((current) => ({ ...current, content: event.target.value }))} placeholder="내용" style={{ minHeight: 120, borderRadius: 10, border: "1px solid #cbd5e1", padding: 10 }} /><div><strong>결재선</strong><input aria-label="결재선 사용자 검색" value={approverSearch} onChange={(event) => setApproverSearch(event.target.value)} placeholder="이름, 부서, 이메일 검색" style={{ display: "block", width: "100%", boxSizing: "border-box", height: 34, marginTop: 8, borderRadius: 10, border: "1px solid #cbd5e1", padding: "0 10px" }} /><div style={{ maxHeight: 120, overflowY: "auto", marginTop: 8, display: "grid", gap: 6 }}>{availableApprovers.map((user) => <button type="button" key={user.userId} onClick={() => selectApprovalApprover(user.userId)} style={{ textAlign: "left", padding: 8, border: "1px solid #dbe4ec", borderRadius: 8, background: "#fff" }}>{user.userName} · {user.departmentName} · {user.userEmail}</button>)}</div><div aria-label="선택된 결재선" style={{ marginTop: 10, display: "grid", gap: 6 }}>{selectedApprovers.map((user, index) => <div key={user.userId} style={{ display: "flex", gap: 6, alignItems: "center", padding: 8, borderRadius: 8, background: "#f0fdfa" }}><span style={{ flex: 1 }}>{index + 1}. {user.userName} ({user.departmentName})</span><button type="button" onClick={() => moveApprovalApprover(user.userId, -1)}>위</button><button type="button" onClick={() => moveApprovalApprover(user.userId, 1)}>아래</button><button type="button" onClick={() => setCreateForm((current) => ({ ...current, approverUserIds: current.approverUserIds.filter((id) => id !== user.userId) }))}>제거</button></div>)}</div></div>{approvalError ? <div role="alert" className="common-popup-error">{approvalError}</div> : null}<div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={closeApprovalModal}>취소</button><button type="submit" disabled={loading}>{approvalModal === "create" ? "초안 저장" : "수정 저장"}</button></div></form> : <div style={{ display: "grid", gap: 12 }}><strong>{({ submit: "상신 확인", approve: "승인", reject: "반려", withdraw: "회수 확인", redraft: "재기안 확인" } as Record<string, string>)[approvalModal]}</strong><div>{selectedDocument?.title}</div>{(approvalModal === "approve" || approvalModal === "reject") ? <textarea aria-label="처리 의견" value={reasonAction.reason} onChange={(event) => setReasonAction((current) => ({ ...current, reason: event.target.value }))} placeholder={approvalModal === "reject" ? "반려 의견 (필수)" : "처리 의견"} style={{ minHeight: 96, borderRadius: 10, border: "1px solid #cbd5e1", padding: 10 }} /> : null}{approvalError ? <div role="alert" className="common-popup-error">{approvalError}</div> : null}<div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={closeApprovalModal}>취소</button><button type="button" disabled={loading} onClick={() => { if (!selectedDocument) return; if (approvalModal === "approve") void executeApprove(selectedDocument.id, true); else if (approvalModal === "reject") void executeApprove(selectedDocument.id, false); else void executeSubmit(selectedDocument.id, approvalModal as "submit" | "withdraw" | "redraft"); }}>{approvalModal === "approve" ? "승인" : approvalModal === "reject" ? "반려" : "확인"}</button></div></div>}
+                <div style={{ display: "grid", gap: 12 }}><strong>{({ submit: "상신 확인", approve: "승인", reject: "반려", withdraw: "회수 확인", redraft: "재기안 확인" } as Record<string, string>)[approvalModal]}</strong><div>{selectedDocument?.title}</div>{(approvalModal === "approve" || approvalModal === "reject") ? <textarea aria-label="처리 의견" value={reasonAction.reason} onChange={(event) => setReasonAction((current) => ({ ...current, reason: event.target.value }))} placeholder={approvalModal === "reject" ? "반려 의견 (필수)" : "처리 의견"} style={{ minHeight: 96, borderRadius: 10, border: "1px solid #cbd5e1", padding: 10 }} /> : null}{approvalError ? <div role="alert" className="common-popup-error">{approvalError}</div> : null}<div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={closeApprovalModal}>취소</button><button type="button" disabled={loading} onClick={() => { if (!selectedDocument) return; if (approvalModal === "approve") void executeApprove(selectedDocument.id, true); else if (approvalModal === "reject") void executeApprove(selectedDocument.id, false); else void executeSubmit(selectedDocument.id, approvalModal as "submit" | "withdraw" | "redraft"); }}>{approvalModal === "approve" ? "승인" : approvalModal === "reject" ? "반려" : "확인"}</button></div></div>
               </div>
             </div> : null}
           </section>

@@ -153,6 +153,24 @@ export type ApprovalAttachment = {
   createdAt: string;
 };
 
+export type ApprovalAttachmentUpload = {
+  uploadId: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+};
+
+export type ApprovalDraftPayload = {
+  title: string;
+  content: string;
+  approverUserIds: string[];
+  attachments: ApprovalAttachmentUpload[];
+};
+
+export type ApprovalDraftUpdatePayload = ApprovalDraftPayload & {
+  retainedAttachmentIds: string[];
+};
+
 export type ApprovalDocumentDetail = ApprovalDocument & {
   attachments: ApprovalAttachment[];
 };
@@ -688,7 +706,7 @@ export async function downloadApprovalAttachment(token: string, documentId: stri
 
 export async function createApproval(
   token: string,
-  payload: { title: string; content: string; approverUserIds: string[] },
+  payload: ApprovalDraftPayload,
 ) {
   return request<{ documentId: string }>("/approvals", {
     method: "POST",
@@ -700,12 +718,22 @@ export async function createApproval(
 export async function updateApproval(
   token: string,
   documentId: string,
-  payload: { title: string; content: string; approverUserIds: string[] },
+  payload: ApprovalDraftUpdatePayload,
 ) {
-  return request<ApprovalDocument>(`/approvals/${documentId}`, {
+  return request<ApprovalDocumentDetail>(`/approvals/${documentId}`, {
     method: "PATCH",
     headers: authHeaders(token),
     body: JSON.stringify(payload),
+  });
+}
+
+export async function uploadApprovalAttachment(token: string, file: File): Promise<ApprovalAttachmentUpload> {
+  const form = new FormData();
+  form.append("file", file);
+  return request<ApprovalAttachmentUpload>("/approvals/attachments", {
+    method: "POST",
+    headers: authHeaders(token),
+    body: form,
   });
 }
 

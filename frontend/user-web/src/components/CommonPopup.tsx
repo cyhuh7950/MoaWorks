@@ -2,11 +2,11 @@ import { useEffect, useId, useRef, useState, type MutableRefObject, type ReactNo
 
 type Mode = "normal" | "minimized" | "maximized";
 type Bounds = { left: number; top: number; width: number; height: number };
-type Props = { title: string; children: ReactNode; open: boolean; onClose: () => void; dirty?: boolean; error?: string; saving?: boolean; floating?: boolean; initialFocusRef?: RefObject<HTMLElement | null>; closeRequestRef?: MutableRefObject<(() => void) | null>; kind?: "dialog" | "alertdialog" };
+type Props = { title: string; children: ReactNode; open: boolean; onClose: () => void; dirty?: boolean; error?: string; saving?: boolean; floating?: boolean; initialFocusRef?: RefObject<HTMLElement | null>; closeRequestRef?: MutableRefObject<(() => void) | null>; kind?: "dialog" | "alertdialog"; className?: string };
 const selector = "button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex='-1'])";
 const items = (root: HTMLElement | null) => root ? Array.from(root.querySelectorAll<HTMLElement>(selector)) : [];
 
-export function CommonPopup({ title, children, open, onClose, dirty = false, error = "", saving = false, floating = false, initialFocusRef, closeRequestRef, kind = "dialog" }: Props) {
+export function CommonPopup({ title, children, open, onClose, dirty = false, error = "", saving = false, floating = false, initialFocusRef, closeRequestRef, kind = "dialog", className = "" }: Props) {
   const panel = useRef<HTMLDivElement>(null);
   const close = useRef<HTMLButtonElement>(null);
   const confirmPanel = useRef<HTMLDivElement>(null);
@@ -106,7 +106,7 @@ export function CommonPopup({ title, children, open, onClose, dirty = false, err
     ? { left: 24, top: 72, right: "auto", bottom: "auto", width: "calc(100vw - 48px)", height: "calc(100vh - 96px)" }
     : bounds ? { left: bounds.left, top: bounds.top, right: "auto", bottom: "auto", width: bounds.width, height: bounds.height } : { right: 24, bottom: 24 };
 
-  return <div className={`common-popup-backdrop ${floating ? "is-floating" : ""}`}><div ref={panel} role={kind} aria-modal={floating ? undefined : true} aria-labelledby={titleId} aria-describedby={descriptionId} className={`common-popup ${floating ? "is-floating" : ""} is-${mode}`} style={style} onMouseUp={saveBounds}>
+  return <div className={`common-popup-backdrop ${floating ? "is-floating" : ""}`}><div ref={panel} role={kind} aria-modal={floating ? undefined : true} aria-labelledby={titleId} aria-describedby={descriptionId} className={`common-popup ${className} ${floating ? "is-floating" : ""} is-${mode}`} style={style} onMouseUp={saveBounds}>
     <div className="common-popup-header" onMouseDown={drag}><h2 id={titleId}>{title}</h2><div>
       {floating ? <button type="button" aria-label="최소화" onClick={minimize}>—</button> : null}
       {floating ? <button type="button" aria-label={expanded ? "복원" : "확대"} onClick={maximize}>{expanded ? "↙" : "↗"}</button> : null}
