@@ -91,7 +91,7 @@ class Ui033ApprovalComposeContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             storage = ApprovalAttachmentStorage(Path(directory), max_file_bytes=5)
             staged = storage.stage("..\\unsafe\r\nname.txt", "text/plain", b"hello")
-            self.assertEqual(staged["file_name"], "name.txt")
+            self.assertEqual(staged["file_name"], "unsafename.txt")
             self.assertEqual(staged["size_bytes"], 5)
             self.assertRegex(staged["upload_id"], r"^[0-9a-f]{32}$")
             self.assertRegex(staged["storage_key"], r"^approval/attachments/[0-9a-f]{32}\.bin$")

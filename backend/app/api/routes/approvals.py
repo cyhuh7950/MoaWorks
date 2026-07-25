@@ -1,20 +1,23 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from app.api.dependencies import get_current_user, permission_required
 from app.schemas.directory import (
     ApprovalActionReason,
     ApprovalApproverListResponse,
+    ApprovalAttachmentUploadResponse,
     ApprovalCreateResponse,
     ApprovalDocumentCreateRequest,
     ApprovalDocumentDetailResponse,
     ApprovalDocumentResponse,
+    ApprovalDocumentUpdateRequest,
     ApprovalLineActionRequest,
     ApprovalListResponse,
     AuthUserSummary,
     AuditLogListResponse,
 )
 from app.services.directory_store import DirectoryStore
+from app.services.approval_attachment_storage import APPROVAL_ATTACHMENT_MAX_FILE_BYTES
 
 
 router = APIRouter()
@@ -41,6 +44,20 @@ def list_approval_approvers(
     return DirectoryStore().list_active_approval_approvers(user.userId)
 
 
+@router.post("/attachments", response_model=ApprovalAttachmentUploadResponse)
+async def upload_approval_attachment(
+    file: UploadFile = File(...),
+    user: AuthUserSummary = Depends(permission_required("approval:create")),
+) -> ApprovalAttachmentUploadResponse:
+    content = await file.read(APPROVAL_ATTACHMENT_MAX_FILE_BYTES + 1)
+    return DirectoryStore().stage_approval_attachment(
+        user.userId,
+        file.filename or "attachment.bin",
+        file.content_type or "application/octet-stream",
+        content,
+    )
+
+
 @router.get("/{document_id}/attachments/{attachment_id}")
 def download_approval_attachment(
     document_id: str,
@@ -65,6 +82,15 @@ def create_approval(
     user: AuthUserSummary = Depends(permission_required("approval:create")),
 ) -> ApprovalCreateResponse:
     return DirectoryStore().create_approval_document(user.userId, payload)
+
+
+@router.patch("/{document_id}", response_model=ApprovalDocumentDetailResponse)
+def update_approval(
+    document_id: str,
+    payload: ApprovalDocumentUpdateRequest,
+    user: AuthUserSummary = Depends(permission_required("approval:create")),
+) -> ApprovalDocumentDetailResponse:
+    return DirectoryStore().update_approval_document(user.userId, document_id, payload)
 
 
 @router.post("/{document_id}/submit", response_model=ApprovalDocumentResponse)

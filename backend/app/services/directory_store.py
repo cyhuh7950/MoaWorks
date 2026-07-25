@@ -1,18 +1,21 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import json
 from uuid import uuid4
 
 from app.schemas.directory import (
     ApprovalActionReason,
     ApprovalAttachmentView,
+    ApprovalAttachmentMeta,
+    ApprovalAttachmentUploadResponse,
     ApprovalApproverListResponse,
     ApprovalApproverView,
     ApprovalCreateResponse,
     ApprovalDocumentCreateRequest,
     ApprovalDocumentDetailResponse,
     ApprovalDocumentResponse,
+    ApprovalDocumentUpdateRequest,
     ApprovalLineRecord,
     ApprovalLineActionRequest,
     ApprovalListResponse,
@@ -38,7 +41,11 @@ from app.services.observability_service import ObservabilityService
 from app.schemas.setup import SetupInitializeRequest
 from app.services.postgres_service import PostgresService
 from app.services.security_service import SecurityService
-from app.services.approval_attachment_storage import ApprovalAttachmentStorage
+from app.services.approval_attachment_storage import (
+    APPROVAL_ATTACHMENT_MAX_COUNT,
+    APPROVAL_ATTACHMENT_MAX_TOTAL_BYTES,
+    ApprovalAttachmentStorage,
+)
 
 
 class DirectoryStore:
@@ -733,6 +740,147 @@ class DirectoryStore:
             "contentType": row["content_type"],
         }
 
+    def stage_approval_attachment(
+        self,
+        actor_id: str,
+        file_name: str,
+        content_type: str,
+        content: bytes,
+    ) -> ApprovalAttachmentUploadResponse:
+        self.db.ensure_migrations_applied()
+        storage = ApprovalAttachmentStorage()
+        staged = storage.stage(file_name, content_type, content)
+        now = self._now()
+        try:
+            with self.db.connect() as connection:
+                with connection.cursor() as cursor:
+                    actor = self._fetch_actor_summary(cursor, actor_id)
+                    cursor.execute(
+                        """
+                        INSERT INTO approval_attachment_uploads (
+                            id, company_id, owner_user_id, file_name, content_type,
+                            size_bytes, storage_key, created_at, expires_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            staged["upload_id"],
+                            actor.companyId,
+                            actor.userId,
+                            staged["file_name"],
+                            staged["content_type"],
+                            staged["size_bytes"],
+                            staged["storage_key"],
+                            now,
+                            now + timedelta(hours=24),
+                        ),
+                    )
+                connection.commit()
+        except Exception:
+            storage.delete(str(staged["storage_key"]))
+            raise
+        return ApprovalAttachmentUploadResponse(
+            uploadId=str(staged["upload_id"]),
+            fileName=str(staged["file_name"]),
+            contentType=str(staged["content_type"]),
+            sizeBytes=int(staged["size_bytes"]),
+        )
+
+    def _validate_approval_approvers(
+        self,
+        cursor,
+        actor: AuthUserSummary,
+        approver_user_ids: list[str],
+    ) -> list[dict]:
+        if len(approver_user_ids) != len(set(approver_user_ids)):
+            raise ValueError("결재선 사용자를 중복 지정할 수 없습니다.")
+        if len(approver_user_ids) > 20:
+            raise ValueError("결재선은 최대 20명까지 지정할 수 있습니다.")
+        if not approver_user_ids:
+            return []
+        cursor.execute(
+            """
+            SELECT u.id AS user_id, u.name AS user_name
+            FROM users u
+            JOIN roles r ON r.id = u.role_id AND r.company_id = u.company_id
+            LEFT JOIN departments d ON d.id = u.department_id AND d.company_id = u.company_id
+            WHERE u.company_id = %s
+              AND u.id = ANY(%s)
+              AND u.status = 'active'
+              AND r.status = 'active'
+              AND (u.department_id IS NULL OR d.status = 'active')
+            """,
+            (actor.companyId, approver_user_ids),
+        )
+        rows = cursor.fetchall()
+        by_id = {row["user_id"]: row for row in rows}
+        if any(user_id not in by_id for user_id in approver_user_ids):
+            raise ValueError("같은 회사의 활성 사용자만 결재선에 지정할 수 있습니다.")
+        return [by_id[user_id] for user_id in approver_user_ids]
+
+    def _consume_approval_uploads(
+        self,
+        cursor,
+        actor: AuthUserSummary,
+        attachments: list[ApprovalAttachmentMeta],
+        *,
+        document_id: str,
+        now: datetime,
+        retained_count: int = 0,
+        retained_size: int = 0,
+    ) -> None:
+        if retained_count + len(attachments) > APPROVAL_ATTACHMENT_MAX_COUNT:
+            raise ValueError("결재 첨부는 최대 10개까지 등록할 수 있습니다.")
+        total_size = retained_size
+        resolved: list[dict] = []
+        for attachment in attachments:
+            cursor.execute(
+                """
+                SELECT id, file_name, content_type, size_bytes, storage_key
+                FROM approval_attachment_uploads
+                WHERE id = %s
+                  AND owner_user_id = %s
+                  AND company_id = %s
+                  AND expires_at > %s
+                FOR UPDATE
+                """,
+                (attachment.uploadId, actor.userId, actor.companyId, now),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise ValueError("사용할 수 없거나 만료된 결재 첨부 업로드입니다.")
+            canonical = (row["file_name"], row["content_type"], int(row["size_bytes"]))
+            requested = (attachment.fileName, attachment.contentType, attachment.sizeBytes)
+            if canonical != requested:
+                raise ValueError("결재 첨부 정보가 업로드 결과와 일치하지 않습니다.")
+            ApprovalAttachmentStorage().stored_path(row["storage_key"])
+            total_size += int(row["size_bytes"])
+            resolved.append(row)
+        if total_size > APPROVAL_ATTACHMENT_MAX_TOTAL_BYTES:
+            raise ValueError("결재 첨부의 전체 크기는 25MB를 초과할 수 없습니다.")
+        for row in resolved:
+            cursor.execute(
+                """
+                INSERT INTO approval_attachments (
+                    id, document_id, file_name, content_type, size_bytes, storage_key, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    self._new_id("aatt"),
+                    document_id,
+                    row["file_name"],
+                    row["content_type"],
+                    row["size_bytes"],
+                    row["storage_key"],
+                    now,
+                ),
+            )
+            cursor.execute(
+                "DELETE FROM approval_attachment_uploads WHERE id = %s",
+                (row["id"],),
+            )
+
     def create_approval_document(self, actor_id: str, payload: ApprovalDocumentCreateRequest) -> ApprovalCreateResponse:
         self.db.ensure_migrations_applied()
         now = self._now()
@@ -741,6 +889,7 @@ class DirectoryStore:
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
                 actor = self._fetch_actor_summary(cursor, actor_id)
+                approvers = self._validate_approval_approvers(cursor, actor, payload.approverUserIds)
                 cursor.execute(
                     """
                     INSERT INTO approval_documents (
@@ -763,8 +912,7 @@ class DirectoryStore:
                         now,
                     ),
                 )
-                for sequence, approver_user_id in enumerate(payload.approverUserIds, start=1):
-                    approver = self._fetch_actor_summary(cursor, approver_user_id)
+                for sequence, approver in enumerate(approvers, start=1):
                     cursor.execute(
                         """
                         INSERT INTO approval_lines (
@@ -776,8 +924,8 @@ class DirectoryStore:
                         (
                             self._new_id("aline"),
                             document_id,
-                            approver.userId,
-                            approver.userName,
+                            approver["user_id"],
+                            approver["user_name"],
                             sequence,
                             "pending",
                             None,
@@ -785,6 +933,13 @@ class DirectoryStore:
                             None,
                         ),
                     )
+                self._consume_approval_uploads(
+                    cursor,
+                    actor,
+                    payload.attachments,
+                    document_id=document_id,
+                    now=now,
+                )
                 self._insert_audit(
                     cursor=cursor,
                     company_id=actor.companyId,
@@ -799,6 +954,115 @@ class DirectoryStore:
                 )
             connection.commit()
         return ApprovalCreateResponse(documentId=document_id)
+
+    def update_approval_document(
+        self,
+        actor_id: str,
+        document_id: str,
+        payload: ApprovalDocumentUpdateRequest,
+    ) -> ApprovalDocumentDetailResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        removed_storage_keys: list[str] = []
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                actor = self._fetch_actor_summary(cursor, actor_id)
+                document = self._fetch_required_approval_document(cursor, document_id, for_update=True)
+                self._assert_creator(actor, document)
+                self._assert_document_status(document, allowed={"draft"}, action_label="수정")
+                approvers = self._validate_approval_approvers(cursor, actor, payload.approverUserIds)
+                cursor.execute(
+                    """
+                    SELECT id, size_bytes, storage_key
+                    FROM approval_attachments
+                    WHERE document_id = %s
+                    FOR UPDATE
+                    """,
+                    (document_id,),
+                )
+                existing = cursor.fetchall()
+                existing_by_id = {row["id"]: row for row in existing}
+                if any(attachment_id not in existing_by_id for attachment_id in payload.retainedAttachmentIds):
+                    raise ValueError("유지할 결재 첨부를 찾을 수 없습니다.")
+                retained = [existing_by_id[attachment_id] for attachment_id in payload.retainedAttachmentIds]
+                if len(retained) + len(payload.attachments) > APPROVAL_ATTACHMENT_MAX_COUNT:
+                    raise ValueError("결재 첨부는 최대 10개까지 등록할 수 있습니다.")
+                retained_size = sum(int(row["size_bytes"]) for row in retained)
+
+                cursor.execute(
+                    """
+                    UPDATE approval_documents
+                    SET title = %s, content = %s, updated_at = %s
+                    WHERE id = %s
+                    """,
+                    (payload.title.strip(), payload.content.strip(), now, document_id),
+                )
+                cursor.execute("DELETE FROM approval_lines WHERE document_id = %s", (document_id,))
+                for sequence, approver in enumerate(approvers, start=1):
+                    cursor.execute(
+                        """
+                        INSERT INTO approval_lines (
+                            id, document_id, approver_user_id, approver_user_name,
+                            sequence, status, comment, decided_by_user_id, decided_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            self._new_id("aline"),
+                            document_id,
+                            approver["user_id"],
+                            approver["user_name"],
+                            sequence,
+                            "pending",
+                            None,
+                            None,
+                            None,
+                        ),
+                    )
+                removed_ids = [row["id"] for row in existing if row["id"] not in set(payload.retainedAttachmentIds)]
+                if removed_ids:
+                    cursor.execute(
+                        """
+                        DELETE FROM approval_attachments
+                        WHERE document_id = %s AND id = ANY(%s)
+                        RETURNING storage_key
+                        """,
+                        (document_id, removed_ids),
+                    )
+                    removed_storage_keys = [row["storage_key"] for row in cursor.fetchall()]
+                self._consume_approval_uploads(
+                    cursor,
+                    actor,
+                    payload.attachments,
+                    document_id=document_id,
+                    now=now,
+                    retained_count=len(retained),
+                    retained_size=retained_size,
+                )
+                self._insert_audit(
+                    cursor=cursor,
+                    company_id=actor.companyId,
+                    actor_user_id=actor.userId,
+                    actor_user_name=actor.userName,
+                    target_type="approval_document",
+                    target_id=document_id,
+                    event="approval.updated",
+                    status_before="draft",
+                    status_after="draft",
+                    reason=None,
+                )
+                response = self._to_approval_document_detail_response(
+                    cursor,
+                    self._fetch_required_approval_document(cursor, document_id),
+                )
+            connection.commit()
+        storage = ApprovalAttachmentStorage()
+        for storage_key in removed_storage_keys:
+            try:
+                storage.delete(storage_key)
+            except (OSError, ValueError):
+                pass
+        return response
 
     def submit_approval_document(self, actor_id: str, document_id: str) -> ApprovalDocumentResponse:
         self.db.ensure_migrations_applied()

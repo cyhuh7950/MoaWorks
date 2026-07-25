@@ -166,10 +166,50 @@ class AuditLogRecord(BaseModel):
     createdAt: datetime
 
 
+class ApprovalAttachmentMeta(BaseModel):
+    uploadId: str = Field(pattern=r"^[0-9a-f]{32}$")
+    fileName: str = Field(min_length=1, max_length=255)
+    contentType: str = Field(default="application/octet-stream", max_length=255)
+    sizeBytes: int = Field(gt=0)
+
+
+class ApprovalAttachmentUploadResponse(BaseModel):
+    uploadId: str
+    fileName: str
+    contentType: str
+    sizeBytes: int = Field(gt=0)
+
+
 class ApprovalDocumentCreateRequest(BaseModel):
-    title: str = Field(min_length=1)
-    content: str = Field(min_length=1)
-    approverUserIds: list[str] = Field(default_factory=list)
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1, max_length=20000)
+    approverUserIds: list[str] = Field(default_factory=list, max_length=20)
+    attachments: list[ApprovalAttachmentMeta] = Field(default_factory=list, max_length=10)
+
+    @field_validator("title", "content")
+    @classmethod
+    def reject_blank_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("공백만 입력할 수 없습니다.")
+        return value
+
+    @field_validator("approverUserIds")
+    @classmethod
+    def reject_duplicate_approvers(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("결재선 사용자를 중복 지정할 수 없습니다.")
+        return values
+
+
+class ApprovalDocumentUpdateRequest(ApprovalDocumentCreateRequest):
+    retainedAttachmentIds: list[str] = Field(default_factory=list, max_length=10)
+
+    @field_validator("retainedAttachmentIds")
+    @classmethod
+    def reject_duplicate_retained_attachments(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("유지할 첨부를 중복 지정할 수 없습니다.")
+        return values
 
 
 class ApprovalSubmitResponse(BaseModel):
