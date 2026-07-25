@@ -63,7 +63,11 @@ await check("attachment upload and draft create-update use same-origin API", () 
 });
 
 await check("draft save allows zero approvers and retains search-select-reorder", () => {
-  const saveBlock = app.split("async function handleCreate")[1].split("async function executeApprove")[0];
+  const createMarker = "async function handleCreate";
+  const actionMarker = "async function executeApprovalAction";
+  assert.ok(app.includes(createMarker), `${createMarker} missing`);
+  assert.ok(app.includes(actionMarker), `${actionMarker} missing`);
+  const saveBlock = app.split(createMarker)[1].split(actionMarker)[0];
   assert.doesNotMatch(saveBlock, /approverUserIds\.length\)/);
   for (const token of ["approverSearch", "selectApprovalApprover", "moveApprovalApprover", "제거"]) assert.ok(app.includes(token), token);
 });
