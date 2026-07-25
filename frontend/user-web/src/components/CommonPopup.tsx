@@ -24,6 +24,7 @@ export function CommonPopup({ title, children, open, onClose, dirty = false, err
     if (rect && mode === "normal") setBounds({ left: rect.left, top: rect.top, width: rect.width, height: rect.height });
   };
   const closeRequest = () => {
+    if (saving) return;
     if (!dirty) return onClose();
     lastFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : close.current;
     setConfirm(true);
@@ -37,7 +38,7 @@ export function CommonPopup({ title, children, open, onClose, dirty = false, err
     if (!closeRequestRef) return;
     closeRequestRef.current = closeRequest;
     return () => { closeRequestRef.current = null; };
-  }, [closeRequestRef, dirty, onClose]);
+  }, [closeRequestRef, dirty, onClose, saving]);
 
   useEffect(() => {
     if (!open) return;
@@ -110,7 +111,7 @@ export function CommonPopup({ title, children, open, onClose, dirty = false, err
     <div className="common-popup-header" onMouseDown={drag}><h2 id={titleId}>{title}</h2><div>
       {floating ? <button type="button" aria-label="최소화" onClick={minimize}>—</button> : null}
       {floating ? <button type="button" aria-label={expanded ? "복원" : "확대"} onClick={maximize}>{expanded ? "↙" : "↗"}</button> : null}
-      <button ref={close} type="button" aria-label="닫기" onClick={closeRequest}>×</button>
+      <button ref={close} type="button" aria-label="닫기" disabled={saving} onClick={closeRequest}>×</button>
     </div></div>
     <p id={descriptionId} className="common-popup-description">변경 사항은 저장 또는 닫기 확인 후 반영됩니다.</p>
     {mode !== "minimized" ? <div className="common-popup-body">{error ? <div role="alert" className="common-popup-error">{error}</div> : null}{children}</div> : null}

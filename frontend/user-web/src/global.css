@@ -2622,6 +2622,26 @@ textarea {
 .ui033-compose__footer button[type="submit"] { border-color: #0f766e; background: #0f766e; color: #fff; font-weight: 800; }
 .ui033-compose__footer button:disabled { opacity: .55; cursor: wait; }
 
+.ui034-action-popup { width: 420px; height: 240px; max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; overflow: hidden; font-size: 12px; }
+.ui034-action-popup > .common-popup-description { display: none; }
+.ui034-action-popup > .common-popup-body { min-height: 0; overflow: auto; padding: 9px 12px; }
+.ui034-action-popup__content { min-height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 7px; }
+.ui034-action-popup__summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px 12px; margin: 0; }
+.ui034-action-popup__summary div { min-width: 0; display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 5px; }
+.ui034-action-popup__summary div:last-child { grid-column: 1 / -1; }
+.ui034-action-popup__summary dt { color: #64748b; font-size: 10px; font-weight: 800; }
+.ui034-action-popup__summary dd { min-width: 0; margin: 0; overflow: hidden; color: #1e293b; text-overflow: ellipsis; white-space: nowrap; }
+.ui034-action-popup__opinion { min-height: 0; display: grid; grid-template-columns: 1fr auto; gap: 3px 8px; color: #334155; font-weight: 800; }
+.ui034-action-popup__opinion textarea { grid-column: 1 / -1; min-height: 48px; height: 48px; resize: none; box-sizing: border-box; }
+.ui034-action-popup__opinion span { grid-column: 2; grid-row: 1; color: #64748b; font-size: 9px; font-weight: 400; }
+.ui034-action-popup__footer { display: flex; justify-content: flex-end; gap: 7px; padding-top: 6px; border-top: 1px solid #e2e8f0; }
+.ui034-action-popup__footer button { min-height: 30px; padding: 0 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; cursor: pointer; font: inherit; }
+.ui034-action-popup__footer button.is-primary { border-color: #0f766e; background: #0f766e; color: #fff; }
+.ui034-action-popup__footer button.is-success { border-color: #15803d; background: #15803d; color: #fff; }
+.ui034-action-popup__footer button.is-warning { border-color: #d97706; background: #fff7ed; color: #9a3412; }
+.ui034-action-popup__footer button.is-danger { border-color: #be123c; background: #be123c; color: #fff; }
+.ui034-action-popup__footer button:disabled { opacity: .55; cursor: wait; }
+
 @media (max-width: 760px) {
   .ui033-compose-popup { width: calc(100vw - 24px); height: calc(100vh - 24px); max-width: none; max-height: none; }
   .ui033-compose__line { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(220px, 1fr) minmax(220px, 1fr); }

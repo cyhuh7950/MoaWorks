@@ -184,6 +184,7 @@ import {
 } from "./approvalShell";
 import { approvalLineStatusLabel, approvalStatusLabel, filterApprovalDocuments, resolveApprovalSelection } from "./approvalDetail";
 import { buildApprovalComposeSnapshot, moveApprovalApprover as moveApprovalApproverOrder, validateApprovalDraft, validateApprovalFiles } from "./approvalCompose";
+import { APPROVAL_ACTION_CONFIG, buildApprovalActionTarget, validateApprovalActionOpinion, type ApprovalActionTarget, type ApprovalActionType } from "./approvalAction";
 
 const NOTIFICATION_POLICY = {
   retryMaxAttempts: 3,
@@ -1253,6 +1254,7 @@ export default function App() {
     approverUserIds: [],
   });
   const [approvalModal, setApprovalModal] = useState<ApprovalModalMode>("none");
+  const [approvalActionTarget, setApprovalActionTarget] = useState<ApprovalActionTarget | null>(null);
   const [approvalEditorDocumentId, setApprovalEditorDocumentId] = useState("");
   const [approvalComposeTab, setApprovalComposeTab] = useState<"document" | "line">("document");
   const [approvalRetainedAttachments, setApprovalRetainedAttachments] = useState<ApprovalAttachment[]>([]);
@@ -3481,6 +3483,7 @@ export default function App() {
     setApprovalRetainedAttachments([]);
     setApprovalPendingFiles([]);
     setApprovalComposeBaseline("");
+    setApprovalActionTarget(null);
     setReasonAction({ documentId: "", reason: "" });
   }
 
@@ -3566,41 +3569,69 @@ export default function App() {
     }
   }
 
-  async function executeApprove(documentId: string, accepted: boolean) {
-    if (!token) return;
-    if (!accepted && !reasonAction.reason.trim()) {
-      setApprovalError("반려 의견을 입력하세요.");
+  async function executeApprovalAction(action: ApprovalActionType) {
+    if (!token || !approvalActionTarget) return;
+    const opinionError = validateApprovalActionOpinion(action, reasonAction.reason);
+    if (opinionError) {
+      setApprovalError(opinionError);
       return;
     }
+    const documentId = approvalActionTarget.documentId;
     setLoading(true);
     setApprovalError("");
     try {
-      const act = accepted ? approveApproval : rejectApproval;
-      const postActionDocument = await act(token, documentId, reasonAction.reason.trim() || "확인");
+      const postActionDocument = action === "approve"
+        ? await approveApproval(token, documentId, reasonAction.reason.trim())
+        : action === "reject"
+          ? await rejectApproval(token, documentId, reasonAction.reason.trim())
+          : await (action === "submit" ? submitApproval : action === "withdraw" ? withdrawApproval : redraftApproval)(token, documentId);
       setReasonAction({ documentId: "", reason: "" });
+      setApprovalActionTarget(null);
       setApprovalModal("none");
-      await keepApprovalPostAction(accepted ? "approve" : "reject", documentId, postActionDocument);
+      await keepApprovalPostAction(action, documentId, postActionDocument);
     } catch (error) {
-      setApprovalError(normalizeClientError(error, "결재 처리 실패"));
+      setApprovalError(normalizeClientError(error, action === "approve" || action === "reject" ? "결재 처리 실패" : "결재 상태 변경 실패"));
     } finally {
       setLoading(false);
     }
   }
 
-  async function executeSubmit(documentId: string, action: "submit" | "withdraw" | "redraft") {
-    if (!token) return;
-    setLoading(true);
+  function openApprovalAction(mode: ApprovalActionType, document: ApprovalDocument) {
+    setReasonAction({ documentId: document.id, reason: "" });
+    setApprovalActionTarget(buildApprovalActionTarget(document));
     setApprovalError("");
-    try {
-      const act = action === "submit" ? submitApproval : action === "withdraw" ? withdrawApproval : redraftApproval;
-      const postActionDocument = await act(token, documentId);
-      setApprovalModal("none");
-      await keepApprovalPostAction(action, documentId, postActionDocument);
-    } catch (error) {
-      setApprovalError(normalizeClientError(error, "결재 상태 변경 실패"));
-    } finally {
-      setLoading(false);
-    }
+    setApprovalModal(mode);
+  }
+
+  function renderApprovalActionPopup() {
+    const action = approvalModal !== "none" && approvalModal !== "create" && approvalModal !== "edit"
+      ? approvalModal as ApprovalActionType
+      : null;
+    const config = action ? APPROVAL_ACTION_CONFIG[action] : null;
+    return <CommonPopup
+      title={config?.title ?? "결재 처리"}
+      open={Boolean(action && approvalActionTarget)}
+      onClose={closeApprovalModal}
+      saving={loading}
+      error={approvalError}
+      className="ui034-action-popup"
+      kind="alertdialog"
+    >
+      {action && config && approvalActionTarget ? <div className="ui034-action-popup__content">
+        <dl className="ui034-action-popup__summary">
+          <div><dt>문서</dt><dd>{approvalActionTarget.title}</dd></div>
+          <div><dt>현재 상태</dt><dd>{approvalStatusLabel(approvalActionTarget.status)}</dd></div>
+          <div><dt>현재 결재자</dt><dd>{approvalActionTarget.currentApproverName}{approvalActionTarget.currentLineIndex == null ? "" : ` · ${approvalActionTarget.currentLineIndex}/${approvalActionTarget.lineCount}`}</dd></div>
+          <div><dt>예상 결과</dt><dd>{config.expectedState}</dd></div>
+          <div><dt>영향</dt><dd>{config.impact}</dd></div>
+        </dl>
+        {config.requiresOpinion ? <label className="ui034-action-popup__opinion">처리 의견
+          <textarea aria-label="처리 의견" required maxLength={500} value={reasonAction.reason} onChange={(event) => { setReasonAction((current) => ({ ...current, reason: event.target.value })); if (approvalError) setApprovalError(""); }} placeholder={`${config.confirmLabel} 의견을 입력하세요.`} />
+          <span>{reasonAction.reason.length} / 500자</span>
+        </label> : null}
+        <footer className="ui034-action-popup__footer"><button type="button" disabled={loading} onClick={closeApprovalModal}>취소</button><button type="button" disabled={loading} className={`is-${config.tone}`} onClick={() => void executeApprovalAction(action)}>{config.confirmLabel}</button></footer>
+      </div> : null}
+    </CommonPopup>;
   }
 
   async function executeAck(notificationId: string) {
@@ -4817,11 +4848,8 @@ export default function App() {
           const keyword = approverSearch.trim().toLowerCase();
           return !createForm.approverUserIds.includes(user.userId) && (!keyword || `${user.userName} ${user.departmentName} ${user.userEmail}`.toLowerCase().includes(keyword));
         });
-        const openActionModal = (mode: ApprovalModalMode) => {
-          if (!selectedDocument) return;
-          setReasonAction({ documentId: selectedDocument.id, reason: "" });
-          setApprovalError("");
-          setApprovalModal(mode);
+        const openActionModal = (mode: ApprovalActionType) => {
+          if (selectedDocument) openApprovalAction(mode, selectedDocument);
         };
         const renderApprovalMenuItem = (item: ApprovalShellMenuItem) => {
           const isCurrent = approvalShellMenu === item.key;
@@ -4976,11 +5004,7 @@ export default function App() {
                 <footer className="ui033-compose__footer"><button type="button" onClick={() => approvalComposeCloseRequestRef.current?.()}>취소</button><button type="submit" disabled={loading}>{approvalModal === "edit" ? "수정 저장" : "임시저장"}</button></footer>
               </form>
             </CommonPopup>
-            {approvalModal !== "none" && approvalModal !== "create" && approvalModal !== "edit" ? <div role="dialog" aria-modal="true" aria-label={`결재 ${approvalModal} 팝업`} style={{ position: "fixed", inset: 0, zIndex: 30, display: "grid", placeItems: "center", padding: 20, background: "rgba(15, 23, 42, 0.42)" }}>
-              <div style={{ width: "min(760px, 92vw)", maxHeight: "88vh", overflowY: "auto", borderRadius: 20, padding: 20, background: "#fff", boxShadow: "0 24px 64px rgba(15,23,42,.25)" }}>
-                <div style={{ display: "grid", gap: 12 }}><strong>{({ submit: "상신 확인", approve: "승인", reject: "반려", withdraw: "회수 확인", redraft: "재기안 확인" } as Record<string, string>)[approvalModal]}</strong><div>{selectedDocument?.title}</div>{(approvalModal === "approve" || approvalModal === "reject") ? <textarea aria-label="처리 의견" value={reasonAction.reason} onChange={(event) => setReasonAction((current) => ({ ...current, reason: event.target.value }))} placeholder={approvalModal === "reject" ? "반려 의견 (필수)" : "처리 의견"} style={{ minHeight: 96, borderRadius: 10, border: "1px solid #cbd5e1", padding: 10 }} /> : null}{approvalError ? <div role="alert" className="common-popup-error">{approvalError}</div> : null}<div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={closeApprovalModal}>취소</button><button type="button" disabled={loading} onClick={() => { if (!selectedDocument) return; if (approvalModal === "approve") void executeApprove(selectedDocument.id, true); else if (approvalModal === "reject") void executeApprove(selectedDocument.id, false); else void executeSubmit(selectedDocument.id, approvalModal as "submit" | "withdraw" | "redraft"); }}>{approvalModal === "approve" ? "승인" : approvalModal === "reject" ? "반려" : "확인"}</button></div></div>
-              </div>
-            </div> : null}
+            {renderApprovalActionPopup()}
           </section>
         );
       }
@@ -6726,7 +6750,7 @@ export default function App() {
                       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                         {doc.status === "draft" && canAct.submit && doc.creatorUserId === me?.userId && (
                           <button
-                            onClick={() => void executeSubmit(doc.id, "submit")}
+                            onClick={() => openApprovalAction("submit", doc)}
                             disabled={loading}
                             style={{ height: 42, borderRadius: 14, border: 0, padding: "0 14px", background: "#0f766e", color: "#fff", fontWeight: 700, cursor: "pointer" }}
                           >
@@ -6735,7 +6759,7 @@ export default function App() {
                         )}
                         {doc.status === "submitted" && doc.creatorUserId === me?.userId && canAct.withdraw && (
                           <button
-                            onClick={() => void executeSubmit(doc.id, "withdraw")}
+                            onClick={() => openApprovalAction("withdraw", doc)}
                             disabled={loading}
                             style={{ height: 42, borderRadius: 14, border: "1px solid #cbd5e1", padding: "0 14px", background: "#fff", fontWeight: 700, cursor: "pointer" }}
                           >
@@ -6744,7 +6768,7 @@ export default function App() {
                         )}
                         {doc.status === "rejected" && doc.creatorUserId === me?.userId && canAct.rework && (
                           <button
-                            onClick={() => void executeSubmit(doc.id, "redraft")}
+                            onClick={() => openApprovalAction("redraft", doc)}
                             disabled={loading}
                             style={{ height: 42, borderRadius: 14, border: "1px solid #cbd5e1", padding: "0 14px", background: "#fff", fontWeight: 700, cursor: "pointer" }}
                           >
@@ -6753,25 +6777,15 @@ export default function App() {
                         )}
                         {doc.status === "submitted" && canAct.act && isCurrentApprover(doc) && (
                           <>
-                            <input
-                              value={doc.id === reasonAction.documentId ? reasonAction.reason : ""}
-                              placeholder="처리 사유"
-                              onChange={(event) => setReasonAction({ documentId: doc.id, reason: event.target.value })}
-                              style={{ minWidth: 180, height: 42, borderRadius: 14, border: "1px solid #cbd5e1", padding: "0 12px", font: "inherit" }}
-                            />
                             <button
-                              onClick={() => {
-                                void executeApprove(doc.id, true);
-                              }}
+                              onClick={() => openApprovalAction("approve", doc)}
                               disabled={loading}
                               style={{ height: 42, borderRadius: 14, border: 0, padding: "0 14px", background: "#14532d", color: "#fff", fontWeight: 700, cursor: "pointer" }}
                             >
                               승인
                             </button>
                             <button
-                              onClick={() => {
-                                void executeApprove(doc.id, false);
-                              }}
+                              onClick={() => openApprovalAction("reject", doc)}
                               disabled={loading}
                               style={{ height: 42, borderRadius: 14, border: 0, padding: "0 14px", background: "#9f1239", color: "#fff", fontWeight: 700, cursor: "pointer" }}
                             >
@@ -6803,6 +6817,7 @@ export default function App() {
         </div>
       )}
 
+      {renderApprovalActionPopup()}
 <ToastViewport items={feedbackItems} onDismiss={dismissFeedback} />
     </main>
   );

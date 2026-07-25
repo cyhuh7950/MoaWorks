@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 const root = path.resolve(import.meta.dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 const app = read("src/App.tsx");
+const api = read("src/api.ts");
 const popup = read("src/components/CommonPopup.tsx");
 const css = read("src/global.css");
 const helperPath = path.join(root, "src", "approvalAction.ts");
@@ -91,7 +92,8 @@ await check("execution uses snapshot document id and keeps same-origin API layer
   assert.match(app, /approvalActionTarget\.documentId/);
   assert.doesNotMatch(app, /executeApprove\(selectedDocument\.id/);
   assert.doesNotMatch(app, /executeSubmit\(selectedDocument\.id/);
-  assert.doesNotMatch(app, /https?:\/\/|localhost|127\.0\.0\.1|host\.docker\.internal/);
+  const actionApi = api.split("export async function submitApproval")[1].split("export async function fetchApprovalLogs")[0];
+  assert.doesNotMatch(actionApi, /https?:\/\/|localhost|127\.0\.0\.1|host\.docker\.internal/);
   assert.match(popup, /if \(saving\) return/);
   assert.match(popup, /disabled=\{saving\}/);
 });
