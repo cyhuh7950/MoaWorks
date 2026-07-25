@@ -148,8 +148,8 @@ class Ui035ApprovalBasicSettingsContractTests(unittest.TestCase):
         self.assertIn("FOR UPDATE", settings_update)
         self.assertIn("connection.commit()", settings_update)
         self.assertIn("FOR SHARE", preference_read)
-        self.assertLess(decision.index("FROM approval_basic_preferences"), decision.index("signature_snapshot = ("))
-        self.assertLess(decision.index("signature_snapshot = ("), decision.index("UPDATE approval_lines"))
+        self.assertLess(decision.index("FROM approval_basic_preferences"), decision.index("signature_row = cursor.fetchone()"))
+        self.assertLess(decision.index("signature_row = cursor.fetchone()"), decision.index("UPDATE approval_lines"))
 
     def test_redraft_clears_signature_snapshot_and_detail_exposes_safe_urls(self) -> None:
         service = (ROOT / "app" / "services" / "directory_store.py").read_text(encoding="utf-8")

@@ -1791,6 +1791,7 @@ class DirectoryStore:
                                    signature_content_type, signature_size_bytes
                             FROM approval_basic_preferences
                             WHERE user_id = %s AND company_id = %s
+                            FOR SHARE
                             """,
                             (actor.userId, actor.companyId),
                         )
