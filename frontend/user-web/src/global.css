@@ -2567,6 +2567,7 @@ textarea {
 .ui032-attachments article { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
 .ui032-attachments article div { min-width: 0; display: grid; gap: 3px; }
 .ui032-attachments strong { overflow-wrap: anywhere; }
+.ui032-attachment-error { margin-bottom: 8px; padding: 9px 10px; border: 1px solid #fecaca; border-radius: 9px; background: #fff7f7; color: #991b1b; font-size: 10px; }
 .ui032-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .ui032-state, .ui032-empty { padding: 14px; border: 1px dashed #cbd5e1; border-radius: 12px; color: #64748b; }
 .ui032-state.is-error { display: flex; justify-content: space-between; gap: 10px; align-items: center; border-color: #fecaca; color: #991b1b; background: #fff7f7; }

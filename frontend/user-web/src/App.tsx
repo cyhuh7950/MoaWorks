@@ -1255,6 +1255,7 @@ export default function App() {
   const [selectedApprovalDetail, setSelectedApprovalDetail] = useState<ApprovalDocumentDetail | null>(null);
   const [approvalDetailLoading, setApprovalDetailLoading] = useState(false);
   const [approvalDetailError, setApprovalDetailError] = useState("");
+  const [approvalAttachmentError, setApprovalAttachmentError] = useState("");
   const [approvalLogsLoading, setApprovalLogsLoading] = useState(false);
   const [approvalLogsError, setApprovalLogsError] = useState("");
   const [approvalDetailMaximized, setApprovalDetailMaximized] = useState(false);
@@ -3345,6 +3346,7 @@ export default function App() {
     }
     setSelectedApprovalId(documentId);
     setSelectedApprovalDetail(null);
+    setApprovalAttachmentError("");
     if (!token || !documentId) return;
     const sequence = ++approvalRequestSequence.current;
     setApprovalDetailLoading(true);
@@ -3391,6 +3393,16 @@ export default function App() {
       .then((response) => { if (sequence === approvalRequestSequence.current) setApprovalLogs(response.logs); })
       .catch((error) => { if (sequence === approvalRequestSequence.current) setApprovalLogsError(normalizeClientError(error, "결재 이력 조회 실패")); })
       .finally(() => { if (sequence === approvalRequestSequence.current) setApprovalLogsLoading(false); });
+  }
+
+  async function handleApprovalAttachmentDownload(attachmentId: string, fileName: string) {
+    if (!token || !selectedApprovalDetail) return;
+    setApprovalAttachmentError("");
+    try {
+      await downloadApprovalAttachment(token, selectedApprovalDetail.id, attachmentId, fileName);
+    } catch (error) {
+      setApprovalAttachmentError(normalizeClientError(error, "결재 첨부 다운로드 실패"));
+    }
   }
 
   async function keepApprovalPostAction(
@@ -4835,7 +4847,7 @@ export default function App() {
                   <section className="ui032-detail__content"><h3>본문</h3><p>{selectedDocument.content}</p></section>
                   <section className="ui032-timeline"><h3>결재선</h3>{selectedDocument.lines.length ? selectedDocument.lines.map((line) => <article key={line.id}><i>{line.sequence}</i><div><strong>{line.approverUserName}</strong><span>{approvalLineStatusLabel(line.status)} · {line.decidedAt ? formatDateLabel(line.decidedAt) : "결정 대기"}</span></div></article>) : <div className="ui032-empty">등록된 결재선이 없습니다.</div>}</section>
                   <section className="ui032-comments"><h3>처리 의견</h3>{approvalComments.length ? approvalComments.map((comment) => <article key={comment.key}><strong>{comment.actor} · {comment.action}</strong><p>{comment.text}</p><small>{comment.at ? formatDateLabel(comment.at) : "시각 없음"}</small></article>) : <div className="ui032-empty">등록된 처리 의견이 없습니다.</div>}</section>
-                  <section className="ui032-attachments"><h3>첨부</h3>{selectedDocument.attachments.length ? selectedDocument.attachments.map((attachment) => <article key={attachment.attachmentId}><div><strong>{attachment.fileName}</strong><span>{attachment.contentType} · {formatFileSize(attachment.sizeBytes)} · {formatDateLabel(attachment.createdAt)}</span></div><button type="button" onClick={() => void downloadApprovalAttachment(token, selectedDocument.id, attachment.attachmentId, attachment.fileName).catch((error) => setApprovalDetailError(normalizeClientError(error, "결재 첨부 다운로드 실패")))}>다운로드</button></article>) : <div className="ui032-empty">첨부 파일이 없습니다.</div>}</section>
+                  <section className="ui032-attachments"><h3>첨부</h3>{approvalAttachmentError ? <div className="ui032-attachment-error" role="alert">{approvalAttachmentError}</div> : null}{selectedDocument.attachments.length ? selectedDocument.attachments.map((attachment) => <article key={attachment.attachmentId}><div><strong>{attachment.fileName}</strong><span>{attachment.contentType} · {formatFileSize(attachment.sizeBytes)} · {formatDateLabel(attachment.createdAt)}</span></div><button type="button" onClick={() => void handleApprovalAttachmentDownload(attachment.attachmentId, attachment.fileName)}>다운로드</button></article>) : <div className="ui032-empty">첨부 파일이 없습니다.</div>}</section>
                   <div className="ui032-actions" aria-label="결재 처리 도구">
                     {selectedDocument.creatorUserId === me?.userId && selectedDocument.status === "draft" && canAct.create ? <button type="button" onClick={() => void openApprovalEditor("edit", selectedDocument)}>수정</button> : null}
                     {selectedDocument.creatorUserId === me?.userId && selectedDocument.status === "draft" && canAct.submit ? <button type="button" onClick={() => openActionModal("submit")}>상신</button> : null}
