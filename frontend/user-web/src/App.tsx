@@ -1273,6 +1273,7 @@ export default function App() {
   const [approvalLogsError, setApprovalLogsError] = useState("");
   const [approvalDetailMaximized, setApprovalDetailMaximized] = useState(false);
   const approvalRequestSequence = useRef(0);
+  const approvalComposeCloseRequestRef = useRef<(() => void) | null>(null);
   const [loading, setLoading] = useState(false);
   const [approvalError, setApprovalError] = useState("");
   const approvalComposeSnapshot = useMemo(
@@ -4945,6 +4946,7 @@ export default function App() {
               saving={loading}
               error={approvalError}
               className="ui033-compose-popup"
+              closeRequestRef={approvalComposeCloseRequestRef}
             >
               <form className="ui033-compose" onSubmit={handleCreate}>
                 <div className="ui033-compose__tabs" role="tablist" aria-label="결재 작성 단계">
@@ -4971,7 +4973,7 @@ export default function App() {
                     <div className="ui033-approver-selected" aria-label="선택된 결재선"><header><strong>선택된 결재선</strong><span>{selectedApprovers.length}명</span></header>{selectedApprovers.map((user, index) => <article key={user.userId}><i>{index + 1}</i><div><strong>{user.userName}</strong><span>{user.departmentName} · {user.userEmail}</span></div><button type="button" disabled={index === 0} onClick={() => moveApprovalApprover(user.userId, -1)}>위</button><button type="button" disabled={index === selectedApprovers.length - 1} onClick={() => moveApprovalApprover(user.userId, 1)}>아래</button><button type="button" onClick={() => setCreateForm((current) => ({ ...current, approverUserIds: current.approverUserIds.filter((id) => id !== user.userId) }))}>제거</button></article>)}{!selectedApprovers.length ? <p>임시저장은 결재선 없이 가능하며, 상신 전에 1명 이상 지정해야 합니다.</p> : null}</div>
                   </section>
                 )}
-                <footer className="ui033-compose__footer"><button type="button" onClick={closeApprovalModal}>취소</button><button type="submit" disabled={loading}>{approvalModal === "edit" ? "수정 저장" : "임시저장"}</button></footer>
+                <footer className="ui033-compose__footer"><button type="button" onClick={() => approvalComposeCloseRequestRef.current?.()}>취소</button><button type="submit" disabled={loading}>{approvalModal === "edit" ? "수정 저장" : "임시저장"}</button></footer>
               </form>
             </CommonPopup>
             {approvalModal !== "none" && approvalModal !== "create" && approvalModal !== "edit" ? <div role="dialog" aria-modal="true" aria-label={`결재 ${approvalModal} 팝업`} style={{ position: "fixed", inset: 0, zIndex: 30, display: "grid", placeItems: "center", padding: 20, background: "rgba(15, 23, 42, 0.42)" }}>

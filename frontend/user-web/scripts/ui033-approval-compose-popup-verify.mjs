@@ -47,6 +47,8 @@ await check("editor identity and latest edit detail are independent from list se
 
 await check("dirty close and saving use CommonPopup without browser confirm", () => {
   assert.match(app, /<CommonPopup[\s\S]*dirty=\{approvalComposeDirty\}[\s\S]*saving=\{loading\}/);
+  assert.match(app, /closeRequestRef=\{approvalComposeCloseRequestRef\}/);
+  assert.match(app, /approvalComposeCloseRequestRef\.current\?\.\(\)/);
   const closeBlock = app.split("function closeApprovalModal")[1].split("function selectApprovalApprover")[0];
   assert.doesNotMatch(closeBlock, /window\.confirm/);
 });
