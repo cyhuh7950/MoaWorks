@@ -41,7 +41,7 @@ class Ui031ApprovalApproverContractTests(unittest.TestCase):
     def test_static_route_precedes_document_route_and_requires_create_permission(self):
         source = (self.root / "app" / "api" / "routes" / "approvals.py").read_text(encoding="utf-8")
         static_marker = '@router.get("/approvers", response_model=ApprovalApproverListResponse)'
-        dynamic_marker = '@router.get("/{document_id}", response_model=ApprovalDocumentResponse)'
+        dynamic_marker = '@router.get("/{document_id}",'
 
         self.assertIn(static_marker, source)
         self.assertLess(source.index(static_marker), source.index(dynamic_marker))

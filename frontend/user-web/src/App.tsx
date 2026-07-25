@@ -20,6 +20,7 @@ import {
   deleteMailFolder,
   deleteMailTag,
   downloadMailAttachment,
+  downloadApprovalAttachment,
   downloadMailboxBackup,
   createApproval,
   createMailboxBackup,
@@ -50,6 +51,7 @@ import {
   fetchApprovalApprovers,
   fetchContacts,
   fetchApprovalLogs,
+  fetchApprovalDetail,
   fetchApprovals,
   fetchDraftMail,
   fetchInbox,
@@ -118,6 +120,7 @@ import {
   type MailRecentRecipient,
   type MailRecentRecipientSettingsResponse,
   type ApprovalDocument,
+  type ApprovalDocumentDetail,
   type AuditLog,
   type AuthUser,
   type LoginResponse,
@@ -177,6 +180,7 @@ import {
   type ApprovalActualMenuKey,
   type ApprovalPostAction,
 } from "./approvalShell";
+import { approvalLineStatusLabel, approvalStatusLabel, filterApprovalDocuments, resolveApprovalSelection } from "./approvalDetail";
 
 const NOTIFICATION_POLICY = {
   retryMaxAttempts: 3,
@@ -1248,6 +1252,13 @@ export default function App() {
   const [approverSearch, setApproverSearch] = useState("");
   const [approvalApprovers, setApprovalApprovers] = useState<ApprovalApprover[]>([]);
   const [approvalLogs, setApprovalLogs] = useState<AuditLog[]>([]);
+  const [selectedApprovalDetail, setSelectedApprovalDetail] = useState<ApprovalDocumentDetail | null>(null);
+  const [approvalDetailLoading, setApprovalDetailLoading] = useState(false);
+  const [approvalDetailError, setApprovalDetailError] = useState("");
+  const [approvalLogsLoading, setApprovalLogsLoading] = useState(false);
+  const [approvalLogsError, setApprovalLogsError] = useState("");
+  const [approvalDetailMaximized, setApprovalDetailMaximized] = useState(false);
+  const approvalRequestSequence = useRef(0);
   const [loading, setLoading] = useState(false);
   const [approvalError, setApprovalError] = useState("");
   const [documents, setDocuments] = useState<ApprovalDocument[]>([]);
@@ -3333,14 +3344,53 @@ export default function App() {
       if (targetMenu) setApprovalShellMenu(targetMenu);
     }
     setSelectedApprovalId(documentId);
-    if (!token) return;
-    try {
-      const response = await fetchApprovalLogs(token, documentId);
-      setApprovalLogs(response.logs);
-    } catch (error) {
-      setApprovalError(normalizeClientError(error, "결재 이력 조회 실패"));
-      setApprovalLogs([]);
-    }
+    setSelectedApprovalDetail(null);
+    if (!token || !documentId) return;
+    const sequence = ++approvalRequestSequence.current;
+    setApprovalDetailLoading(true);
+    setApprovalLogsLoading(true);
+    setApprovalDetailError("");
+    setApprovalLogsError("");
+    void fetchApprovalDetail(token, documentId)
+      .then((detail) => {
+        if (sequence !== approvalRequestSequence.current) return;
+        setSelectedApprovalDetail(detail);
+      })
+      .catch((error) => {
+        if (sequence !== approvalRequestSequence.current) return;
+        setApprovalDetailError(normalizeClientError(error, "결재 상세 조회 실패"));
+      })
+      .finally(() => {
+        if (sequence === approvalRequestSequence.current) setApprovalDetailLoading(false);
+      });
+    void fetchApprovalLogs(token, documentId)
+      .then((response) => {
+        if (sequence !== approvalRequestSequence.current) return;
+        setApprovalLogs(response.logs);
+      })
+      .catch((error) => {
+        if (sequence !== approvalRequestSequence.current) return;
+        setApprovalLogsError(normalizeClientError(error, "결재 이력 조회 실패"));
+        setApprovalLogs([]);
+      })
+      .finally(() => {
+        if (sequence === approvalRequestSequence.current) setApprovalLogsLoading(false);
+      });
+  }
+
+  function retryApprovalDetail() {
+    if (selectedApprovalId) void selectApprovalDocument(selectedApprovalId, { preserveMenu: true });
+  }
+
+  function retryApprovalLogs() {
+    if (!token || !selectedApprovalId) return;
+    const sequence = approvalRequestSequence.current;
+    setApprovalLogsLoading(true);
+    setApprovalLogsError("");
+    void fetchApprovalLogs(token, selectedApprovalId)
+      .then((response) => { if (sequence === approvalRequestSequence.current) setApprovalLogs(response.logs); })
+      .catch((error) => { if (sequence === approvalRequestSequence.current) setApprovalLogsError(normalizeClientError(error, "결재 이력 조회 실패")); })
+      .finally(() => { if (sequence === approvalRequestSequence.current) setApprovalLogsLoading(false); });
   }
 
   async function keepApprovalPostAction(
@@ -3561,6 +3611,21 @@ export default function App() {
     () => classifyApprovalDocuments(documents, me?.userId ?? ""),
     [documents, me?.userId],
   );
+
+  useEffect(() => {
+    if (activePortalMenu !== "approval" || !isApprovalActualMenuKey(approvalShellMenu)) return;
+    const visible = filterApprovalDocuments(approvalDocumentsByMenu[approvalShellMenu], approvalStatusFilter, approvalSearch);
+    const nextId = resolveApprovalSelection(selectedApprovalId, visible);
+    if (nextId !== selectedApprovalId) {
+      if (nextId) void selectApprovalDocument(nextId, { preserveMenu: true });
+      else {
+        approvalRequestSequence.current += 1;
+        setSelectedApprovalId("");
+        setSelectedApprovalDetail(null);
+        setApprovalLogs([]);
+      }
+    }
+  }, [activePortalMenu, approvalDocumentsByMenu, approvalSearch, approvalShellMenu, approvalStatusFilter, selectedApprovalId]);
 
   function openApprovalShellMenu(nextMenu: ApprovalShellMenuKey) {
     setApprovalShellMenu(nextMenu);
@@ -4658,12 +4723,13 @@ export default function App() {
         const menuDocuments = isApprovalActualMenuKey(approvalShellMenu)
           ? approvalDocumentsByMenu[approvalShellMenu]
           : [];
-        const filteredDocuments = menuDocuments.filter((document) => {
-          const statusMatches = approvalStatusFilter === "all" || document.status === approvalStatusFilter;
-          const keyword = approvalSearch.trim().toLowerCase();
-          return statusMatches && (!keyword || `${document.title} ${document.creatorUserName}`.toLowerCase().includes(keyword));
-        });
-        const selectedDocument = menuDocuments.find((document) => document.id === selectedApprovalId) ?? filteredDocuments[0] ?? null;
+        const filteredDocuments = filterApprovalDocuments(menuDocuments, approvalStatusFilter, approvalSearch);
+        const effectiveSelectionId = resolveApprovalSelection(selectedApprovalId, filteredDocuments);
+        const selectedDocument = selectedApprovalDetail?.id === effectiveSelectionId ? selectedApprovalDetail : null;
+        const approvalComments = selectedDocument ? [
+          ...selectedDocument.lines.filter((line) => line.comment?.trim()).map((line) => ({ key: `line-${line.id}`, actor: line.approverUserName, action: approvalLineStatusLabel(line.status), text: line.comment!.trim(), at: line.decidedAt })),
+          ...approvalLogs.filter((log) => log.reason?.trim() && !selectedDocument.lines.some((line) => line.comment?.trim() === log.reason?.trim())).map((log) => ({ key: `log-${log.id}`, actor: log.actorUserName, action: log.event, text: log.reason!.trim(), at: log.createdAt })),
+        ] : [];
         const selectedApprovers = createForm.approverUserIds
           .map((userId) => approvalApprovers.find((user) => user.userId === userId))
           .filter((user): user is ApprovalApprover => Boolean(user));
@@ -4731,32 +4797,46 @@ export default function App() {
             </header>
             {approvalError && approvalModal === "none" ? <FeedbackState state="error" title="결재 정보를 처리하지 못했습니다." message={approvalError} action={{ label: "다시 시도", onAction: () => void reload() }} /> : null}
             {isApprovalActualMenuKey(approvalShellMenu) ? (
-            <div className="ui031-shell__body">
-              <section className="ui031-list" aria-label="결재 목록">
+            <div className="ui031-shell__body ui032-approval-split">
+              <SplitView
+                ariaLabel="결재 목록과 상세 크기 조절"
+                storageKey="moaworks.user.approval.split-ratio.v1"
+                defaultRatio={40}
+                minRatio={28}
+                maxRatio={65}
+                secondaryMaximized={approvalDetailMaximized}
+                primary={<section className="ui031-list" aria-label="결재 목록">
                 <div className="ui031-list__filters">
-                  {[["all", "전체"], ["draft", "초안"], ["submitted", "상신"], ["rejected", "반려"], ["approved", "완료"]].map(([value, label]) => (
+                  {[["all", "전체"], ["draft", "초안"], ["submitted", "상신"], ["rejected", "반려"], ["withdrawn", "회수"], ["approved", "완료"]].map(([value, label]) => (
                     <button key={value} type="button" className={approvalStatusFilter === value ? "is-active" : ""} onClick={() => setApprovalStatusFilter(value)}>{label}</button>
                   ))}
                 </div>
-                <input className="ui031-list__search" aria-label="결재 검색" value={approvalSearch} onChange={(event) => setApprovalSearch(event.target.value)} placeholder="제목 또는 기안자 검색" />
+                <input className="ui031-list__search" aria-label="결재 검색" value={approvalSearch} onChange={(event) => setApprovalSearch(event.target.value)} placeholder="제목, 기안자, 현재 결재자 검색" />
                 <div className="ui031-list__items">
                   {filteredDocuments.map((document) => {
                     const currentLine = document.lines.find((line) => line.sequence === document.currentLineIndex);
-                    return <button className={selectedDocument?.id === document.id ? "is-active" : ""} key={document.id} type="button" onDoubleClick={() => void selectApprovalDocument(document.id)} onClick={() => void selectApprovalDocument(document.id)}>
-                      <strong>{document.title}</strong>
-                      <div style={{ marginTop: 5, display: "flex", justifyContent: "space-between", gap: 8, color: "#475569", fontSize: 12 }}><span>{document.creatorUserName}</span><span>{document.status}</span></div>
-                      <div style={{ marginTop: 4, color: "#64748b", fontSize: 11 }}>현재 결재자: {currentLine?.approverUserName ?? "-"} · {formatDateLabel(document.updatedAt)}</div>
+                    const isSelected = effectiveSelectionId === document.id;
+                    const decidedCount = document.lines.filter((line) => line.status !== "pending").length;
+                    return <button className={`ui032-list-row${isSelected ? " is-active" : ""}`} aria-current={isSelected ? "true" : undefined} key={document.id} type="button" onClick={() => void selectApprovalDocument(document.id)}>
+                      <span className={`ui032-status is-${document.status}`}>{approvalStatusLabel(document.status)}</span><strong>{document.title}</strong>
+                      <span>기안 {document.creatorUserName}</span><span>현재 {currentLine?.approverUserName ?? "-"}</span>
+                      <small>{formatDateLabel(document.updatedAt)} · 진행 {decidedCount}/{document.lines.length}</small>
                     </button>;
                   })}
-                  {!filteredDocuments.length ? <div style={{ padding: 16, border: "1px dashed #cbd5e1", borderRadius: 12, color: "#64748b" }}>표시할 결재 문서가 없습니다.</div> : null}
+                  {!filteredDocuments.length ? <div className="ui032-empty">표시할 결재 문서가 없습니다.</div> : null}
                 </div>
-              </section>
-              <section className="ui031-detail" aria-label="결재 상세">
-                {selectedDocument ? <>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}><div><div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800 }}>선택 문서</div><h2 style={{ margin: "6px 0 0", fontSize: 22 }}>{selectedDocument.title}</h2></div><span style={{ padding: "5px 9px", borderRadius: 999, background: "#e2e8f0", fontSize: 12, fontWeight: 800 }}>{selectedDocument.status}</span></div>
-                  <p style={{ whiteSpace: "pre-wrap", color: "#334155", lineHeight: 1.6 }}>{selectedDocument.content}</p>
-                  <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e2e8f0" }}><strong>결재선</strong>{selectedDocument.lines.map((line) => <div key={line.id} style={{ marginTop: 7, fontSize: 12, color: "#475569" }}>{line.sequence}. {line.approverUserName} · {line.status}{line.comment ? ` · ${line.comment}` : ""}</div>)}</div>
-                  <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              </section>}
+                secondary={<section className="ui031-detail ui032-detail" aria-label="결재 상세">
+                <div className="ui032-detail__toolbar"><button type="button" onClick={() => setApprovalDetailMaximized((current) => !current)}>{approvalDetailMaximized ? "분할 복귀" : "상세 최대화"}</button></div>
+                {approvalDetailLoading ? <div className="ui032-state" role="status">최신 결재 상세를 불러오는 중입니다.</div> : null}
+                {approvalDetailError ? <div className="ui032-state is-error" role="alert">{approvalDetailError}<button type="button" onClick={retryApprovalDetail}>상세 다시 시도</button></div> : null}
+                {!approvalDetailLoading && !approvalDetailError && selectedDocument ? <>
+                  <header className="ui032-detail__header"><div><span>선택 문서</span><h2>{selectedDocument.title}</h2><p>기안 {selectedDocument.creatorUserName} · 작성 {formatDateLabel(selectedDocument.createdAt)} · 상신 {selectedDocument.submittedAt ? formatDateLabel(selectedDocument.submittedAt) : "-"} · 갱신 {formatDateLabel(selectedDocument.updatedAt)}</p></div><span className={`ui032-status is-${selectedDocument.status}`}>{approvalStatusLabel(selectedDocument.status)}</span></header>
+                  <section className="ui032-detail__content"><h3>본문</h3><p>{selectedDocument.content}</p></section>
+                  <section className="ui032-timeline"><h3>결재선</h3>{selectedDocument.lines.length ? selectedDocument.lines.map((line) => <article key={line.id}><i>{line.sequence}</i><div><strong>{line.approverUserName}</strong><span>{approvalLineStatusLabel(line.status)} · {line.decidedAt ? formatDateLabel(line.decidedAt) : "결정 대기"}</span></div></article>) : <div className="ui032-empty">등록된 결재선이 없습니다.</div>}</section>
+                  <section className="ui032-comments"><h3>처리 의견</h3>{approvalComments.length ? approvalComments.map((comment) => <article key={comment.key}><strong>{comment.actor} · {comment.action}</strong><p>{comment.text}</p><small>{comment.at ? formatDateLabel(comment.at) : "시각 없음"}</small></article>) : <div className="ui032-empty">등록된 처리 의견이 없습니다.</div>}</section>
+                  <section className="ui032-attachments"><h3>첨부</h3>{selectedDocument.attachments.length ? selectedDocument.attachments.map((attachment) => <article key={attachment.attachmentId}><div><strong>{attachment.fileName}</strong><span>{attachment.contentType} · {formatFileSize(attachment.sizeBytes)} · {formatDateLabel(attachment.createdAt)}</span></div><button type="button" onClick={() => void downloadApprovalAttachment(token, selectedDocument.id, attachment.attachmentId, attachment.fileName).catch((error) => setApprovalDetailError(normalizeClientError(error, "결재 첨부 다운로드 실패")))}>다운로드</button></article>) : <div className="ui032-empty">첨부 파일이 없습니다.</div>}</section>
+                  <div className="ui032-actions" aria-label="결재 처리 도구">
                     {selectedDocument.creatorUserId === me?.userId && selectedDocument.status === "draft" && canAct.create ? <button type="button" onClick={() => void openApprovalEditor("edit", selectedDocument)}>수정</button> : null}
                     {selectedDocument.creatorUserId === me?.userId && selectedDocument.status === "draft" && canAct.submit ? <button type="button" onClick={() => openActionModal("submit")}>상신</button> : null}
                     {selectedDocument.creatorUserId === me?.userId && selectedDocument.status === "submitted" && canAct.withdraw ? <button type="button" onClick={() => openActionModal("withdraw")}>회수</button> : null}
@@ -4764,9 +4844,10 @@ export default function App() {
                     {isCurrentApprover(selectedDocument) && canAct.act ? <button type="button" onClick={() => openActionModal("approve")}>승인</button> : null}
                     {isCurrentApprover(selectedDocument) && canAct.act ? <button type="button" onClick={() => openActionModal("reject")}>반려</button> : null}
                   </div>
-                  <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid #e2e8f0" }}><strong>처리 이력</strong>{approvalLogs.length ? approvalLogs.map((log) => <div key={log.id} style={{ marginTop: 7, color: "#64748b", fontSize: 12 }}>{log.event} · {log.actorUserName} · {formatDateLabel(log.createdAt)}</div>) : <div style={{ marginTop: 7, color: "#64748b", fontSize: 12 }}>이력을 불러오는 중이거나 아직 없습니다.</div>}</div>
-                </> : <div style={{ color: "#64748b" }}>목록에서 결재 문서를 선택하세요.</div>}
-              </section>
+                  <section className="ui032-history"><h3>처리 이력</h3>{approvalLogsLoading ? <div className="ui032-state" role="status">처리 이력을 불러오는 중입니다.</div> : approvalLogsError ? <div className="ui032-state is-error" role="alert">{approvalLogsError}<button type="button" onClick={retryApprovalLogs}>이력 다시 시도</button></div> : approvalLogs.length ? approvalLogs.map((log) => <article key={log.id}><strong>{log.event}</strong><span>{log.actorUserName} · {log.statusBefore ?? "-"} → {log.statusAfter ?? "-"} · {formatDateLabel(log.createdAt)}</span></article>) : <div className="ui032-empty">처리 이력이 없습니다.</div>}</section>
+                </> : !approvalDetailLoading && !approvalDetailError ? <div className="ui032-empty">목록에서 결재 문서를 선택하세요.</div> : null}
+              </section>}
+              />
             </div>
             ) : (
               <section className="ui031-ready" role="status" aria-live="polite">

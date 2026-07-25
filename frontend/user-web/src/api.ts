@@ -145,6 +145,18 @@ export type ApprovalDocument = {
   lines: ApprovalLine[];
 };
 
+export type ApprovalAttachment = {
+  attachmentId: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  createdAt: string;
+};
+
+export type ApprovalDocumentDetail = ApprovalDocument & {
+  attachments: ApprovalAttachment[];
+};
+
 export type ApprovalListResponse = {
   documents: ApprovalDocument[];
 };
@@ -653,6 +665,25 @@ export async function fetchApprovals(token: string): Promise<ApprovalListRespons
   return request<ApprovalListResponse>("/approvals", {
     headers: authHeaders(token),
   });
+}
+
+export async function fetchApprovalDetail(token: string, documentId: string): Promise<ApprovalDocumentDetail> {
+  return request<ApprovalDocumentDetail>(`/approvals/${documentId}`, {
+    headers: authHeaders(token),
+  });
+}
+
+export async function downloadApprovalAttachment(token: string, documentId: string, attachmentId: string, fileName: string) {
+  const response = await fetch(`${apiBase}/approvals/${documentId}/attachments/${attachmentId}`, {
+    headers: authHeaders(token),
+  });
+  if (!response.ok) throw extractApiError(response, await response.json().catch(() => ({})));
+  const objectUrl = URL.createObjectURL(await response.blob());
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = fileName;
+  anchor.click();
+  URL.revokeObjectURL(objectUrl);
 }
 
 export async function createApproval(
