@@ -6,6 +6,8 @@ from uuid import uuid4
 
 from app.schemas.directory import (
     ApprovalActionReason,
+    ApprovalApproverListResponse,
+    ApprovalApproverView,
     ApprovalCreateResponse,
     ApprovalDocumentCreateRequest,
     ApprovalDocumentResponse,
@@ -598,6 +600,42 @@ class DirectoryStore:
                     raise ValueError("대상 Relay 설정을 찾을 수 없습니다.")
             connection.commit()
         return self._to_mail_provider_record(row)
+
+    def list_active_approval_approvers(self, actor_id: str) -> ApprovalApproverListResponse:
+        actor = self.get_user_summary(actor_id)
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        u.id AS user_id,
+                        u.name AS user_name,
+                        u.email AS user_email,
+                        COALESCE(d.name, '미지정') AS department_name
+                    FROM users u
+                    JOIN roles r ON r.id = u.role_id AND r.company_id = u.company_id
+                    LEFT JOIN departments d ON d.id = u.department_id AND d.company_id = u.company_id
+                    WHERE u.company_id = %s
+                      AND u.status = 'active'
+                      AND r.status = 'active'
+                      AND (u.department_id IS NULL OR d.status = 'active')
+                    ORDER BY department_name ASC, u.name ASC, u.email ASC
+                    """,
+                    (actor.companyId,),
+                )
+                rows = cursor.fetchall()
+        return ApprovalApproverListResponse(
+            users=[
+                ApprovalApproverView(
+                    userId=row["user_id"],
+                    userName=row["user_name"],
+                    userEmail=row["user_email"],
+                    departmentName=row["department_name"],
+                )
+                for row in rows
+            ]
+        )
 
     def list_approval_documents(self, actor_id: str) -> ApprovalListResponse:
         self.db.ensure_migrations_applied()

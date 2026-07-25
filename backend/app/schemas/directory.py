@@ -208,6 +208,17 @@ class ApprovalListResponse(BaseModel):
     documents: list[ApprovalDocumentResponse]
 
 
+class ApprovalApproverView(BaseModel):
+    userId: str
+    userName: str
+    userEmail: str
+    departmentName: str
+
+
+class ApprovalApproverListResponse(BaseModel):
+    users: list[ApprovalApproverView]
+
+
 class AuditLogView(BaseModel):
     id: str
     event: str

@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, Query
 from app.api.dependencies import get_current_user, permission_required
 from app.schemas.directory import (
     ApprovalActionReason,
+    ApprovalApproverListResponse,
     ApprovalCreateResponse,
     ApprovalDocumentCreateRequest,
     ApprovalDocumentResponse,
@@ -29,6 +30,13 @@ def list_approval_audit_logs(
     user: AuthUserSummary = Depends(get_current_user),
 ) -> AuditLogListResponse:
     return DirectoryStore().get_audit_logs(user.userId, target_id=documentId)
+
+
+@router.get("/approvers", response_model=ApprovalApproverListResponse)
+def list_approval_approvers(
+    user: AuthUserSummary = Depends(permission_required("approval:create")),
+) -> ApprovalApproverListResponse:
+    return DirectoryStore().list_active_approval_approvers(user.userId)
 
 
 @router.get("/{document_id}", response_model=ApprovalDocumentResponse)
