@@ -6,6 +6,38 @@ body,
   margin: 0;
 }
 
+/* UI-035 approval basic settings */
+.ui035-settings { min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; background: #fff; font-size: 12px; }
+.ui035-settings > nav { display: flex; gap: 4px; padding: 12px 18px; border-bottom: 1px solid #dbe4ec; }
+.ui035-settings > nav button { min-height: 34px; padding: 0 14px; border: 1px solid #cbd5e1; border-radius: 9px; background: #f8fafc; font: inherit; }
+.ui035-settings > nav button[aria-selected="true"] { color: #fff; border-color: #0f766e; background: #0f766e; font-weight: 800; }
+.ui035-settings__body { min-height: 0; overflow-y: auto; padding: 16px 20px 80px; display: grid; grid-template-columns: repeat(2, minmax(280px, 1fr)); align-content: start; gap: 16px; }
+.ui035-settings fieldset { margin: 0; padding: 16px; display: grid; align-content: start; gap: 12px; border: 1px solid #dbe4ec; border-radius: 14px; }
+.ui035-settings fieldset:first-child { grid-column: 1 / -1; }
+.ui035-settings legend { padding: 0 8px; font-size: 14px; font-weight: 800; }
+.ui035-settings legend i { display: inline-grid; place-items: center; width: 15px; height: 15px; margin-left: 4px; border-radius: 50%; background: #e2e8f0; color: #475569; font-size: 9px; font-style: normal; cursor: help; }
+.ui035-settings fieldset > label { min-height: 34px; display: flex; align-items: center; gap: 8px; }
+.ui035-signature-row { display: grid; grid-template-columns: 90px minmax(180px, 1fr) auto auto; align-items: center; gap: 10px; }
+.ui035-signature-preview { width: 88px; height: 54px; display: grid; place-items: center; overflow: hidden; border: 1px dashed #94a3b8; border-radius: 9px; background: #f8fafc; color: #64748b; font-size: 9px; }
+.ui035-signature-preview img { max-width: 55px; max-height: 40px; object-fit: contain; }
+.ui035-signature-row > div:nth-child(2) { min-width: 0; display: grid; gap: 3px; }
+.ui035-signature-row small { color: #64748b; font-size: 10px; }
+.ui035-file-button, .ui035-signature-row button, .ui035-settings__actions button, .ui035-settings__state button, .ui035-discard-confirm button { min-height: 34px; padding: 0 11px; border: 1px solid #cbd5e1; border-radius: 9px; background: #fff; color: #1e293b; font: inherit; font-weight: 700; }
+.ui035-file-button { display: inline-flex; align-items: center; cursor: pointer; }
+.ui035-file-button input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.ui035-settings__actions { position: sticky; bottom: 0; display: flex; align-items: center; gap: 8px; padding: 12px 20px; border-top: 1px solid #dbe4ec; background: rgba(255,255,255,.97); }
+.ui035-settings__actions span { flex: 1; color: #64748b; font-size: 10px; }
+.ui035-settings__actions button:last-child { color: #fff; border-color: #0f766e; background: #0f766e; }
+.ui035-settings__state { margin: 16px 20px 0; padding: 12px; border: 1px solid #dbe4ec; border-radius: 10px; }
+.ui035-settings__state.is-error { color: #991b1b; border-color: #fecaca; background: #fff7f7; }
+.ui035-line-signature { width: auto; max-width: 55px; max-height: 40px; margin-left: auto; object-fit: contain; }
+.ui035-attachment-preview { flex: 0 0 auto; object-fit: contain; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; }
+.ui035-attachment-preview.is-thumbnail { width: 100px; height: 100px; }
+.ui035-attachment-preview.is-original { width: auto; height: auto; max-width: 100%; max-height: none; }
+.ui035-discard-confirm { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; max-width: 430px; }
+.ui035-discard-confirm p { width: 100%; margin: 0 0 8px; line-height: 1.6; }
+@media (max-width: 1100px) { .ui035-settings__body { grid-template-columns: 1fr; } .ui035-signature-row { grid-template-columns: 80px minmax(0, 1fr); } }
+
 .user-mail-settings { min-width: 0; height: 100%; overflow: hidden; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; background: #fff; border: 1px solid #dbe4ec; border-radius: 20px; font-size: 12px; }
 .user-mail-settings > header { display: flex; justify-content: space-between; align-items: center; padding: 18px 20px 12px; }
 .user-mail-settings > header small { color: #0f766e; font-weight: 800; }

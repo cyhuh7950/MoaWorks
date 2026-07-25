@@ -11,6 +11,7 @@ from app.schemas.directory import (
     ApprovalAttachmentUploadResponse,
     ApprovalApproverListResponse,
     ApprovalApproverView,
+    ApprovalBasicPreferenceResponse,
     ApprovalCreateResponse,
     ApprovalDocumentCreateRequest,
     ApprovalDocumentDetailResponse,
@@ -46,6 +47,11 @@ from app.services.approval_attachment_storage import (
     APPROVAL_ATTACHMENT_MAX_TOTAL_BYTES,
     ApprovalAttachmentStorage,
 )
+from app.services.approval_signature_storage import ApprovalSignatureStorage, detect_safe_image_type
+
+
+class ApprovalPreferenceConflictError(Exception):
+    pass
 
 
 class DirectoryStore:
@@ -740,6 +746,224 @@ class DirectoryStore:
             "contentType": row["content_type"],
         }
 
+    def get_approval_basic_preferences(self, actor_id: str) -> ApprovalBasicPreferenceResponse:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                actor = self._fetch_actor_summary(cursor, actor_id)
+                cursor.execute(
+                    """
+                    SELECT writing_method, attachment_image_display, signature_file_name,
+                           signature_content_type, signature_size_bytes, version
+                    FROM approval_basic_preferences
+                    WHERE user_id = %s AND company_id = %s
+                    """,
+                    (actor.userId, actor.companyId),
+                )
+                row = cursor.fetchone()
+        if row is None:
+            return ApprovalBasicPreferenceResponse(
+                writingMethod="general",
+                attachmentImageDisplay="thumbnail",
+                version=0,
+                hasSignature=False,
+            )
+        has_signature = bool(row["signature_file_name"])
+        return ApprovalBasicPreferenceResponse(
+            writingMethod=row["writing_method"],
+            attachmentImageDisplay=row["attachment_image_display"],
+            version=row["version"],
+            hasSignature=has_signature,
+            signatureFileName=row["signature_file_name"],
+            signatureContentType=row["signature_content_type"],
+            signatureSizeBytes=row["signature_size_bytes"],
+            signatureUrl="/api/v1/approvals/settings/signature" if has_signature else None,
+        )
+
+    def get_approval_signature(self, actor_id: str) -> dict[str, object]:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                actor = self._fetch_actor_summary(cursor, actor_id)
+                cursor.execute(
+                    """
+                    SELECT signature_storage_key, signature_file_name, signature_content_type
+                    FROM approval_basic_preferences
+                    WHERE user_id = %s AND company_id = %s
+                    """,
+                    (actor.userId, actor.companyId),
+                )
+                row = cursor.fetchone()
+        if row is None or not row["signature_storage_key"]:
+            raise ValueError("등록된 서명 파일이 없습니다.")
+        return {
+            "path": ApprovalSignatureStorage().stored_path(row["signature_storage_key"]),
+            "fileName": row["signature_file_name"],
+            "contentType": row["signature_content_type"],
+        }
+
+    def update_approval_basic_preferences(
+        self,
+        actor_id: str,
+        writing_method: str,
+        attachment_image_display: str,
+        expected_version: int,
+        remove_signature: bool,
+        signature: tuple[str, str, bytes] | None,
+    ) -> ApprovalBasicPreferenceResponse:
+        if writing_method != "general":
+            raise ValueError("지원하지 않는 결재 작성 방식입니다.")
+        if attachment_image_display not in {"thumbnail", "original", "filename"}:
+            raise ValueError("지원하지 않는 첨부 이미지 표시 방식입니다.")
+        if expected_version < 0:
+            raise ValueError("설정 버전이 올바르지 않습니다.")
+        if remove_signature and signature is not None:
+            raise ValueError("서명 등록과 제거를 동시에 요청할 수 없습니다.")
+
+        self.db.ensure_migrations_applied()
+        storage = ApprovalSignatureStorage()
+        staged = storage.stage(*signature) if signature is not None else None
+        old_storage_key: str | None = None
+        old_referenced = False
+        try:
+            with self.db.connect() as connection:
+                with connection.cursor() as cursor:
+                    actor = self._fetch_actor_summary(cursor, actor_id)
+                    cursor.execute(
+                        """
+                        SELECT writing_method, attachment_image_display, signature_storage_key,
+                               signature_file_name, signature_content_type, signature_size_bytes, version
+                        FROM approval_basic_preferences
+                        WHERE user_id = %s AND company_id = %s
+                        FOR UPDATE
+                        """,
+                        (actor.userId, actor.companyId),
+                    )
+                    current = cursor.fetchone()
+                    current_version = int(current["version"]) if current else 0
+                    if current_version != expected_version:
+                        raise ApprovalPreferenceConflictError("다른 화면에서 설정이 변경되었습니다.")
+
+                    old_storage_key = current["signature_storage_key"] if current else None
+                    if staged is not None:
+                        signature_values = (
+                            staged["storage_key"], staged["file_name"], staged["content_type"], staged["size_bytes"]
+                        )
+                        signature_action = "added" if not old_storage_key else "replaced"
+                    elif remove_signature:
+                        signature_values = (None, None, None, None)
+                        signature_action = "removed" if old_storage_key else "unchanged"
+                    else:
+                        signature_values = (
+                            current["signature_storage_key"] if current else None,
+                            current["signature_file_name"] if current else None,
+                            current["signature_content_type"] if current else None,
+                            current["signature_size_bytes"] if current else None,
+                        )
+                        signature_action = "unchanged"
+
+                    next_version = current_version + 1
+                    now = self._now()
+                    cursor.execute(
+                        """
+                        INSERT INTO approval_basic_preferences (
+                            user_id, company_id, writing_method, attachment_image_display,
+                            signature_storage_key, signature_file_name, signature_content_type,
+                            signature_size_bytes, version, updated_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (user_id) DO UPDATE SET
+                            company_id = EXCLUDED.company_id,
+                            writing_method = EXCLUDED.writing_method,
+                            attachment_image_display = EXCLUDED.attachment_image_display,
+                            signature_storage_key = EXCLUDED.signature_storage_key,
+                            signature_file_name = EXCLUDED.signature_file_name,
+                            signature_content_type = EXCLUDED.signature_content_type,
+                            signature_size_bytes = EXCLUDED.signature_size_bytes,
+                            version = EXCLUDED.version,
+                            updated_at = EXCLUDED.updated_at
+                        """,
+                        (
+                            actor.userId, actor.companyId, writing_method, attachment_image_display,
+                            *signature_values, next_version, now,
+                        ),
+                    )
+                    changed_policies = []
+                    if current is None or current["writing_method"] != writing_method:
+                        changed_policies.append("writingMethod")
+                    if current is None or current["attachment_image_display"] != attachment_image_display:
+                        changed_policies.append("attachmentImageDisplay")
+                    self._insert_audit(
+                        cursor=cursor,
+                        company_id=actor.companyId,
+                        actor_user_id=actor.userId,
+                        actor_user_name=actor.userName,
+                        target_type="approval_preference",
+                        target_id=actor.userId,
+                        event="approval.settings.updated",
+                        status_before=str(current_version),
+                        status_after=str(next_version),
+                        reason=f"policies={','.join(changed_policies) or 'unchanged'};signature={signature_action}",
+                    )
+                    if old_storage_key and old_storage_key != signature_values[0]:
+                        cursor.execute(
+                            "SELECT 1 FROM approval_lines WHERE signature_storage_key = %s LIMIT 1",
+                            (old_storage_key,),
+                        )
+                        old_referenced = cursor.fetchone() is not None
+                connection.commit()
+        except Exception:
+            if staged is not None:
+                storage.delete(str(staged["storage_key"]))
+            raise
+
+        if old_storage_key and old_storage_key != signature_values[0] and not old_referenced:
+            try:
+                storage.delete(old_storage_key)
+            except (OSError, ValueError):
+                pass
+        return ApprovalBasicPreferenceResponse(
+            writingMethod="general",
+            attachmentImageDisplay=attachment_image_display,
+            version=next_version,
+            hasSignature=bool(signature_values[0]),
+            signatureFileName=signature_values[1],
+            signatureContentType=signature_values[2],
+            signatureSizeBytes=signature_values[3],
+            signatureUrl="/api/v1/approvals/settings/signature" if signature_values[0] else None,
+        )
+
+    def get_approval_line_signature(self, actor_id: str, document_id: str, line_id: str) -> dict[str, object]:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                actor = self._fetch_actor_summary(cursor, actor_id)
+                document = self._fetch_required_approval_document(cursor, document_id)
+                self._assert_approval_visible(cursor, actor, document)
+                cursor.execute(
+                    """
+                    SELECT signature_storage_key, signature_file_name, signature_content_type
+                    FROM approval_lines
+                    WHERE document_id = %s AND id = %s
+                    """,
+                    (document_id, line_id),
+                )
+                row = cursor.fetchone()
+        if row is None or not row["signature_storage_key"]:
+            raise ValueError("승인 시점의 서명이 없습니다.")
+        return {
+            "path": ApprovalSignatureStorage().stored_path(row["signature_storage_key"]),
+            "fileName": row["signature_file_name"],
+            "contentType": row["signature_content_type"],
+        }
+
+    def get_approval_attachment_preview(self, actor_id: str, document_id: str, attachment_id: str) -> dict[str, object]:
+        item = self.get_approval_attachment(actor_id, document_id, attachment_id)
+        path = item["path"]
+        detected_type = detect_safe_image_type(path.read_bytes())
+        if detected_type is None:
+            raise ValueError("미리보기 가능한 이미지 첨부가 아닙니다.")
+        return {**item, "contentType": detected_type}
+
     def stage_approval_attachment(
         self,
         actor_id: str,
@@ -1197,7 +1421,11 @@ class DirectoryStore:
                     SET status = 'pending',
                         comment = NULL,
                         decided_by_user_id = NULL,
-                        decided_at = NULL
+                        decided_at = NULL,
+                        signature_storage_key = NULL,
+                        signature_file_name = NULL,
+                        signature_content_type = NULL,
+                        signature_size_bytes = NULL
                     WHERE document_id = %s
                     """,
                     (document_id,),
@@ -1352,6 +1580,10 @@ class DirectoryStore:
                 comment,
                 decided_by_user_id,
                 decided_at
+                , signature_storage_key
+                , signature_file_name
+                , signature_content_type
+                , signature_size_bytes
             FROM approval_lines
             WHERE document_id = %s
             ORDER BY sequence ASC
@@ -1442,6 +1674,11 @@ class DirectoryStore:
                 comment=line["comment"],
                 decidedByUserId=line["decided_by_user_id"],
                 decidedAt=line["decided_at"],
+                hasSignature=bool(line["signature_storage_key"]),
+                signatureUrl=(
+                    f"/api/v1/approvals/{row['id']}/lines/{line['id']}/signature"
+                    if line["signature_storage_key"] else None
+                ),
             )
             for line in self._fetch_approval_lines(cursor, row["id"])
         ]
@@ -1477,6 +1714,10 @@ class DirectoryStore:
                 contentType=row["content_type"],
                 sizeBytes=row["size_bytes"],
                 createdAt=row["created_at"],
+                previewUrl=(
+                    f"/api/v1/approvals/{document_id}/attachments/{row['id']}/preview"
+                    if str(row["content_type"]).lower().startswith("image/") else None
+                ),
             )
             for row in cursor.fetchall()
         ]
@@ -1542,6 +1783,25 @@ class DirectoryStore:
                         raise PermissionError("현재 결재선의 담당자만 처리할 수 있습니다.")
 
                 if accepted:
+                    signature_snapshot = (None, None, None, None)
+                    if not forced:
+                        cursor.execute(
+                            """
+                            SELECT signature_storage_key, signature_file_name,
+                                   signature_content_type, signature_size_bytes
+                            FROM approval_basic_preferences
+                            WHERE user_id = %s AND company_id = %s
+                            """,
+                            (actor.userId, actor.companyId),
+                        )
+                        signature_row = cursor.fetchone()
+                        if signature_row:
+                            signature_snapshot = (
+                                signature_row["signature_storage_key"],
+                                signature_row["signature_file_name"],
+                                signature_row["signature_content_type"],
+                                signature_row["signature_size_bytes"],
+                            )
                     if forced:
                         cursor.execute(
                             """
@@ -1564,10 +1824,14 @@ class DirectoryStore:
                             SET status = 'approved',
                                 comment = %s,
                                 decided_by_user_id = %s,
-                                decided_at = %s
+                                decided_at = %s,
+                                signature_storage_key = %s,
+                                signature_file_name = %s,
+                                signature_content_type = %s,
+                                signature_size_bytes = %s
                             WHERE id = %s
                             """,
-                            (normalized_reason, actor.userId, now, target_line["id"]),
+                            (normalized_reason, actor.userId, now, *signature_snapshot, target_line["id"]),
                         )
                         remaining_pending = [line for line in lines if line["sequence"] > target_line["sequence"] and line["status"] == "pending"]
                         next_status = "approved" if not remaining_pending else "submitted"

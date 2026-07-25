@@ -86,7 +86,8 @@ class Ui035ApprovalBasicSettingsContractTests(unittest.TestCase):
         self.assertLess(source.index('@router.get("/settings/basic"'), source.index('@router.get("/{document_id}"'))
         self.assertIn('permission_required("approval:read")', source[source.index('@router.get("/settings/basic"'):source.index('@router.put("/settings/basic"')])
         self.assertIn('permission_required("approval:create")', source[source.index('@router.put("/settings/basic"'):source.index('@router.get("/settings/signature"')])
-        self.assertIn('Form(...)', source)
+        self.assertIn('alias="writingMethod"', source)
+        self.assertIn('alias="expectedVersion"', source)
         self.assertIn('File(default=None)', source)
 
     def test_inline_routes_bind_document_and_child_and_set_safe_headers(self) -> None:

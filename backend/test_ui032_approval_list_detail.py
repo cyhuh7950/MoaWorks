@@ -33,7 +33,7 @@ class Ui032ApprovalBackendContractTests(unittest.TestCase):
         attachment_fields = set(ApprovalAttachmentView.model_fields)
         self.assertEqual(
             attachment_fields,
-            {"attachmentId", "fileName", "contentType", "sizeBytes", "createdAt"},
+            {"attachmentId", "fileName", "contentType", "sizeBytes", "createdAt", "previewUrl"},
         )
         self.assertIn("attachments", ApprovalDocumentDetailResponse.model_fields)
         self.assertNotIn("attachments", ApprovalDocumentResponse.model_fields)

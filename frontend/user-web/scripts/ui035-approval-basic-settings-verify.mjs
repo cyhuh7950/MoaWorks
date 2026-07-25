@@ -32,7 +32,7 @@ await check("dirty snapshot includes policy and signature intent", async () => {
 });
 
 await check("same-origin settings API uses browser-managed multipart boundary", () => {
-  const block = api.split("export async function fetchApprovalBasicPreferences", 1)[1].split("export async function fetchApprovalLogs", 1)[0];
+  const block = api.split("export async function fetchApprovalBasicPreferences")[1].split("export async function fetchApprovalLogs")[0];
   assert.doesNotMatch(block, /https?:\/\/|localhost|127\.0\.0\.1|host\.docker\.internal/);
   assert.match(block, /\/approvals\/settings\/basic/);
   assert.match(block, /new FormData\(\)/);
@@ -52,7 +52,7 @@ await check("signature upload preview remove and limits are explicit", () => {
   assert.match(app, /512KB/);
   assert.match(app, /max-width:\s*55px|maxWidth:\s*55/);
   assert.match(app, /max-height:\s*40px|maxHeight:\s*40/);
-  assert.match(app, />교체</);
+  assert.match(app, /"교체"/);
   assert.match(app, />제거</);
 });
 

@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from app.api.dependencies import get_current_user, permission_required
 from app.schemas.directory import (
     ApprovalActionReason,
     ApprovalApproverListResponse,
+    ApprovalBasicPreferenceResponse,
     ApprovalAttachmentUploadResponse,
     ApprovalCreateResponse,
     ApprovalDocumentCreateRequest,
@@ -16,8 +17,9 @@ from app.schemas.directory import (
     AuthUserSummary,
     AuditLogListResponse,
 )
-from app.services.directory_store import DirectoryStore
+from app.services.directory_store import ApprovalPreferenceConflictError, DirectoryStore
 from app.services.approval_attachment_storage import APPROVAL_ATTACHMENT_MAX_FILE_BYTES
+from app.services.approval_signature_storage import APPROVAL_SIGNATURE_MAX_FILE_BYTES
 
 
 router = APIRouter()
@@ -55,6 +57,82 @@ async def upload_approval_attachment(
         file.filename or "attachment.bin",
         file.content_type or "application/octet-stream",
         content,
+    )
+
+
+@router.get("/settings/basic", response_model=ApprovalBasicPreferenceResponse)
+def get_approval_basic_preferences(
+    user: AuthUserSummary = Depends(permission_required("approval:read")),
+) -> ApprovalBasicPreferenceResponse:
+    return DirectoryStore().get_approval_basic_preferences(user.userId)
+
+
+@router.put("/settings/basic", response_model=ApprovalBasicPreferenceResponse)
+async def update_approval_basic_preferences(
+    writing_method: str = Form(..., alias="writingMethod"),
+    attachment_image_display: str = Form(..., alias="attachmentImageDisplay"),
+    expected_version: int = Form(..., alias="expectedVersion"),
+    remove_signature: bool = Form(False, alias="removeSignature"),
+    signature: UploadFile | None = File(default=None),
+    user: AuthUserSummary = Depends(permission_required("approval:create")),
+) -> ApprovalBasicPreferenceResponse:
+    upload = None
+    if signature is not None:
+        upload = (
+            signature.filename or "signature.png",
+            signature.content_type or "application/octet-stream",
+            await signature.read(APPROVAL_SIGNATURE_MAX_FILE_BYTES + 1),
+        )
+    try:
+        return DirectoryStore().update_approval_basic_preferences(
+            user.userId,
+            writing_method,
+            attachment_image_display,
+            expected_version,
+            remove_signature,
+            upload,
+        )
+    except ApprovalPreferenceConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "APPROVAL_SETTINGS_STALE", "userMessage": str(exc), "adminMessage": str(exc)},
+        ) from exc
+
+
+@router.get("/settings/signature")
+def get_approval_signature(
+    user: AuthUserSummary = Depends(permission_required("approval:read")),
+) -> FileResponse:
+    item = DirectoryStore().get_approval_signature(user.userId)
+    return FileResponse(
+        path=item["path"], media_type=item["contentType"], filename=item["fileName"],
+        content_disposition_type="inline", headers={"X-Content-Type-Options": "nosniff"},
+    )
+
+
+@router.get("/{document_id}/lines/{line_id}/signature")
+def get_approval_line_signature(
+    document_id: str,
+    line_id: str,
+    user: AuthUserSummary = Depends(permission_required("approval:read")),
+) -> FileResponse:
+    item = DirectoryStore().get_approval_line_signature(user.userId, document_id, line_id)
+    return FileResponse(
+        path=item["path"], media_type=item["contentType"], filename=item["fileName"],
+        content_disposition_type="inline", headers={"X-Content-Type-Options": "nosniff"},
+    )
+
+
+@router.get("/{document_id}/attachments/{attachment_id}/preview")
+def preview_approval_attachment(
+    document_id: str,
+    attachment_id: str,
+    user: AuthUserSummary = Depends(permission_required("approval:read")),
+) -> FileResponse:
+    item = DirectoryStore().get_approval_attachment_preview(user.userId, document_id, attachment_id)
+    return FileResponse(
+        path=item["path"], media_type=item["contentType"], filename=item["fileName"],
+        content_disposition_type="inline", headers={"X-Content-Type-Options": "nosniff"},
     )
 
 

@@ -49,6 +49,8 @@ import {
   deleteAutoForwardExceptions,
   deleteAutoForwardTargets,
   fetchApprovalApprovers,
+  fetchApprovalBasicPreferences,
+  fetchApprovalInlineImage,
   fetchContacts,
   fetchApprovalLogs,
   fetchApprovalDetail,
@@ -113,11 +115,13 @@ import {
   emptyMailbox,
   setMailCategory,
   updateApproval,
+  updateApprovalBasicPreferences,
   updateMailFolder,
   updateMailTag,
   type MailAttachment,
   withdrawApproval,
   type ApprovalApprover,
+  type ApprovalBasicPreferences,
   type ApprovalAttachment,
   type MailRecentRecipient,
   type MailRecentRecipientSettingsResponse,
@@ -185,6 +189,14 @@ import {
 import { approvalLineStatusLabel, approvalStatusLabel, filterApprovalDocuments, resolveApprovalSelection } from "./approvalDetail";
 import { buildApprovalComposeSnapshot, moveApprovalApprover as moveApprovalApproverOrder, validateApprovalDraft, validateApprovalFiles } from "./approvalCompose";
 import { APPROVAL_ACTION_CONFIG, buildApprovalActionTarget, validateApprovalActionOpinion, type ApprovalActionTarget, type ApprovalActionType } from "./approvalAction";
+import {
+  APPROVAL_ATTACHMENT_IMAGE_DISPLAYS,
+  APPROVAL_WRITING_METHODS,
+  buildApprovalPreferenceSnapshot,
+  shouldPreviewApprovalAttachment,
+  type ApprovalAttachmentImageDisplay,
+  type ApprovalPreferenceDraft,
+} from "./approvalPreferences";
 
 const NOTIFICATION_POLICY = {
   retryMaxAttempts: 3,
@@ -240,7 +252,6 @@ const APPROVAL_SHELL_MENU_ITEMS: ApprovalShellMenuItem[] = [
     label: "환경설정",
     description: "결재 작성·부재·위임 설정",
     group: "footer",
-    readyMessage: "결재 환경설정은 UI-035~036에서 제공합니다. 현재 설정값이나 임시 화면은 추가하지 않습니다.",
   },
 ];
 
@@ -1274,6 +1285,25 @@ export default function App() {
   const [approvalLogsLoading, setApprovalLogsLoading] = useState(false);
   const [approvalLogsError, setApprovalLogsError] = useState("");
   const [approvalDetailMaximized, setApprovalDetailMaximized] = useState(false);
+  const [approvalPreferences, setApprovalPreferences] = useState<ApprovalBasicPreferences | null>(null);
+  const [approvalPreferencesDraft, setApprovalPreferencesDraft] = useState<ApprovalPreferenceDraft>({
+    writingMethod: "general",
+    attachmentImageDisplay: "thumbnail",
+    signatureName: "",
+    removeSignature: false,
+  });
+  const [approvalPreferencesBaseline, setApprovalPreferencesBaseline] = useState("");
+  const [approvalPreferencesLoading, setApprovalPreferencesLoading] = useState(false);
+  const [approvalPreferencesSaving, setApprovalPreferencesSaving] = useState(false);
+  const [approvalPreferencesError, setApprovalPreferencesError] = useState("");
+  const [approvalSignatureFile, setApprovalSignatureFile] = useState<File | null>(null);
+  const [approvalSignaturePreviewUrl, setApprovalSignaturePreviewUrl] = useState("");
+  const [approvalPendingMenu, setApprovalPendingMenu] = useState<ApprovalShellMenuKey | null>(null);
+  const [approvalPendingPortalMenu, setApprovalPendingPortalMenu] = useState<UserPortalMenu | null>(null);
+  const [approvalLineSignatureUrls, setApprovalLineSignatureUrls] = useState<Record<string, string>>({});
+  const [approvalAttachmentPreviewUrls, setApprovalAttachmentPreviewUrls] = useState<Record<string, string>>({});
+  const approvalSettingsObjectUrl = useRef("");
+  const approvalDetailObjectUrls = useRef<string[]>([]);
   const approvalRequestSequence = useRef(0);
   const approvalComposeCloseRequestRef = useRef<(() => void) | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1287,6 +1317,12 @@ export default function App() {
     [approvalPendingFiles, approvalRetainedAttachments, createForm],
   );
   const approvalComposeDirty = Boolean(approvalComposeBaseline) && approvalComposeSnapshot !== approvalComposeBaseline;
+  const approvalPreferencesSnapshot = useMemo(
+    () => buildApprovalPreferenceSnapshot(approvalPreferencesDraft),
+    [approvalPreferencesDraft],
+  );
+  const approvalPreferencesDirty = Boolean(approvalPreferencesBaseline)
+    && approvalPreferencesSnapshot !== approvalPreferencesBaseline;
   const [documents, setDocuments] = useState<ApprovalDocument[]>([]);
   const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
   const [notificationSummary, setNotificationSummary] = useState<NotificationSummary | null>(null);
@@ -1512,6 +1548,10 @@ export default function App() {
   }
 
   function setPortalMenu(nextMenu: UserPortalMenu) {
+    if (activePortalMenu === "approval" && approvalShellMenu === "settings" && nextMenu !== "approval" && approvalPreferencesDirty) {
+      setApprovalPendingPortalMenu(nextMenu);
+      return;
+    }
     resetQuickComposeMode();
     setShowNotificationPanel(false);
     clearTransientFeedback();
@@ -3360,6 +3400,135 @@ export default function App() {
     }
   }
 
+  function releaseApprovalDetailImages() {
+    approvalDetailObjectUrls.current.forEach((url) => URL.revokeObjectURL(url));
+    approvalDetailObjectUrls.current = [];
+    setApprovalLineSignatureUrls({});
+    setApprovalAttachmentPreviewUrls({});
+  }
+
+  async function loadApprovalDetailImages(
+    targetToken: string,
+    detail: ApprovalDocumentDetail,
+    display: ApprovalAttachmentImageDisplay,
+    sequence: number,
+  ) {
+    releaseApprovalDetailImages();
+    const lineEntries = await Promise.all(detail.lines.filter((line) => line.hasSignature && line.signatureUrl).map(async (line) => {
+      try { return [line.id, await fetchApprovalInlineImage(targetToken, line.signatureUrl!)] as const; }
+      catch { return null; }
+    }));
+    const attachmentEntries = await Promise.all(detail.attachments.filter((item) => (
+      item.previewUrl && shouldPreviewApprovalAttachment(item.contentType, display)
+    )).map(async (item) => {
+      try { return [item.attachmentId, await fetchApprovalInlineImage(targetToken, item.previewUrl!)] as const; }
+      catch { return null; }
+    }));
+    const entries = [...lineEntries, ...attachmentEntries].filter((item): item is readonly [string, string] => Boolean(item));
+    if (sequence !== approvalRequestSequence.current) {
+      entries.forEach(([, url]) => URL.revokeObjectURL(url));
+      return;
+    }
+    approvalDetailObjectUrls.current = entries.map(([, url]) => url);
+    setApprovalLineSignatureUrls(Object.fromEntries(lineEntries.filter((item): item is readonly [string, string] => Boolean(item))));
+    setApprovalAttachmentPreviewUrls(Object.fromEntries(attachmentEntries.filter((item): item is readonly [string, string] => Boolean(item))));
+  }
+
+  async function applyApprovalPreferences(value: ApprovalBasicPreferences, loadPreview = true) {
+    if (approvalSettingsObjectUrl.current) URL.revokeObjectURL(approvalSettingsObjectUrl.current);
+    approvalSettingsObjectUrl.current = "";
+    setApprovalPreferences(value);
+    const draft: ApprovalPreferenceDraft = {
+      writingMethod: value.writingMethod,
+      attachmentImageDisplay: value.attachmentImageDisplay,
+      signatureName: value.signatureFileName ?? "",
+      removeSignature: false,
+    };
+    setApprovalPreferencesDraft(draft);
+    setApprovalPreferencesBaseline(buildApprovalPreferenceSnapshot(draft));
+    setApprovalSignatureFile(null);
+    setApprovalSignaturePreviewUrl("");
+    if (loadPreview && token && value.hasSignature && value.signatureUrl) {
+      try {
+        const objectUrl = await fetchApprovalInlineImage(token, value.signatureUrl);
+        approvalSettingsObjectUrl.current = objectUrl;
+        setApprovalSignaturePreviewUrl(objectUrl);
+      } catch (error) {
+        setApprovalPreferencesError(normalizeClientError(error, "등록된 서명 미리보기 조회 실패"));
+      }
+    }
+  }
+
+  async function loadApprovalPreferences(targetToken: string) {
+    setApprovalPreferencesLoading(true);
+    setApprovalPreferencesError("");
+    try {
+      await applyApprovalPreferences(await fetchApprovalBasicPreferences(targetToken));
+    } catch (error) {
+      setApprovalPreferencesError(normalizeClientError(error, "결재 기본 설정 조회 실패"));
+    } finally {
+      setApprovalPreferencesLoading(false);
+    }
+  }
+
+  function selectApprovalSignature(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0] ?? null;
+    event.currentTarget.value = "";
+    if (!file) return;
+    const allowed = ["image/png", "image/jpeg", "image/webp"];
+    if (!allowed.includes(file.type) || file.size > 512 * 1024) {
+      setApprovalPreferencesError("서명은 512KB 이하 PNG/JPEG/WEBP 파일만 사용할 수 있습니다.");
+      return;
+    }
+    if (approvalSettingsObjectUrl.current) URL.revokeObjectURL(approvalSettingsObjectUrl.current);
+    const objectUrl = URL.createObjectURL(file);
+    approvalSettingsObjectUrl.current = objectUrl;
+    setApprovalSignaturePreviewUrl(objectUrl);
+    setApprovalSignatureFile(file);
+    setApprovalPreferencesError("");
+    setApprovalPreferencesDraft((current) => ({ ...current, signatureName: file.name, removeSignature: false }));
+  }
+
+  function removeApprovalSignature() {
+    if (approvalSettingsObjectUrl.current) URL.revokeObjectURL(approvalSettingsObjectUrl.current);
+    approvalSettingsObjectUrl.current = "";
+    setApprovalSignaturePreviewUrl("");
+    setApprovalSignatureFile(null);
+    setApprovalPreferencesDraft((current) => ({ ...current, signatureName: "", removeSignature: true }));
+  }
+
+  function cancelApprovalPreferences() {
+    if (approvalPreferences) void applyApprovalPreferences(approvalPreferences);
+  }
+
+  async function saveApprovalPreferences() {
+    if (!token) return;
+    setApprovalPreferencesSaving(true);
+    setApprovalPreferencesError("");
+    try {
+      const confirmed = await updateApprovalBasicPreferences(
+        token,
+        {
+          writingMethod: approvalPreferencesDraft.writingMethod,
+          attachmentImageDisplay: approvalPreferencesDraft.attachmentImageDisplay,
+          version: approvalPreferences?.version ?? 0,
+        },
+        approvalPreferencesDraft.removeSignature,
+        approvalSignatureFile ?? undefined,
+      );
+      await applyApprovalPreferences(confirmed);
+      pushFeedback({ id: `approval-settings-${confirmed.version}`, source: "approval", tone: "success", title: "결재 기본 설정을 저장했습니다." });
+    } catch (error) {
+      if (error instanceof ApiRequestError && error.status === 409) {
+        setApprovalPreferencesError("다른 화면에서 설정이 변경되었습니다. 입력 내용은 유지됩니다. 서버 값을 다시 조회한 뒤 저장해 주세요.");
+      } else {
+        setApprovalPreferencesError(normalizeClientError(error, "결재 기본 설정 저장 실패"));
+      }
+    } finally {
+      setApprovalPreferencesSaving(false);
+    }
+  }
+
   async function selectApprovalDocument(documentId: string, options?: { preserveMenu?: boolean }) {
     const targetDocument = documents.find((document) => document.id === documentId);
     if (targetDocument && me && !options?.preserveMenu) {
@@ -3372,16 +3541,23 @@ export default function App() {
     setSelectedApprovalId(documentId);
     setSelectedApprovalDetail(null);
     setApprovalAttachmentError("");
+    releaseApprovalDetailImages();
     if (!token || !documentId) return;
     const sequence = ++approvalRequestSequence.current;
     setApprovalDetailLoading(true);
     setApprovalLogsLoading(true);
     setApprovalDetailError("");
     setApprovalLogsError("");
-    void fetchApprovalDetail(token, documentId)
-      .then((detail) => {
+    void Promise.all([
+      fetchApprovalDetail(token, documentId),
+      fetchApprovalBasicPreferences(token).catch(() => null),
+    ])
+      .then(([detail, preferences]) => {
         if (sequence !== approvalRequestSequence.current) return;
         setSelectedApprovalDetail(detail);
+        const display = preferences?.attachmentImageDisplay ?? "filename";
+        if (preferences) setApprovalPreferences(preferences);
+        void loadApprovalDetailImages(token, detail, display, sequence);
       })
       .catch((error) => {
         if (sequence !== approvalRequestSequence.current) return;
@@ -3738,8 +3914,14 @@ export default function App() {
     }
   }, [activePortalMenu, approvalDocumentsByMenu, approvalSearch, approvalShellMenu, approvalStatusFilter, selectedApprovalId]);
 
-  function openApprovalShellMenu(nextMenu: ApprovalShellMenuKey) {
+  function activateApprovalShellMenu(nextMenu: ApprovalShellMenuKey) {
     setApprovalShellMenu(nextMenu);
+    if (nextMenu === "settings") {
+      if (token) void loadApprovalPreferences(token);
+      setSelectedApprovalId("");
+      setApprovalLogs([]);
+      return;
+    }
     if (!isApprovalActualMenuKey(nextMenu)) {
       setSelectedApprovalId("");
       setApprovalLogs([]);
@@ -3754,6 +3936,33 @@ export default function App() {
       return;
     }
     if (nextDocument.id !== selectedApprovalId) void selectApprovalDocument(nextDocument.id, { preserveMenu: true });
+  }
+
+  function openApprovalShellMenu(nextMenu: ApprovalShellMenuKey) {
+    if (approvalShellMenu === "settings" && nextMenu !== "settings" && approvalPreferencesDirty) {
+      setApprovalPendingMenu(nextMenu);
+      return;
+    }
+    activateApprovalShellMenu(nextMenu);
+  }
+
+  function discardApprovalPreferencesAndNavigate() {
+    const nextMenu = approvalPendingMenu;
+    const nextPortalMenu = approvalPendingPortalMenu;
+    setApprovalPendingMenu(null);
+    setApprovalPendingPortalMenu(null);
+    if (approvalPreferences) void applyApprovalPreferences(approvalPreferences, false);
+    if (nextMenu) activateApprovalShellMenu(nextMenu);
+    if (nextPortalMenu) {
+      resetQuickComposeMode();
+      setShowNotificationPanel(false);
+      clearTransientFeedback();
+      setApprovalError("");
+      setMailError("");
+      setMessengerError("");
+      setSearchError("");
+      setActivePortalMenu(nextPortalMenu);
+    }
   }
 
   const dashboardStats = useMemo(() => {
@@ -4901,7 +5110,7 @@ export default function App() {
                 <h2 id="ui031-content-title">{activeApprovalMenu.label}</h2>
                 <p>{activeApprovalMenu.description}</p>
               </div>
-              <strong>{isApprovalActualMenuKey(approvalShellMenu) ? `${menuDocuments.length}건` : "준비 상태"}</strong>
+              <strong>{isApprovalActualMenuKey(approvalShellMenu) ? `${menuDocuments.length}건` : approvalShellMenu === "settings" ? "개인 설정" : "준비 상태"}</strong>
             </header>
             {approvalError && approvalModal === "none" ? <FeedbackState state="error" title="결재 정보를 처리하지 못했습니다." message={approvalError} action={{ label: "다시 시도", onAction: () => void reload() }} /> : null}
             {isApprovalActualMenuKey(approvalShellMenu) ? (
@@ -4941,9 +5150,9 @@ export default function App() {
                 {!approvalDetailLoading && !approvalDetailError && selectedDocument ? <>
                   <header className="ui032-detail__header"><div><span>선택 문서</span><h2>{selectedDocument.title}</h2><p>기안 {selectedDocument.creatorUserName} · 작성 {formatDateLabel(selectedDocument.createdAt)} · 상신 {selectedDocument.submittedAt ? formatDateLabel(selectedDocument.submittedAt) : "-"} · 갱신 {formatDateLabel(selectedDocument.updatedAt)}</p></div><span className={`ui032-status is-${selectedDocument.status}`}>{approvalStatusLabel(selectedDocument.status)}</span></header>
                   <section className="ui032-detail__content"><h3>본문</h3><p>{selectedDocument.content}</p></section>
-                  <section className="ui032-timeline"><h3>결재선</h3>{selectedDocument.lines.length ? selectedDocument.lines.map((line) => <article key={line.id}><i>{line.sequence}</i><div><strong>{line.approverUserName}</strong><span>{approvalLineStatusLabel(line.status)} · {line.decidedAt ? formatDateLabel(line.decidedAt) : "결정 대기"}</span></div></article>) : <div className="ui032-empty">등록된 결재선이 없습니다.</div>}</section>
+                  <section className="ui032-timeline"><h3>결재선</h3>{selectedDocument.lines.length ? selectedDocument.lines.map((line) => <article key={line.id}><i>{line.sequence}</i><div><strong>{line.approverUserName}</strong><span>{approvalLineStatusLabel(line.status)} · {line.decidedAt ? formatDateLabel(line.decidedAt) : "결정 대기"}</span></div>{line.hasSignature && line.signatureUrl ? (approvalLineSignatureUrls[line.id] ? <img className="ui035-line-signature" src={approvalLineSignatureUrls[line.id]} alt={`${line.approverUserName} 승인 서명`} /> : <small>서명 확인 중</small>) : null}</article>) : <div className="ui032-empty">등록된 결재선이 없습니다.</div>}</section>
                   <section className="ui032-comments"><h3>처리 의견</h3>{approvalComments.length ? approvalComments.map((comment) => <article key={comment.key}><strong>{comment.actor} · {comment.action}</strong><p>{comment.text}</p><small>{comment.at ? formatDateLabel(comment.at) : "시각 없음"}</small></article>) : <div className="ui032-empty">등록된 처리 의견이 없습니다.</div>}</section>
-                  <section className="ui032-attachments"><h3>첨부</h3>{approvalAttachmentError ? <div className="ui032-attachment-error" role="alert">{approvalAttachmentError}</div> : null}{selectedDocument.attachments.length ? selectedDocument.attachments.map((attachment) => <article key={attachment.attachmentId}><div><strong>{attachment.fileName}</strong><span>{attachment.contentType} · {formatFileSize(attachment.sizeBytes)} · {formatDateLabel(attachment.createdAt)}</span></div><button type="button" onClick={() => void handleApprovalAttachmentDownload(attachment.attachmentId, attachment.fileName)}>다운로드</button></article>) : <div className="ui032-empty">첨부 파일이 없습니다.</div>}</section>
+                  <section className="ui032-attachments"><h3>첨부</h3>{approvalAttachmentError ? <div className="ui032-attachment-error" role="alert">{approvalAttachmentError}</div> : null}{selectedDocument.attachments.length ? selectedDocument.attachments.map((attachment) => <article key={attachment.attachmentId}>{attachment.previewUrl && approvalAttachmentPreviewUrls[attachment.attachmentId] ? <img className={`ui035-attachment-preview is-${approvalPreferences?.attachmentImageDisplay ?? "filename"}`} src={approvalAttachmentPreviewUrls[attachment.attachmentId]} alt={attachment.fileName} /> : null}<div><strong>{attachment.fileName}</strong><span>{attachment.contentType} · {formatFileSize(attachment.sizeBytes)} · {formatDateLabel(attachment.createdAt)}</span></div><button type="button" onClick={() => void handleApprovalAttachmentDownload(attachment.attachmentId, attachment.fileName)}>다운로드</button></article>) : <div className="ui032-empty">첨부 파일이 없습니다.</div>}</section>
                   <div className="ui032-actions" aria-label="결재 처리 도구">
                     {selectedDocument.creatorUserId === me?.userId && selectedDocument.status === "draft" && canAct.create ? <button type="button" onClick={() => void openApprovalEditor("edit", selectedDocument)}>수정</button> : null}
                     {selectedDocument.creatorUserId === me?.userId && selectedDocument.status === "draft" && canAct.submit ? <button type="button" onClick={() => openActionModal("submit")}>상신</button> : null}
@@ -4957,6 +5166,37 @@ export default function App() {
               </section>}
               />
             </div>
+            ) : approvalShellMenu === "settings" ? (
+              <section className="ui035-settings" aria-label="결재 기본 설정">
+                <nav role="tablist" aria-label="결재 환경설정 탭">
+                  <button type="button" role="tab" aria-selected="true">기본 설정</button>
+                  <button type="button" role="tab" aria-selected="false" disabled title="UI-036에서 제공합니다.">부재/위임 설정</button>
+                </nav>
+                {approvalPreferencesLoading ? <div className="ui035-settings__state" role="status">기본 설정을 불러오는 중입니다.</div> : null}
+                {approvalPreferencesError ? <div className="ui035-settings__state is-error" role="alert">{approvalPreferencesError}<button type="button" onClick={() => token && void loadApprovalPreferences(token)}>서버 값을 다시 조회</button></div> : null}
+                {!approvalPreferencesLoading ? <div className="ui035-settings__body">
+                  <fieldset>
+                    <legend>서명/도장 <i tabIndex={0} data-tooltip="서명은 승인 시점의 결재선에 보존됩니다." aria-label="서명 보존 안내">i</i></legend>
+                    <div className="ui035-signature-row">
+                      <div className="ui035-signature-preview">
+                        {approvalSignaturePreviewUrl ? <img src={approvalSignaturePreviewUrl} alt="서명 미리보기" style={{ maxWidth: 55, maxHeight: 40 }} /> : <span>등록된 서명 없음</span>}
+                      </div>
+                      <div><strong>{approvalPreferencesDraft.signatureName || "서명을 등록하지 않았습니다."}</strong><small>{approvalSignatureFile ? formatFileSize(approvalSignatureFile.size) : approvalPreferences?.signatureSizeBytes ? formatFileSize(approvalPreferences.signatureSizeBytes) : "PNG/JPEG/WEBP · 최대 512KB"}</small></div>
+                      <label className="ui035-file-button"><span>{approvalPreferencesDraft.signatureName ? "교체" : "선택"}</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={selectApprovalSignature} /></label>
+                      <button type="button" disabled={!approvalPreferencesDraft.signatureName} onClick={removeApprovalSignature}>제거</button>
+                    </div>
+                  </fieldset>
+                  <fieldset>
+                    <legend>결재 작성 방식 <i tabIndex={0} data-tooltip="현재 확인된 작성 방식만 제공합니다." aria-label="작성 방식 안내">i</i></legend>
+                    {APPROVAL_WRITING_METHODS.map((item) => <label key={item.value}><input type="radio" name="approval-writing-method" value={item.value} checked={approvalPreferencesDraft.writingMethod === item.value} onChange={() => setApprovalPreferencesDraft((current) => ({ ...current, writingMethod: item.value }))} />{item.label}</label>)}
+                  </fieldset>
+                  <fieldset>
+                    <legend>첨부 이미지 표시 <i tabIndex={0} data-tooltip="이미지 첨부의 상세 화면 표시 크기를 선택합니다." aria-label="첨부 표시 안내">i</i></legend>
+                    {APPROVAL_ATTACHMENT_IMAGE_DISPLAYS.map((item) => <label key={item.value}><input type="radio" name="approval-attachment-display" value={item.value} checked={approvalPreferencesDraft.attachmentImageDisplay === item.value} onChange={() => setApprovalPreferencesDraft((current) => ({ ...current, attachmentImageDisplay: item.value }))} />{item.label}</label>)}
+                  </fieldset>
+                </div> : null}
+                <footer className="ui035-settings__actions"><span>{approvalPreferencesDirty ? "저장하지 않은 변경사항이 있습니다." : "서버 설정과 일치합니다."}</span><button type="button" disabled={!approvalPreferencesDirty || approvalPreferencesSaving} onClick={cancelApprovalPreferences}>취소</button><button type="button" disabled={!approvalPreferencesDirty || approvalPreferencesSaving || !canAct.create} onClick={() => void saveApprovalPreferences()}>{approvalPreferencesSaving ? "저장 중" : "저장"}</button></footer>
+              </section>
             ) : (
               <section className="ui031-ready" role="status" aria-live="polite">
                 <span aria-hidden="true">i</span>
@@ -5003,6 +5243,9 @@ export default function App() {
                 )}
                 <footer className="ui033-compose__footer"><button type="button" onClick={() => approvalComposeCloseRequestRef.current?.()}>취소</button><button type="submit" disabled={loading}>{approvalModal === "edit" ? "수정 저장" : "임시저장"}</button></footer>
               </form>
+            </CommonPopup>
+            <CommonPopup title="변경사항 확인" open={Boolean(approvalPendingMenu || approvalPendingPortalMenu)} onClose={() => { setApprovalPendingMenu(null); setApprovalPendingPortalMenu(null); }} dirty={approvalPreferencesDirty}>
+              <div className="ui035-discard-confirm"><p>저장하지 않은 결재 기본 설정이 있습니다. 변경사항을 버리고 이동할까요?</p><button type="button" onClick={() => { setApprovalPendingMenu(null); setApprovalPendingPortalMenu(null); }}>계속 작성</button><button type="button" onClick={discardApprovalPreferencesAndNavigate}>변경 버리고 이동</button></div>
             </CommonPopup>
             {renderApprovalActionPopup()}
           </section>

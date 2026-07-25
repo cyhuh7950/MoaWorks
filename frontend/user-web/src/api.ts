@@ -128,6 +128,8 @@ export type ApprovalLine = {
   comment?: string;
   decidedByUserId?: string;
   decidedAt?: string;
+  hasSignature: boolean;
+  signatureUrl?: string;
 };
 
 export type ApprovalDocument = {
@@ -151,6 +153,18 @@ export type ApprovalAttachment = {
   contentType: string;
   sizeBytes: number;
   createdAt: string;
+  previewUrl?: string;
+};
+
+export type ApprovalBasicPreferences = {
+  writingMethod: "general";
+  attachmentImageDisplay: "thumbnail" | "original" | "filename";
+  version: number;
+  hasSignature: boolean;
+  signatureFileName?: string;
+  signatureContentType?: "image/png" | "image/jpeg" | "image/webp";
+  signatureSizeBytes?: number;
+  signatureUrl?: string;
 };
 
 export type ApprovalAttachmentUpload = {
@@ -741,6 +755,38 @@ export async function fetchApprovalApprovers(token: string): Promise<ApprovalApp
   return request<ApprovalApproverListResponse>("/approvals/approvers", {
     headers: authHeaders(token),
   });
+}
+
+export async function fetchApprovalBasicPreferences(token: string): Promise<ApprovalBasicPreferences> {
+  return request<ApprovalBasicPreferences>("/approvals/settings/basic", {
+    headers: authHeaders(token),
+  });
+}
+
+export async function updateApprovalBasicPreferences(
+  token: string,
+  value: Pick<ApprovalBasicPreferences, "writingMethod" | "attachmentImageDisplay" | "version">,
+  removeSignature: boolean,
+  signature?: File,
+): Promise<ApprovalBasicPreferences> {
+  const form = new FormData();
+  form.append("writingMethod", value.writingMethod);
+  form.append("attachmentImageDisplay", value.attachmentImageDisplay);
+  form.append("expectedVersion", String(value.version));
+  form.append("removeSignature", String(removeSignature));
+  if (signature) form.append("signature", signature);
+  return request<ApprovalBasicPreferences>("/approvals/settings/basic", {
+    method: "PUT",
+    headers: authHeaders(token),
+    body: form,
+  });
+}
+
+export async function fetchApprovalInlineImage(token: string, relativeUrl: string): Promise<string> {
+  if (!relativeUrl.startsWith("/api/v1/approvals/")) throw new Error("결재 이미지 경로가 올바르지 않습니다.");
+  const response = await fetch(relativeUrl, { headers: authHeaders(token) });
+  if (!response.ok) throw extractApiError(response, await response.json().catch(() => ({})));
+  return URL.createObjectURL(await response.blob());
 }
 
 export async function submitApproval(token: string, documentId: string) {

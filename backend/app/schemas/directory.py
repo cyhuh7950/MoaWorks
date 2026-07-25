@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from enum import Enum
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -151,6 +152,8 @@ class ApprovalLineRecord(BaseModel):
     comment: str | None = None
     decidedByUserId: str | None = None
     decidedAt: datetime | None = None
+    hasSignature: bool = False
+    signatureUrl: str | None = None
 
 
 class AuditLogRecord(BaseModel):
@@ -250,6 +253,18 @@ class ApprovalAttachmentView(BaseModel):
     contentType: str
     sizeBytes: int
     createdAt: datetime
+    previewUrl: str | None = None
+
+
+class ApprovalBasicPreferenceResponse(BaseModel):
+    writingMethod: Literal["general"]
+    attachmentImageDisplay: Literal["thumbnail", "original", "filename"]
+    version: int = Field(ge=0)
+    hasSignature: bool
+    signatureFileName: str | None = None
+    signatureContentType: Literal["image/png", "image/jpeg", "image/webp"] | None = None
+    signatureSizeBytes: int | None = Field(default=None, gt=0)
+    signatureUrl: str | None = None
 
 
 class ApprovalDocumentDetailResponse(ApprovalDocumentResponse):
