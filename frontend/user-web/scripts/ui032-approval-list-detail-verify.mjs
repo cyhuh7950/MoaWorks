@@ -65,6 +65,15 @@ await check("responsive UI-032 namespace styles exist", () => {
   assert.match(css, /@media \(max-width: 1100px\)[\s\S]*\.ui032-approval-split/);
 });
 
+await check("attachment download failure is isolated from loaded detail", () => {
+  assert.ok(app.includes("approvalAttachmentError"));
+  assert.ok(app.includes("handleApprovalAttachmentDownload"));
+  assert.match(app, /setApprovalAttachmentError\(""\)[\s\S]*downloadApprovalAttachment/);
+  assert.match(app, /catch[\s\S]*setApprovalAttachmentError/);
+  assert.match(app, /className="ui032-attachment-error"/);
+  assert.doesNotMatch(app, /downloadApprovalAttachment[\s\S]{0,300}setApprovalDetailError/);
+});
+
 const results = await Promise.all(checks.map(async ([name, passed, error]) => ({ name, passed, error })));
 for (const item of results) console.log(`${item.passed ? "PASS" : "FAIL"} ${item.name}${item.error ? `: ${item.error}` : ""}`);
 const failures = results.filter((item) => !item.passed);
