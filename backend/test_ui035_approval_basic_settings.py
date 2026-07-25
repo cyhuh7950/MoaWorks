@@ -122,6 +122,35 @@ class Ui035ApprovalBasicSettingsContractTests(unittest.TestCase):
         self.assertIn("approval_basic_preferences", decision)
         self.assertIn("target_line", decision)
 
+    def test_approve_first_holds_preference_lock_until_signature_snapshot_commit(self) -> None:
+        source = (ROOT / "app" / "services" / "directory_store.py").read_text(encoding="utf-8")
+        decision = source.split("def _process_approval_decision", 1)[1].split("def _fetch_user_view_row", 1)[0]
+        preference_read = decision.split("FROM approval_basic_preferences", 1)[1].split("cursor.fetchone()", 1)[0]
+        self.assertIn("FOR SHARE", preference_read)
+        self.assertLess(decision.index("FROM approval_basic_preferences"), decision.index("UPDATE approval_lines"))
+        self.assertLess(decision.index("UPDATE approval_lines"), decision.index("connection.commit()"))
+
+        settings_update = source.split("def update_approval_basic_preferences", 1)[1].split(
+            "def get_approval_line_signature", 1
+        )[0]
+        self.assertLess(settings_update.index("FOR UPDATE"), settings_update.index("FROM approval_lines"))
+        self.assertLess(settings_update.index("FROM approval_lines"), settings_update.index("connection.commit()"))
+        self.assertLess(settings_update.index("connection.commit()"), settings_update.index("storage.delete"))
+
+    def test_settings_first_commit_is_followed_by_locked_approve_signature_read(self) -> None:
+        source = (ROOT / "app" / "services" / "directory_store.py").read_text(encoding="utf-8")
+        settings_update = source.split("def update_approval_basic_preferences", 1)[1].split(
+            "def get_approval_line_signature", 1
+        )[0]
+        decision = source.split("def _process_approval_decision", 1)[1].split("def _fetch_user_view_row", 1)[0]
+        preference_read = decision.split("FROM approval_basic_preferences", 1)[1].split("cursor.fetchone()", 1)[0]
+
+        self.assertIn("FOR UPDATE", settings_update)
+        self.assertIn("connection.commit()", settings_update)
+        self.assertIn("FOR SHARE", preference_read)
+        self.assertLess(decision.index("FROM approval_basic_preferences"), decision.index("signature_snapshot = ("))
+        self.assertLess(decision.index("signature_snapshot = ("), decision.index("UPDATE approval_lines"))
+
     def test_redraft_clears_signature_snapshot_and_detail_exposes_safe_urls(self) -> None:
         service = (ROOT / "app" / "services" / "directory_store.py").read_text(encoding="utf-8")
         redraft = service.split("def rework_approval_document", 1)[1].split("def admin_force_approve", 1)[0]
