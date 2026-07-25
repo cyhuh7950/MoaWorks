@@ -100,9 +100,10 @@ check("App post-action 반환값·stale closure 우회", () => {
   assert.match(app, /selectApprovalDocument\(target\.documentId, \{ preserveMenu: true \}\)/);
   assert.match(app, /const postActionDocument = await updateApproval\(/);
   assert.match(app, /const response = await createApproval\([\s\S]*?keepApprovalPostAction\("create", response\.documentId, null\)/);
-  assert.match(app, /const postActionDocument = await act\(token, documentId, reasonAction\.reason\.trim\(\) \|\| "확인"\)/);
-  assert.match(app, /keepApprovalPostAction\(accepted \? "approve" : "reject", documentId, postActionDocument\)/);
-  assert.match(app, /const postActionDocument = await act\(token, documentId\)/);
+  assert.match(app, /const documentId = approvalActionTarget\.documentId/);
+  assert.match(app, /approveApproval\(token, documentId, reasonAction\.reason\.trim\(\)\)/);
+  assert.match(app, /rejectApproval\(token, documentId, reasonAction\.reason\.trim\(\)\)/);
+  assert.doesNotMatch(app, /reasonAction\.reason\.trim\(\) \|\| "확인"/);
   assert.match(app, /keepApprovalPostAction\(action, documentId, postActionDocument\)/);
   assert.doesNotMatch(app, /await reload\(\);\s*await selectApprovalDocument\(documentId\);/);
 });

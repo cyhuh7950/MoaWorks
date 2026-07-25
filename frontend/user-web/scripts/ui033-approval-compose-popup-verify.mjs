@@ -69,9 +69,10 @@ await check("draft save allows zero approvers and retains search-select-reorder"
 });
 
 await check("UI-034 state action path remains separate", () => {
-  assert.ok(app.includes('approvalModal === "approve"'));
-  assert.ok(app.includes("executeApprove"));
-  assert.ok(app.includes("executeSubmit"));
+  assert.ok(app.includes("approvalActionTarget"));
+  assert.ok(app.includes("executeApprovalAction"));
+  assert.ok(app.includes("renderApprovalActionPopup"));
+  assert.match(app, /approvalModal !== "create" && approvalModal !== "edit"/);
 });
 
 for (const [name, passed, error] of checks) console.log(`${passed ? "PASS" : "FAIL"} ${name}${error ? `: ${error}` : ""}`);
