@@ -24,6 +24,10 @@ const event = (id, startsAt, endsAt, title = id, description = "") => ({
 });
 const base = new Date("2026-07-27T00:00:00+09:00");
 
+assert.deepEqual(calendar.normalizeCalendarPreferences("not a locale", "Mars/Olympus"), { locale: "ko-KR", timezone: "Asia/Seoul" });
+assert.doesNotThrow(() => calendar.getCalendarRange("month", base, "Mars/Olympus"));
+assert.match(calendar.formatCalendarRangeTitle("month", base, "not a locale", "Mars/Olympus"), /2026년 7월/);
+
 assert.deepEqual(calendar.getCalendarRange("month", base), {
   start: new Date("2026-07-01T00:00:00+09:00"),
   end: new Date("2026-08-01T00:00:00+09:00"),
@@ -51,12 +55,22 @@ assert.equal(calendar.navigateCalendarDate(new Date("2026-01-31T12:00:00+09:00")
 assert.equal(calendar.navigateCalendarDate(base, "week", -1).getDate(), 20);
 assert.equal(calendar.navigateCalendarDate(base, "day", 1).getDate(), 28);
 assert.match(calendar.formatCalendarRangeTitle("month", base, "ko-KR", "Asia/Seoul"), /2026년 7월/);
+const focused = new Date("2026-07-31T00:00:00+09:00");
+assert.deepEqual(calendar.getCalendarListRange(base, focused, "Asia/Seoul"), {
+  start: focused,
+  end: new Date("2026-08-01T00:00:00+09:00"),
+});
+assert.equal(calendar.navigateCalendarListDate(focused, 1, "Asia/Seoul").toISOString(), "2026-07-31T15:00:00.000Z");
+assert.match(calendar.formatCalendarListTitle(base, focused, "ko-KR", "Asia/Seoul"), /7월 31일/);
 
 for (const text of ["일정 만들기", "내 캘린더", "관심 캘린더", "부서 캘린더", "전사 캘린더", "등록된 캘린더 없음", "오늘", "월", "주", "일", "목록", "일정을 선택하세요.", "검색 결과가 없습니다.", "다시 시도"])
   assert.ok(component.includes(text), `missing UI contract: ${text}`);
 for (const view of ["month", "week", "day", "list"])
   assert.ok(component.includes(`key: "${view}"`), `missing calendar view: ${view}`);
 assert.ok(component.includes("aria-pressed={view === item.key}"), "selected view must expose aria-pressed");
+assert.ok(component.includes("focusedListDate"), "focused list state missing");
+assert.ok(component.includes("setFocusedListDate(null)"), "segmented list must clear focused date");
+assert.ok(component.includes("getCalendarListRange"), "focused list range missing");
 assert.ok(workspace.includes("<CalendarPanel"), "schedule branch must delegate to CalendarPanel");
 assert.ok(workspace.includes("openSchedule") && workspace.includes("submitSchedule") && workspace.includes("confirmDelete"), "existing CRUD wiring missing");
 assert.ok(api.includes('request<{ items: WorkspaceSchedule[] }>("/workspace/schedules"'), "same-origin schedule request missing");
