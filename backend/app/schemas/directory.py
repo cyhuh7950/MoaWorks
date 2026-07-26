@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from enum import Enum
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class CompanyRecord(BaseModel):
@@ -151,9 +151,11 @@ class ApprovalLineRecord(BaseModel):
     status: str
     comment: str | None = None
     decidedByUserId: str | None = None
+    decidedByUserName: str | None = None
     decidedAt: datetime | None = None
     hasSignature: bool = False
     signatureUrl: str | None = None
+    delegationId: str | None = None
 
 
 class AuditLogRecord(BaseModel):
@@ -244,6 +246,7 @@ class ApprovalDocumentResponse(BaseModel):
     submittedByUserId: str | None = None
     submittedAt: datetime | None = None
     currentLineIndex: int | None = None
+    canCurrentUserAct: bool = False
     lines: list[ApprovalLineRecord]
 
 
@@ -265,6 +268,56 @@ class ApprovalBasicPreferenceResponse(BaseModel):
     signatureContentType: Literal["image/png", "image/jpeg", "image/webp"] | None = None
     signatureSizeBytes: int | None = Field(default=None, gt=0)
     signatureUrl: str | None = None
+
+
+class ApprovalDelegationCreateRequest(BaseModel):
+    delegateUserId: str = Field(min_length=1)
+    startDate: date
+    endDate: date
+    reason: str = Field(min_length=1, max_length=500)
+    enabled: bool = True
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("부재 사유를 입력해야 합니다.")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_period(self) -> "ApprovalDelegationCreateRequest":
+        if self.startDate > self.endDate:
+            raise ValueError("종료일은 시작일보다 빠를 수 없습니다.")
+        return self
+
+
+class ApprovalDelegationUpdateRequest(ApprovalDelegationCreateRequest):
+    expectedVersion: int = Field(ge=1)
+
+
+class ApprovalDelegationView(BaseModel):
+    delegationId: str
+    ownerUserId: str
+    delegateUserId: str
+    delegateUserName: str
+    delegateUserEmail: str
+    departmentName: str
+    startDate: date
+    endDate: date
+    reason: str
+    enabled: bool
+    status: Literal["disabled", "scheduled", "active", "expired"]
+    version: int = Field(ge=1)
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class ApprovalDelegationListResponse(BaseModel):
+    items: list[ApprovalDelegationView]
+    total: int = Field(ge=0)
+    page: int = Field(ge=1)
+    pageSize: int = Field(ge=1, le=100)
 
 
 class ApprovalDocumentDetailResponse(ApprovalDocumentResponse):

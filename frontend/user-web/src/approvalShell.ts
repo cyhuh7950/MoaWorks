@@ -29,12 +29,12 @@ export function classifyApprovalDocuments(
       ? undefined
       : document.lines.find((line) => line.sequence === document.currentLineIndex);
     const isPending = document.status === "submitted"
-      && currentLine?.approverUserId === actorUserId
-      && currentLine.status === "pending";
+      && (document.canCurrentUserAct || currentLine?.approverUserId === actorUserId)
+      && currentLine?.status === "pending";
     const isScheduled = document.status === "submitted"
       && document.currentLineIndex != null
       && document.lines.some((line) => (
-        line.approverUserId === actorUserId
+        (line.approverUserId === actorUserId || line.decidedByUserId === actorUserId)
         && line.status === "pending"
         && line.sequence > document.currentLineIndex!
       ));

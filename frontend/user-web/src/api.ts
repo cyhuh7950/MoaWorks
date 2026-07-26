@@ -127,9 +127,11 @@ export type ApprovalLine = {
   status: "pending" | "approved" | "rejected";
   comment?: string;
   decidedByUserId?: string;
+  decidedByUserName?: string;
   decidedAt?: string;
   hasSignature: boolean;
   signatureUrl?: string;
+  delegationId?: string;
 };
 
 export type ApprovalDocument = {
@@ -144,6 +146,7 @@ export type ApprovalDocument = {
   submittedByUserId?: string;
   submittedAt?: string;
   currentLineIndex?: number;
+  canCurrentUserAct: boolean;
   lines: ApprovalLine[];
 };
 
@@ -165,6 +168,38 @@ export type ApprovalBasicPreferences = {
   signatureContentType?: "image/png" | "image/jpeg" | "image/webp";
   signatureSizeBytes?: number;
   signatureUrl?: string;
+};
+
+export type ApprovalDelegation = {
+  delegationId: string;
+  ownerUserId: string;
+  delegateUserId: string;
+  delegateUserName: string;
+  delegateUserEmail: string;
+  departmentName: string;
+  startDate: string;
+  endDate: string;
+  reason: string;
+  enabled: boolean;
+  status: "disabled" | "scheduled" | "active" | "expired";
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ApprovalDelegationPayload = {
+  delegateUserId: string;
+  startDate: string;
+  endDate: string;
+  reason: string;
+  enabled: boolean;
+};
+
+export type ApprovalDelegationListResponse = {
+  items: ApprovalDelegation[];
+  total: number;
+  page: number;
+  pageSize: number;
 };
 
 export type ApprovalAttachmentUpload = {
@@ -779,6 +814,43 @@ export async function updateApprovalBasicPreferences(
     method: "PUT",
     headers: authHeaders(token),
     body: form,
+  });
+}
+
+export async function fetchApprovalDelegations(
+  token: string,
+  page = 1,
+  pageSize = 20,
+): Promise<ApprovalDelegationListResponse> {
+  return request<ApprovalDelegationListResponse>(`/approvals/settings/delegations?page=${page}&pageSize=${pageSize}`, {
+    headers: authHeaders(token),
+  });
+}
+
+export async function createApprovalDelegation(token: string, payload: ApprovalDelegationPayload) {
+  return request<ApprovalDelegation>("/approvals/settings/delegations", {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateApprovalDelegation(
+  token: string,
+  delegationId: string,
+  payload: ApprovalDelegationPayload & { expectedVersion: number },
+) {
+  return request<ApprovalDelegation>(`/approvals/settings/delegations/${delegationId}`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteApprovalDelegation(token: string, delegationId: string, expectedVersion: number) {
+  return request<ApprovalDelegation>(`/approvals/settings/delegations/${delegationId}?expectedVersion=${expectedVersion}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
   });
 }
 

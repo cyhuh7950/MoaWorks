@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 import json
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from app.schemas.directory import (
     ApprovalActionReason,
@@ -12,6 +13,10 @@ from app.schemas.directory import (
     ApprovalApproverListResponse,
     ApprovalApproverView,
     ApprovalBasicPreferenceResponse,
+    ApprovalDelegationCreateRequest,
+    ApprovalDelegationListResponse,
+    ApprovalDelegationUpdateRequest,
+    ApprovalDelegationView,
     ApprovalCreateResponse,
     ApprovalDocumentCreateRequest,
     ApprovalDocumentDetailResponse,
@@ -51,6 +56,26 @@ from app.services.approval_signature_storage import ApprovalSignatureStorage, de
 
 
 class ApprovalPreferenceConflictError(Exception):
+    pass
+
+
+class ApprovalDelegationConflictError(Exception):
+    pass
+
+
+class ApprovalDelegationOverlapError(Exception):
+    pass
+
+
+class ApprovalDelegateInvalidError(Exception):
+    pass
+
+
+class ApprovalDelegationPeriodError(Exception):
+    pass
+
+
+class ApprovalDelegationNotFoundError(Exception):
     pass
 
 
@@ -659,7 +684,15 @@ class DirectoryStore:
             with connection.cursor() as cursor:
                 actor = self._fetch_actor_summary(cursor, actor_id)
                 rows = self._fetch_visible_approval_rows(cursor, actor)
-                documents = [self._to_approval_document_response(cursor, row) for row in rows]
+                actionable_ids = self._fetch_actor_actionable_document_ids(
+                    cursor, actor, [row["id"] for row in rows],
+                )
+                documents = [
+                    self._to_approval_document_response(
+                        cursor, row, actor, can_current_user_act=row["id"] in actionable_ids,
+                    )
+                    for row in rows
+                ]
         return ApprovalListResponse(documents=documents)
 
     def get_audit_logs(self, actor_id: str, target_id: str | None = None) -> AuditLogListResponse:
@@ -705,10 +738,25 @@ class DirectoryStore:
                               AND (
                                   ad.creator_user_id = %s
                                   OR apl.approver_user_id = %s
+                                  OR apl.decided_by_user_id = %s
+                                  OR EXISTS (
+                                      SELECT 1
+                                      FROM approval_lines current_line
+                                      JOIN approval_delegations adg
+                                        ON adg.company_id = ad.company_id
+                                       AND adg.owner_user_id = current_line.approver_user_id
+                                       AND adg.delegate_user_id = %s
+                                       AND adg.enabled = TRUE AND adg.deleted_at IS NULL
+                                       AND adg.start_date <= timezone('Asia/Seoul', CURRENT_TIMESTAMP)::date
+                                       AND adg.end_date >= timezone('Asia/Seoul', CURRENT_TIMESTAMP)::date
+                                      WHERE current_line.document_id = ad.id
+                                        AND current_line.sequence = ad.current_line_index
+                                        AND current_line.status = 'pending'
+                                  )
                               )
                             ORDER BY al.created_at DESC
                             """,
-                            (actor.companyId, actor.userId, actor.userId),
+                            (actor.companyId, actor.userId, actor.userId, actor.userId, actor.userId),
                         )
                 rows = cursor.fetchall()
         return AuditLogListResponse(logs=[self._to_audit_view(row) for row in rows])
@@ -720,7 +768,7 @@ class DirectoryStore:
                 actor = self._fetch_actor_summary(cursor, actor_id)
                 row = self._fetch_required_approval_document(cursor, document_id)
                 self._assert_approval_visible(cursor, actor, row)
-                return self._to_approval_document_detail_response(cursor, row)
+                return self._to_approval_document_detail_response(cursor, row, actor)
 
     def get_approval_attachment(self, actor_id: str, document_id: str, attachment_id: str) -> dict[str, object]:
         self.db.ensure_migrations_applied()
@@ -931,6 +979,253 @@ class DirectoryStore:
             signatureSizeBytes=signature_values[3],
             signatureUrl="/api/v1/approvals/settings/signature" if signature_values[0] else None,
         )
+
+    @staticmethod
+    def _delegation_status(enabled: bool, start_date: date, end_date: date, today: date) -> str:
+        if not enabled:
+            return "disabled"
+        if today < start_date:
+            return "scheduled"
+        if today > end_date:
+            return "expired"
+        return "active"
+
+    @staticmethod
+    def _seoul_today() -> date:
+        return datetime.now(ZoneInfo("Asia/Seoul")).date()
+
+    def _to_approval_delegation_view(self, row: dict, today: date) -> ApprovalDelegationView:
+        return ApprovalDelegationView(
+            delegationId=row["id"],
+            ownerUserId=row["owner_user_id"],
+            delegateUserId=row["delegate_user_id"],
+            delegateUserName=row["delegate_user_name"],
+            delegateUserEmail=row["delegate_user_email"],
+            departmentName=row["department_name"],
+            startDate=row["start_date"],
+            endDate=row["end_date"],
+            reason=row["reason"],
+            enabled=row["enabled"],
+            status=self._delegation_status(row["enabled"], row["start_date"], row["end_date"], today),
+            version=row["version"],
+            createdAt=row["created_at"],
+            updatedAt=row["updated_at"],
+        )
+
+    @staticmethod
+    def _lock_delegation_owner(cursor, actor: AuthUserSummary) -> None:
+        cursor.execute(
+            "SELECT id FROM users WHERE id = %s AND company_id = %s FOR UPDATE",
+            (actor.userId, actor.companyId),
+        )
+        if cursor.fetchone() is None:
+            raise PermissionError("부재/위임 설정에 접근할 수 없습니다.")
+
+    @staticmethod
+    def _validate_delegation_period(start_date: date, end_date: date) -> None:
+        if start_date > end_date:
+            raise ApprovalDelegationPeriodError("종료일은 시작일보다 빠를 수 없습니다.")
+
+    @staticmethod
+    def _validate_delegate(cursor, actor: AuthUserSummary, delegate_user_id: str) -> None:
+        if delegate_user_id == actor.userId:
+            raise ApprovalDelegateInvalidError("본인을 대결자로 지정할 수 없습니다.")
+        cursor.execute(
+            """
+            SELECT u.id
+            FROM users u
+            JOIN roles r ON r.id = u.role_id AND r.company_id = u.company_id
+            LEFT JOIN departments d ON d.id = u.department_id AND d.company_id = u.company_id
+            WHERE u.id = %s AND u.company_id = %s
+              AND u.status = 'active' AND r.status = 'active'
+              AND (u.department_id IS NULL OR d.status = 'active')
+            """,
+            (delegate_user_id, actor.companyId),
+        )
+        if cursor.fetchone() is None:
+            raise ApprovalDelegateInvalidError("같은 회사의 활성 사용자만 대결자로 지정할 수 있습니다.")
+
+    @staticmethod
+    def _assert_no_delegation_overlap(
+        cursor,
+        actor: AuthUserSummary,
+        start_date: date,
+        end_date: date,
+        *,
+        exclude_id: str | None = None,
+    ) -> None:
+        query = """
+            SELECT 1
+            FROM approval_delegations
+            WHERE company_id = %s AND owner_user_id = %s
+              AND enabled = TRUE AND deleted_at IS NULL
+              AND NOT (end_date < %s OR start_date > %s)
+        """
+        params: list[object] = [actor.companyId, actor.userId, start_date, end_date]
+        if exclude_id is not None:
+            query += " AND id <> %s"
+            params.append(exclude_id)
+        query += " LIMIT 1"
+        cursor.execute(query, tuple(params))
+        if cursor.fetchone() is not None:
+            raise ApprovalDelegationOverlapError("활성 위임 기간이 기존 설정과 겹칩니다.")
+
+    @staticmethod
+    def _fetch_owned_delegation(cursor, actor: AuthUserSummary, delegation_id: str, *, for_update: bool) -> dict:
+        query = """
+            SELECT ad.*, u.name AS delegate_user_name, u.email AS delegate_user_email,
+                   COALESCE(d.name, '미지정') AS department_name
+            FROM approval_delegations ad
+            JOIN users u ON u.id = ad.delegate_user_id
+            LEFT JOIN departments d ON d.id = u.department_id AND d.company_id = u.company_id
+            WHERE ad.id = %s AND ad.company_id = %s AND ad.owner_user_id = %s
+              AND ad.deleted_at IS NULL
+        """
+        if for_update:
+            query += " FOR UPDATE OF ad"
+        cursor.execute(query, (delegation_id, actor.companyId, actor.userId))
+        row = cursor.fetchone()
+        if row is None:
+            raise ApprovalDelegationNotFoundError("대상 부재/위임 설정을 찾을 수 없습니다.")
+        return row
+
+    def list_approval_delegations(self, actor_id: str, page: int, page_size: int) -> ApprovalDelegationListResponse:
+        if page < 1 or not 1 <= page_size <= 100:
+            raise ValueError("페이지 범위가 올바르지 않습니다.")
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                actor = self._fetch_actor_summary(cursor, actor_id)
+                cursor.execute(
+                    "SELECT COUNT(*) AS count FROM approval_delegations WHERE company_id = %s AND owner_user_id = %s AND deleted_at IS NULL",
+                    (actor.companyId, actor.userId),
+                )
+                total = int(cursor.fetchone()["count"])
+                cursor.execute(
+                    """
+                    SELECT ad.*, u.name AS delegate_user_name, u.email AS delegate_user_email,
+                           COALESCE(d.name, '미지정') AS department_name
+                    FROM approval_delegations ad
+                    JOIN users u ON u.id = ad.delegate_user_id
+                    LEFT JOIN departments d ON d.id = u.department_id AND d.company_id = u.company_id
+                    WHERE ad.company_id = %s AND ad.owner_user_id = %s AND ad.deleted_at IS NULL
+                    ORDER BY ad.updated_at DESC, ad.created_at DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (actor.companyId, actor.userId, page_size, (page - 1) * page_size),
+                )
+                rows = list(cursor.fetchall())
+        today = self._seoul_today()
+        return ApprovalDelegationListResponse(
+            items=[self._to_approval_delegation_view(row, today) for row in rows],
+            total=total,
+            page=page,
+            pageSize=page_size,
+        )
+
+    def create_approval_delegation(
+        self, actor_id: str, payload: ApprovalDelegationCreateRequest
+    ) -> ApprovalDelegationView:
+        self._validate_delegation_period(payload.startDate, payload.endDate)
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        delegation_id = self._new_id("delegation")
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                actor = self._fetch_actor_summary(cursor, actor_id)
+                self._lock_delegation_owner(cursor, actor)
+                self._validate_delegate(cursor, actor, payload.delegateUserId)
+                if payload.enabled:
+                    self._assert_no_delegation_overlap(cursor, actor, payload.startDate, payload.endDate)
+                cursor.execute(
+                    """
+                    INSERT INTO approval_delegations (
+                        id, company_id, owner_user_id, delegate_user_id, start_date, end_date,
+                        reason, enabled, version, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 1, %s, %s)
+                    """,
+                    (delegation_id, actor.companyId, actor.userId, payload.delegateUserId,
+                     payload.startDate, payload.endDate, payload.reason, payload.enabled, now, now),
+                )
+                self._insert_audit(
+                    cursor=cursor, company_id=actor.companyId, actor_user_id=actor.userId,
+                    actor_user_name=actor.userName, target_type="approval_delegation", target_id=delegation_id,
+                    event="approval.delegation.created", status_before=None, status_after="1", reason=payload.reason,
+                )
+                row = self._fetch_owned_delegation(cursor, actor, delegation_id, for_update=False)
+            connection.commit()
+        return self._to_approval_delegation_view(row, self._seoul_today())
+
+    def update_approval_delegation(
+        self, actor_id: str, delegation_id: str, payload: ApprovalDelegationUpdateRequest
+    ) -> ApprovalDelegationView:
+        self._validate_delegation_period(payload.startDate, payload.endDate)
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                actor = self._fetch_actor_summary(cursor, actor_id)
+                self._lock_delegation_owner(cursor, actor)
+                current = self._fetch_owned_delegation(cursor, actor, delegation_id, for_update=True)
+                if int(current["version"]) != payload.expectedVersion:
+                    raise ApprovalDelegationConflictError("다른 화면에서 위임 설정이 변경되었습니다.")
+                self._validate_delegate(cursor, actor, payload.delegateUserId)
+                if payload.enabled:
+                    self._assert_no_delegation_overlap(
+                        cursor, actor, payload.startDate, payload.endDate, exclude_id=delegation_id,
+                    )
+                next_version = payload.expectedVersion + 1
+                cursor.execute(
+                    """
+                    UPDATE approval_delegations
+                    SET delegate_user_id = %s, start_date = %s, end_date = %s, reason = %s,
+                        enabled = %s, version = %s, updated_at = %s
+                    WHERE id = %s AND company_id = %s AND owner_user_id = %s AND deleted_at IS NULL
+                    """,
+                    (payload.delegateUserId, payload.startDate, payload.endDate, payload.reason,
+                     payload.enabled, next_version, now, delegation_id, actor.companyId, actor.userId),
+                )
+                self._insert_audit(
+                    cursor=cursor, company_id=actor.companyId, actor_user_id=actor.userId,
+                    actor_user_name=actor.userName, target_type="approval_delegation", target_id=delegation_id,
+                    event="approval.delegation.updated", status_before=str(payload.expectedVersion),
+                    status_after=str(next_version), reason=payload.reason,
+                )
+                row = self._fetch_owned_delegation(cursor, actor, delegation_id, for_update=False)
+            connection.commit()
+        return self._to_approval_delegation_view(row, self._seoul_today())
+
+    def delete_approval_delegation(
+        self, actor_id: str, delegation_id: str, expected_version: int
+    ) -> ApprovalDelegationView:
+        if expected_version < 1:
+            raise ApprovalDelegationConflictError("위임 설정 버전이 올바르지 않습니다.")
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                actor = self._fetch_actor_summary(cursor, actor_id)
+                self._lock_delegation_owner(cursor, actor)
+                current = self._fetch_owned_delegation(cursor, actor, delegation_id, for_update=True)
+                if int(current["version"]) != expected_version:
+                    raise ApprovalDelegationConflictError("다른 화면에서 위임 설정이 변경되었습니다.")
+                next_version = expected_version + 1
+                cursor.execute(
+                    """
+                    UPDATE approval_delegations
+                    SET deleted_at = %s, updated_at = %s, version = %s
+                    WHERE id = %s AND company_id = %s AND owner_user_id = %s AND deleted_at IS NULL
+                    """,
+                    (now, now, next_version, delegation_id, actor.companyId, actor.userId),
+                )
+                self._insert_audit(
+                    cursor=cursor, company_id=actor.companyId, actor_user_id=actor.userId,
+                    actor_user_name=actor.userName, target_type="approval_delegation", target_id=delegation_id,
+                    event="approval.delegation.deleted", status_before=str(expected_version),
+                    status_after=str(next_version), reason=current["reason"],
+                )
+            connection.commit()
+        return self._to_approval_delegation_view({**current, "version": next_version, "updated_at": now}, self._seoul_today())
 
     def get_approval_line_signature(self, actor_id: str, document_id: str, line_id: str) -> dict[str, object]:
         self.db.ensure_migrations_applied()
@@ -1278,6 +1573,7 @@ class DirectoryStore:
                 response = self._to_approval_document_detail_response(
                     cursor,
                     self._fetch_required_approval_document(cursor, document_id),
+                    actor,
                 )
             connection.commit()
         storage = ApprovalAttachmentStorage()
@@ -1327,7 +1623,7 @@ class DirectoryStore:
                     status_after="submitted",
                     reason=None,
                 )
-                response = self._to_approval_document_response(cursor, self._fetch_required_approval_document(cursor, document_id))
+                response = self._to_approval_document_response(cursor, self._fetch_required_approval_document(cursor, document_id), actor)
             connection.commit()
         self._emit_approval_event(
             actor=actor,
@@ -1379,7 +1675,7 @@ class DirectoryStore:
                     status_after="withdrawn",
                     reason=None,
                 )
-                response = self._to_approval_document_response(cursor, self._fetch_required_approval_document(cursor, document_id))
+                response = self._to_approval_document_response(cursor, self._fetch_required_approval_document(cursor, document_id), actor)
             connection.commit()
         self._emit_approval_event(
             actor=actor,
@@ -1425,7 +1721,8 @@ class DirectoryStore:
                         signature_storage_key = NULL,
                         signature_file_name = NULL,
                         signature_content_type = NULL,
-                        signature_size_bytes = NULL
+                        signature_size_bytes = NULL,
+                        delegation_id = NULL
                     WHERE document_id = %s
                     """,
                     (document_id,),
@@ -1442,7 +1739,7 @@ class DirectoryStore:
                     status_after="draft",
                     reason=None,
                 )
-                response = self._to_approval_document_response(cursor, self._fetch_required_approval_document(cursor, document_id))
+                response = self._to_approval_document_response(cursor, self._fetch_required_approval_document(cursor, document_id), actor)
             connection.commit()
         self._emit_approval_event(
             actor=actor,
@@ -1571,25 +1868,28 @@ class DirectoryStore:
     def _fetch_approval_lines(self, cursor, document_id: str, *, for_update: bool = False) -> list[dict]:
         query = """
             SELECT
-                id,
-                document_id,
-                approver_user_id,
-                approver_user_name,
-                sequence,
-                status,
-                comment,
-                decided_by_user_id,
-                decided_at
-                , signature_storage_key
-                , signature_file_name
-                , signature_content_type
-                , signature_size_bytes
-            FROM approval_lines
-            WHERE document_id = %s
-            ORDER BY sequence ASC
+                apl.id,
+                apl.document_id,
+                apl.approver_user_id,
+                apl.approver_user_name,
+                apl.sequence,
+                apl.status,
+                apl.comment,
+                apl.decided_by_user_id,
+                decided.name AS decided_by_user_name,
+                apl.decided_at,
+                apl.delegation_id,
+                apl.signature_storage_key,
+                apl.signature_file_name,
+                apl.signature_content_type,
+                apl.signature_size_bytes
+            FROM approval_lines apl
+            LEFT JOIN users decided ON decided.id = apl.decided_by_user_id
+            WHERE apl.document_id = %s
+            ORDER BY apl.sequence ASC
         """
         if for_update:
-            query += " FOR UPDATE"
+            query += " FOR UPDATE OF apl"
         cursor.execute(query, (document_id,))
         return list(cursor.fetchall())
 
@@ -1640,10 +1940,26 @@ class DirectoryStore:
                   AND (
                       ad.creator_user_id = %s
                       OR apl.approver_user_id = %s
+                      OR apl.decided_by_user_id = %s
+                      OR EXISTS (
+                          SELECT 1
+                          FROM approval_lines current_line
+                          JOIN approval_delegations adg
+                            ON adg.company_id = ad.company_id
+                           AND adg.owner_user_id = current_line.approver_user_id
+                           AND adg.delegate_user_id = %s
+                           AND adg.enabled = TRUE
+                           AND adg.deleted_at IS NULL
+                           AND adg.start_date <= timezone('Asia/Seoul', CURRENT_TIMESTAMP)::date
+                           AND adg.end_date >= timezone('Asia/Seoul', CURRENT_TIMESTAMP)::date
+                          WHERE current_line.document_id = ad.id
+                            AND current_line.sequence = ad.current_line_index
+                            AND current_line.status = 'pending'
+                      )
                   )
                 ORDER BY ad.updated_at DESC, ad.created_at DESC
                 """,
-                (actor.companyId, actor.userId, actor.userId),
+                (actor.companyId, actor.userId, actor.userId, actor.userId, actor.userId),
             )
         return list(cursor.fetchall())
 
@@ -1655,14 +1971,98 @@ class DirectoryStore:
         if document["creator_user_id"] == actor.userId:
             return
         cursor.execute(
-            "SELECT 1 FROM approval_lines WHERE document_id = %s AND approver_user_id = %s",
-            (document["id"], actor.userId),
+            """
+            SELECT 1
+            FROM approval_lines apl
+            WHERE apl.document_id = %s
+              AND (
+                  apl.approver_user_id = %s
+                  OR apl.decided_by_user_id = %s
+                  OR (
+                      apl.sequence = %s AND apl.status = 'pending'
+                      AND EXISTS (
+                          SELECT 1 FROM approval_delegations adg
+                          WHERE adg.company_id = %s
+                            AND adg.owner_user_id = apl.approver_user_id
+                            AND adg.delegate_user_id = %s
+                            AND adg.enabled = TRUE AND adg.deleted_at IS NULL
+                            AND adg.start_date <= timezone('Asia/Seoul', CURRENT_TIMESTAMP)::date
+                            AND adg.end_date >= timezone('Asia/Seoul', CURRENT_TIMESTAMP)::date
+                      )
+                  )
+              )
+            LIMIT 1
+            """,
+            (document["id"], actor.userId, actor.userId, document["current_line_index"], actor.companyId, actor.userId),
         )
         if cursor.fetchone() is not None:
             return
         raise PermissionError("대상 결재 문서에 접근할 수 없습니다.")
 
-    def _to_approval_document_response(self, cursor, row: dict) -> ApprovalDocumentResponse:
+    def _can_actor_process_current_line(self, cursor, row: dict, actor: AuthUserSummary) -> bool:
+        if row["status"] != "submitted" or row["current_line_index"] is None:
+            return False
+        cursor.execute(
+            """
+            SELECT 1
+            FROM approval_lines apl
+            WHERE apl.document_id = %s AND apl.sequence = %s AND apl.status = 'pending'
+              AND (
+                  apl.approver_user_id = %s
+                  OR EXISTS (
+                      SELECT 1 FROM approval_delegations adg
+                      WHERE adg.company_id = %s
+                        AND adg.owner_user_id = apl.approver_user_id
+                        AND adg.delegate_user_id = %s
+                        AND adg.enabled = TRUE AND adg.deleted_at IS NULL
+                        AND adg.start_date <= timezone('Asia/Seoul', CURRENT_TIMESTAMP)::date
+                        AND adg.end_date >= timezone('Asia/Seoul', CURRENT_TIMESTAMP)::date
+                  )
+              )
+            LIMIT 1
+            """,
+            (row["id"], row["current_line_index"], actor.userId, actor.companyId, actor.userId),
+        )
+        return cursor.fetchone() is not None
+
+    def _fetch_actor_actionable_document_ids(
+        self, cursor, actor: AuthUserSummary, document_ids: list[str]
+    ) -> set[str]:
+        if not document_ids:
+            return set()
+        cursor.execute(
+            """
+            SELECT DISTINCT apl.document_id
+            FROM approval_lines apl
+            JOIN approval_documents ad ON ad.id = apl.document_id
+            WHERE apl.document_id = ANY(%s)
+              AND ad.company_id = %s AND ad.status = 'submitted'
+              AND apl.sequence = ad.current_line_index AND apl.status = 'pending'
+              AND (
+                  apl.approver_user_id = %s
+                  OR EXISTS (
+                      SELECT 1 FROM approval_delegations adg
+                      WHERE adg.company_id = ad.company_id
+                        AND adg.owner_user_id = apl.approver_user_id
+                        AND adg.delegate_user_id = %s
+                        AND adg.enabled = TRUE AND adg.deleted_at IS NULL
+                        AND adg.start_date <= timezone('Asia/Seoul', CURRENT_TIMESTAMP)::date
+                        AND adg.end_date >= timezone('Asia/Seoul', CURRENT_TIMESTAMP)::date
+                  )
+              )
+            """,
+            (document_ids, actor.companyId, actor.userId, actor.userId),
+        )
+        return {row["document_id"] for row in cursor.fetchall()}
+
+    def _to_approval_document_response(
+        self,
+        cursor,
+        row: dict,
+        actor: AuthUserSummary,
+        *,
+        can_current_user_act: bool | None = None,
+    ) -> ApprovalDocumentResponse:
         lines = [
             ApprovalLineRecord(
                 id=line["id"],
@@ -1673,12 +2073,14 @@ class DirectoryStore:
                 status=line["status"],
                 comment=line["comment"],
                 decidedByUserId=line["decided_by_user_id"],
+                decidedByUserName=line["decided_by_user_name"],
                 decidedAt=line["decided_at"],
                 hasSignature=bool(line["signature_storage_key"]),
                 signatureUrl=(
                     f"/api/v1/approvals/{row['id']}/lines/{line['id']}/signature"
                     if line["signature_storage_key"] else None
                 ),
+                delegationId=line["delegation_id"],
             )
             for line in self._fetch_approval_lines(cursor, row["id"])
         ]
@@ -1694,6 +2096,10 @@ class DirectoryStore:
             submittedByUserId=row["submitted_by_user_id"],
             submittedAt=row["submitted_at"],
             currentLineIndex=row["current_line_index"],
+            canCurrentUserAct=(
+                self._can_actor_process_current_line(cursor, row, actor)
+                if can_current_user_act is None else can_current_user_act
+            ),
             lines=lines,
         )
 
@@ -1722,8 +2128,10 @@ class DirectoryStore:
             for row in cursor.fetchall()
         ]
 
-    def _to_approval_document_detail_response(self, cursor, row: dict) -> ApprovalDocumentDetailResponse:
-        document = self._to_approval_document_response(cursor, row)
+    def _to_approval_document_detail_response(
+        self, cursor, row: dict, actor: AuthUserSummary
+    ) -> ApprovalDocumentDetailResponse:
+        document = self._to_approval_document_response(cursor, row, actor)
         return ApprovalDocumentDetailResponse(
             **document.model_dump(),
             attachments=self._fetch_approval_attachments(cursor, row["id"]),
@@ -1769,6 +2177,7 @@ class DirectoryStore:
 
                 status_before = document["status"]
                 target_line = None
+                delegation_id = None
                 if forced:
                     pending_lines = [line for line in lines if line["status"] == "pending"]
                     if not pending_lines:
@@ -1780,7 +2189,26 @@ class DirectoryStore:
                     if target_line is None or target_line["status"] != "pending":
                         raise ValueError("현재 처리 가능한 결재선이 없습니다.")
                     if target_line["approver_user_id"] != actor.userId:
-                        raise PermissionError("현재 결재선의 담당자만 처리할 수 있습니다.")
+                        cursor.execute(
+                            """
+                            SELECT id
+                            FROM approval_delegations
+                            WHERE company_id = %s
+                              AND owner_user_id = %s
+                              AND delegate_user_id = %s
+                              AND enabled = TRUE AND deleted_at IS NULL
+                              AND start_date <= timezone('Asia/Seoul', CURRENT_TIMESTAMP)::date
+                              AND end_date >= timezone('Asia/Seoul', CURRENT_TIMESTAMP)::date
+                            ORDER BY updated_at DESC
+                            LIMIT 1
+                            FOR SHARE
+                            """,
+                            (actor.companyId, target_line["approver_user_id"], actor.userId),
+                        )
+                        delegation = cursor.fetchone()
+                        if delegation is None:
+                            raise PermissionError("현재 결재선의 담당자 또는 유효한 대결자만 처리할 수 있습니다.")
+                        delegation_id = delegation["id"]
 
                 if accepted:
                     signature_snapshot = (None, None, None, None)
@@ -1829,15 +2257,18 @@ class DirectoryStore:
                                 signature_storage_key = %s,
                                 signature_file_name = %s,
                                 signature_content_type = %s,
-                                signature_size_bytes = %s
+                                signature_size_bytes = %s,
+                                delegation_id = %s
                             WHERE id = %s
                             """,
-                            (normalized_reason, actor.userId, now, *signature_snapshot, target_line["id"]),
+                            (normalized_reason, actor.userId, now, *signature_snapshot, delegation_id, target_line["id"]),
                         )
                         remaining_pending = [line for line in lines if line["sequence"] > target_line["sequence"] and line["status"] == "pending"]
                         next_status = "approved" if not remaining_pending else "submitted"
                         next_line_index = None if next_status == "approved" else remaining_pending[0]["sequence"]
                         event_name = "approval.approved"
+                        if delegation_id:
+                            event_name = "approval.delegated_approved"
                 else:
                     if forced:
                         cursor.execute(
@@ -1859,12 +2290,15 @@ class DirectoryStore:
                             SET status = 'rejected',
                                 comment = %s,
                                 decided_by_user_id = %s,
-                                decided_at = %s
+                                decided_at = %s,
+                                delegation_id = %s
                             WHERE id = %s
                             """,
-                            (normalized_reason, actor.userId, now, target_line["id"]),
+                            (normalized_reason, actor.userId, now, delegation_id, target_line["id"]),
                         )
                         event_name = "approval.rejected"
+                        if delegation_id:
+                            event_name = "approval.delegated_rejected"
                     next_status = "rejected"
                     next_line_index = None
 
@@ -1890,7 +2324,7 @@ class DirectoryStore:
                     status_after=next_status,
                     reason=normalized_reason,
                 )
-                response = self._to_approval_document_response(cursor, self._fetch_required_approval_document(cursor, document_id))
+                response = self._to_approval_document_response(cursor, self._fetch_required_approval_document(cursor, document_id), actor)
             connection.commit()
         self._emit_approval_status_event(
             actor=actor,

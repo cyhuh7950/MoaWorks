@@ -38,6 +38,49 @@ body,
 .ui035-discard-confirm p { width: 100%; margin: 0 0 8px; line-height: 1.6; }
 @media (max-width: 1100px) { .ui035-settings__body { grid-template-columns: 1fr; } .ui035-signature-row { grid-template-columns: 80px minmax(0, 1fr); } }
 
+/* UI-036 approval absence and delegation settings */
+.ui036-delegations { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; overflow: hidden; font-size: 12px; }
+.ui036-delegations__toolbar { min-height: 54px; display: flex; align-items: center; gap: 8px; padding: 9px 20px; border-bottom: 1px solid #e2e8f0; }
+.ui036-delegations button, .ui036-delegation-form button, .ui036-delegation-delete button { min-height: 34px; padding: 0 11px; border: 1px solid #cbd5e1; border-radius: 9px; background: #fff; color: #1e293b; font: inherit; font-weight: 700; }
+.ui036-delegations__toolbar > button:first-child { color: #fff; border-color: #0f766e; background: #0f766e; }
+.ui036-delegations__toolbar > i { position: relative; display: inline-grid; place-items: center; width: 17px; height: 17px; border-radius: 50%; background: #e2e8f0; color: #475569; font-size: 9px; font-style: normal; cursor: help; }
+.ui036-delegations__toolbar > i::after { content: attr(data-tooltip); position: absolute; z-index: 10; top: calc(100% + 7px); left: 0; width: 260px; padding: 8px 10px; border-radius: 8px; background: #0f172a; color: #fff; font-size: 10px; line-height: 1.5; opacity: 0; pointer-events: none; transform: translateY(-3px); transition: .15s ease; }
+.ui036-delegations__toolbar > i:hover::after, .ui036-delegations__toolbar > i:focus-visible::after { opacity: 1; transform: translateY(0); }
+.ui036-delegations__toolbar > span { margin-left: auto; color: #64748b; font-size: 10px; }
+.ui036-delegations__table-wrap { min-height: 0; margin: 14px 20px; overflow: auto; border: 1px solid #dbe4ec; border-radius: 12px; }
+.ui036-delegations table { width: 100%; min-width: 900px; border-collapse: collapse; }
+.ui036-delegations caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+.ui036-delegations th, .ui036-delegations td { padding: 10px 9px; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: middle; }
+.ui036-delegations th { position: sticky; top: 0; z-index: 1; background: #f8fafc; color: #475569; font-size: 10px; }
+.ui036-delegations tr.is-selected { background: #f0fdfa; }
+.ui036-delegations td small { display: block; margin-top: 2px; color: #64748b; font-size: 9px; }
+.ui036-status { display: inline-flex; padding: 3px 8px; border-radius: 999px; background: #e2e8f0; color: #475569; font-size: 9px; font-weight: 800; }
+.ui036-status.is-active { background: #ccfbf1; color: #115e59; }
+.ui036-status.is-scheduled { background: #dbeafe; color: #1e40af; }
+.ui036-status.is-expired { background: #f1f5f9; color: #64748b; }
+.ui036-delegations__empty { min-height: 210px; display: grid; place-items: center; align-content: center; gap: 10px; color: #64748b; }
+.ui036-delegations__paging { display: flex; justify-content: center; align-items: center; gap: 10px; padding: 9px 20px; border-top: 1px solid #e2e8f0; }
+.ui036-delegation-popup { width: 720px; max-width: calc(100vw - 48px); max-height: calc(100vh - 48px); }
+.ui036-delegation-form { display: grid; gap: 13px; font-size: 12px; }
+.ui036-delegation-form label { display: grid; gap: 6px; font-weight: 700; }
+.ui036-delegation-form input:not([type="checkbox"]), .ui036-delegation-form textarea { min-height: 34px; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 9px; font: inherit; }
+.ui036-delegation-form textarea { min-height: 88px; resize: vertical; }
+.ui036-delegation-period { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.ui036-delegation-candidates { display: grid; gap: 7px; }
+.ui036-delegation-candidates > div { max-height: 155px; overflow: auto; display: grid; gap: 5px; padding: 6px; border: 1px solid #dbe4ec; border-radius: 10px; }
+.ui036-delegation-candidates button { display: flex; justify-content: space-between; align-items: center; text-align: left; }
+.ui036-delegation-candidates button[aria-selected="true"] { border-color: #0f766e; background: #f0fdfa; }
+.ui036-delegation-candidates button span, .ui036-delegation-form label small { color: #64748b; font-size: 10px; }
+.ui036-delegation-enabled { grid-template-columns: 1fr auto !important; align-items: center; }
+.ui036-delegation-enabled input { width: 38px; height: 21px; accent-color: #0f766e; }
+.ui036-delegation-form > footer { display: flex; justify-content: flex-end; gap: 8px; padding-top: 8px; }
+.ui036-delegation-form > footer button:last-child { color: #fff; border-color: #0f766e; background: #0f766e; }
+.ui036-delegation-delete { max-width: 440px; display: grid; gap: 8px; font-size: 12px; }
+.ui036-delegation-delete p { margin: 0; }
+.ui036-delegation-delete span { color: #64748b; font-size: 10px; }
+.ui036-delegation-delete > div { display: flex; justify-content: flex-end; gap: 8px; }
+.ui036-delegation-delete button.is-destructive { color: #fff; border-color: #b91c1c; background: #b91c1c; }
+
 .user-mail-settings { min-width: 0; height: 100%; overflow: hidden; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; background: #fff; border: 1px solid #dbe4ec; border-radius: 20px; font-size: 12px; }
 .user-mail-settings > header { display: flex; justify-content: space-between; align-items: center; padding: 18px 20px 12px; }
 .user-mail-settings > header small { color: #0f766e; font-weight: 800; }

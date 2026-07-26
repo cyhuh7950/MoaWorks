@@ -61,7 +61,7 @@ class Ui036ApprovalDelegationContractTests(unittest.TestCase):
 
     def test_crud_locks_owner_validates_delegate_overlap_and_soft_delete(self) -> None:
         source = (ROOT / "app" / "services" / "directory_store.py").read_text(encoding="utf-8")
-        block = source.split("def list_approval_delegations", 1)[1].split("def get_approval_line_signature", 1)[0]
+        block = source.split("def _lock_delegation_owner", 1)[1].split("def get_approval_line_signature", 1)[0]
         self.assertIn("FOR UPDATE", block)
         self.assertIn("u.company_id", block)
         self.assertIn("u.status = 'active'", block)
@@ -81,7 +81,7 @@ class Ui036ApprovalDelegationContractTests(unittest.TestCase):
             self.assertIn("decided_by_user_id", block)
             self.assertIn("approval_delegations", block)
             self.assertIn("deleted_at IS NULL", block)
-            self.assertIn("CURRENT_DATE", block)
+            self.assertIn("Asia/Seoul", block)
 
     def test_delegate_decision_preserves_owner_actor_delegation_and_signature(self) -> None:
         source = (ROOT / "app" / "services" / "directory_store.py").read_text(encoding="utf-8")
@@ -100,6 +100,58 @@ class Ui036ApprovalDelegationContractTests(unittest.TestCase):
         self.assertIn("delegation_id = NULL", redraft)
         schema = (ROOT / "app" / "schemas" / "directory.py").read_text(encoding="utf-8")
         self.assertIn("delegationId", schema)
+        self.assertIn("decidedByUserName", schema)
+        self.assertIn("decided.name AS decided_by_user_name", service)
+
+    def test_overlap_helper_uses_inclusive_parameterized_ranges(self) -> None:
+        from app.schemas.directory import AuthUserSummary
+        from app.services.directory_store import ApprovalDelegationOverlapError, DirectoryStore
+
+        class Cursor:
+            def __init__(self) -> None:
+                self.query = ""
+                self.params = ()
+
+            def execute(self, query, params) -> None:
+                self.query, self.params = query, params
+
+            @staticmethod
+            def fetchone():
+                return {"exists": 1}
+
+        actor = AuthUserSummary(
+            userId="owner", companyId="company", userName="Owner", userEmail="owner@example.com",
+            roleId="role", roleName="User", userType="user", status="active", permissions=[],
+        )
+        cursor = Cursor()
+        with self.assertRaises(ApprovalDelegationOverlapError):
+            DirectoryStore._assert_no_delegation_overlap(
+                cursor, actor, date(2026, 7, 26), date(2026, 7, 27), exclude_id="delegation_1",
+            )
+        self.assertIn("NOT (end_date < %s OR start_date > %s)", cursor.query)
+        self.assertIn("id <> %s", cursor.query)
+        self.assertEqual(cursor.params, ("company", "owner", date(2026, 7, 26), date(2026, 7, 27), "delegation_1"))
+
+    def test_route_error_mapping_preserves_stale_overlap_and_invalid_codes(self) -> None:
+        from fastapi import HTTPException
+        from app.api.routes.approvals import _raise_delegation_error
+        from app.services.directory_store import (
+            ApprovalDelegateInvalidError, ApprovalDelegationConflictError,
+            ApprovalDelegationNotFoundError, ApprovalDelegationOverlapError, ApprovalDelegationPeriodError,
+        )
+
+        cases = (
+            (ApprovalDelegationConflictError("stale"), 409, "APPROVAL_DELEGATION_STALE"),
+            (ApprovalDelegationOverlapError("overlap"), 409, "APPROVAL_DELEGATION_OVERLAP"),
+            (ApprovalDelegateInvalidError("invalid"), 400, "APPROVAL_DELEGATE_INVALID"),
+            (ApprovalDelegationPeriodError("period"), 400, "APPROVAL_DELEGATION_PERIOD_INVALID"),
+            (ApprovalDelegationNotFoundError("missing"), 404, "APPROVAL_DELEGATION_NOT_FOUND"),
+        )
+        for error, status, code in cases:
+            with self.subTest(code=code), self.assertRaises(HTTPException) as raised:
+                _raise_delegation_error(error)
+            self.assertEqual(raised.exception.status_code, status)
+            self.assertEqual(raised.exception.detail["code"], code)
 
 
 if __name__ == "__main__":

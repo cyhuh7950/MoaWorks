@@ -6,6 +6,10 @@ from app.schemas.directory import (
     ApprovalActionReason,
     ApprovalApproverListResponse,
     ApprovalBasicPreferenceResponse,
+    ApprovalDelegationCreateRequest,
+    ApprovalDelegationListResponse,
+    ApprovalDelegationUpdateRequest,
+    ApprovalDelegationView,
     ApprovalAttachmentUploadResponse,
     ApprovalCreateResponse,
     ApprovalDocumentCreateRequest,
@@ -17,7 +21,15 @@ from app.schemas.directory import (
     AuthUserSummary,
     AuditLogListResponse,
 )
-from app.services.directory_store import ApprovalPreferenceConflictError, DirectoryStore
+from app.services.directory_store import (
+    ApprovalDelegateInvalidError,
+    ApprovalDelegationConflictError,
+    ApprovalDelegationOverlapError,
+    ApprovalDelegationPeriodError,
+    ApprovalDelegationNotFoundError,
+    ApprovalPreferenceConflictError,
+    DirectoryStore,
+)
 from app.services.approval_attachment_storage import APPROVAL_ATTACHMENT_MAX_FILE_BYTES
 from app.services.approval_signature_storage import APPROVAL_SIGNATURE_MAX_FILE_BYTES
 
@@ -97,6 +109,75 @@ async def update_approval_basic_preferences(
             status_code=409,
             detail={"code": "APPROVAL_SETTINGS_STALE", "userMessage": str(exc), "adminMessage": str(exc)},
         ) from exc
+
+
+def _raise_delegation_error(exc: Exception) -> None:
+    if isinstance(exc, ApprovalDelegationConflictError):
+        status, code = 409, "APPROVAL_DELEGATION_STALE"
+    elif isinstance(exc, ApprovalDelegationOverlapError):
+        status, code = 409, "APPROVAL_DELEGATION_OVERLAP"
+    elif isinstance(exc, ApprovalDelegateInvalidError):
+        status, code = 400, "APPROVAL_DELEGATE_INVALID"
+    elif isinstance(exc, ApprovalDelegationPeriodError):
+        status, code = 400, "APPROVAL_DELEGATION_PERIOD_INVALID"
+    elif isinstance(exc, ApprovalDelegationNotFoundError):
+        status, code = 404, "APPROVAL_DELEGATION_NOT_FOUND"
+    else:
+        raise exc
+    raise HTTPException(
+        status_code=status,
+        detail={"code": code, "userMessage": str(exc), "adminMessage": str(exc)},
+    ) from exc
+
+
+@router.get("/settings/delegations", response_model=ApprovalDelegationListResponse)
+def list_approval_delegations(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100, alias="pageSize"),
+    user: AuthUserSummary = Depends(permission_required("approval:read")),
+) -> ApprovalDelegationListResponse:
+    return DirectoryStore().list_approval_delegations(user.userId, page, page_size)
+
+
+@router.post("/settings/delegations", response_model=ApprovalDelegationView)
+def create_approval_delegation(
+    payload: ApprovalDelegationCreateRequest,
+    user: AuthUserSummary = Depends(permission_required("approval:create")),
+) -> ApprovalDelegationView:
+    try:
+        return DirectoryStore().create_approval_delegation(user.userId, payload)
+    except (ApprovalDelegationOverlapError, ApprovalDelegateInvalidError, ApprovalDelegationPeriodError) as exc:
+        _raise_delegation_error(exc)
+        raise AssertionError("unreachable")
+
+
+@router.patch("/settings/delegations/{delegation_id}", response_model=ApprovalDelegationView)
+def update_approval_delegation(
+    delegation_id: str,
+    payload: ApprovalDelegationUpdateRequest,
+    user: AuthUserSummary = Depends(permission_required("approval:create")),
+) -> ApprovalDelegationView:
+    try:
+        return DirectoryStore().update_approval_delegation(user.userId, delegation_id, payload)
+    except (
+        ApprovalDelegationConflictError, ApprovalDelegationOverlapError,
+        ApprovalDelegateInvalidError, ApprovalDelegationPeriodError, ApprovalDelegationNotFoundError,
+    ) as exc:
+        _raise_delegation_error(exc)
+        raise AssertionError("unreachable")
+
+
+@router.delete("/settings/delegations/{delegation_id}", response_model=ApprovalDelegationView)
+def delete_approval_delegation(
+    delegation_id: str,
+    expected_version: int = Query(alias="expectedVersion", ge=1),
+    user: AuthUserSummary = Depends(permission_required("approval:create")),
+) -> ApprovalDelegationView:
+    try:
+        return DirectoryStore().delete_approval_delegation(user.userId, delegation_id, expected_version)
+    except (ApprovalDelegationConflictError, ApprovalDelegationNotFoundError) as exc:
+        _raise_delegation_error(exc)
+        raise AssertionError("unreachable")
 
 
 @router.get("/settings/signature")

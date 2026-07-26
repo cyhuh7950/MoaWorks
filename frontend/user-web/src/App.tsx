@@ -23,6 +23,7 @@ import {
   downloadApprovalAttachment,
   downloadMailboxBackup,
   createApproval,
+  createApprovalDelegation,
   createMailboxBackup,
   createSpamRule,
   createAutoClassificationRule,
@@ -48,8 +49,10 @@ import {
   collectExternalMailAccount,
   deleteAutoForwardExceptions,
   deleteAutoForwardTargets,
+  deleteApprovalDelegation,
   fetchApprovalApprovers,
   fetchApprovalBasicPreferences,
+  fetchApprovalDelegations,
   fetchApprovalInlineImage,
   fetchContacts,
   fetchApprovalLogs,
@@ -116,12 +119,14 @@ import {
   setMailCategory,
   updateApproval,
   updateApprovalBasicPreferences,
+  updateApprovalDelegation,
   updateMailFolder,
   updateMailTag,
   type MailAttachment,
   withdrawApproval,
   type ApprovalApprover,
   type ApprovalBasicPreferences,
+  type ApprovalDelegation,
   type ApprovalAttachment,
   type MailRecentRecipient,
   type MailRecentRecipientSettingsResponse,
@@ -197,6 +202,12 @@ import {
   type ApprovalAttachmentImageDisplay,
   type ApprovalPreferenceDraft,
 } from "./approvalPreferences";
+import {
+  APPROVAL_DELEGATION_STATUS_LABELS,
+  buildApprovalDelegationSnapshot,
+  validateApprovalDelegation,
+  type ApprovalDelegationDraft,
+} from "./approvalDelegation";
 
 const NOTIFICATION_POLICY = {
   retryMaxAttempts: 3,
@@ -219,6 +230,17 @@ const MAIL_CATEGORIES = [
 ] as const;
 
 type ApprovalShellMenuKey = ApprovalActualMenuKey | "reference" | "department" | "settings";
+
+function seoulDateInputValue(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(new Date());
+}
+
+function emptyApprovalDelegationDraft(): ApprovalDelegationDraft {
+  const today = seoulDateInputValue();
+  return { delegateUserId: "", startDate: today, endDate: today, reason: "", enabled: true };
+}
 
 type ApprovalShellMenuItem = {
   key: ApprovalShellMenuKey;
@@ -1296,6 +1318,20 @@ export default function App() {
   const [approvalPreferencesLoading, setApprovalPreferencesLoading] = useState(false);
   const [approvalPreferencesSaving, setApprovalPreferencesSaving] = useState(false);
   const [approvalPreferencesError, setApprovalPreferencesError] = useState("");
+  const [approvalSettingsTab, setApprovalSettingsTab] = useState<"basic" | "delegation">("basic");
+  const [approvalDelegations, setApprovalDelegations] = useState<ApprovalDelegation[]>([]);
+  const [approvalDelegationsTotal, setApprovalDelegationsTotal] = useState(0);
+  const [approvalDelegationsPage, setApprovalDelegationsPage] = useState(1);
+  const [approvalDelegationsLoading, setApprovalDelegationsLoading] = useState(false);
+  const [approvalDelegationsError, setApprovalDelegationsError] = useState("");
+  const [selectedApprovalDelegationId, setSelectedApprovalDelegationId] = useState("");
+  const [approvalDelegationPopupMode, setApprovalDelegationPopupMode] = useState<"none" | "create" | "edit">("none");
+  const [approvalDelegationDraft, setApprovalDelegationDraft] = useState<ApprovalDelegationDraft>(emptyApprovalDelegationDraft);
+  const [approvalDelegationBaseline, setApprovalDelegationBaseline] = useState("");
+  const [approvalDelegationSaving, setApprovalDelegationSaving] = useState(false);
+  const [approvalDelegationError, setApprovalDelegationError] = useState("");
+  const [approvalDelegationSearch, setApprovalDelegationSearch] = useState("");
+  const [approvalDelegationDeleteTarget, setApprovalDelegationDeleteTarget] = useState<ApprovalDelegation | null>(null);
   const [approvalSignatureFile, setApprovalSignatureFile] = useState<File | null>(null);
   const [approvalSignaturePreviewUrl, setApprovalSignaturePreviewUrl] = useState("");
   const [approvalPendingMenu, setApprovalPendingMenu] = useState<ApprovalShellMenuKey | null>(null);
@@ -1306,6 +1342,7 @@ export default function App() {
   const approvalDetailObjectUrls = useRef<string[]>([]);
   const approvalRequestSequence = useRef(0);
   const approvalComposeCloseRequestRef = useRef<(() => void) | null>(null);
+  const approvalDelegationCloseRequestRef = useRef<(() => void) | null>(null);
   const [loading, setLoading] = useState(false);
   const [approvalError, setApprovalError] = useState("");
   const approvalComposeSnapshot = useMemo(
@@ -1323,6 +1360,12 @@ export default function App() {
   );
   const approvalPreferencesDirty = Boolean(approvalPreferencesBaseline)
     && approvalPreferencesSnapshot !== approvalPreferencesBaseline;
+  const approvalDelegationSnapshot = useMemo(
+    () => buildApprovalDelegationSnapshot(approvalDelegationDraft),
+    [approvalDelegationDraft],
+  );
+  const approvalDelegationDirty = Boolean(approvalDelegationBaseline)
+    && approvalDelegationSnapshot !== approvalDelegationBaseline;
   const [documents, setDocuments] = useState<ApprovalDocument[]>([]);
   const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
   const [notificationSummary, setNotificationSummary] = useState<NotificationSummary | null>(null);
@@ -3529,6 +3572,117 @@ export default function App() {
     }
   }
 
+  async function loadApprovalDelegations(targetToken: string, page = approvalDelegationsPage) {
+    setApprovalDelegationsLoading(true);
+    setApprovalDelegationsError("");
+    try {
+      const response = await fetchApprovalDelegations(targetToken, page, 20);
+      setApprovalDelegations(response.items);
+      setApprovalDelegationsTotal(response.total);
+      setApprovalDelegationsPage(response.page);
+      setSelectedApprovalDelegationId((current) => (
+        response.items.some((item) => item.delegationId === current) ? current : ""
+      ));
+    } catch (error) {
+      setApprovalDelegationsError(normalizeClientError(error, "부재/위임 설정 조회 실패"));
+    } finally {
+      setApprovalDelegationsLoading(false);
+    }
+  }
+
+  function selectApprovalSettingsTab(tab: "basic" | "delegation") {
+    setApprovalSettingsTab(tab);
+    if (!token) return;
+    if (tab === "basic") {
+      if (!approvalPreferences) void loadApprovalPreferences(token);
+      return;
+    }
+    void loadApprovalDelegations(token, 1);
+  }
+
+  function openApprovalDelegationCreate() {
+    const draft = emptyApprovalDelegationDraft();
+    setApprovalDelegationDraft(draft);
+    setApprovalDelegationBaseline(buildApprovalDelegationSnapshot(draft));
+    setApprovalDelegationSearch("");
+    setApprovalDelegationError("");
+    setApprovalDelegationPopupMode("create");
+  }
+
+  function openApprovalDelegationEdit(item?: ApprovalDelegation) {
+    const target = item ?? approvalDelegations.find((value) => value.delegationId === selectedApprovalDelegationId);
+    if (!target) return;
+    const draft: ApprovalDelegationDraft = {
+      delegateUserId: target.delegateUserId,
+      startDate: target.startDate,
+      endDate: target.endDate,
+      reason: target.reason,
+      enabled: target.enabled,
+    };
+    setSelectedApprovalDelegationId(target.delegationId);
+    setApprovalDelegationDraft(draft);
+    setApprovalDelegationBaseline(buildApprovalDelegationSnapshot(draft));
+    setApprovalDelegationSearch("");
+    setApprovalDelegationError("");
+    setApprovalDelegationPopupMode("edit");
+  }
+
+  async function saveApprovalDelegation(event: FormEvent) {
+    event.preventDefault();
+    if (!token) return;
+    const validation = validateApprovalDelegation(approvalDelegationDraft);
+    if (validation) {
+      setApprovalDelegationError(validation);
+      return;
+    }
+    setApprovalDelegationSaving(true);
+    setApprovalDelegationError("");
+    try {
+      if (approvalDelegationPopupMode === "create") {
+        await createApprovalDelegation(token, { ...approvalDelegationDraft, reason: approvalDelegationDraft.reason.trim() });
+      } else {
+        const current = approvalDelegations.find((item) => item.delegationId === selectedApprovalDelegationId);
+        if (!current) throw new Error("수정할 위임 설정을 다시 선택하세요.");
+        await updateApprovalDelegation(token, current.delegationId, {
+          ...approvalDelegationDraft,
+          reason: approvalDelegationDraft.reason.trim(),
+          expectedVersion: current.version,
+        });
+      }
+      setApprovalDelegationPopupMode("none");
+      await loadApprovalDelegations(token, approvalDelegationsPage);
+      pushFeedback({ id: `approval-delegation-${Date.now()}`, source: "approval", tone: "success", title: "부재/위임 설정을 저장했습니다." });
+    } catch (error) {
+      const stale = error instanceof ApiRequestError && error.status === 409;
+      setApprovalDelegationError(stale
+        ? "다른 화면에서 위임 설정이 변경되었거나 기간이 겹칩니다. 목록을 다시 조회해 주세요."
+        : normalizeClientError(error, "부재/위임 설정 저장 실패"));
+    } finally {
+      setApprovalDelegationSaving(false);
+    }
+  }
+
+  async function confirmDeleteApprovalDelegation() {
+    if (!token || !approvalDelegationDeleteTarget) return;
+    setApprovalDelegationSaving(true);
+    setApprovalDelegationsError("");
+    try {
+      await deleteApprovalDelegation(
+        token, approvalDelegationDeleteTarget.delegationId, approvalDelegationDeleteTarget.version,
+      );
+      setApprovalDelegationDeleteTarget(null);
+      const nextPage = approvalDelegations.length === 1 && approvalDelegationsPage > 1
+        ? approvalDelegationsPage - 1 : approvalDelegationsPage;
+      await loadApprovalDelegations(token, nextPage);
+      pushFeedback({ id: `approval-delegation-delete-${Date.now()}`, source: "approval", tone: "success", title: "부재/위임 설정을 삭제했습니다." });
+    } catch (error) {
+      setApprovalDelegationsError(normalizeClientError(error, "부재/위임 설정 삭제 실패"));
+      setApprovalDelegationDeleteTarget(null);
+    } finally {
+      setApprovalDelegationSaving(false);
+    }
+  }
+
   async function selectApprovalDocument(documentId: string, options?: { preserveMenu?: boolean }) {
     const targetDocument = documents.find((document) => document.id === documentId);
     if (targetDocument && me && !options?.preserveMenu) {
@@ -3917,7 +4071,10 @@ export default function App() {
   function activateApprovalShellMenu(nextMenu: ApprovalShellMenuKey) {
     setApprovalShellMenu(nextMenu);
     if (nextMenu === "settings") {
-      if (token) void loadApprovalPreferences(token);
+      if (token) {
+        if (approvalSettingsTab === "basic") void loadApprovalPreferences(token);
+        else void loadApprovalDelegations(token, approvalDelegationsPage);
+      }
       setSelectedApprovalId("");
       setApprovalLogs([]);
       return;
@@ -3978,11 +4135,19 @@ export default function App() {
     };
   }, [documents, notificationSummary]);
 
-  function isCurrentApprover(doc: ApprovalDocument): boolean {
+  const approvalDelegationCandidates = useMemo(() => {
+    const keyword = approvalDelegationSearch.trim().toLowerCase();
+    return approvalApprovers.filter((user) => user.userId !== me?.userId).filter((user) => (
+      !keyword || `${user.userName} ${user.userEmail} ${user.departmentName}`.toLowerCase().includes(keyword)
+    ));
+  }, [approvalApprovers, approvalDelegationSearch, me?.userId]);
+
+  function isCurrentApprovalActor(doc: ApprovalDocument): boolean {
     if (!me) return false;
-    if (doc.currentLineIndex == null) return false;
-    const line = doc.lines.find((item) => item.sequence === doc.currentLineIndex);
-    return Boolean(line && line.approverUserId === me.userId);
+    const currentLine = doc.currentLineIndex == null
+      ? undefined
+      : doc.lines.find((line) => line.sequence === doc.currentLineIndex);
+    return Boolean(doc.canCurrentUserAct || currentLine?.approverUserId === me.userId);
   }
 
   const navItems = [
@@ -5047,7 +5212,7 @@ export default function App() {
         const effectiveSelectionId = resolveApprovalSelection(selectedApprovalId, filteredDocuments);
         const selectedDocument = selectedApprovalDetail?.id === effectiveSelectionId ? selectedApprovalDetail : null;
         const approvalComments = selectedDocument ? [
-          ...selectedDocument.lines.filter((line) => line.comment?.trim()).map((line) => ({ key: `line-${line.id}`, actor: line.approverUserName, action: approvalLineStatusLabel(line.status), text: line.comment!.trim(), at: line.decidedAt })),
+          ...selectedDocument.lines.filter((line) => line.comment?.trim()).map((line) => ({ key: `line-${line.id}`, actor: line.decidedByUserName ?? line.approverUserName, action: approvalLineStatusLabel(line.status), text: line.comment!.trim(), at: line.decidedAt })),
           ...approvalLogs.filter((log) => log.reason?.trim() && !selectedDocument.lines.some((line) => line.comment?.trim() === log.reason?.trim())).map((log) => ({ key: `log-${log.id}`, actor: log.actorUserName, action: log.event, text: log.reason!.trim(), at: log.createdAt })),
         ] : [];
         const selectedApprovers = createForm.approverUserIds
@@ -5150,7 +5315,7 @@ export default function App() {
                 {!approvalDetailLoading && !approvalDetailError && selectedDocument ? <>
                   <header className="ui032-detail__header"><div><span>선택 문서</span><h2>{selectedDocument.title}</h2><p>기안 {selectedDocument.creatorUserName} · 작성 {formatDateLabel(selectedDocument.createdAt)} · 상신 {selectedDocument.submittedAt ? formatDateLabel(selectedDocument.submittedAt) : "-"} · 갱신 {formatDateLabel(selectedDocument.updatedAt)}</p></div><span className={`ui032-status is-${selectedDocument.status}`}>{approvalStatusLabel(selectedDocument.status)}</span></header>
                   <section className="ui032-detail__content"><h3>본문</h3><p>{selectedDocument.content}</p></section>
-                  <section className="ui032-timeline"><h3>결재선</h3>{selectedDocument.lines.length ? selectedDocument.lines.map((line) => <article key={line.id}><i>{line.sequence}</i><div><strong>{line.approverUserName}</strong><span>{approvalLineStatusLabel(line.status)} · {line.decidedAt ? formatDateLabel(line.decidedAt) : "결정 대기"}</span></div>{line.hasSignature && line.signatureUrl ? (approvalLineSignatureUrls[line.id] ? <img className="ui035-line-signature" src={approvalLineSignatureUrls[line.id]} alt={`${line.approverUserName} 승인 서명`} /> : <small>서명 확인 중</small>) : null}</article>) : <div className="ui032-empty">등록된 결재선이 없습니다.</div>}</section>
+                  <section className="ui032-timeline"><h3>결재선</h3>{selectedDocument.lines.length ? selectedDocument.lines.map((line) => <article key={line.id}><i>{line.sequence}</i><div><strong>{line.approverUserName}{line.delegationId && line.decidedByUserName ? ` · 대결 ${line.decidedByUserName}` : ""}</strong><span>{approvalLineStatusLabel(line.status)} · {line.decidedAt ? formatDateLabel(line.decidedAt) : "결정 대기"}</span></div>{line.hasSignature && line.signatureUrl ? (approvalLineSignatureUrls[line.id] ? <img className="ui035-line-signature" src={approvalLineSignatureUrls[line.id]} alt={`${line.decidedByUserName ?? line.approverUserName} 승인 서명`} /> : <small>서명 확인 중</small>) : null}</article>) : <div className="ui032-empty">등록된 결재선이 없습니다.</div>}</section>
                   <section className="ui032-comments"><h3>처리 의견</h3>{approvalComments.length ? approvalComments.map((comment) => <article key={comment.key}><strong>{comment.actor} · {comment.action}</strong><p>{comment.text}</p><small>{comment.at ? formatDateLabel(comment.at) : "시각 없음"}</small></article>) : <div className="ui032-empty">등록된 처리 의견이 없습니다.</div>}</section>
                   <section className="ui032-attachments"><h3>첨부</h3>{approvalAttachmentError ? <div className="ui032-attachment-error" role="alert">{approvalAttachmentError}</div> : null}{selectedDocument.attachments.length ? selectedDocument.attachments.map((attachment) => <article key={attachment.attachmentId}>{attachment.previewUrl && approvalAttachmentPreviewUrls[attachment.attachmentId] ? <img className={`ui035-attachment-preview is-${approvalPreferences?.attachmentImageDisplay ?? "filename"}`} src={approvalAttachmentPreviewUrls[attachment.attachmentId]} alt={attachment.fileName} /> : null}<div><strong>{attachment.fileName}</strong><span>{attachment.contentType} · {formatFileSize(attachment.sizeBytes)} · {formatDateLabel(attachment.createdAt)}</span></div><button type="button" onClick={() => void handleApprovalAttachmentDownload(attachment.attachmentId, attachment.fileName)}>다운로드</button></article>) : <div className="ui032-empty">첨부 파일이 없습니다.</div>}</section>
                   <div className="ui032-actions" aria-label="결재 처리 도구">
@@ -5158,8 +5323,8 @@ export default function App() {
                     {selectedDocument.creatorUserId === me?.userId && selectedDocument.status === "draft" && canAct.submit ? <button type="button" onClick={() => openActionModal("submit")}>상신</button> : null}
                     {selectedDocument.creatorUserId === me?.userId && selectedDocument.status === "submitted" && canAct.withdraw ? <button type="button" onClick={() => openActionModal("withdraw")}>회수</button> : null}
                     {selectedDocument.creatorUserId === me?.userId && (selectedDocument.status === "rejected" || selectedDocument.status === "withdrawn") && canAct.rework ? <button type="button" onClick={() => openActionModal("redraft")}>재기안</button> : null}
-                    {isCurrentApprover(selectedDocument) && canAct.act ? <button type="button" onClick={() => openActionModal("approve")}>승인</button> : null}
-                    {isCurrentApprover(selectedDocument) && canAct.act ? <button type="button" onClick={() => openActionModal("reject")}>반려</button> : null}
+                    {isCurrentApprovalActor(selectedDocument) && canAct.act ? <button type="button" onClick={() => openActionModal("approve")}>승인</button> : null}
+                    {isCurrentApprovalActor(selectedDocument) && canAct.act ? <button type="button" onClick={() => openActionModal("reject")}>반려</button> : null}
                   </div>
                   <section className="ui032-history"><h3>처리 이력</h3>{approvalLogsLoading ? <div className="ui032-state" role="status">처리 이력을 불러오는 중입니다.</div> : approvalLogsError ? <div className="ui032-state is-error" role="alert">{approvalLogsError}<button type="button" onClick={retryApprovalLogs}>이력 다시 시도</button></div> : approvalLogs.length ? approvalLogs.map((log) => <article key={log.id}><strong>{log.event}</strong><span>{log.actorUserName} · {log.statusBefore ?? "-"} → {log.statusAfter ?? "-"} · {formatDateLabel(log.createdAt)}</span></article>) : <div className="ui032-empty">처리 이력이 없습니다.</div>}</section>
                 </> : !approvalDetailLoading && !approvalDetailError ? <div className="ui032-empty">목록에서 결재 문서를 선택하세요.</div> : null}
@@ -5169,12 +5334,13 @@ export default function App() {
             ) : approvalShellMenu === "settings" ? (
               <section className="ui035-settings" aria-label="결재 기본 설정">
                 <nav role="tablist" aria-label="결재 환경설정 탭">
-                  <button type="button" role="tab" aria-selected="true">기본 설정</button>
-                  <button type="button" role="tab" aria-selected="false" disabled title="UI-036에서 제공합니다.">부재/위임 설정</button>
+                  <button type="button" role="tab" aria-selected={approvalSettingsTab === "basic"} onClick={() => selectApprovalSettingsTab("basic")}>기본 설정</button>
+                  <button type="button" role="tab" aria-selected={approvalSettingsTab === "delegation"} onClick={() => selectApprovalSettingsTab("delegation")}>부재/위임 설정</button>
                 </nav>
-                {approvalPreferencesLoading ? <div className="ui035-settings__state" role="status">기본 설정을 불러오는 중입니다.</div> : null}
-                {approvalPreferencesError ? <div className="ui035-settings__state is-error" role="alert">{approvalPreferencesError}<button type="button" onClick={() => token && void loadApprovalPreferences(token)}>서버 값을 다시 조회</button></div> : null}
-                {!approvalPreferencesLoading ? <div className="ui035-settings__body">
+                {approvalSettingsTab === "basic" ? <>
+                  {approvalPreferencesLoading ? <div className="ui035-settings__state" role="status">기본 설정을 불러오는 중입니다.</div> : null}
+                  {approvalPreferencesError ? <div className="ui035-settings__state is-error" role="alert">{approvalPreferencesError}<button type="button" onClick={() => token && void loadApprovalPreferences(token)}>서버 값을 다시 조회</button></div> : null}
+                  {!approvalPreferencesLoading ? <div className="ui035-settings__body">
                   <fieldset>
                     <legend>서명/도장 <i tabIndex={0} data-tooltip="서명은 승인 시점의 결재선에 보존됩니다." aria-label="서명 보존 안내">i</i></legend>
                     <div className="ui035-signature-row">
@@ -5194,8 +5360,28 @@ export default function App() {
                     <legend>첨부 이미지 표시 <i tabIndex={0} data-tooltip="이미지 첨부의 상세 화면 표시 크기를 선택합니다." aria-label="첨부 표시 안내">i</i></legend>
                     {APPROVAL_ATTACHMENT_IMAGE_DISPLAYS.map((item) => <label key={item.value}><input type="radio" name="approval-attachment-display" value={item.value} checked={approvalPreferencesDraft.attachmentImageDisplay === item.value} onChange={() => setApprovalPreferencesDraft((current) => ({ ...current, attachmentImageDisplay: item.value }))} />{item.label}</label>)}
                   </fieldset>
-                </div> : null}
-                <footer className="ui035-settings__actions"><span>{approvalPreferencesDirty ? "저장하지 않은 변경사항이 있습니다." : "서버 설정과 일치합니다."}</span><button type="button" disabled={!approvalPreferencesDirty || approvalPreferencesSaving} onClick={cancelApprovalPreferences}>취소</button><button type="button" disabled={!approvalPreferencesDirty || approvalPreferencesSaving || !canAct.create} onClick={() => void saveApprovalPreferences()}>{approvalPreferencesSaving ? "저장 중" : "저장"}</button></footer>
+                  </div> : null}
+                  <footer className="ui035-settings__actions"><span>{approvalPreferencesDirty ? "저장하지 않은 변경사항이 있습니다." : "서버 설정과 일치합니다."}</span><button type="button" disabled={!approvalPreferencesDirty || approvalPreferencesSaving} onClick={cancelApprovalPreferences}>취소</button><button type="button" disabled={!approvalPreferencesDirty || approvalPreferencesSaving || !canAct.create} onClick={() => void saveApprovalPreferences()}>{approvalPreferencesSaving ? "저장 중" : "저장"}</button></footer>
+                </> : <section className="ui036-delegations" aria-label="부재 및 위임 목록">
+                  <div className="ui036-delegations__toolbar">
+                    <button type="button" disabled={!canAct.create} onClick={openApprovalDelegationCreate}>부재 추가</button>
+                    <button type="button" disabled={!selectedApprovalDelegationId || !canAct.create} onClick={() => openApprovalDelegationEdit()}>수정</button>
+                    <button type="button" disabled={!selectedApprovalDelegationId || !canAct.create} onClick={() => setApprovalDelegationDeleteTarget(approvalDelegations.find((item) => item.delegationId === selectedApprovalDelegationId) ?? null)}>삭제</button>
+                    <i tabIndex={0} data-tooltip="활성 위임 기간에는 대결자가 현재 결재선을 처리할 수 있습니다." aria-label="위임 처리 안내">i</i>
+                    <span>페이지 크기 20 · 총 {approvalDelegationsTotal}건</span>
+                  </div>
+                  {approvalDelegationsLoading ? <div className="ui035-settings__state" role="status">부재/위임 설정을 불러오는 중입니다.</div> : null}
+                  {approvalDelegationsError ? <div className="ui035-settings__state is-error" role="alert">{approvalDelegationsError}<button type="button" onClick={() => token && void loadApprovalDelegations(token, approvalDelegationsPage)}>다시 조회</button></div> : null}
+                  {!approvalDelegationsLoading && !approvalDelegationsError ? <div className="ui036-delegations__table-wrap">
+                    <table><caption>내 부재 및 위임 설정</caption><thead><tr><th>선택</th><th>부재 시작</th><th>부재 종료</th><th>대결자</th><th>부재 사유</th><th>사용 여부</th><th>상태</th></tr></thead>
+                    <tbody>{approvalDelegations.map((item) => <tr key={item.delegationId} className={selectedApprovalDelegationId === item.delegationId ? "is-selected" : ""} onDoubleClick={() => openApprovalDelegationEdit(item)}>
+                      <td><input type="radio" name="approval-delegation-selection" aria-label={`${item.delegateUserName} 위임 선택`} checked={selectedApprovalDelegationId === item.delegationId} onChange={() => setSelectedApprovalDelegationId(item.delegationId)} /></td>
+                      <td>{item.startDate}</td><td>{item.endDate}</td><td><strong>{item.delegateUserName}</strong><small>{item.departmentName} · {item.delegateUserEmail}</small></td><td>{item.reason}</td><td>{item.enabled ? "사용" : "사용 안 함"}</td><td><span className={`ui036-status is-${item.status}`}>{APPROVAL_DELEGATION_STATUS_LABELS[item.status]}</span></td>
+                    </tr>)}</tbody></table>
+                    {!approvalDelegations.length ? <div className="ui036-delegations__empty"><p>저장된 부재 목록이 없습니다.</p><button type="button" disabled={!canAct.create} onClick={openApprovalDelegationCreate}>부재 추가</button></div> : null}
+                  </div> : null}
+                  <footer className="ui036-delegations__paging"><button type="button" disabled={approvalDelegationsPage <= 1} onClick={() => token && void loadApprovalDelegations(token, approvalDelegationsPage - 1)}>이전</button><span>{approvalDelegationsPage} / {Math.max(1, Math.ceil(approvalDelegationsTotal / 20))}</span><button type="button" disabled={approvalDelegationsPage * 20 >= approvalDelegationsTotal} onClick={() => token && void loadApprovalDelegations(token, approvalDelegationsPage + 1)}>다음</button></footer>
+                </section>}
               </section>
             ) : (
               <section className="ui031-ready" role="status" aria-live="polite">
@@ -5243,6 +5429,27 @@ export default function App() {
                 )}
                 <footer className="ui033-compose__footer"><button type="button" onClick={() => approvalComposeCloseRequestRef.current?.()}>취소</button><button type="submit" disabled={loading}>{approvalModal === "edit" ? "수정 저장" : "임시저장"}</button></footer>
               </form>
+            </CommonPopup>
+            <CommonPopup
+              title={approvalDelegationPopupMode === "edit" ? "부재/위임 수정" : "부재 추가"}
+              open={approvalDelegationPopupMode !== "none"}
+              onClose={() => setApprovalDelegationPopupMode("none")}
+              dirty={approvalDelegationDirty}
+              saving={approvalDelegationSaving}
+              error={approvalDelegationError}
+              className="ui036-delegation-popup"
+              closeRequestRef={approvalDelegationCloseRequestRef}
+            >
+              <form className="ui036-delegation-form" onSubmit={saveApprovalDelegation}>
+                <div className="ui036-delegation-period"><label>시작일<input type="date" required value={approvalDelegationDraft.startDate} onChange={(event) => setApprovalDelegationDraft((current) => ({ ...current, startDate: event.target.value }))} /></label><label>종료일<input type="date" required value={approvalDelegationDraft.endDate} onChange={(event) => setApprovalDelegationDraft((current) => ({ ...current, endDate: event.target.value }))} /></label></div>
+                <section className="ui036-delegation-candidates"><label>대결자 검색<input value={approvalDelegationSearch} onChange={(event) => setApprovalDelegationSearch(event.target.value)} placeholder="이름, 부서, 이메일 검색" /></label><div role="listbox" aria-label="대결자 검색 결과">{approvalDelegationCandidates.map((user) => <button type="button" role="option" aria-selected={approvalDelegationDraft.delegateUserId === user.userId} key={user.userId} onClick={() => setApprovalDelegationDraft((current) => ({ ...current, delegateUserId: user.userId }))}><strong>{user.userName}</strong><span>{user.departmentName} · {user.userEmail}</span></button>)}{!approvalDelegationCandidates.length ? <p>선택 가능한 활성 사용자가 없습니다.</p> : null}</div></section>
+                <label>부재 사유<textarea required maxLength={500} value={approvalDelegationDraft.reason} onChange={(event) => setApprovalDelegationDraft((current) => ({ ...current, reason: event.target.value }))} placeholder="부재 사유를 입력하세요." /><small>{approvalDelegationDraft.reason.length}/500</small></label>
+                <label className="ui036-delegation-enabled">사용 여부<input type="checkbox" role="switch" checked={approvalDelegationDraft.enabled} onChange={(event) => setApprovalDelegationDraft((current) => ({ ...current, enabled: event.target.checked }))} /></label>
+                <footer><button type="button" onClick={() => approvalDelegationCloseRequestRef.current?.()}>취소</button><button type="submit" disabled={approvalDelegationSaving}>{approvalDelegationSaving ? "저장 중" : "저장"}</button></footer>
+              </form>
+            </CommonPopup>
+            <CommonPopup title="부재/위임 삭제" open={Boolean(approvalDelegationDeleteTarget)} onClose={() => setApprovalDelegationDeleteTarget(null)} saving={approvalDelegationSaving} kind="alertdialog">
+              <div className="ui036-delegation-delete"><strong>삭제할 위임</strong><p>{approvalDelegationDeleteTarget ? `${approvalDelegationDeleteTarget.delegateUserName} · ${approvalDelegationDeleteTarget.startDate} ~ ${approvalDelegationDeleteTarget.endDate}` : ""}</p><span>삭제 후 목록에서 사라지며 기존 처리 이력은 보존됩니다.</span><div><button type="button" onClick={() => setApprovalDelegationDeleteTarget(null)}>취소</button><button type="button" className="is-destructive" onClick={() => void confirmDeleteApprovalDelegation()}>삭제</button></div></div>
             </CommonPopup>
             <CommonPopup title="변경사항 확인" open={Boolean(approvalPendingMenu || approvalPendingPortalMenu)} onClose={() => { setApprovalPendingMenu(null); setApprovalPendingPortalMenu(null); }} dirty={approvalPreferencesDirty}>
               <div className="ui035-discard-confirm"><p>저장하지 않은 결재 기본 설정이 있습니다. 변경사항을 버리고 이동할까요?</p><button type="button" onClick={() => { setApprovalPendingMenu(null); setApprovalPendingPortalMenu(null); }}>계속 작성</button><button type="button" onClick={discardApprovalPreferencesAndNavigate}>변경 버리고 이동</button></div>
@@ -7018,7 +7225,7 @@ export default function App() {
                             재기안
                           </button>
                         )}
-                        {doc.status === "submitted" && canAct.act && isCurrentApprover(doc) && (
+                        {doc.status === "submitted" && canAct.act && isCurrentApprovalActor(doc) && (
                           <>
                             <button
                               onClick={() => openApprovalAction("approve", doc)}

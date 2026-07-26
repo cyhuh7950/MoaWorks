@@ -57,7 +57,21 @@ def register_error_handlers(app: FastAPI) -> None:
         )
 
     @app.exception_handler(RequestValidationError)
-    async def handle_request_validation(_: Request, exc: RequestValidationError) -> JSONResponse:
+    async def handle_request_validation(request: Request, exc: RequestValidationError) -> JSONResponse:
+        if request.url.path.startswith("/api/v1/approvals/settings/delegations"):
+            period_invalid = any(
+                "종료일은 시작일보다 빠를 수 없습니다" in str(item.get("msg", ""))
+                for item in exc.errors()
+            )
+            if period_invalid:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "code": "APPROVAL_DELEGATION_PERIOD_INVALID",
+                        "userMessage": "종료일은 시작일보다 빠를 수 없습니다.",
+                        "adminMessage": str(exc),
+                    },
+                )
         return JSONResponse(
             status_code=422,
             content={

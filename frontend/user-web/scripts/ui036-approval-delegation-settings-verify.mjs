@@ -36,7 +36,7 @@ await check("real settings tabs isolate basic and delegation state", () => {
 
 await check("list toolbar paging states and tooltip are rendered", () => {
   for (const text of ["부재 추가", "수정", "삭제", "부재 시작", "부재 종료", "대결자", "부재 사유", "사용 여부", "저장된 부재 목록이 없습니다."]) assert.ok(app.includes(text), text);
-  assert.match(app, /pageSize:\s*20/);
+  assert.match(app, /fetchApprovalDelegations\(targetToken, page, 20\)/);
   assert.match(app, /data-tooltip="활성 위임 기간에는 대결자가 현재 결재선을 처리할 수 있습니다\."/);
 });
 
@@ -50,7 +50,9 @@ await check("popup candidate selection dirty close and delete confirmation exist
 
 await check("delegate actor can open current action controls", () => {
   assert.match(api, /delegationId\?:\s*string/);
+  assert.match(api, /decidedByUserName\?:\s*string/);
   assert.match(app, /isCurrentApprovalActor/);
+  assert.match(app, /대결 \$\{line\.decidedByUserName\}/);
 });
 
 await check("layout keeps 12px scroll table and popup standards", () => {
