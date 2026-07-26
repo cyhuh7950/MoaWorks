@@ -29,9 +29,15 @@ export function zonedDate(parts: Omit<DateParts, "hour" | "minute" | "second"> &
 
 function shiftedParts(date: Date, amount: number, unit: "day" | "month", timezone: string): DateParts {
   const parts = partsInTimeZone(date, timezone);
+  if (unit === "month") {
+    const targetMonthIndex = parts.year * 12 + (parts.month - 1) + amount;
+    const year = Math.floor(targetMonthIndex / 12);
+    const monthIndex = ((targetMonthIndex % 12) + 12) % 12;
+    const lastDay = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+    return { ...parts, year, month: monthIndex + 1, day: Math.min(parts.day, lastDay) };
+  }
   const carrier = new Date(Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second));
-  if (unit === "month") carrier.setUTCMonth(carrier.getUTCMonth() + amount);
-  else carrier.setUTCDate(carrier.getUTCDate() + amount);
+  carrier.setUTCDate(carrier.getUTCDate() + amount);
   return { year: carrier.getUTCFullYear(), month: carrier.getUTCMonth() + 1, day: carrier.getUTCDate(), hour: carrier.getUTCHours(), minute: carrier.getUTCMinutes(), second: carrier.getUTCSeconds() };
 }
 
