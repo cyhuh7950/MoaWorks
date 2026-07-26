@@ -27,6 +27,9 @@ assert.equal(defaults.scheduleId, null);
 assert.equal(defaults.startsAt, "2026-07-27T09:30");
 assert.equal(defaults.endsAt, "2026-07-27T10:30");
 assert.equal(defaults.repeatType, "none");
+assert.equal(defaults.repeatUntil, "2026-10-27");
+const monthEndDefaults = form.createScheduleDraft(null, "UTC", new Date("2026-01-31T01:07:00Z"));
+assert.equal(monthEndDefaults.repeatUntil, "2026-04-30");
 
 const monthly = form.expandScheduleOccurrences({
   id: "schedule_1", title: "월말", description: "", starts_at: "2026-01-31T01:00:00Z", ends_at: "2026-01-31T02:00:00Z",

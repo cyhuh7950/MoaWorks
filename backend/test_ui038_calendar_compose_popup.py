@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 import unittest
 
@@ -99,6 +99,39 @@ class Ui038CalendarComposeContractTests(unittest.TestCase):
         self.assertIn("MonitoringCategory.SCHEDULE", source)
         self.assertIn("targets=[recipient_user_id]", source)
         self.assertIn("s.status = 'active'", source)
+
+    def test_notification_window_excludes_stale_due_times(self) -> None:
+        from app.services.schedule_notification_service import notification_due_in_window, notification_grace_window
+
+        now = datetime(2026, 7, 27, 3, 0, tzinfo=UTC)
+        grace = notification_grace_window(30)
+        self.assertEqual(grace, timedelta(seconds=90))
+        self.assertTrue(notification_due_in_window(now - timedelta(seconds=89), now, grace))
+        self.assertFalse(notification_due_in_window(now - timedelta(days=2), now, grace))
+        self.assertFalse(notification_due_in_window(now + timedelta(seconds=1), now, grace))
+
+    def test_processing_claim_lease_and_active_company_recipient_boundaries(self) -> None:
+        from app.services.schedule_notification_service import active_recipient_ids, delivery_claim_retryable
+
+        now = datetime(2026, 7, 27, 3, 0, tzinfo=UTC)
+        lease = timedelta(minutes=5)
+        self.assertFalse(delivery_claim_retryable("processing", now - timedelta(minutes=4), now, lease))
+        self.assertTrue(delivery_claim_retryable("processing", now - timedelta(minutes=6), now, lease))
+        self.assertTrue(delivery_claim_retryable("failed", now, now, lease))
+        self.assertFalse(delivery_claim_retryable("sent", now - timedelta(days=1), now, lease))
+        rows = [
+            {"id": "owner", "company_id": "company-a", "status": "active"},
+            {"id": "active-attendee", "company_id": "company-a", "status": "active"},
+            {"id": "inactive-attendee", "company_id": "company-a", "status": "inactive"},
+            {"id": "foreign-attendee", "company_id": "company-b", "status": "active"},
+        ]
+        self.assertEqual(active_recipient_ids("company-a", "owner", rows), ["owner", "active-attendee"])
+        source = (ROOT / "app" / "services" / "schedule_notification_service.py").read_text(encoding="utf-8")
+        self.assertIn("owner.status = 'active'", source)
+        self.assertIn("owner.company_id = s.company_id", source)
+        self.assertIn("u.status = 'active'", source)
+        self.assertIn("u.company_id = s.company_id", source)
+        self.assertIn("updated_at <= %s", source)
 
     def test_main_lifespan_runs_schedule_notification_loop(self) -> None:
         source = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
