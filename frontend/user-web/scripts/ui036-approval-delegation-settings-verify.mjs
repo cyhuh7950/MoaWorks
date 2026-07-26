@@ -48,6 +48,34 @@ await check("popup candidate selection dirty close and delete confirmation exist
   assert.match(app, /삭제할 위임/);
 });
 
+await check("fresh UI-036 session loads candidates without opening UI-033 compose", () => {
+  assert.match(app, /approvalDelegationCandidatesLoading/);
+  assert.match(app, /approvalDelegationCandidatesError/);
+  assert.match(app, /approvalDelegationCandidatesRequestRef/);
+
+  const candidateLoader = app
+    .split("async function loadApprovalDelegationCandidates")[1]
+    ?.split("async function loadApprovalDelegations")[0] ?? "";
+  assert.match(candidateLoader, /fetchApprovalApprovers\(targetToken\)/);
+  assert.match(candidateLoader, /approvalDelegationCandidatesRequestRef\.current/);
+
+  const settingsTabHandler = app
+    .split("function selectApprovalSettingsTab")[1]
+    ?.split("function openApprovalDelegationCreate")[0] ?? "";
+  assert.match(settingsTabHandler, /loadApprovalDelegationCandidates\(token\)/);
+
+  const createHandler = app
+    .split("function openApprovalDelegationCreate")[1]
+    ?.split("function openApprovalDelegationEdit")[0] ?? "";
+  const editHandler = app
+    .split("function openApprovalDelegationEdit")[1]
+    ?.split("async function saveApprovalDelegation")[0] ?? "";
+  assert.match(createHandler, /loadApprovalDelegationCandidates\(token\)/);
+  assert.match(editHandler, /loadApprovalDelegationCandidates\(token\)/);
+  assert.match(app, /대결자 후보 조회 실패/);
+  assert.match(app, /대결자 다시 조회/);
+});
+
 await check("delegate actor can open current action controls", () => {
   assert.match(api, /delegationId\?:\s*string/);
   assert.match(api, /decidedByUserName\?:\s*string/);
