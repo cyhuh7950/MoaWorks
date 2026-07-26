@@ -1331,6 +1331,8 @@ export default function App() {
   const [approvalDelegationSaving, setApprovalDelegationSaving] = useState(false);
   const [approvalDelegationError, setApprovalDelegationError] = useState("");
   const [approvalDelegationSearch, setApprovalDelegationSearch] = useState("");
+  const [approvalDelegationCandidatesLoading, setApprovalDelegationCandidatesLoading] = useState(false);
+  const [approvalDelegationCandidatesError, setApprovalDelegationCandidatesError] = useState("");
   const [approvalDelegationDeleteTarget, setApprovalDelegationDeleteTarget] = useState<ApprovalDelegation | null>(null);
   const [approvalSignatureFile, setApprovalSignatureFile] = useState<File | null>(null);
   const [approvalSignaturePreviewUrl, setApprovalSignaturePreviewUrl] = useState("");
@@ -1343,6 +1345,8 @@ export default function App() {
   const approvalRequestSequence = useRef(0);
   const approvalComposeCloseRequestRef = useRef<(() => void) | null>(null);
   const approvalDelegationCloseRequestRef = useRef<(() => void) | null>(null);
+  const approvalDelegationCandidatesRequestRef = useRef<{ token: string; request: Promise<{ users: ApprovalApprover[] }> } | null>(null);
+  const approvalDelegationCandidatesLoadedTokenRef = useRef("");
   const [loading, setLoading] = useState(false);
   const [approvalError, setApprovalError] = useState("");
   const approvalComposeSnapshot = useMemo(
@@ -3572,6 +3576,30 @@ export default function App() {
     }
   }
 
+  async function loadApprovalDelegationCandidates(targetToken: string, force = false) {
+    if (!force && approvalDelegationCandidatesLoadedTokenRef.current === targetToken) return;
+    if (approvalDelegationCandidatesRequestRef.current?.token === targetToken) return;
+
+    const request = fetchApprovalApprovers(targetToken);
+    approvalDelegationCandidatesRequestRef.current = { token: targetToken, request };
+    setApprovalDelegationCandidatesLoading(true);
+    setApprovalDelegationCandidatesError("");
+    try {
+      const response = await request;
+      if (approvalDelegationCandidatesRequestRef.current?.request !== request) return;
+      setApprovalApprovers(response.users);
+      approvalDelegationCandidatesLoadedTokenRef.current = targetToken;
+    } catch (error) {
+      if (approvalDelegationCandidatesRequestRef.current?.request !== request) return;
+      setApprovalDelegationCandidatesError(normalizeClientError(error, "대결자 후보 조회 실패"));
+    } finally {
+      if (approvalDelegationCandidatesRequestRef.current?.request === request) {
+        approvalDelegationCandidatesRequestRef.current = null;
+        setApprovalDelegationCandidatesLoading(false);
+      }
+    }
+  }
+
   async function loadApprovalDelegations(targetToken: string, page = approvalDelegationsPage) {
     setApprovalDelegationsLoading(true);
     setApprovalDelegationsError("");
@@ -3598,6 +3626,7 @@ export default function App() {
       return;
     }
     void loadApprovalDelegations(token, 1);
+    void loadApprovalDelegationCandidates(token);
   }
 
   function openApprovalDelegationCreate() {
@@ -3607,6 +3636,7 @@ export default function App() {
     setApprovalDelegationSearch("");
     setApprovalDelegationError("");
     setApprovalDelegationPopupMode("create");
+    if (token) void loadApprovalDelegationCandidates(token);
   }
 
   function openApprovalDelegationEdit(item?: ApprovalDelegation) {
@@ -3625,6 +3655,7 @@ export default function App() {
     setApprovalDelegationSearch("");
     setApprovalDelegationError("");
     setApprovalDelegationPopupMode("edit");
+    if (token) void loadApprovalDelegationCandidates(token);
   }
 
   async function saveApprovalDelegation(event: FormEvent) {
@@ -4073,7 +4104,10 @@ export default function App() {
     if (nextMenu === "settings") {
       if (token) {
         if (approvalSettingsTab === "basic") void loadApprovalPreferences(token);
-        else void loadApprovalDelegations(token, approvalDelegationsPage);
+        else {
+          void loadApprovalDelegations(token, approvalDelegationsPage);
+          void loadApprovalDelegationCandidates(token);
+        }
       }
       setSelectedApprovalId("");
       setApprovalLogs([]);
@@ -5442,7 +5476,7 @@ export default function App() {
             >
               <form className="ui036-delegation-form" onSubmit={saveApprovalDelegation}>
                 <div className="ui036-delegation-period"><label>시작일<input type="date" required value={approvalDelegationDraft.startDate} onChange={(event) => setApprovalDelegationDraft((current) => ({ ...current, startDate: event.target.value }))} /></label><label>종료일<input type="date" required value={approvalDelegationDraft.endDate} onChange={(event) => setApprovalDelegationDraft((current) => ({ ...current, endDate: event.target.value }))} /></label></div>
-                <section className="ui036-delegation-candidates"><label>대결자 검색<input value={approvalDelegationSearch} onChange={(event) => setApprovalDelegationSearch(event.target.value)} placeholder="이름, 부서, 이메일 검색" /></label><div role="listbox" aria-label="대결자 검색 결과">{approvalDelegationCandidates.map((user) => <button type="button" role="option" aria-selected={approvalDelegationDraft.delegateUserId === user.userId} key={user.userId} onClick={() => setApprovalDelegationDraft((current) => ({ ...current, delegateUserId: user.userId }))}><strong>{user.userName}</strong><span>{user.departmentName} · {user.userEmail}</span></button>)}{!approvalDelegationCandidates.length ? <p>선택 가능한 활성 사용자가 없습니다.</p> : null}</div></section>
+                <section className="ui036-delegation-candidates"><label>대결자 검색<input value={approvalDelegationSearch} onChange={(event) => setApprovalDelegationSearch(event.target.value)} placeholder="이름, 부서, 이메일 검색" disabled={approvalDelegationCandidatesLoading} /></label>{approvalDelegationCandidatesLoading ? <div className="ui035-settings__state" role="status">대결자 후보를 조회하고 있습니다.</div> : null}{approvalDelegationCandidatesError ? <div className="ui035-settings__state is-error" role="alert"><span>{approvalDelegationCandidatesError}</span><button type="button" onClick={() => token && void loadApprovalDelegationCandidates(token, true)}>대결자 다시 조회</button></div> : null}{!approvalDelegationCandidatesLoading && !approvalDelegationCandidatesError ? <div role="listbox" aria-label="대결자 검색 결과">{approvalDelegationCandidates.map((user) => <button type="button" role="option" aria-selected={approvalDelegationDraft.delegateUserId === user.userId} key={user.userId} onClick={() => setApprovalDelegationDraft((current) => ({ ...current, delegateUserId: user.userId }))}><strong>{user.userName}</strong><span>{user.departmentName} · {user.userEmail}</span></button>)}{!approvalDelegationCandidates.length ? <p>선택 가능한 활성 사용자가 없습니다.</p> : null}</div> : null}</section>
                 <label>부재 사유<textarea required maxLength={500} value={approvalDelegationDraft.reason} onChange={(event) => setApprovalDelegationDraft((current) => ({ ...current, reason: event.target.value }))} placeholder="부재 사유를 입력하세요." /><small>{approvalDelegationDraft.reason.length}/500</small></label>
                 <label className="ui036-delegation-enabled">사용 여부<input type="checkbox" role="switch" checked={approvalDelegationDraft.enabled} onChange={(event) => setApprovalDelegationDraft((current) => ({ ...current, enabled: event.target.checked }))} /></label>
                 <footer><button type="button" onClick={() => approvalDelegationCloseRequestRef.current?.()}>취소</button><button type="submit" disabled={approvalDelegationSaving}>{approvalDelegationSaving ? "저장 중" : "저장"}</button></footer>
