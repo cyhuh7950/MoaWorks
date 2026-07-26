@@ -47,6 +47,7 @@ assert.deepEqual(visible.map((item) => item.id), ["cross"]);
 assert.equal(calendar.eventIntersectsRange(event("ends-at-start", "2026-06-30T14:00:00Z", "2026-06-30T15:00:00Z"), range), false);
 
 assert.equal(calendar.navigateCalendarDate(base, "month", 1).getMonth(), 7);
+assert.equal(calendar.navigateCalendarDate(new Date("2026-01-31T12:00:00+09:00"), "month", 1).toISOString(), "2026-02-28T03:00:00.000Z");
 assert.equal(calendar.navigateCalendarDate(base, "week", -1).getDate(), 20);
 assert.equal(calendar.navigateCalendarDate(base, "day", 1).getDate(), 28);
 assert.match(calendar.formatCalendarRangeTitle("month", base, "ko-KR", "Asia/Seoul"), /2026년 7월/);
