@@ -22,6 +22,7 @@ export function ScheduleComposePopup({ open, draft, users, ownerUserId, saving, 
   const [localError, setLocalError] = useState("");
   const [search, setSearch] = useState("");
   const initialFocusRef = useRef<HTMLInputElement>(null);
+  const closeRequestRef = useRef<(() => void) | null>(null);
   useEffect(() => { if (open) { setForm(draft); setLocalError(""); setSearch(""); } }, [draft, open]);
   const candidates = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase();
@@ -47,7 +48,7 @@ export function ScheduleComposePopup({ open, draft, users, ownerUserId, saving, 
     catch (cause) { setLocalError(cause instanceof Error ? cause.message : "입력값을 확인하세요."); }
   };
 
-  return <CommonPopup title={form.scheduleId === null ? "일정 만들기" : "일정 수정"} open={open} onClose={onClose} dirty={dirty} saving={saving} error={localError || error} initialFocusRef={initialFocusRef} className="ui038-schedule-popup">
+  return <CommonPopup title={form.scheduleId === null ? "일정 만들기" : "일정 수정"} open={open} onClose={onClose} dirty={dirty} saving={saving} error={localError || error} initialFocusRef={initialFocusRef} closeRequestRef={closeRequestRef} className="ui038-schedule-popup">
     <form className="ui038-schedule-form" onSubmit={submit}>
       <label className="is-wide"><span>제목</span><input ref={initialFocusRef} required maxLength={160} value={form.title} onChange={(event) => update("title", event.target.value)} /></label>
       <label><span>시작</span><input required type="datetime-local" value={form.startsAt} onChange={(event) => update("startsAt", event.target.value)} /></label>
@@ -59,7 +60,7 @@ export function ScheduleComposePopup({ open, draft, users, ownerUserId, saving, 
       <fieldset className="is-wide"><legend>알림 <small>최대 3개</small></legend><div className="ui038-alerts">{alertOptions.map((option) => <label key={option.value}><input type="checkbox" checked={form.alertMinutes.includes(option.value)} onChange={() => toggleAlert(option.value)} />{option.label}</label>)}</div></fieldset>
       <label className="is-wide"><span>설명</span><textarea maxLength={4000} rows={4} value={form.description} onChange={(event) => update("description", event.target.value)} /></label>
       <label className="is-wide"><span>시간대</span><input required value={form.timezone} onChange={(event) => update("timezone", event.target.value)} /></label>
-      <footer className="is-wide"><button type="button" onClick={onClose} disabled={saving}>취소</button><button type="submit" className="is-primary" disabled={saving}>{saving ? "저장 중" : "저장"}</button></footer>
+      <footer className="is-wide"><button type="button" onClick={() => closeRequestRef.current?.()} disabled={saving}>취소</button><button type="submit" className="is-primary" disabled={saving}>{saving ? "저장 중" : "저장"}</button></footer>
     </form>
   </CommonPopup>;
 }

@@ -50,13 +50,6 @@ function formatDate(value: string | null | undefined): string {
   return Number.isNaN(date.getTime()) ? "-" : new Intl.DateTimeFormat("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date);
 }
 
-function toInputDate(value: string | null | undefined): string {
-  if (!value) return "";
-  const date = new Date(value);
-  const offset = date.getTimezoneOffset() * 60000;
-  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof ApiRequestError ? error.message : error instanceof Error ? error.message : "요청 처리에 실패했습니다.";
 }

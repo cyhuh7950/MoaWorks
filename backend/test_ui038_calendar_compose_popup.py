@@ -83,6 +83,7 @@ class Ui038CalendarComposeContractTests(unittest.TestCase):
             "company_id=%s",
             "status='active'",
             "user_schedule_attendees",
+            "(schedule_id,company_id,user_id,created_at)",
             "workspace.schedule.created",
             "workspace.schedule.updated",
             "conn.commit()",

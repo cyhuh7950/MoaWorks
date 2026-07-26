@@ -87,12 +87,12 @@ class WorkspaceService:
         return attendees
 
     @staticmethod
-    def _replace_schedule_attendees(cursor, item_id: str, attendee_user_ids: list[str]) -> None:
+    def _replace_schedule_attendees(cursor, item_id: str, company_id: str, attendee_user_ids: list[str]) -> None:
         cursor.execute("DELETE FROM user_schedule_attendees WHERE schedule_id=%s", (item_id,))
         for attendee_user_id in attendee_user_ids:
             cursor.execute(
-                "INSERT INTO user_schedule_attendees (schedule_id,user_id,created_at) VALUES(%s,%s,NOW())",
-                (item_id, attendee_user_id),
+                "INSERT INTO user_schedule_attendees (schedule_id,company_id,user_id,created_at) VALUES(%s,%s,%s,NOW())",
+                (item_id, company_id, attendee_user_id),
             )
 
     def _schedule_attendees(self, cursor, schedule_ids: list[str]) -> dict[str, list[dict]]:
@@ -140,7 +140,7 @@ class WorkspaceService:
                 "INSERT INTO user_schedule_events (id,company_id,owner_user_id,title,starts_at,ends_at,description,location,repeat_type,repeat_until,alert_minutes,timezone,created_at,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())",
                 (item_id,user.companyId,user.userId,payload.title,payload.startsAt,payload.endsAt,payload.description,payload.location,payload.repeatType,payload.repeatUntil,Jsonb(payload.alertMinutes),payload.timezone),
             )
-            self._replace_schedule_attendees(cursor, item_id, payload.attendeeUserIds)
+            self._replace_schedule_attendees(cursor, item_id, user.companyId, payload.attendeeUserIds)
             self._audit(cursor,user,"schedule",item_id,"workspace.schedule.created",None,"active")
             conn.commit()
         return self._owned_schedule(user,item_id)
@@ -153,7 +153,7 @@ class WorkspaceService:
                 "UPDATE user_schedule_events SET title=%s,starts_at=%s,ends_at=%s,description=%s,location=%s,repeat_type=%s,repeat_until=%s,alert_minutes=%s,timezone=%s,updated_at=NOW() WHERE id=%s AND owner_user_id=%s AND status='active'",
                 (payload.title,payload.startsAt,payload.endsAt,payload.description,payload.location,payload.repeatType,payload.repeatUntil,Jsonb(payload.alertMinutes),payload.timezone,item_id,user.userId),
             )
-            self._replace_schedule_attendees(cursor, item_id, payload.attendeeUserIds)
+            self._replace_schedule_attendees(cursor, item_id, user.companyId, payload.attendeeUserIds)
             self._audit(cursor,user,"schedule",item_id,"workspace.schedule.updated",current['status'],"active")
             conn.commit()
         return self._owned_schedule(user,item_id)

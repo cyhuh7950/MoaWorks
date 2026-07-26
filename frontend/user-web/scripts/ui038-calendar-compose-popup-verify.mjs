@@ -42,7 +42,7 @@ assert.deepEqual(monthly.map((item) => [item.id, item.occurrence_key, new Date(i
 for (const text of ["CommonPopup", "일정 만들기", "일정 수정", "위치", "참석자", "반복", "반복 종료일", "알림", "설명", "이름, 이메일, 부서 검색", "최대 3개"])
   assert.ok(popup.includes(text), `missing popup contract: ${text}`);
 assert.ok(popup.includes("scheduleId === null"), "create/edit id boundary missing");
-assert.ok(popup.includes("initialFocusRef") && popup.includes("dirty=") && popup.includes("saving="), "CommonPopup behavior missing");
+assert.ok(popup.includes("initialFocusRef") && popup.includes("closeRequestRef") && popup.includes("dirty=") && popup.includes("saving="), "CommonPopup behavior missing");
 assert.ok(workspace.includes("fetchWorkspaceDirectory") && workspace.includes("ownerUserId") && workspace.includes("ScheduleComposePopup"), "attendee loading/owner exclusion missing");
 assert.ok(app.includes("ownerUserId={me?.userId ?? \"\"}"), "App owner id wiring missing");
 for (const field of ["location", "attendeeUserIds", "repeatType", "repeatUntil", "alertMinutes", "timezone"])
