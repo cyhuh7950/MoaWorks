@@ -54,7 +54,8 @@ assert.match(calendar.formatCalendarRangeTitle("month", base, "ko-KR", "Asia/Seo
 for (const text of ["일정 만들기", "내 캘린더", "관심 캘린더", "부서 캘린더", "전사 캘린더", "등록된 캘린더 없음", "오늘", "월", "주", "일", "목록", "일정을 선택하세요.", "검색 결과가 없습니다.", "다시 시도"])
   assert.ok(component.includes(text), `missing UI contract: ${text}`);
 for (const view of ["month", "week", "day", "list"])
-  assert.ok(component.includes(`aria-pressed={view === "${view}"}`), `missing aria pressed: ${view}`);
+  assert.ok(component.includes(`key: "${view}"`), `missing calendar view: ${view}`);
+assert.ok(component.includes("aria-pressed={view === item.key}"), "selected view must expose aria-pressed");
 assert.ok(workspace.includes("<CalendarPanel"), "schedule branch must delegate to CalendarPanel");
 assert.ok(workspace.includes("openSchedule") && workspace.includes("submitSchedule") && workspace.includes("confirmDelete"), "existing CRUD wiring missing");
 assert.ok(api.includes('request<{ items: WorkspaceSchedule[] }>("/workspace/schedules"'), "same-origin schedule request missing");
