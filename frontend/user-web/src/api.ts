@@ -1666,7 +1666,9 @@ export async function readMessengerRoom(token: string, roomId: string): Promise<
   });
 }
 
-export type WorkspaceSchedule = { id: string; title: string; starts_at: string; ends_at: string; description: string; status: string; created_at: string; updated_at: string };
+export type WorkspaceScheduleAttendee = { userId: string; name: string; email: string; department: string };
+export type WorkspaceSchedule = { id: string; title: string; starts_at: string; ends_at: string; description: string; location: string; attendees: WorkspaceScheduleAttendee[]; repeatType: "none" | "daily" | "weekly" | "monthly"; repeatUntil: string | null; alertMinutes: number[]; timezone: string; occurrence_key?: string; status: string; created_at: string; updated_at: string };
+export type WorkspaceSchedulePayload = { title: string; startsAt: string; endsAt: string; description: string; location: string; attendeeUserIds: string[]; repeatType: "none" | "daily" | "weekly" | "monthly"; repeatUntil: string | null; alertMinutes: number[]; timezone: string };
 export type WorkspaceContact = { id: string; name: string; email: string; phone: string; company_name: string; memo: string; status: string; created_at: string; updated_at: string };
 export type WorkspaceFile = { id: string; file_name: string; content_type: string; size_bytes: number; status: string; created_at: string; updated_at: string };
 export type WorkspaceDirectory = { departments: Array<{ id: string; name: string; parent_id: string | null; department_code: string | null }>; users: Array<{ id: string; name: string; email: string; department_name: string; role_name: string }> };
@@ -1674,7 +1676,7 @@ export type WorkspaceHelpPolicy = { id: string; title: string; category: string;
 export type WorkspaceNotice = { id: string; title: string; content: string; author_name: string; published_at: string; is_read: boolean };
 export async function fetchWorkspaceDirectory(token: string) { return request<WorkspaceDirectory>("/workspace/directory", { headers: authHeaders(token) }); }
 export async function fetchSchedules(token: string) { return request<{ items: WorkspaceSchedule[] }>("/workspace/schedules", { headers: authHeaders(token) }); }
-export async function saveSchedule(token: string, payload: { title: string; startsAt: string; endsAt: string; description: string }, id?: string) { return request<WorkspaceSchedule>(`/workspace/schedules${id ? `/${id}` : ""}`, { method: id ? "PATCH" : "POST", headers: authHeaders(token), body: JSON.stringify(payload) }); }
+export async function saveSchedule(token: string, payload: WorkspaceSchedulePayload, id?: string) { return request<WorkspaceSchedule>(`/workspace/schedules${id ? `/${id}` : ""}`, { method: id ? "PATCH" : "POST", headers: authHeaders(token), body: JSON.stringify(payload) }); }
 export async function deleteSchedule(token: string, id: string) { return request<void>(`/workspace/schedules/${id}`, { method: "DELETE", headers: authHeaders(token) }); }
 export async function fetchContacts(token: string) { return request<{ items: WorkspaceContact[] }>("/workspace/contacts", { headers: authHeaders(token) }); }
 export async function saveContact(token: string, payload: { name: string; email: string; phone: string; companyName: string; memo: string }, id?: string) { return request<WorkspaceContact>(`/workspace/contacts${id ? `/${id}` : ""}`, { method: id ? "PATCH" : "POST", headers: authHeaders(token), body: JSON.stringify(payload) }); }

@@ -2784,3 +2784,20 @@ textarea {
   .ui033-compose-popup { width: calc(100vw - 24px); height: calc(100vh - 24px); max-width: none; max-height: none; }
   .ui033-compose__line { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(220px, 1fr) minmax(220px, 1fr); }
 }
+.ui038-schedule-popup { width: 720px; max-width: calc(100vw - 48px); font-size: 12px; }
+.ui038-schedule-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.ui038-schedule-form .is-wide { grid-column: 1 / -1; }
+.ui038-schedule-form > label { display: grid; gap: 5px; color: #334155; }
+.ui038-schedule-form input, .ui038-schedule-form select, .ui038-schedule-form textarea { box-sizing: border-box; width: 100%; min-height: 34px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 7px 9px; font: inherit; }
+.ui038-schedule-form fieldset { margin: 0; border: 1px solid #dbe4ec; border-radius: 10px; padding: 10px; }
+.ui038-schedule-form legend { padding: 0 5px; font-weight: 700; }
+.ui038-attendee-list { max-height: 132px; overflow: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 7px; }
+.ui038-attendee-list label { display: flex; align-items: center; gap: 7px; padding: 6px; border-radius: 7px; background: #f8fafc; }
+.ui038-attendee-list input, .ui038-alerts input { width: auto; min-height: auto; }
+.ui038-attendee-list span { display: grid; color: #64748b; font-size: 10px; }
+.ui038-attendee-list strong { color: #0f172a; font-size: 12px; }
+.ui038-alerts { display: flex; flex-wrap: wrap; gap: 12px; }
+.ui038-alerts label { display: flex; align-items: center; gap: 5px; }
+.ui038-schedule-form footer { display: flex; justify-content: flex-end; gap: 8px; }
+.ui038-schedule-form footer button { min-width: 72px; height: 34px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; }
+.ui038-schedule-form footer .is-primary { border-color: #0f766e; color: #fff; background: #0f766e; font-weight: 700; }

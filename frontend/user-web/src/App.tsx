@@ -4629,6 +4629,7 @@ export default function App() {
             token={token}
             locale={locale}
             timezone={timezone}
+            ownerUserId={me?.userId ?? ""}
             initialSelectionId={searchWorkspaceSelection?.menu === activePortalMenu ? searchWorkspaceSelection.id : activePortalMenu === "schedule" ? homeScheduleSelectionId : undefined}
             onPreferencesSaved={(nextLocale, nextTimezone) => {
               saveLocale(resolveLocale(nextLocale));

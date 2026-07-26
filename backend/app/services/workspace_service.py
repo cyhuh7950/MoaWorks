@@ -3,6 +3,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from fastapi import HTTPException
+from psycopg.types.json import Jsonb
 
 from app.schemas.directory import AuthUserSummary
 from app.schemas.workspace import ContactPayload, PreferencePayload, SchedulePayload
@@ -52,24 +53,110 @@ class WorkspaceService:
             self._audit(cursor, user, target_type, item_id, event, current['status'], 'deleted')
             conn.commit()
 
+    @staticmethod
+    def _schedule_record(row: dict, attendees: list[dict]) -> dict:
+        item = dict(row)
+        item["repeatType"] = item.pop("repeat_type", "none")
+        item["repeatUntil"] = item.pop("repeat_until", None)
+        item["alertMinutes"] = item.pop("alert_minutes", [])
+        item["attendees"] = [
+            {"userId": attendee["id"], "name": attendee["name"], "email": attendee["email"], "department": attendee["department"]}
+            for attendee in attendees
+        ]
+        return item
+
+    def _validate_schedule_attendees(self, cursor, user: AuthUserSummary, attendee_user_ids: list[str]) -> list[dict]:
+        if user.userId in attendee_user_ids:
+            raise HTTPException(status_code=400, detail={"code": "SCHEDULE_ATTENDEE_INVALID", "userMessage": "일정 소유자는 참석자로 추가할 수 없습니다."})
+        if not attendee_user_ids:
+            return []
+        cursor.execute(
+            """
+            SELECT u.id, u.name, u.email, COALESCE(d.name, '') AS department
+            FROM users u
+            JOIN roles r ON r.id=u.role_id AND r.status='active'
+            LEFT JOIN departments d ON d.id=u.department_id
+            WHERE u.id = ANY(%s) AND u.company_id=%s AND u.status='active'
+            ORDER BY u.name
+            """,
+            (attendee_user_ids, user.companyId),
+        )
+        attendees = [dict(row) for row in cursor.fetchall()]
+        if len(attendees) != len(attendee_user_ids):
+            raise HTTPException(status_code=400, detail={"code": "SCHEDULE_ATTENDEE_INVALID", "userMessage": "같은 회사의 활성 사용자만 참석자로 선택할 수 있습니다."})
+        return attendees
+
+    @staticmethod
+    def _replace_schedule_attendees(cursor, item_id: str, attendee_user_ids: list[str]) -> None:
+        cursor.execute("DELETE FROM user_schedule_attendees WHERE schedule_id=%s", (item_id,))
+        for attendee_user_id in attendee_user_ids:
+            cursor.execute(
+                "INSERT INTO user_schedule_attendees (schedule_id,user_id,created_at) VALUES(%s,%s,NOW())",
+                (item_id, attendee_user_id),
+            )
+
+    def _schedule_attendees(self, cursor, schedule_ids: list[str]) -> dict[str, list[dict]]:
+        grouped: dict[str, list[dict]] = {item_id: [] for item_id in schedule_ids}
+        if not schedule_ids:
+            return grouped
+        cursor.execute(
+            """
+            SELECT a.schedule_id, u.id, u.name, u.email, COALESCE(d.name, '') AS department
+            FROM user_schedule_attendees a
+            JOIN users u ON u.id=a.user_id AND u.status='active'
+            LEFT JOIN departments d ON d.id=u.department_id
+            WHERE a.schedule_id = ANY(%s)
+            ORDER BY u.name
+            """,
+            (schedule_ids,),
+        )
+        for row in cursor.fetchall():
+            item = dict(row)
+            schedule_id = item.pop("schedule_id")
+            grouped.setdefault(schedule_id, []).append(item)
+        return grouped
+
+    def _owned_schedule(self, user: AuthUserSummary, item_id: str) -> dict:
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM user_schedule_events WHERE id=%s AND owner_user_id=%s AND status='active'", (item_id, user.userId))
+            row = cursor.fetchone()
+            if not row:
+                raise self._missing()
+            attendees = self._schedule_attendees(cursor, [item_id])
+        return self._schedule_record(dict(row), attendees[item_id])
+
     def list_schedules(self, user: AuthUserSummary) -> dict:
-        return self._list_owned("user_schedule_events", user, "starts_at")
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM user_schedule_events WHERE owner_user_id=%s AND status='active' ORDER BY starts_at", (user.userId,))
+            rows = [dict(row) for row in cursor.fetchall()]
+            attendees = self._schedule_attendees(cursor, [row["id"] for row in rows])
+        return {"items": [self._schedule_record(row, attendees[row["id"]]) for row in rows]}
 
     def create_schedule(self, user: AuthUserSummary, payload: SchedulePayload) -> dict:
         item_id = f"sch_{uuid4().hex[:12]}"
         with self.db.connect() as conn, conn.cursor() as cursor:
-            cursor.execute("INSERT INTO user_schedule_events (id,company_id,owner_user_id,title,starts_at,ends_at,description,created_at,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())", (item_id,user.companyId,user.userId,payload.title,payload.startsAt,payload.endsAt,payload.description))
+            self._validate_schedule_attendees(cursor, user, payload.attendeeUserIds)
+            cursor.execute(
+                "INSERT INTO user_schedule_events (id,company_id,owner_user_id,title,starts_at,ends_at,description,location,repeat_type,repeat_until,alert_minutes,timezone,created_at,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())",
+                (item_id,user.companyId,user.userId,payload.title,payload.startsAt,payload.endsAt,payload.description,payload.location,payload.repeatType,payload.repeatUntil,Jsonb(payload.alertMinutes),payload.timezone),
+            )
+            self._replace_schedule_attendees(cursor, item_id, payload.attendeeUserIds)
             self._audit(cursor,user,"schedule",item_id,"workspace.schedule.created",None,"active")
             conn.commit()
-        return self._owned("user_schedule_events",user,item_id)
+        return self._owned_schedule(user,item_id)
 
     def update_schedule(self, user: AuthUserSummary, item_id: str, payload: SchedulePayload) -> dict:
-        current = self._owned("user_schedule_events",user,item_id)
+        current = self._owned_schedule(user,item_id)
         with self.db.connect() as conn, conn.cursor() as cursor:
-            cursor.execute("UPDATE user_schedule_events SET title=%s,starts_at=%s,ends_at=%s,description=%s,updated_at=NOW() WHERE id=%s AND owner_user_id=%s AND status='active'", (payload.title,payload.startsAt,payload.endsAt,payload.description,item_id,user.userId))
+            self._validate_schedule_attendees(cursor, user, payload.attendeeUserIds)
+            cursor.execute(
+                "UPDATE user_schedule_events SET title=%s,starts_at=%s,ends_at=%s,description=%s,location=%s,repeat_type=%s,repeat_until=%s,alert_minutes=%s,timezone=%s,updated_at=NOW() WHERE id=%s AND owner_user_id=%s AND status='active'",
+                (payload.title,payload.startsAt,payload.endsAt,payload.description,payload.location,payload.repeatType,payload.repeatUntil,Jsonb(payload.alertMinutes),payload.timezone,item_id,user.userId),
+            )
+            self._replace_schedule_attendees(cursor, item_id, payload.attendeeUserIds)
             self._audit(cursor,user,"schedule",item_id,"workspace.schedule.updated",current['status'],"active")
             conn.commit()
-        return self._owned("user_schedule_events",user,item_id)
+        return self._owned_schedule(user,item_id)
 
     def delete_schedule(self, user: AuthUserSummary, item_id: str) -> None:
         self._soft_delete("user_schedule_events","schedule","workspace.schedule.deleted",user,item_id)

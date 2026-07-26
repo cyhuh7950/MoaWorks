@@ -88,7 +88,7 @@ class Ui038CalendarComposeContractTests(unittest.TestCase):
             "conn.commit()",
         ):
             self.assertIn(token, source)
-        self.assertIn("WHERE owner_user_id = ANY(%s)", source)
+        self.assertIn("WHERE a.schedule_id = ANY(%s)", source)
 
     def test_notification_worker_uses_permanent_dedup_and_existing_center(self) -> None:
         source = (ROOT / "app" / "services" / "schedule_notification_service.py").read_text(encoding="utf-8")
@@ -97,7 +97,7 @@ class Ui038CalendarComposeContractTests(unittest.TestCase):
         self.assertIn("ObservabilityService", source)
         self.assertIn("MonitoringCategory.SCHEDULE", source)
         self.assertIn("targets=[recipient_user_id]", source)
-        self.assertIn("status = 'deleted'", source)
+        self.assertIn("s.status = 'active'", source)
 
     def test_main_lifespan_runs_schedule_notification_loop(self) -> None:
         source = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
