@@ -3,7 +3,31 @@ import type { WorkspaceSchedule } from "./api";
 export type CalendarView = "month" | "week" | "day" | "list";
 export type CalendarRange = { start: Date; end: Date };
 
+export const DEFAULT_CALENDAR_LOCALE = "ko-KR";
+export const DEFAULT_CALENDAR_TIMEZONE = "Asia/Seoul";
+
 type DateParts = { year: number; month: number; day: number; hour: number; minute: number; second: number };
+
+export function normalizeCalendarPreferences(locale: string, timezone: string): { locale: string; timezone: string } {
+  let safeLocale = DEFAULT_CALENDAR_LOCALE;
+  let safeTimezone = DEFAULT_CALENDAR_TIMEZONE;
+  try {
+    safeLocale = Intl.getCanonicalLocales(locale)[0] ?? DEFAULT_CALENDAR_LOCALE;
+  } catch {
+    safeLocale = DEFAULT_CALENDAR_LOCALE;
+  }
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(0);
+    safeTimezone = timezone;
+  } catch {
+    safeTimezone = DEFAULT_CALENDAR_TIMEZONE;
+  }
+  return { locale: safeLocale, timezone: safeTimezone };
+}
+
+function safeTimezone(timezone: string): string {
+  return normalizeCalendarPreferences(DEFAULT_CALENDAR_LOCALE, timezone).timezone;
+}
 
 function partsInTimeZone(date: Date, timezone: string): DateParts {
   const values = new Intl.DateTimeFormat("en-CA", {
@@ -21,6 +45,7 @@ function timezoneOffsetMs(date: Date, timezone: string): number {
 }
 
 export function zonedDate(parts: Omit<DateParts, "hour" | "minute" | "second"> & Partial<Pick<DateParts, "hour" | "minute" | "second">>, timezone = "Asia/Seoul"): Date {
+  timezone = safeTimezone(timezone);
   const target = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour ?? 0, parts.minute ?? 0, parts.second ?? 0);
   let candidate = new Date(target);
   for (let index = 0; index < 3; index += 1) candidate = new Date(target - timezoneOffsetMs(candidate, timezone));
@@ -42,10 +67,12 @@ function shiftedParts(date: Date, amount: number, unit: "day" | "month", timezon
 }
 
 export function addZonedDays(date: Date, amount: number, timezone = "Asia/Seoul"): Date {
+  timezone = safeTimezone(timezone);
   return zonedDate(shiftedParts(date, amount, "day", timezone), timezone);
 }
 
 export function getCalendarRange(view: CalendarView, baseDate: Date, timezone = "Asia/Seoul"): CalendarRange {
+  timezone = safeTimezone(timezone);
   const parts = partsInTimeZone(baseDate, timezone);
   if (view === "month" || view === "list") {
     const start = zonedDate({ year: parts.year, month: parts.month, day: 1 }, timezone);
@@ -59,6 +86,7 @@ export function getCalendarRange(view: CalendarView, baseDate: Date, timezone = 
 }
 
 export function navigateCalendarDate(baseDate: Date, view: CalendarView, direction: -1 | 1, timezone = "Asia/Seoul"): Date {
+  timezone = safeTimezone(timezone);
   const unit = view === "month" || view === "list" ? "month" : "day";
   const amount = view === "week" ? direction * 7 : direction;
   return zonedDate(shiftedParts(baseDate, amount, unit, timezone), timezone);
@@ -79,6 +107,7 @@ export function filterCalendarEvents(events: WorkspaceSchedule[], range: Calenda
 }
 
 export function formatCalendarRangeTitle(view: CalendarView, baseDate: Date, locale = "ko-KR", timezone = "Asia/Seoul"): string {
+  ({ locale, timezone } = normalizeCalendarPreferences(locale, timezone));
   if (view === "month" || view === "list") return new Intl.DateTimeFormat(locale, { timeZone: timezone, year: "numeric", month: "long" }).format(baseDate);
   if (view === "day") return new Intl.DateTimeFormat(locale, { timeZone: timezone, year: "numeric", month: "long", day: "numeric", weekday: "long" }).format(baseDate);
   const range = getCalendarRange("week", baseDate, timezone);
@@ -89,6 +118,7 @@ export function formatCalendarRangeTitle(view: CalendarView, baseDate: Date, loc
 }
 
 export function calendarDays(view: CalendarView, baseDate: Date, timezone = "Asia/Seoul"): Date[] {
+  timezone = safeTimezone(timezone);
   const range = getCalendarRange(view, baseDate, timezone);
   if (view === "day") return [range.start];
   if (view === "week") return Array.from({ length: 7 }, (_, index) => addZonedDays(range.start, index, timezone));
@@ -99,10 +129,29 @@ export function calendarDays(view: CalendarView, baseDate: Date, timezone = "Asi
 }
 
 export function eventsForDay(events: WorkspaceSchedule[], day: Date, timezone = "Asia/Seoul"): WorkspaceSchedule[] {
+  timezone = safeTimezone(timezone);
   return events.filter((event) => eventIntersectsRange(event, { start: day, end: addZonedDays(day, 1, timezone) }));
 }
 
 export function dateKey(date: Date, timezone = "Asia/Seoul"): string {
+  timezone = safeTimezone(timezone);
   const parts = partsInTimeZone(date, timezone);
   return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+export function getCalendarListRange(baseDate: Date, focusedDate: Date | null, timezone = "Asia/Seoul"): CalendarRange {
+  timezone = safeTimezone(timezone);
+  return focusedDate ? getCalendarRange("day", focusedDate, timezone) : getCalendarRange("list", baseDate, timezone);
+}
+
+export function navigateCalendarListDate(focusedDate: Date, direction: -1 | 1, timezone = "Asia/Seoul"): Date {
+  timezone = safeTimezone(timezone);
+  return navigateCalendarDate(focusedDate, "day", direction, timezone);
+}
+
+export function formatCalendarListTitle(baseDate: Date, focusedDate: Date | null, locale = "ko-KR", timezone = "Asia/Seoul"): string {
+  ({ locale, timezone } = normalizeCalendarPreferences(locale, timezone));
+  return focusedDate
+    ? formatCalendarRangeTitle("day", focusedDate, locale, timezone)
+    : formatCalendarRangeTitle("list", baseDate, locale, timezone);
 }
