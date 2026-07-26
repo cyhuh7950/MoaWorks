@@ -5,9 +5,32 @@ from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from app.core.config import settings
 from app.schemas.observability import EventEnvelope, MonitoringCategory, SeverityLevel, Visibility
 from app.services.observability_service import ObservabilityService
 from app.services.postgres_service import PostgresService
+
+
+def notification_grace_window(interval_seconds: int) -> timedelta:
+    return timedelta(seconds=min(max(interval_seconds * 3, 60), 300))
+
+
+def processing_lease_window(interval_seconds: int) -> timedelta:
+    return timedelta(seconds=max(interval_seconds * 10, 300))
+
+
+def notification_due_in_window(due_at: datetime, now: datetime, grace: timedelta) -> bool:
+    return now - grace < due_at <= now
+
+
+def delivery_claim_retryable(status: str, updated_at: datetime, now: datetime, lease: timedelta) -> bool:
+    return status == "failed" or (status == "processing" and updated_at <= now - lease)
+
+
+def active_recipient_ids(company_id: str, owner_user_id: str, rows: list[dict]) -> list[str]:
+    eligible = {row["id"] for row in rows if row.get("company_id") == company_id and row.get("status") == "active"}
+    ordered = [owner_user_id, *(row["id"] for row in rows if row["id"] != owner_user_id)]
+    return list(dict.fromkeys(user_id for user_id in ordered if user_id in eligible))
 
 
 def _next_month(value: datetime, source_day: int) -> datetime:
@@ -51,33 +74,47 @@ def schedule_occurrences(
 
 
 class ScheduleNotificationService:
-    def __init__(self, db_service: PostgresService | None = None) -> None:
+    def __init__(self, db_service: PostgresService | None = None, scheduler_interval_seconds: int | None = None) -> None:
         self.db = db_service or PostgresService()
+        self.scheduler_interval_seconds = scheduler_interval_seconds or settings.schedule_notification_interval_seconds
 
     def dispatch_due_notifications(self, now: datetime | None = None, limit: int = 500) -> int:
         self.db.ensure_migrations_applied()
         current = (now or datetime.now(UTC)).astimezone(UTC)
-        lookback = current - timedelta(days=2)
+        grace = notification_grace_window(self.scheduler_interval_seconds)
+        range_start = current - grace
         with self.db.connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
                 SELECT s.* FROM user_schedule_events s
+                JOIN users owner ON owner.id = s.owner_user_id
+                  AND owner.status = 'active' AND owner.company_id = s.company_id
                 WHERE s.status = 'active' AND jsonb_array_length(s.alert_minutes) > 0
                   AND (s.repeat_type <> 'none' OR s.starts_at >= %s)
                 ORDER BY s.starts_at
                 """,
-                (lookback,),
+                (range_start,),
             )
             schedules = [dict(row) for row in cursor.fetchall()]
             schedule_ids = [item["id"] for item in schedules]
-            attendees: dict[str, list[str]] = {item_id: [] for item_id in schedule_ids}
+            recipients: dict[str, list[dict]] = {
+                schedule["id"]: [{"id": schedule["owner_user_id"], "company_id": schedule["company_id"], "status": "active"}]
+                for schedule in schedules
+            }
             if schedule_ids:
                 cursor.execute(
-                    "SELECT schedule_id, user_id FROM user_schedule_attendees WHERE schedule_id = ANY(%s)",
+                    """
+                    SELECT a.schedule_id, u.id, u.company_id, u.status
+                    FROM user_schedule_attendees a
+                    JOIN user_schedule_events s ON s.id = a.schedule_id
+                    JOIN users u ON u.id = a.user_id
+                      AND u.status = 'active' AND u.company_id = s.company_id
+                    WHERE a.schedule_id = ANY(%s)
+                    """,
                     (schedule_ids,),
                 )
                 for row in cursor.fetchall():
-                    attendees[row["schedule_id"]].append(row["user_id"])
+                    recipients[row["schedule_id"]].append(dict(row))
 
         sent = 0
         for schedule in schedules:
@@ -85,15 +122,15 @@ class ScheduleNotificationService:
             range_end = current + timedelta(minutes=max(alerts, default=0) + 1)
             occurrences = schedule_occurrences(
                 schedule["starts_at"], schedule["repeat_type"], schedule.get("repeat_until"),
-                lookback, range_end, schedule.get("timezone") or "Asia/Seoul",
+                range_start, range_end, schedule.get("timezone") or "Asia/Seoul",
             )
-            recipients = list(dict.fromkeys([schedule["owner_user_id"], *attendees.get(schedule["id"], [])]))
+            recipient_ids = active_recipient_ids(schedule["company_id"], schedule["owner_user_id"], recipients.get(schedule["id"], []))
             for occurrence in occurrences:
                 for alert_minutes in alerts:
                     due_at = occurrence - timedelta(minutes=alert_minutes)
-                    if not (lookback < due_at <= current):
+                    if not notification_due_in_window(due_at, current, grace):
                         continue
-                    for recipient_user_id in recipients:
+                    for recipient_user_id in recipient_ids:
                         if sent >= limit:
                             return sent
                         if self._deliver(schedule, occurrence, alert_minutes, recipient_user_id, current):
@@ -102,6 +139,7 @@ class ScheduleNotificationService:
 
     def _deliver(self, schedule: dict, occurrence: datetime, alert_minutes: int, recipient_user_id: str, now: datetime) -> bool:
         delivery_id = f"schdel_{uuid4().hex[:12]}"
+        lease_deadline = now - processing_lease_window(self.scheduler_interval_seconds)
         with self.db.connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -112,9 +150,11 @@ class ScheduleNotificationService:
                 ON CONFLICT (schedule_id, occurrence_at, alert_minutes, recipient_user_id)
                 DO UPDATE SET status='processing', last_error=NULL, updated_at=EXCLUDED.updated_at
                 WHERE user_schedule_notification_deliveries.status = 'failed'
+                   OR (user_schedule_notification_deliveries.status = 'processing'
+                       AND user_schedule_notification_deliveries.updated_at <= %s)
                 RETURNING id
                 """,
-                (delivery_id, schedule["id"], schedule["company_id"], occurrence, alert_minutes, recipient_user_id, now, now),
+                (delivery_id, schedule["id"], schedule["company_id"], occurrence, alert_minutes, recipient_user_id, now, now, lease_deadline),
             )
             claimed = cursor.fetchone()
             connection.commit()

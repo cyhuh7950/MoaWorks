@@ -51,6 +51,15 @@ export function localDateTimeToUtc(value: string, timezone: string): string {
 
 function localDate(value: string): string { return value.slice(0, 10); }
 
+function addMonthsClamped(value: string, months: number): string {
+  const [year, month, day] = value.split("-").map(Number);
+  const monthIndex = month - 1 + months;
+  const targetYear = year + Math.floor(monthIndex / 12);
+  const targetMonth = monthIndex % 12 + 1;
+  const targetDay = Math.min(day, daysInMonth(targetYear, targetMonth));
+  return `${targetYear}-${String(targetMonth).padStart(2, "0")}-${String(targetDay).padStart(2, "0")}`;
+}
+
 export function createScheduleDraft(schedule: WorkspaceSchedule | null, timezone: string, now = new Date()): ScheduleDraft {
   if (schedule) return {
     scheduleId: schedule.id, title: schedule.title,
@@ -62,7 +71,8 @@ export function createScheduleDraft(schedule: WorkspaceSchedule | null, timezone
   };
   const rounded = new Date(Math.ceil(now.getTime() / 1_800_000) * 1_800_000);
   const end = new Date(rounded.getTime() + 3_600_000);
-  return { scheduleId: null, title: "", startsAt: utcToLocalDateTime(rounded, timezone), endsAt: utcToLocalDateTime(end, timezone), location: "", attendeeUserIds: [], repeatType: "none", repeatUntil: "", alertMinutes: [], description: "", timezone };
+  const startsAt = utcToLocalDateTime(rounded, timezone);
+  return { scheduleId: null, title: "", startsAt, endsAt: utcToLocalDateTime(end, timezone), location: "", attendeeUserIds: [], repeatType: "none", repeatUntil: addMonthsClamped(localDate(startsAt), 3), alertMinutes: [], description: "", timezone };
 }
 
 export function scheduleDraftPayload(draft: ScheduleDraft) {
