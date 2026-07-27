@@ -961,13 +961,19 @@ class WorkspaceService:
         scope_clause = clauses[scope]
         scope_args = (user.userId, user.userId) if scope == "shared" else (user.userId,) if "%s" in scope_clause else ()
         order = {"updated_desc":"f.updated_at DESC", "updated_asc":"f.updated_at", "name_asc":"lower(f.file_name)", "name_desc":"lower(f.file_name) DESC", "size_desc":"f.size_bytes DESC"}[sort]
+        if not folder_specified:
+            folder_clause, folder_args = "", ()
+        elif folder_id is None:
+            folder_clause, folder_args = "AND f.folder_id IS NULL", ()
+        else:
+            folder_clause, folder_args = "AND f.folder_id=%s", (folder_id,)
         with self.db.connect() as conn, conn.cursor() as cursor:
             cursor.execute(f"""SELECT f.id,f.file_name,f.content_type,f.size_bytes,f.status,f.folder_id,f.current_version,f.version,f.owner_user_id,
                 f.created_at,f.updated_at,EXISTS(SELECT 1 FROM workspace_file_favorites fav WHERE fav.file_id=f.id AND fav.user_id=%s) AS is_favorite,
                 CASE WHEN f.owner_user_id=%s THEN 'owner' WHEN EXISTS(SELECT 1 FROM workspace_file_shares ep WHERE ep.file_id=f.id AND ep.status='active' AND ep.permission='editor' AND ((ep.target_type='user' AND ep.target_id=%s) OR (ep.target_type='department' AND ep.target_id=(SELECT department_id FROM users WHERE id=%s)))) THEN 'editor' ELSE 'viewer' END AS effective_permission
                 FROM workspace_files f WHERE {access} AND {scope_clause} AND (%s='' OR f.file_name ILIKE '%%'||%s||'%%')
-                AND (NOT %s OR (%s IS NULL AND f.folder_id IS NULL) OR f.folder_id=%s) ORDER BY {order}""",
-                (user.userId,user.userId,user.userId,user.userId,user.companyId,user.userId,user.userId,user.userId,user.userId,*scope_args,query,query,folder_specified,folder_id,folder_id))
+                {folder_clause} ORDER BY {order}""",
+                (user.userId,user.userId,user.userId,user.userId,user.companyId,user.userId,user.userId,user.userId,user.userId,*scope_args,query,query,*folder_args))
             return {"items": [self._file_view(dict(row), user.userId) for row in cursor.fetchall()]}
 
     @staticmethod

@@ -193,7 +193,9 @@ class Ui043RemediationTests(unittest.TestCase):
     def test_non_mine_scopes_omit_explicit_folder_filter(self):
         for scope in ("shared","department","recent","favorites","trash"):
             service=service_with([[]]); service.list_files(actor(),scope=scope,folder_specified=False)
-            self.assertFalse(service.db.cursor.executions[0][1][-3],scope)
+            sql,_params=service.db.cursor.executions[0]
+            self.assertNotIn("AND f.folder_id IS NULL",sql,scope)
+            self.assertNotIn("AND f.folder_id=%s",sql,scope)
 
 
 if __name__ == "__main__": unittest.main()
