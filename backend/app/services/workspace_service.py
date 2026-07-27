@@ -652,7 +652,7 @@ class WorkspaceService:
                 FROM personal_contacts contact
                 LEFT JOIN contact_groups contact_group ON contact_group.id=contact.group_id AND contact_group.status='active'
                 WHERE contact.company_id=%s AND contact.owner_user_id=%s AND contact.status='active'
-                  AND (%s IS NULL OR contact.group_id=%s)
+                  AND (%s::text IS NULL OR contact.group_id=%s)
                   AND (%s='' OR contact.name ILIKE %s OR contact.email ILIKE %s OR contact.phone ILIKE %s OR contact.company_name ILIKE %s OR contact.memo ILIKE %s)
                 ORDER BY contact.name,contact.email LIMIT 500
                 """,
