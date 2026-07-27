@@ -474,6 +474,7 @@ class DirectoryStore:
         now = self._now()
         user_id = self._new_id("user")
         mail_account_id = self._new_id("mail")
+        calendar_id = self._new_id("cal")
 
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
@@ -505,6 +506,16 @@ class DirectoryStore:
                         now,
                         now,
                     ),
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO user_calendars (
+                        id, company_id, owner_user_id, name, color, sort_order,
+                        is_default, visibility, version, status, created_at, updated_at
+                    )
+                    VALUES (%s, %s, %s, '내 일정', '#0f766e', 0, TRUE, 'private', 0, 'active', %s, %s)
+                    """,
+                    (calendar_id, company.id, user_id, now, now),
                 )
                 cursor.execute(
                     """

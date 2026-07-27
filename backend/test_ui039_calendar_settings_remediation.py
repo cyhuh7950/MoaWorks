@@ -20,9 +20,11 @@ class Ui039CalendarSettingsRemediationTests(unittest.TestCase):
     def test_lazy_default_repair_locks_user_and_is_idempotent(self) -> None:
         source = (ROOT / "app" / "services" / "workspace_service.py").read_text(encoding="utf-8")
         self.assertIn("def _ensure_default_calendar", source)
-        helper = source[source.index("def _ensure_default_calendar"):source.index("def _calendar_rows")]
-        self.assertIn("FROM users", helper)
-        self.assertIn("FOR UPDATE", helper)
+        lock = source[source.index("def _lock_calendar_owner"):source.index("def _ensure_default_calendar")]
+        helper = source[source.index("def _ensure_default_calendar"):source.index("def _cancel_calendar_subscriptions")]
+        self.assertIn("FROM users", lock)
+        self.assertIn("FOR UPDATE", lock)
+        self.assertIn("_lock_calendar_owner", helper)
         self.assertIn("WHERE owner_user_id=%s AND status='active' AND is_default=TRUE", helper)
         self.assertIn("ON CONFLICT DO NOTHING", helper)
         list_section = source[source.index("def list_calendars"):source.index("def discover_calendars")]

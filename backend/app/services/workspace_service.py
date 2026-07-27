@@ -79,6 +79,7 @@ class WorkspaceService:
 
     def list_calendars(self, user: AuthUserSummary) -> dict:
         with self.db.connect() as conn, conn.cursor() as cursor:
+            self._ensure_default_calendar(cursor, user)
             owned_rows = self._calendar_rows(cursor, user)
             cursor.execute(
                 """
@@ -106,11 +107,12 @@ class WorkspaceService:
                 JOIN users owner ON owner.id=c.owner_user_id
                 JOIN users subscriber ON subscriber.id=sub.subscriber_user_id AND subscriber.status='active' AND subscriber.company_id=c.company_id
                 LEFT JOIN departments d ON d.id=subscriber.department_id
-                WHERE sub.status='pending' ORDER BY sub.requested_at DESC
+                WHERE sub.status IN ('pending','active') ORDER BY sub.requested_at DESC
                 """,
                 (user.userId, user.companyId),
             )
             incoming = [{"subscriptionId": row["subscription_id"], "status": row["subscription_status"], "version": row["subscription_version"], "calendar": self._calendar_record(dict(row)), "subscriber": {"userId": row["subscriber_user_id"], "name": row["subscriber_user_name"], "email": row["subscriber_email"], "department": row["subscriber_department"]}} for row in cursor.fetchall()]
+            conn.commit()
         return {"owned": [self._calendar_record(row) for row in owned_rows], "subscriptions": subscriptions, "incomingRequests": incoming}
 
     def discover_calendars(self, user: AuthUserSummary, query: str) -> list[dict]:
@@ -138,11 +140,69 @@ class WorkspaceService:
     def _calendar_conflict(code: str, message: str) -> HTTPException:
         return HTTPException(status_code=409, detail={"code": code, "userMessage": message})
 
+    def _lock_calendar_owner(self, cursor, user: AuthUserSummary) -> None:
+        cursor.execute(
+            "SELECT id FROM users WHERE id=%s AND company_id=%s AND status='active' FOR UPDATE",
+            (user.userId, user.companyId),
+        )
+        if not cursor.fetchone():
+            raise self._missing()
+
+    def _ensure_default_calendar(self, cursor, user: AuthUserSummary) -> dict:
+        self._lock_calendar_owner(cursor, user)
+        cursor.execute(
+            "SELECT * FROM user_calendars WHERE owner_user_id=%s AND status='active' AND is_default=TRUE ORDER BY created_at,id LIMIT 1",
+            (user.userId,),
+        )
+        default = cursor.fetchone()
+        if default:
+            return dict(default)
+        cursor.execute(
+            "SELECT * FROM user_calendars WHERE company_id=%s AND owner_user_id=%s AND status='active' ORDER BY sort_order,created_at,id LIMIT 1 FOR UPDATE",
+            (user.companyId, user.userId),
+        )
+        existing = cursor.fetchone()
+        if existing:
+            cursor.execute(
+                "UPDATE user_calendars SET is_default=TRUE,version=version+1,updated_at=NOW() WHERE id=%s RETURNING *",
+                (existing["id"],),
+            )
+            return dict(cursor.fetchone())
+        calendar_id = f"cal_{uuid4().hex[:20]}"
+        cursor.execute(
+            "INSERT INTO user_calendars (id,company_id,owner_user_id,name,color,sort_order,is_default,visibility,version,status,created_at,updated_at) VALUES(%s,%s,%s,'내 일정','#0f766e',0,TRUE,'private',0,'active',NOW(),NOW()) ON CONFLICT DO NOTHING RETURNING *",
+            (calendar_id, user.companyId, user.userId),
+        )
+        created = cursor.fetchone()
+        if created:
+            return dict(created)
+        cursor.execute(
+            "SELECT * FROM user_calendars WHERE owner_user_id=%s AND status='active' AND is_default=TRUE",
+            (user.userId,),
+        )
+        repaired = cursor.fetchone()
+        if not repaired:
+            raise self._calendar_conflict("CALENDAR_DEFAULT_CONFLICT", "기본 캘린더를 준비하지 못했습니다. 다시 시도하세요.")
+        return dict(repaired)
+
+    def _cancel_calendar_subscriptions(self, cursor, user: AuthUserSummary, calendar_id: str) -> None:
+        cursor.execute(
+            "SELECT id,subscriber_user_id,status FROM user_calendar_subscriptions WHERE calendar_id=%s AND company_id=%s AND status IN ('pending','active') ORDER BY id FOR UPDATE",
+            (calendar_id, user.companyId),
+        )
+        subscriptions = [dict(row) for row in cursor.fetchall()]
+        for subscription in subscriptions:
+            cursor.execute(
+                "UPDATE user_calendar_subscriptions SET status='cancelled',version=version+1,decided_at=NOW(),updated_at=NOW() WHERE id=%s",
+                (subscription["id"],),
+            )
+            self._audit(cursor, user, "calendar_subscription", subscription["id"], "workspace.calendar.subscription.cancelled", subscription["status"], "cancelled")
+            self._notify_in_transaction(cursor, user, subscription["subscriber_user_id"], "calendar.subscription.cancelled", calendar_id, "캘린더 공유 종료", "캘린더 소유자가 공유를 종료했습니다.")
+
     def create_calendar(self, user: AuthUserSummary, payload: CalendarCreatePayload) -> dict:
         item_id = f"cal_{uuid4().hex[:20]}"
         with self.db.connect() as conn, conn.cursor() as cursor:
-            cursor.execute("SELECT id FROM users WHERE id=%s AND company_id=%s AND status='active' FOR UPDATE", (user.userId, user.companyId))
-            if not cursor.fetchone(): raise self._missing()
+            self._lock_calendar_owner(cursor, user)
             cursor.execute("SELECT 1 FROM user_calendars WHERE owner_user_id=%s AND status='active' AND LOWER(name)=LOWER(%s)", (user.userId, payload.name))
             if cursor.fetchone(): raise self._calendar_conflict("CALENDAR_NAME_CONFLICT", "같은 이름의 캘린더가 이미 있습니다.")
             cursor.execute("SELECT COALESCE(MAX(sort_order),-1)+1 AS next_order,COALESCE(BOOL_OR(is_default),FALSE) AS has_default FROM user_calendars WHERE owner_user_id=%s AND status='active'", (user.userId,))
@@ -155,6 +215,7 @@ class WorkspaceService:
 
     def update_calendar(self, user: AuthUserSummary, calendar_id: str, payload: CalendarUpdatePayload) -> dict:
         with self.db.connect() as conn, conn.cursor() as cursor:
+            self._lock_calendar_owner(cursor, user)
             cursor.execute("SELECT * FROM user_calendars WHERE id=%s AND company_id=%s AND owner_user_id=%s AND status='active' FOR UPDATE", (calendar_id,user.companyId,user.userId))
             row = cursor.fetchone()
             if not row: raise self._missing()
@@ -173,13 +234,14 @@ class WorkspaceService:
                 event = "workspace.calendar.default_changed"
             cursor.execute("UPDATE user_calendars SET name=%s,color=%s,visibility=%s,is_default=%s,version=version+1,updated_at=NOW() WHERE id=%s", (name,color,visibility,is_default,calendar_id))
             if visibility == "private":
-                cursor.execute("UPDATE user_calendar_subscriptions SET status='cancelled',version=version+1,decided_at=NOW(),updated_at=NOW() WHERE calendar_id=%s AND status IN ('pending','active')", (calendar_id,))
+                self._cancel_calendar_subscriptions(cursor, user, calendar_id)
             self._audit(cursor,user,"calendar",calendar_id,event,str(current["version"]),str(current["version"]+1))
             conn.commit()
         return next(item for item in self.list_calendars(user)["owned"] if item["id"] == calendar_id)
 
     def reorder_calendars(self, user: AuthUserSummary, payload: CalendarOrderPayload) -> dict:
         with self.db.connect() as conn, conn.cursor() as cursor:
+            self._lock_calendar_owner(cursor, user)
             cursor.execute("SELECT id,version FROM user_calendars WHERE company_id=%s AND owner_user_id=%s AND status='active' ORDER BY sort_order FOR UPDATE", (user.companyId,user.userId))
             current = [dict(row) for row in cursor.fetchall()]
             requested = [item.model_dump() for item in payload.items]
@@ -193,6 +255,7 @@ class WorkspaceService:
 
     def delete_calendar(self, user: AuthUserSummary, calendar_id: str, expectedVersion: int) -> None:
         with self.db.connect() as conn, conn.cursor() as cursor:
+            self._lock_calendar_owner(cursor, user)
             cursor.execute("SELECT * FROM user_calendars WHERE id=%s AND company_id=%s AND owner_user_id=%s AND status='active' FOR UPDATE", (calendar_id,user.companyId,user.userId))
             row = cursor.fetchone()
             if not row: raise self._missing()
@@ -201,7 +264,7 @@ class WorkspaceService:
             if current["is_default"]: raise self._calendar_conflict("CALENDAR_DEFAULT_DELETE_FORBIDDEN", "기본 캘린더는 삭제할 수 없습니다.")
             cursor.execute("UPDATE user_calendars SET status='deleted',is_default=FALSE,version=version+1,updated_at=NOW() WHERE id=%s", (calendar_id,))
             cursor.execute("UPDATE user_schedule_events SET status='deleted',updated_at=NOW() WHERE calendar_id=%s AND status='active'", (calendar_id,))
-            cursor.execute("UPDATE user_calendar_subscriptions SET status='cancelled',version=version+1,decided_at=NOW(),updated_at=NOW() WHERE calendar_id=%s AND status IN ('pending','active')", (calendar_id,))
+            self._cancel_calendar_subscriptions(cursor, user, calendar_id)
             self._audit(cursor,user,"calendar",calendar_id,"workspace.calendar.deleted","active","deleted")
             conn.commit()
 
@@ -370,10 +433,11 @@ class WorkspaceService:
         return {"items": [self._schedule_record(row, attendees[row["id"]]) for row in rows]}
 
     def _resolve_owned_calendar(self, cursor, user: AuthUserSummary, calendar_id: str | None) -> dict:
+        default = self._ensure_default_calendar(cursor, user)
         if calendar_id:
             cursor.execute("SELECT * FROM user_calendars WHERE id=%s AND company_id=%s AND owner_user_id=%s AND status='active'", (calendar_id,user.companyId,user.userId))
         else:
-            cursor.execute("SELECT * FROM user_calendars WHERE company_id=%s AND owner_user_id=%s AND status='active' AND is_default=TRUE", (user.companyId,user.userId))
+            return default
         row = cursor.fetchone()
         if not row: raise self._missing()
         return dict(row)
