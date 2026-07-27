@@ -25,7 +25,7 @@ assert.match(css, /\.ui043-files__section-title[^}]*font-size:\s*14px/);
 assert.match(css, /\.ui043-files :where\(button,input,select,label\)[^}]*font-size:\s*12px/);
 assert.match(css, /\.ui043-files__helper[^}]*font-size:\s*10px/);
 assert.ok(panel.includes('aria-label="파일 화면 설명"') && panel.includes('title='), "i tooltip is required");
-assert.ok(panel.includes('fetchWorkspaceFileDetail(token,selectedId,scope==="trash")'), "trash selection must request owner deleted detail context");
+assert.ok(panel.includes('fetchWorkspaceFileDetail(token,itemId,scope==="trash")'), "trash selection must request owner deleted detail context");
 assert.ok(panel.includes('scope==="mine"?{scope,folderId,query:debouncedQuery,sort}:{scope,query:debouncedQuery,sort}'), "only mine may send folderId");
 assert.ok(panel.includes('scope==="mine"?<button className="is-primary"') && panel.includes('scope==="mine"?<><h2'), "upload and folder controls must be mine-only");
 assert.ok(api.includes('includeDeleted') && api.includes('includeDeleted=true'), "detail API must expose explicit trash context only");
