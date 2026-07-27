@@ -942,6 +942,7 @@ class WorkspaceService:
             (user.userId,user.userId,user.userId,user.userId,item_id,user.companyId,user.userId,user.userId,user.userId,user.userId))
         row=cursor.fetchone()
         if not row or row.get("status") != required_status: raise self._missing()
+        if required_status == "deleted" and row.get("owner_user_id") != user.userId: raise self._missing()
         permission = "owner" if row.get("owner_user_id") == user.userId else row.get("effective_permission","viewer")
         allowed = {"owner":{"detail","download","rename","version","move","share","favorite","trash","restore"},"editor":{"detail","download","rename","version","favorite"},"viewer":{"detail","download","favorite"}}
         if action not in allowed.get(permission,set()):
@@ -972,10 +973,12 @@ class WorkspaceService:
     @staticmethod
     def _file_view(row: dict, actor_id: str) -> dict:
         owner = row.get("owner_user_id") == actor_id or row.get("effective_permission") == "owner"; editor = row.get("effective_permission") == "editor"
+        deleted = row.get("status") == "deleted"
+        permissions = {"download":False,"favorite":False,"rename":False,"newVersion":False,"move":False,"share":False,"trash":False,"restore":owner} if deleted else {"download":True,"favorite":True,"rename":owner or editor,"newVersion":owner or editor,"move":owner,"share":owner,"trash":owner,"restore":False}
         return {"id":row.get("id"),"file_name":row.get("file_name"),"content_type":row.get("content_type"),"size_bytes":row.get("size_bytes"),"status":row.get("status"),
             "folderId":row.get("folder_id"),"fileName":row.get("file_name"),"contentType":row.get("content_type"),"sizeBytes":row.get("size_bytes"),
             "currentVersion":row.get("current_version",1),"version":row.get("version",0),"owner_user_id":row.get("owner_user_id"),"isFavorite":bool(row.get("is_favorite")),
-            "created_at":row.get("created_at"),"updated_at":row.get("updated_at"),"permissions":{"download":True,"favorite":True,"rename":owner or editor,"newVersion":owner or editor,"move":owner,"share":owner,"trash":owner,"restore":owner}}
+            "created_at":row.get("created_at"),"updated_at":row.get("updated_at"),"permissions":permissions}
 
     def create_file(self, user: AuthUserSummary, file_name: str, content_type: str, content: bytes, folder_id: str | None = None, storage: WorkspaceFileStorage | None = None) -> dict:
         storage = storage or WorkspaceFileStorage(); file_name=storage.safe_name(file_name); storage.validate(file_name,content_type,content); item_id = f"wfl_{uuid4().hex[:12]}"; storage_key = storage.write(content); digest = sha256(content).hexdigest()
@@ -996,9 +999,10 @@ class WorkspaceService:
             row=self._lock_file_access(cursor,user,item_id,"detail","active",lock=False)
         return self._file_view(row,user.userId)
 
-    def file_detail(self, user: AuthUserSummary, item_id: str) -> dict:
+    def file_detail(self, user: AuthUserSummary, item_id: str, include_deleted: bool = False) -> dict:
         with self.db.connect() as conn, conn.cursor() as cursor:
-            item=self._file_view(self._lock_file_access(cursor,user,item_id,"detail","active",lock=False),user.userId)
+            status="deleted" if include_deleted else "active"; action="restore" if include_deleted else "detail"
+            item=self._file_view(self._lock_file_access(cursor,user,item_id,action,status,lock=False),user.userId)
             cursor.execute("SELECT version_no,file_name,content_type,size_bytes,created_at FROM workspace_file_versions WHERE file_id=%s ORDER BY version_no DESC",(item_id,)); versions=[dict(x) for x in cursor.fetchall()]
             cursor.execute("""SELECT s.target_type,s.target_id,s.permission,COALESCE(u.name,d.name,'') AS target_name
                 FROM workspace_file_shares s LEFT JOIN users u ON s.target_type='user' AND u.id=s.target_id LEFT JOIN departments d ON s.target_type='department' AND d.id=s.target_id

@@ -265,8 +265,8 @@ def download_file(item_id: str, version: int | None = Query(default=None, ge=1),
 
 
 @router.get('/files/{item_id}')
-def file_detail(item_id: str, user: AuthUserSummary = Depends(permission_required("profile:read"))):
-    return _service().file_detail(user, item_id)
+def file_detail(item_id: str, includeDeleted: bool = Query(default=False), user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().file_detail(user, item_id, include_deleted=includeDeleted)
 
 
 @router.get('/preferences', response_model=WorkspacePreferencesResponse)
