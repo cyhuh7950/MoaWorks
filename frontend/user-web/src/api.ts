@@ -593,7 +593,19 @@ export type MessengerParticipant = {
   userId: string;
   userName: string;
   userEmail: string;
+  departmentName: string;
+  joinedAt: string | null;
+  lastReadAt: string | null;
 };
+
+export type MessengerAttachment = {
+  uploadId: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+};
+
+export type MessengerAttachmentView = Omit<MessengerAttachment, "uploadId"> & { attachmentId: string };
 
 export type MessengerRoomSummary = {
   roomId: string;
@@ -604,6 +616,10 @@ export type MessengerRoomSummary = {
   lastMessageAt: string | null;
   unreadCount: number;
   readState: string;
+  isFavorite: boolean;
+  participantCount: number;
+  createdByUserId: string;
+  canManageParticipants: boolean;
   createdAt: string;
   updatedAt: string;
   retentionExpiresAt: string | null;
@@ -625,14 +641,19 @@ export type MessengerMessage = {
   messageType: string;
   body: string;
   attachmentMeta: Array<Record<string, unknown>>;
+  attachments: MessengerAttachmentView[];
   createdAt: string;
   retentionExpiresAt: string | null;
   readBy: string[];
   readState: string;
+  recipientCount: number;
+  readCount: number;
+  unreadCount: number;
 };
 
 export type MessengerMessageListResponse = {
   messages: MessengerMessage[];
+  nextCursor: string | null;
 };
 
 export type MessengerMessageSendResponse = {
@@ -1624,11 +1645,19 @@ export async function createMessengerRoom(token: string, payload: { roomName: st
   });
 }
 
-export async function updateMessengerRoomParticipants(token: string, roomId: string, participantUserIds: string[]) {
+export async function favoriteMessengerRoom(token: string, roomId: string, isFavorite: boolean) {
+  return request<MessengerRoomDetail>(`/messenger/rooms/${roomId}/favorite`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+    body: JSON.stringify({ isFavorite }),
+  });
+}
+
+export async function updateMessengerRoomParticipants(token: string, roomId: string, participantUserIds: string[], expectedUpdatedAt: string) {
   return request<MessengerRoomDetail>(`/messenger/rooms/${roomId}/participants`, {
     method: "PATCH",
     headers: authHeaders(token),
-    body: JSON.stringify({ participantUserIds }),
+    body: JSON.stringify({ participantUserIds, expectedUpdatedAt }),
   });
 }
 export async function fetchMessengerRoom(token: string, roomId: string): Promise<MessengerRoomDetail> {
@@ -1637,8 +1666,9 @@ export async function fetchMessengerRoom(token: string, roomId: string): Promise
   });
 }
 
-export async function fetchMessengerMessages(token: string, roomId: string): Promise<MessengerMessageListResponse> {
-  return request<MessengerMessageListResponse>(`/messenger/rooms/${roomId}/messages`, {
+export async function fetchMessengerMessages(token: string, roomId: string, before?: string): Promise<MessengerMessageListResponse> {
+  const suffix = before ? `?limit=100&before=${encodeURIComponent(before)}` : "?limit=100";
+  return request<MessengerMessageListResponse>(`/messenger/rooms/${roomId}/messages${suffix}`, {
     headers: authHeaders(token),
   });
 }
@@ -1646,7 +1676,7 @@ export async function fetchMessengerMessages(token: string, roomId: string): Pro
 export async function sendMessengerMessage(
   token: string,
   roomId: string,
-  payload: { body: string; messageType?: string; attachmentMeta?: Array<Record<string, unknown>> },
+  payload: { body: string; messageType?: "text" | "file"; attachments?: MessengerAttachment[] },
 ): Promise<MessengerMessageSendResponse> {
   return request<MessengerMessageSendResponse>(`/messenger/rooms/${roomId}/messages`, {
     method: "POST",
@@ -1654,9 +1684,33 @@ export async function sendMessengerMessage(
     body: JSON.stringify({
       body: payload.body,
       messageType: payload.messageType ?? "text",
-      attachmentMeta: payload.attachmentMeta ?? [],
+      attachments: payload.attachments ?? [],
+      attachmentMeta: [],
     }),
   });
+}
+
+export async function uploadMessengerAttachment(token: string, file: File): Promise<MessengerAttachment> {
+  const form = new FormData();
+  form.append("file", file);
+  return request<MessengerAttachment>("/messenger/attachments", { method: "POST", headers: authHeaders(token), body: form });
+}
+
+export async function downloadMessengerAttachment(token: string, roomId: string, messageId: string, attachment: MessengerAttachmentView): Promise<void> {
+  const response = await fetch(`${apiBase}/messenger/rooms/${roomId}/messages/${messageId}/attachments/${attachment.attachmentId}`, { headers: authHeaders(token) });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw extractApiError(response, data);
+  }
+  const objectUrl = URL.createObjectURL(await response.blob());
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = attachment.fileName;
+    anchor.click();
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
 }
 
 export async function readMessengerRoom(token: string, roomId: string): Promise<MessengerReadResponse> {

@@ -51,13 +51,16 @@ from app.schemas.mail_messenger import (
     MailTagView,
     MailSummary,
     MessengerMessageListResponse,
+    MessengerAttachmentMeta,
     MessengerMessageSendRequest,
     MessengerMessageSendResponse,
     MessengerMessageView,
     MessengerReadResponse,
     MessengerRoomCreateRequest,
     MessengerRoomDetailResponse,
+    MessengerRoomFavoriteRequest,
     MessengerRoomListResponse,
+    MessengerRoomParticipantsRequest,
     MessengerRoomSummary,
 )
 from app.services.postgres_service import PostgresService
@@ -73,9 +76,14 @@ class MailPreferenceConflictError(RuntimeError):
     pass
 
 from app.services.mail_attachment_storage import MailAttachmentStorage
+from app.services.messenger_attachment_storage import MessengerAttachmentStorage, MessengerAttachmentTooLargeError
 
 
 class MailSignatureConflictError(RuntimeError):
+    pass
+
+
+class MessengerConflictError(RuntimeError):
     pass
 
 
@@ -83,6 +91,7 @@ class MailMessengerService:
     def __init__(self) -> None:
         self.db = PostgresService()
         self.attachment_storage = MailAttachmentStorage()
+        self.messenger_attachment_storage = MessengerAttachmentStorage()
         self.spam_settings = SpamSettingsService()
         self.auto_classification = MailAutoClassificationService()
         self.auto_forwarding = MailAutoForwardingService()
@@ -1776,51 +1785,36 @@ class MailMessengerService:
 
     def list_rooms(self, actor: AuthUserSummary) -> MessengerRoomListResponse:
         self.db.ensure_migrations_applied()
-        with self.db.connect() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT
-                        room.id AS room_id,
-                        room.room_type,
-                        room.room_name,
-                        room.created_at,
-                        room.updated_at,
-                        room.retention_expires_at,
-                        COALESCE(member_ids.participant_ids, '[]'::jsonb) AS participant_ids,
-                        last_msg.body AS last_message,
-                        last_msg.created_at AS last_message_at,
-                        COALESCE(unread.unread_count, 0) AS unread_count
-                    FROM messenger_rooms room
-                    JOIN messenger_room_members self_member
-                      ON self_member.room_id = room.id AND self_member.user_id = %s
-                    LEFT JOIN LATERAL (
-                        SELECT jsonb_agg(user_id ORDER BY joined_at) AS participant_ids
-                        FROM messenger_room_members
-                        WHERE room_id = room.id
-                    ) member_ids ON TRUE
-                    LEFT JOIN LATERAL (
-                        SELECT body, created_at
-                        FROM messenger_messages
-                        WHERE room_id = room.id
-                        ORDER BY created_at DESC
-                        LIMIT 1
-                    ) last_msg ON TRUE
-                    LEFT JOIN LATERAL (
-                        SELECT COUNT(*) AS unread_count
-                        FROM messenger_messages msg
-                        LEFT JOIN messenger_message_reads reads
-                          ON reads.message_id = msg.id AND reads.user_id = %s
-                        WHERE msg.room_id = room.id
-                          AND msg.sender_user_id <> %s
-                          AND reads.id IS NULL
-                    ) unread ON TRUE
-                    WHERE room.company_id = %s
-                    ORDER BY COALESCE(last_msg.created_at, room.updated_at) DESC
-                    """,
-                    (actor.userId, actor.userId, actor.userId, actor.companyId),
-                )
-                rooms = [self._to_room_summary(row) for row in cursor.fetchall()]
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT room.id AS room_id, room.room_type, room.room_name, room.created_by_user_id,
+                       room.created_at, room.updated_at, room.retention_expires_at,
+                       self_member.is_favorite,
+                       COALESCE(member_ids.participant_ids, '[]'::jsonb) AS participant_ids,
+                       COALESCE(member_ids.participant_count, 0) AS participant_count,
+                       last_msg.body AS last_message, last_msg.created_at AS last_message_at,
+                       COALESCE(unread.unread_count, 0) AS unread_count
+                FROM messenger_rooms room
+                JOIN messenger_room_members self_member ON self_member.room_id=room.id AND self_member.user_id=%s
+                LEFT JOIN LATERAL (
+                    SELECT jsonb_agg(user_id ORDER BY joined_at) AS participant_ids, COUNT(*) AS participant_count
+                    FROM messenger_room_members WHERE room_id=room.id
+                ) member_ids ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT body,created_at FROM messenger_messages WHERE room_id=room.id ORDER BY created_at DESC LIMIT 1
+                ) last_msg ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT COUNT(*) AS unread_count FROM messenger_messages msg
+                    LEFT JOIN messenger_message_reads reads ON reads.message_id=msg.id AND reads.user_id=%s
+                    WHERE msg.room_id=room.id AND msg.sender_user_id<>%s AND reads.id IS NULL
+                ) unread ON TRUE
+                WHERE room.company_id=%s
+                ORDER BY self_member.is_favorite DESC,COALESCE(last_msg.created_at,room.updated_at) DESC
+                """,
+                (actor.userId, actor.userId, actor.userId, actor.companyId),
+            )
+            rooms = [self._to_room_summary(row, actor.userId) for row in cursor.fetchall()]
         return MessengerRoomListResponse(rooms=rooms)
 
     def create_room(self, actor: AuthUserSummary, payload: MessengerRoomCreateRequest) -> MessengerRoomDetailResponse:
@@ -1828,164 +1822,219 @@ class MailMessengerService:
         now = self._now()
         room_id = self._new_id("room")
         participant_ids = self._dedupe([actor.userId, *payload.participantUserIds])
-        if not participant_ids:
-            raise ValueError("참여자를 1명 이상 입력해야 합니다.")
-        with self.db.connect() as connection:
-            with connection.cursor() as cursor:
-                users = self._fetch_company_users(cursor, actor.companyId, participant_ids)
-                if set(users.keys()) != set(participant_ids):
-                    raise ValueError("대화방 참여자 중 찾을 수 없는 사용자가 있습니다.")
+        if len(participant_ids) < 2 or (payload.roomType == "direct" and len(participant_ids) != 2):
+            raise ValueError("대화방은 본인을 포함해 2명 이상이어야 합니다.")
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            users = self._fetch_company_users(cursor, actor.companyId, participant_ids, lock=True)
+            if set(users) != set(participant_ids):
+                raise ValueError("같은 회사의 활성 사용자만 참여할 수 있습니다.")
+            cursor.execute(
+                """INSERT INTO messenger_rooms
+                (id,company_id,room_type,room_name,created_by_user_id,created_at,updated_at,retention_expires_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (room_id, actor.companyId, payload.roomType, payload.roomName, actor.userId, now, now, now + timedelta(days=14)),
+            )
+            for user_id in participant_ids:
                 cursor.execute(
-                    """
-                    INSERT INTO messenger_rooms (
-                        id, company_id, room_type, room_name, created_by_user_id,
-                        created_at, updated_at, retention_expires_at
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        room_id,
-                        actor.companyId,
-                        payload.roomType,
-                        payload.roomName.strip(),
-                        actor.userId,
-                        now,
-                        now,
-                        now + timedelta(days=14),
-                    ),
+                    "INSERT INTO messenger_room_members (id,room_id,user_id,joined_at) VALUES (%s,%s,%s,%s)",
+                    (self._new_id("member"), room_id, user_id, now),
                 )
-                for user_id in participant_ids:
-                    cursor.execute(
-                        """
-                        INSERT INTO messenger_room_members (id, room_id, user_id, joined_at)
-                        VALUES (%s, %s, %s, %s)
-                        """,
-                        (self._new_id("member"), room_id, user_id, now),
-                    )
+            self._write_messenger_audit(cursor, actor, room_id, "messenger.room.created", None, "active", {"participantUserIds": participant_ids}, now)
             connection.commit()
         return self.get_room(actor, room_id)
 
     def get_room(self, actor: AuthUserSummary, room_id: str) -> MessengerRoomDetailResponse:
         self.db.ensure_migrations_applied()
-        with self.db.connect() as connection:
-            with connection.cursor() as cursor:
-                room = self._fetch_accessible_room(cursor, actor, room_id)
-                participants = self._fetch_room_participants(cursor, room_id)
-                summary = self._room_row_to_summary_with_participants(cursor, actor, room)
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            room = self._fetch_accessible_room(cursor, actor, room_id)
+            participants = self._fetch_room_participants(cursor, room_id)
+            summary = self._room_row_to_summary_with_participants(cursor, actor, room)
         return MessengerRoomDetailResponse(**summary.model_dump(), participants=participants)
 
-    def list_messages(self, actor: AuthUserSummary, room_id: str) -> MessengerMessageListResponse:
+    def update_room_favorite(self, actor: AuthUserSummary, room_id: str, payload: MessengerRoomFavoriteRequest) -> MessengerRoomDetailResponse:
         self.db.ensure_migrations_applied()
-        with self.db.connect() as connection:
-            with connection.cursor() as cursor:
-                self._fetch_accessible_room(cursor, actor, room_id)
+        now = self._now()
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            self._fetch_accessible_room(cursor, actor, room_id)
+            cursor.execute(
+                "SELECT is_favorite FROM messenger_room_members WHERE room_id=%s AND user_id=%s FOR UPDATE",
+                (room_id, actor.userId),
+            )
+            before = bool(cursor.fetchone()["is_favorite"])
+            if before != payload.isFavorite:
                 cursor.execute(
-                    """
-                    SELECT
-                        msg.id AS message_id,
-                        msg.room_id,
-                        msg.sender_user_id,
-                        u.name AS sender_user_name,
-                        msg.message_type,
-                        msg.body,
-                        msg.attachment_meta,
-                        msg.created_at,
-                        msg.retention_expires_at,
-                        COALESCE(reads.read_by, '[]'::jsonb) AS read_by
-                    FROM messenger_messages msg
-                    JOIN users u ON u.id = msg.sender_user_id
-                    LEFT JOIN LATERAL (
-                        SELECT jsonb_agg(user_id ORDER BY read_at) AS read_by
-                        FROM messenger_message_reads
-                        WHERE message_id = msg.id
-                    ) reads ON TRUE
-                    WHERE msg.room_id = %s
-                    ORDER BY msg.created_at ASC
-                    """,
-                    (room_id,),
+                    "UPDATE messenger_room_members SET is_favorite=%s WHERE room_id=%s AND user_id=%s",
+                    (payload.isFavorite, room_id, actor.userId),
                 )
-                messages = [self._to_message_view(row) for row in cursor.fetchall()]
-        return MessengerMessageListResponse(messages=messages)
+                self._write_messenger_audit(cursor, actor, room_id, "messenger.room.favorite_changed", str(before).lower(), str(payload.isFavorite).lower(), None, now)
+            connection.commit()
+        return self.get_room(actor, room_id)
+
+    def update_room_participants(self, actor: AuthUserSummary, room_id: str, payload: MessengerRoomParticipantsRequest) -> MessengerRoomDetailResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        participant_ids = self._dedupe(payload.participantUserIds)
+        if actor.userId not in participant_ids or len(participant_ids) < 2:
+            raise ValueError("방 생성자를 포함한 최소 2명의 참여자가 필요합니다.")
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM messenger_rooms WHERE id=%s AND company_id=%s FOR UPDATE",
+                (room_id, actor.companyId),
+            )
+            room = cursor.fetchone()
+            if room is None:
+                raise PermissionError("대화방에 접근할 권한이 없습니다.")
+            if room["created_by_user_id"] != actor.userId:
+                raise PermissionError("방 생성자만 참여자를 변경할 수 있습니다.")
+            if room["room_type"] == "direct" and len(participant_ids) != 2:
+                raise ValueError("1:1 대화방은 본인을 포함해 정확히 2명이어야 합니다.")
+            if room["updated_at"] != payload.expectedUpdatedAt:
+                raise MessengerConflictError("대화방이 변경되었습니다. 새로고침 후 다시 시도하세요.")
+            users = self._fetch_company_users(cursor, actor.companyId, participant_ids, lock=True)
+            if set(users) != set(participant_ids):
+                raise ValueError("같은 회사의 활성 사용자만 참여할 수 있습니다.")
+            cursor.execute("SELECT user_id FROM messenger_room_members WHERE room_id=%s ORDER BY user_id FOR UPDATE", (room_id,))
+            before_ids = [row["user_id"] for row in cursor.fetchall()]
+            removed = [user_id for user_id in before_ids if user_id not in participant_ids]
+            added = [user_id for user_id in participant_ids if user_id not in before_ids]
+            if removed:
+                cursor.execute("DELETE FROM messenger_room_members WHERE room_id=%s AND user_id=ANY(%s)", (room_id, removed))
+            for user_id in added:
+                cursor.execute(
+                    "INSERT INTO messenger_room_members (id,room_id,user_id,joined_at) VALUES (%s,%s,%s,%s)",
+                    (self._new_id("member"), room_id, user_id, now),
+                )
+            cursor.execute("UPDATE messenger_rooms SET updated_at=%s WHERE id=%s", (now, room_id))
+            self._write_messenger_audit(cursor, actor, room_id, "messenger.room.participants_changed", "active", "active", {"beforeUserIds": before_ids, "afterUserIds": participant_ids}, now)
+            connection.commit()
+        return self.get_room(actor, room_id)
+
+    def list_messages(self, actor: AuthUserSummary, room_id: str, limit: int = 100, before: datetime | None = None) -> MessengerMessageListResponse:
+        self.db.ensure_migrations_applied()
+        limit = max(1, min(limit, 100))
+        where_before = "AND msg.created_at < %s" if before else ""
+        params: tuple = (room_id, before, limit + 1) if before else (room_id, limit + 1)
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            self._fetch_accessible_room(cursor, actor, room_id)
+            cursor.execute(
+                f"""
+                SELECT msg.id AS message_id,msg.room_id,msg.sender_user_id,u.name AS sender_user_name,
+                       msg.message_type,msg.body,msg.attachment_meta,msg.created_at,msg.retention_expires_at,
+                       COALESCE(reads.read_by,'[]'::jsonb) AS read_by,
+                       GREATEST(COALESCE(members.participant_count,1)-1,0) AS recipient_count,
+                       COALESCE(reads.read_count,0) AS read_count,
+                       GREATEST(COALESCE(members.participant_count,1)-1-COALESCE(reads.read_count,0),0) AS unread_count,
+                       COALESCE(files.attachments,'[]'::jsonb) AS attachments
+                FROM messenger_messages msg JOIN users u ON u.id=msg.sender_user_id
+                LEFT JOIN LATERAL (
+                    SELECT jsonb_agg(reads.user_id ORDER BY reads.read_at) FILTER (WHERE reads.user_id<>msg.sender_user_id) AS read_by,
+                           COUNT(*) FILTER (WHERE reads.user_id<>msg.sender_user_id) AS read_count
+                    FROM messenger_message_reads reads
+                    JOIN messenger_room_members current_member ON current_member.room_id=msg.room_id AND current_member.user_id=reads.user_id
+                    WHERE reads.message_id=msg.id
+                ) reads ON TRUE
+                LEFT JOIN LATERAL (SELECT COUNT(*) AS participant_count FROM messenger_room_members WHERE room_id=msg.room_id) members ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT jsonb_agg(jsonb_build_object('attachmentId',id,'fileName',file_name,'contentType',content_type,'sizeBytes',size_bytes) ORDER BY created_at) AS attachments
+                    FROM messenger_attachments WHERE message_id=msg.id
+                ) files ON TRUE
+                WHERE msg.room_id=%s {where_before}
+                ORDER BY msg.created_at DESC LIMIT %s
+                """,
+                params,
+            )
+            rows = [dict(row) for row in cursor.fetchall()]
+        has_more = len(rows) > limit
+        visible = rows[:limit]
+        next_cursor = visible[-1]["created_at"] if has_more and visible else None
+        return MessengerMessageListResponse(messages=[self._to_message_view(row) for row in reversed(visible)], nextCursor=next_cursor)
+
+    def stage_messenger_attachment(self, actor: AuthUserSummary, file_name: str, content_type: str, content: bytes):
+        self.messenger_attachment_storage.cleanup_expired()
+        return self.messenger_attachment_storage.stage(actor, file_name, content_type, content)
+
+    def download_messenger_attachment(self, actor: AuthUserSummary, room_id: str, message_id: str, attachment_id: str) -> dict:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            self._fetch_accessible_room(cursor, actor, room_id)
+            cursor.execute(
+                """SELECT attachment.file_name,attachment.content_type,attachment.size_bytes,attachment.storage_key
+                FROM messenger_attachments attachment JOIN messenger_messages message ON message.id=attachment.message_id
+                WHERE attachment.id=%s AND message.id=%s AND message.room_id=%s""",
+                (attachment_id, message_id, room_id),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            raise PermissionError("첨부 파일에 접근할 권한이 없습니다.")
+        return {"path": self.messenger_attachment_storage.stored_path(row["storage_key"]), "fileName": row["file_name"], "contentType": row["content_type"], "sizeBytes": row["size_bytes"]}
 
     def send_message(self, actor: AuthUserSummary, room_id: str, payload: MessengerMessageSendRequest) -> MessengerMessageSendResponse:
         self.db.ensure_migrations_applied()
+        resolved = [self.messenger_attachment_storage.resolve(actor, item) for item in payload.attachments]
+        if len({item["upload_id"] for item in resolved}) != len(resolved):
+            raise ValueError("같은 첨부 파일을 중복 사용할 수 없습니다.")
+        if sum(item["size_bytes"] for item in resolved) > settings.mail_attachment_max_total_bytes:
+            raise MessengerAttachmentTooLargeError("첨부 파일의 전체 용량 제한을 초과했습니다.")
         now = self._now()
         message_id = self._new_id("msg")
-        with self.db.connect() as connection:
-            with connection.cursor() as cursor:
-                self._fetch_accessible_room(cursor, actor, room_id)
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            self._fetch_accessible_room(cursor, actor, room_id)
+            cursor.execute(
+                """INSERT INTO messenger_messages
+                (id,room_id,sender_user_id,message_type,body,attachment_meta,created_at,retention_expires_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (message_id, room_id, actor.userId, payload.messageType, payload.body, Jsonb([]), now, now + timedelta(days=14)),
+            )
+            for item in resolved:
                 cursor.execute(
-                    """
-                    INSERT INTO messenger_messages (
-                        id, room_id, sender_user_id, message_type, body,
-                        attachment_meta, created_at, retention_expires_at
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        message_id,
-                        room_id,
-                        actor.userId,
-                        payload.messageType,
-                        payload.body,
-                        Jsonb(payload.attachmentMeta),
-                        now,
-                        now + timedelta(days=14),
-                    ),
+                    """INSERT INTO messenger_attachments
+                    (id,message_id,upload_id,file_name,content_type,size_bytes,storage_key,created_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (self._new_id("msgatt"), message_id, item["upload_id"], item["file_name"], item["content_type"], item["size_bytes"], item["storage_key"], now),
                 )
-                cursor.execute(
-                    """
-                    INSERT INTO messenger_message_reads (id, message_id, user_id, read_at)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (message_id, user_id)
-                    DO UPDATE SET read_at = EXCLUDED.read_at
-                    """,
-                    (self._new_id("read"), message_id, actor.userId, now),
-                )
-                cursor.execute("UPDATE messenger_rooms SET updated_at = %s WHERE id = %s", (now, room_id))
+            cursor.execute(
+                "INSERT INTO messenger_message_reads (id,message_id,user_id,read_at) VALUES (%s,%s,%s,%s) ON CONFLICT (message_id, user_id) DO NOTHING",
+                (self._new_id("read"), message_id, actor.userId, now),
+            )
+            cursor.execute("UPDATE messenger_rooms SET updated_at=%s WHERE id=%s", (now, room_id))
+            self._write_messenger_audit(cursor, actor, message_id, "messenger.message.sent", None, "sent", {"messageType": payload.messageType, "attachmentCount": len(resolved)}, now)
             connection.commit()
+        for item in resolved:
+            self.messenger_attachment_storage.mark_attached(item["upload_id"])
         return MessengerMessageSendResponse(messageId=message_id, roomId=room_id, createdAt=now)
 
     def mark_room_read(self, actor: AuthUserSummary, room_id: str) -> MessengerReadResponse:
         self.db.ensure_migrations_applied()
         now = self._now()
-        with self.db.connect() as connection:
-            with connection.cursor() as cursor:
-                self._fetch_accessible_room(cursor, actor, room_id)
-                cursor.execute(
-                    """
-                    SELECT id
-                    FROM messenger_messages
-                    WHERE room_id = %s
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                    """,
-                    (room_id,),
-                )
-                last_message = cursor.fetchone()
-                last_message_id = last_message["id"] if last_message else None
-                cursor.execute(
-                    """
-                    INSERT INTO messenger_message_reads (id, message_id, user_id, read_at)
-                    SELECT %s || '_' || id, id, %s, %s
-                    FROM messenger_messages
-                    WHERE room_id = %s
-                    ON CONFLICT (message_id, user_id)
-                    DO UPDATE SET read_at = EXCLUDED.read_at
-                    """,
-                    (self._new_id("read"), actor.userId, now, room_id),
-                )
-                cursor.execute(
-                    """
-                    UPDATE messenger_room_members
-                    SET last_read_message_id = %s,
-                        last_read_at = %s
-                    WHERE room_id = %s AND user_id = %s
-                    """,
-                    (last_message_id, now, room_id, actor.userId),
-                )
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            self._fetch_accessible_room(cursor, actor, room_id)
+            cursor.execute("SELECT id FROM messenger_messages WHERE room_id=%s ORDER BY created_at DESC LIMIT 1", (room_id,))
+            last_message = cursor.fetchone()
+            last_message_id = last_message["id"] if last_message else None
+            cursor.execute(
+                """INSERT INTO messenger_message_reads (id,message_id,user_id,read_at)
+                SELECT %s||'_'||message.id,message.id,%s,%s FROM messenger_messages message
+                WHERE message.room_id=%s AND message.sender_user_id<>%s
+                ON CONFLICT (message_id, user_id) DO NOTHING""",
+                (self._new_id("read"), actor.userId, now, room_id, actor.userId),
+            )
+            inserted = max(getattr(cursor, "rowcount", 0), 0)
+            cursor.execute(
+                "UPDATE messenger_room_members SET last_read_message_id=%s,last_read_at=%s WHERE room_id=%s AND user_id=%s",
+                (last_message_id, now, room_id, actor.userId),
+            )
+            if inserted:
+                self._write_messenger_audit(cursor, actor, room_id, "messenger.room.read", "unread", "read", {"readCount": inserted}, now)
             connection.commit()
         return MessengerReadResponse(roomId=room_id, readAt=now, lastReadMessageId=last_message_id)
+
+    def _write_messenger_audit(self, cursor, actor: AuthUserSummary, target_id: str, event: str, before: str | None, after: str | None, reason: dict | None, now: datetime) -> None:
+        cursor.execute(
+            """INSERT INTO audit_logs
+            (id,company_id,actor_user_id,actor_user_name,target_type,target_id,event,status_before,status_after,reason,created_at)
+            VALUES (%s,%s,%s,%s,'messenger',%s,%s,%s,%s,%s,%s)""",
+            (self._new_id("audit"), actor.companyId, actor.userId, actor.userName, target_id, event, before, after, json.dumps(reason, ensure_ascii=True, separators=(",", ":")) if reason else None, now),
+        )
 
     def _save_mail(self, actor: AuthUserSummary, payload: MailSendRequest | MailDraftRequest, *, status_value: str) -> MailSendResponse:
         self.db.ensure_migrations_applied()
@@ -2528,12 +2577,14 @@ class MailMessengerService:
         row = cursor.fetchone()
         return row["id"] if row else None
 
-    def _fetch_company_users(self, cursor, company_id: str, user_ids: list[str]) -> dict[str, dict]:
+    def _fetch_company_users(self, cursor, company_id: str, user_ids: list[str], *, lock: bool = False) -> dict[str, dict]:
+        lock_clause = " FOR UPDATE" if lock else ""
         cursor.execute(
-            """
+            f"""
             SELECT id, name, email, status
             FROM users
-            WHERE company_id = %s AND id = ANY(%s)
+            WHERE company_id = %s AND id = ANY(%s) AND status = 'active'
+            ORDER BY id{lock_clause}
             """,
             (company_id, user_ids),
         )
@@ -2559,9 +2610,11 @@ class MailMessengerService:
     def _fetch_room_participants(self, cursor, room_id: str) -> list[dict]:
         cursor.execute(
             """
-            SELECT u.id AS user_id, u.name AS user_name, u.email AS user_email, member.joined_at, member.last_read_at
+            SELECT u.id AS user_id, u.name AS user_name, u.email AS user_email,
+                   COALESCE(department.name, '') AS department_name, member.joined_at, member.last_read_at
             FROM messenger_room_members member
-            JOIN users u ON u.id = member.user_id
+            JOIN users u ON u.id = member.user_id AND u.status='active'
+            LEFT JOIN departments department ON department.id=u.department_id
             WHERE member.room_id = %s
             ORDER BY member.joined_at ASC
             """,
@@ -2572,6 +2625,7 @@ class MailMessengerService:
                 "userId": row["user_id"],
                 "userName": row["user_name"],
                 "userEmail": row["user_email"],
+                "departmentName": row["department_name"],
                 "joinedAt": row["joined_at"].isoformat() if row["joined_at"] else None,
                 "lastReadAt": row["last_read_at"].isoformat() if row["last_read_at"] else None,
             }
@@ -2582,13 +2636,17 @@ class MailMessengerService:
         cursor.execute(
             """
             SELECT
+                room.created_by_user_id,
+                self_member.is_favorite,
                 COALESCE(member_ids.participant_ids, '[]'::jsonb) AS participant_ids,
+                COALESCE(member_ids.participant_count, 0) AS participant_count,
                 last_msg.body AS last_message,
                 last_msg.created_at AS last_message_at,
                 COALESCE(unread.unread_count, 0) AS unread_count
             FROM messenger_rooms room
+            JOIN messenger_room_members self_member ON self_member.room_id=room.id AND self_member.user_id=%s
             LEFT JOIN LATERAL (
-                SELECT jsonb_agg(user_id ORDER BY joined_at) AS participant_ids
+                SELECT jsonb_agg(user_id ORDER BY joined_at) AS participant_ids, COUNT(*) AS participant_count
                 FROM messenger_room_members
                 WHERE room_id = room.id
             ) member_ids ON TRUE
@@ -2610,13 +2668,13 @@ class MailMessengerService:
             ) unread ON TRUE
             WHERE room.id = %s
             """,
-            (actor.userId, actor.userId, room["id"]),
+            (actor.userId, actor.userId, actor.userId, room["id"]),
         )
         extra = cursor.fetchone()
         combined = dict(room)
         combined.update(extra)
         combined["room_id"] = room["id"]
-        return self._to_room_summary(combined)
+        return self._to_room_summary(combined, actor.userId)
 
     def _to_mail_summary(self, row: dict) -> MailSummary:
         return MailSummary(
@@ -2680,7 +2738,7 @@ class MailMessengerService:
             ],
         )
 
-    def _to_room_summary(self, row: dict) -> MessengerRoomSummary:
+    def _to_room_summary(self, row: dict, actor_user_id: str | None = None) -> MessengerRoomSummary:
         participant_ids = row["participant_ids"]
         if isinstance(participant_ids, str):
             participant_ids = json.loads(participant_ids)
@@ -2693,6 +2751,10 @@ class MailMessengerService:
             lastMessageAt=row["last_message_at"],
             unreadCount=int(row["unread_count"] or 0),
             readState="unread" if int(row["unread_count"] or 0) > 0 else "read",
+            isFavorite=bool(row.get("is_favorite", False)),
+            participantCount=int(row.get("participant_count") or len(participant_ids or [])),
+            createdByUserId=row.get("created_by_user_id") or "",
+            canManageParticipants=bool(actor_user_id and row.get("created_by_user_id") == actor_user_id),
             createdAt=row["created_at"],
             updatedAt=row["updated_at"],
             retentionExpiresAt=row["retention_expires_at"],
@@ -2700,11 +2762,14 @@ class MailMessengerService:
 
     def _to_message_view(self, row: dict) -> MessengerMessageView:
         attachment_meta = row["attachment_meta"]
+        attachments = row.get("attachments") or []
         read_by = row["read_by"]
         if isinstance(attachment_meta, str):
             attachment_meta = json.loads(attachment_meta)
         if isinstance(read_by, str):
             read_by = json.loads(read_by)
+        if isinstance(attachments, str):
+            attachments = json.loads(attachments)
         read_by_ids = [str(item) for item in (read_by or [])]
         return MessengerMessageView(
             messageId=row["message_id"],
@@ -2714,10 +2779,14 @@ class MailMessengerService:
             messageType=row["message_type"],
             body=row["body"],
             attachmentMeta=list(attachment_meta or []),
+            attachments=list(attachments or []),
             createdAt=row["created_at"],
             retentionExpiresAt=row["retention_expires_at"],
             readBy=read_by_ids,
             readState="read" if read_by_ids else "unread",
+            recipientCount=int(row.get("recipient_count") or 0),
+            readCount=int(row.get("read_count") or 0),
+            unreadCount=int(row.get("unread_count") or 0),
         )
 
     def _new_id(self, prefix: str) -> str:

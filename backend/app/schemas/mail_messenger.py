@@ -1093,15 +1093,60 @@ class MailDetailResponse(BaseModel):
 
 
 class MessengerRoomCreateRequest(BaseModel):
-    roomName: str = Field(min_length=1)
-    roomType: str = Field(default="group")
+    roomName: str = Field(min_length=1, max_length=80)
+    roomType: Literal["direct", "group"] = Field(default="group")
     participantUserIds: list[str] = Field(default_factory=list)
+
+    @field_validator("roomName")
+    @classmethod
+    def normalize_room_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("대화방 이름을 입력하세요.")
+        return normalized
+
+
+class MessengerAttachmentMeta(BaseModel):
+    uploadId: str = Field(pattern=r"^[0-9a-f]{32}$")
+    fileName: str = Field(min_length=1, max_length=255)
+    contentType: str = Field(min_length=1, max_length=255)
+    sizeBytes: int = Field(gt=0)
+
+
+class MessengerAttachmentUploadResponse(MessengerAttachmentMeta):
+    pass
+
+
+class MessengerAttachmentView(BaseModel):
+    attachmentId: str
+    fileName: str
+    contentType: str
+    sizeBytes: int
+
+
+class MessengerRoomFavoriteRequest(BaseModel):
+    isFavorite: bool
+
+
+class MessengerRoomParticipantsRequest(BaseModel):
+    participantUserIds: list[str] = Field(min_length=2)
+    expectedUpdatedAt: datetime
 
 
 class MessengerMessageSendRequest(BaseModel):
-    body: str = Field(min_length=1)
-    messageType: str = Field(default="text")
+    body: str = Field(default="", max_length=10000)
+    messageType: Literal["text", "file"] = Field(default="text")
+    attachments: list[MessengerAttachmentMeta] = Field(default_factory=list, max_length=10)
     attachmentMeta: list[dict] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_content(self):
+        self.body = self.body.strip()
+        if self.attachmentMeta:
+            raise ValueError("실제 업로드된 첨부만 사용할 수 있습니다.")
+        if not self.body and not self.attachments:
+            raise ValueError("메시지 본문 또는 첨부 파일이 필요합니다.")
+        return self
 
 
 class MessengerRoomSummary(BaseModel):
@@ -1113,6 +1158,10 @@ class MessengerRoomSummary(BaseModel):
     lastMessageAt: datetime | None = None
     unreadCount: int = 0
     readState: str
+    isFavorite: bool = False
+    participantCount: int = 0
+    createdByUserId: str
+    canManageParticipants: bool = False
     createdAt: datetime
     updatedAt: datetime
     retentionExpiresAt: datetime | None = None
@@ -1134,14 +1183,19 @@ class MessengerMessageView(BaseModel):
     messageType: str
     body: str
     attachmentMeta: list[dict]
+    attachments: list[MessengerAttachmentView] = Field(default_factory=list)
     createdAt: datetime
     retentionExpiresAt: datetime | None = None
     readBy: list[str]
     readState: str
+    recipientCount: int = 0
+    readCount: int = 0
+    unreadCount: int = 0
 
 
 class MessengerMessageListResponse(BaseModel):
     messages: list[MessengerMessageView]
+    nextCursor: datetime | None = None
 
 
 class MessengerMessageSendResponse(BaseModel):
