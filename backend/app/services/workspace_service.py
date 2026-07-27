@@ -9,7 +9,7 @@ from psycopg.types.json import Jsonb
 from app.schemas.directory import AuthUserSummary
 from app.schemas.observability import EventEnvelope, MonitoringCategory, SeverityLevel, Visibility
 from app.schemas.workspace import CalendarCreatePayload, CalendarOrderPayload, CalendarSubscriptionPayload, CalendarUpdatePayload, ContactPayload, PreferencePayload, SchedulePayload
-from app.services.calendar_rules import subscription_status_for_visibility, validate_order_snapshot
+from app.services.calendar_rules import subscription_action_for_visibility_change, subscription_status_for_visibility, validate_order_snapshot
 from app.services.observability_service import ObservabilityService
 from app.services.postgres_service import PostgresService
 
@@ -185,6 +185,20 @@ class WorkspaceService:
             raise self._calendar_conflict("CALENDAR_DEFAULT_CONFLICT", "기본 캘린더를 준비하지 못했습니다. 다시 시도하세요.")
         return dict(repaired)
 
+    def _activate_pending_calendar_subscriptions(self, cursor, user: AuthUserSummary, calendar_id: str) -> None:
+        cursor.execute(
+            "SELECT id,subscriber_user_id,status FROM user_calendar_subscriptions WHERE calendar_id=%s AND company_id=%s AND status='pending' ORDER BY id FOR UPDATE",
+            (calendar_id, user.companyId),
+        )
+        subscriptions = [dict(row) for row in cursor.fetchall()]
+        for subscription in subscriptions:
+            cursor.execute(
+                "UPDATE user_calendar_subscriptions SET status='active',version=version+1,decided_at=NOW(),updated_at=NOW() WHERE id=%s",
+                (subscription["id"],),
+            )
+            self._audit(cursor, user, "calendar_subscription", subscription["id"], "workspace.calendar.subscription.accepted", "pending", "active")
+            self._notify_in_transaction(cursor, user, subscription["subscriber_user_id"], "calendar.subscription.accepted", calendar_id, "캘린더 공유 승인", "캘린더가 공개로 변경되어 공유 요청이 승인되었습니다.")
+
     def _cancel_calendar_subscriptions(self, cursor, user: AuthUserSummary, calendar_id: str) -> None:
         cursor.execute(
             "SELECT id,subscriber_user_id,status FROM user_calendar_subscriptions WHERE calendar_id=%s AND company_id=%s AND status IN ('pending','active') ORDER BY id FOR UPDATE",
@@ -226,6 +240,7 @@ class WorkspaceService:
             color = payload.color if payload.color is not None else current["color"]
             visibility = payload.visibility if payload.visibility is not None else current["visibility"]
             is_default = payload.isDefault if payload.isDefault is not None else current["is_default"]
+            subscription_action = subscription_action_for_visibility_change(current["visibility"], visibility)
             cursor.execute("SELECT 1 FROM user_calendars WHERE owner_user_id=%s AND id<>%s AND status='active' AND LOWER(name)=LOWER(%s)", (user.userId,calendar_id,name))
             if cursor.fetchone(): raise self._calendar_conflict("CALENDAR_NAME_CONFLICT", "같은 이름의 캘린더가 이미 있습니다.")
             event = "workspace.calendar.updated"
@@ -233,7 +248,9 @@ class WorkspaceService:
                 cursor.execute("UPDATE user_calendars SET is_default=FALSE,version=version+1,updated_at=NOW() WHERE owner_user_id=%s AND status='active' AND is_default=TRUE", (user.userId,))
                 event = "workspace.calendar.default_changed"
             cursor.execute("UPDATE user_calendars SET name=%s,color=%s,visibility=%s,is_default=%s,version=version+1,updated_at=NOW() WHERE id=%s", (name,color,visibility,is_default,calendar_id))
-            if visibility == "private":
+            if subscription_action == "activate_pending":
+                self._activate_pending_calendar_subscriptions(cursor, user, calendar_id)
+            elif subscription_action == "cancel_open":
                 self._cancel_calendar_subscriptions(cursor, user, calendar_id)
             self._audit(cursor,user,"calendar",calendar_id,event,str(current["version"]),str(current["version"]+1))
             conn.commit()
@@ -293,7 +310,19 @@ class WorkspaceService:
         next_status = "active" if decision == "accepted" else "rejected"
         event = "workspace.calendar.subscription.accepted" if decision == "accepted" else "workspace.calendar.subscription.rejected"
         with self.db.connect() as conn, conn.cursor() as cursor:
-            cursor.execute("""SELECT sub.*,c.owner_user_id,c.company_id AS calendar_company_id FROM user_calendar_subscriptions sub JOIN user_calendars c ON c.id=sub.calendar_id AND c.status='active' WHERE sub.id=%s AND c.company_id=%s AND c.owner_user_id=%s FOR UPDATE""", (subscription_id,user.companyId,user.userId))
+            self._lock_calendar_owner(cursor, user)
+            cursor.execute(
+                """SELECT id FROM user_calendars
+                WHERE id=(SELECT calendar_id FROM user_calendar_subscriptions WHERE id=%s AND company_id=%s)
+                  AND company_id=%s AND owner_user_id=%s AND status='active' FOR UPDATE""",
+                (subscription_id, user.companyId, user.companyId, user.userId),
+            )
+            calendar = cursor.fetchone()
+            if not calendar: raise self._missing()
+            cursor.execute(
+                "SELECT * FROM user_calendar_subscriptions WHERE id=%s AND calendar_id=%s AND company_id=%s FOR UPDATE",
+                (subscription_id, calendar["id"], user.companyId),
+            )
             row = cursor.fetchone()
             if not row: raise self._missing()
             current = dict(row)
