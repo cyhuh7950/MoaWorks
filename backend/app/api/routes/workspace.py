@@ -274,14 +274,21 @@ def preferences(user: AuthUserSummary = Depends(permission_required("profile:rea
     return _service().get_preferences(user)
 
 
+@router.get('/profile')
+def profile(user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().profile(user)
+
+
 @router.put('/preferences', response_model=WorkspacePreferencesResponse)
 def save_preferences(payload: PreferencePayload, user: AuthUserSummary = Depends(permission_required("profile:read"))):
     return _service().save_preferences(user, payload)
 
 
 @router.get('/help-policies', response_model=WorkspaceItemList)
-def help_policies(user: AuthUserSummary = Depends(permission_required("profile:read"))):
-    return _service().list_help(user)
+def help_policies(query: str = Query(default="", max_length=120), category: str | None = Query(default=None, max_length=32), user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    if category not in {None,"guide","policy","error"}:
+        raise HTTPException(status_code=400,detail={"code":"HELP_CATEGORY_INVALID","userMessage":"도움말 분류를 확인하세요."})
+    return _service().list_help(user,query,category)
 
 
 @router.get('/notices', response_model=NoticeListResponse)

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from app.api.dependencies import get_current_user
-from app.schemas.auth import CurrentUserResponse, LoginRequest, LoginResponse
+from app.schemas.auth import CurrentUserResponse, LoginRequest, LoginResponse, PasswordChangeRequest, PasswordChangeResponse
 from app.schemas.directory import AuthUserSummary
 from app.services.auth_service import AuthService
 from app.services.directory_store import DirectoryStore
@@ -19,3 +19,8 @@ def login(payload: LoginRequest) -> LoginResponse:
 @router.get("/me", response_model=CurrentUserResponse)
 def get_me(user: AuthUserSummary = Depends(get_current_user)) -> CurrentUserResponse:
     return CurrentUserResponse(user=user)
+
+
+@router.post("/change-password", response_model=PasswordChangeResponse)
+def change_password(payload: PasswordChangeRequest, user: AuthUserSummary = Depends(get_current_user)) -> PasswordChangeResponse:
+    return AuthService(DirectoryStore(), TokenService()).change_password(user, payload)

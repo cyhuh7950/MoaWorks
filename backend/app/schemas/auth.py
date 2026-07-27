@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.directory import AuthUserSummary
 
@@ -24,4 +24,20 @@ class LoginResponse(BaseModel):
 
 
 class CurrentUserResponse(BaseModel):
+    user: AuthUserSummary
+
+
+class PasswordChangeRequest(BaseModel):
+    currentPassword: str = Field(min_length=1, max_length=128)
+    newPassword: str = Field(min_length=8, max_length=128)
+
+    @model_validator(mode="after")
+    def require_new_value(self):
+        if self.currentPassword == self.newPassword:
+            raise ValueError("새 비밀번호는 현재 비밀번호와 달라야 합니다.")
+        return self
+
+
+class PasswordChangeResponse(BaseModel):
+    message: str
     user: AuthUserSummary

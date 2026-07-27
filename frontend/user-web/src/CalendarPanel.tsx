@@ -16,6 +16,7 @@ type Props = {
   token: string;
   ownerUserId: string;
   calendarData: WorkspaceCalendarData;
+  settingsRequestKey: number;
   onCalendarsChanged: () => Promise<void>;
   onRetry: () => void;
   onCreate: () => void;
@@ -43,12 +44,13 @@ function EventButton({ item, selected, locale, timezone, onSelect }: { item: Wor
   return <button type="button" className={`ui037-event${selected ? " is-selected" : ""}`} style={{ borderLeftColor: item.calendarColor }} onClick={() => onSelect(item.id)} title={`${dateTimeLabel(item.starts_at, locale, timezone)} – ${dateTimeLabel(item.ends_at, locale, timezone)}`}><span>{timeLabel(item.starts_at, locale, timezone)}</span><strong>{item.title}</strong></button>;
 }
 
-export function CalendarPanel({ schedules, selectedId, locale, timezone, loading, error, token, ownerUserId, calendarData, onCalendarsChanged, onRetry, onCreate, onSelect, onEdit, onDelete }: Props) {
+export function CalendarPanel({ schedules, selectedId, locale, timezone, loading, error, token, ownerUserId, calendarData, settingsRequestKey, onCalendarsChanged, onRetry, onCreate, onSelect, onEdit, onDelete }: Props) {
   const [view, setView] = useState<CalendarView>("month");
   const [baseDate, setBaseDate] = useState(() => new Date());
   const [focusedListDate, setFocusedListDate] = useState<Date | null>(null);
   const [query, setQuery] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  useEffect(() => { if (settingsRequestKey > 0) setSettingsOpen(true); }, [settingsRequestKey]);
   const [selectedCalendarIds, setSelectedCalendarIds] = useState<string[]>(() => initialSelectedCalendarIds(calendarData));
   useEffect(() => { setSelectedCalendarIds((current) => { const available = initialSelectedCalendarIds(calendarData); const retained = current.filter((id) => available.includes(id)); return retained.length || !available.length ? retained : available; }); }, [calendarData]);
   const preferences = useMemo(() => normalizeCalendarPreferences(locale, timezone), [locale, timezone]);

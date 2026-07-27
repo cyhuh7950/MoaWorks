@@ -1125,24 +1125,95 @@ class WorkspaceService:
             if cursor.rowcount != 1: raise self._missing()
             self._audit(cursor,user,"folder",folder_id,"workspace.folder.deleted","active","deleted",json.dumps({"empty":True})); conn.commit()
 
+    def profile(self, user: AuthUserSummary) -> dict:
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT account.id,account.name,account.email,company.name AS company_name,
+                       COALESCE(department.name,'') AS department_name,role.name AS role_name
+                FROM users account
+                JOIN companies company ON company.id=account.company_id
+                JOIN roles role ON role.id=account.role_id AND role.company_id=account.company_id
+                LEFT JOIN departments department ON department.id=account.department_id AND department.company_id=account.company_id
+                WHERE account.id=%s AND account.company_id=%s AND account.status='active'
+                """,
+                (user.userId, user.companyId),
+            )
+            row = cursor.fetchone()
+            if not row:
+                raise self._missing()
+            self._audit(cursor,user,"user",user.userId,"workspace.profile.viewed",None,None,json.dumps({"source":"personal_settings"},separators=(",",":")))
+            conn.commit()
+        return {
+            "userId": row["id"], "name": row["name"], "email": row["email"],
+            "companyName": row["company_name"], "departmentName": row["department_name"], "roleName": row["role_name"],
+        }
+
+    def _preference_row(self, cursor, user: AuthUserSummary, lock: bool = False):
+        cursor.execute(
+            "SELECT locale,timezone,start_page,version FROM user_workspace_preferences WHERE owner_user_id=%s AND company_id=%s" + (" FOR UPDATE" if lock else ""),
+            (user.userId,user.companyId),
+        )
+        return cursor.fetchone()
+
+    @staticmethod
+    def _preference_view(row) -> dict:
+        if not row:
+            return {"locale":"ko-KR","timezone":"Asia/Seoul","startPage":"home","version":0}
+        return {"locale":row["locale"],"timezone":row["timezone"],"startPage":row["start_page"],"version":row["version"]}
+
     def get_preferences(self, user: AuthUserSummary) -> dict:
         with self.db.connect() as conn, conn.cursor() as cursor:
-            cursor.execute("SELECT locale,timezone FROM user_workspace_preferences WHERE owner_user_id=%s", (user.userId,))
-            row = cursor.fetchone()
-        return dict(row) if row else {"locale":"ko","timezone":"Asia/Seoul"}
+            result = self._preference_view(self._preference_row(cursor,user))
+            self._audit(cursor,user,"preference",user.userId,"workspace.preferences.viewed",None,None,json.dumps({"version":result["version"]},separators=(",",":")))
+            conn.commit()
+        return result
 
     def save_preferences(self, user: AuthUserSummary, payload: PreferencePayload) -> dict:
-        current = self.get_preferences(user)
         with self.db.connect() as conn, conn.cursor() as cursor:
-            cursor.execute("INSERT INTO user_workspace_preferences (owner_user_id,locale,timezone,updated_at) VALUES(%s,%s,%s,NOW()) ON CONFLICT(owner_user_id) DO UPDATE SET locale=EXCLUDED.locale,timezone=EXCLUDED.timezone,updated_at=NOW()", (user.userId,payload.locale,payload.timezone))
-            self._audit(cursor,user,"preference",user.userId,"workspace.preferences.updated",None,None,f"{current['locale']}/{current['timezone']}->{payload.locale}/{payload.timezone}")
+            current_row = self._preference_row(cursor,user,lock=True)
+            current = self._preference_view(current_row)
+            if current["version"] != payload.expectedVersion:
+                raise HTTPException(status_code=409,detail={"code":"WORKSPACE_PREFERENCES_CONFLICT","userMessage":"다른 변경이 먼저 저장되었습니다. 최신 설정을 다시 불러오세요."})
+            if current_row is None:
+                cursor.execute(
+                    "INSERT INTO user_workspace_preferences(owner_user_id,company_id,locale,timezone,start_page,version,created_at,updated_at) VALUES(%s,%s,%s,%s,%s,1,NOW(),NOW()) ON CONFLICT(owner_user_id) DO NOTHING",
+                    (user.userId,user.companyId,payload.locale,payload.timezone,payload.startPage),
+                )
+                if cursor.rowcount != 1:
+                    raise HTTPException(status_code=409,detail={"code":"WORKSPACE_PREFERENCES_CONFLICT","userMessage":"다른 변경이 먼저 저장되었습니다. 최신 설정을 다시 불러오세요."})
+            else:
+                cursor.execute(
+                    "UPDATE user_workspace_preferences SET locale=%s,timezone=%s,start_page=%s,version=version+1,updated_at=NOW() WHERE owner_user_id=%s AND company_id=%s AND version=%s",
+                    (payload.locale,payload.timezone,payload.startPage,user.userId,user.companyId,payload.expectedVersion),
+                )
+                if cursor.rowcount != 1:
+                    raise HTTPException(status_code=409,detail={"code":"WORKSPACE_PREFERENCES_CONFLICT","userMessage":"다른 변경이 먼저 저장되었습니다. 최신 설정을 다시 불러오세요."})
+            changed = [key for key,before,after in (("locale",current["locale"],payload.locale),("timezone",current["timezone"],payload.timezone),("startPage",current["startPage"],payload.startPage)) if before != after]
+            self._audit(cursor,user,"preference",user.userId,"workspace.preferences.updated",str(current["version"]),str(current["version"]+1),json.dumps({"changedFields":changed},separators=(",",":")))
+            result = self._preference_view(self._preference_row(cursor,user))
             conn.commit()
-        return self.get_preferences(user)
+        return result
 
-    def list_help(self, user: AuthUserSummary) -> dict:
+    def list_help(self, user: AuthUserSummary, query: str = "", category: str | None = None) -> dict:
+        normalized_query = query.strip()
+        search = f"%{normalized_query}%"
         with self.db.connect() as conn, conn.cursor() as cursor:
-            cursor.execute("SELECT id,code,title,category,audience,content,version,published_at,updated_at FROM help_policy_documents WHERE status='published' AND audience IN ('user','both','all') ORDER BY updated_at DESC")
-            return {"items": [dict(row) for row in cursor.fetchall()]}
+            cursor.execute(
+                """
+                SELECT id,code,title,category,audience,content,version,published_at,updated_at
+                FROM help_policy_documents
+                WHERE status='published' AND audience IN ('user','both','all')
+                  AND (%s='' OR LOWER(title) LIKE LOWER(%s) OR LOWER(code) LIKE LOWER(%s) OR LOWER(content) LIKE LOWER(%s))
+                  AND (%s IS NULL OR category=%s)
+                ORDER BY updated_at DESC,id
+                """,
+                (normalized_query,search,search,search,category,category),
+            )
+            items = [dict(row) for row in cursor.fetchall()]
+            self._audit(cursor,user,"help",user.userId,"workspace.help.viewed",None,None,json.dumps({"category":category or "all","resultCount":len(items)},separators=(",",":")))
+            conn.commit()
+        return {"items":items}
 
     def list_notices(self, user: AuthUserSummary) -> dict:
         with self.db.connect() as conn, conn.cursor() as cursor:

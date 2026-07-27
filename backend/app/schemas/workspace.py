@@ -185,9 +185,24 @@ class ContactGroupUpdatePayload(ContactGroupCreatePayload):
     expectedUpdatedAt: datetime
 
 
+WorkspaceLocale = Literal["ko-KR", "en-US", "ja-JP", "zh-CN", "es-ES", "fr-FR", "de-DE"]
+WorkspaceStartPage = Literal["home", "mail", "approval", "messenger", "schedule", "contacts", "org", "files"]
+
+
 class PreferencePayload(BaseModel):
-    locale: str = Field(min_length=2, max_length=16)
+    locale: WorkspaceLocale
     timezone: str = Field(min_length=2, max_length=80)
+    startPage: WorkspaceStartPage
+    expectedVersion: int = Field(ge=0)
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_preference_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("유효한 IANA 시간대를 입력하세요.") from exc
+        return value
 
 
 class FileRenamePayload(BaseModel):
@@ -268,6 +283,8 @@ class WorkspaceDirectoryResponse(BaseModel):
 class WorkspacePreferencesResponse(BaseModel):
     locale: str
     timezone: str
+    startPage: str
+    version: int
 
 
 class NoticeRecord(BaseModel):

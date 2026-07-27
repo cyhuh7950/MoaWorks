@@ -5,6 +5,7 @@ import { CalendarPanel } from "./CalendarPanel";
 import { OrganizationPanel } from "./OrganizationPanel";
 import { ScheduleComposePopup } from "./ScheduleComposePopup";
 import { FilePanel } from "./FilePanel";
+import { SettingsHelpPanel } from "./SettingsHelpPanel";
 import { createScheduleDraft, type ScheduleDraft } from "./scheduleForm";
 
 import {
@@ -29,6 +30,7 @@ import {
   type WorkspaceDirectory,
   type WorkspaceFile,
   type WorkspaceHelpPolicy,
+  type WorkspacePreferences,
   type WorkspaceSchedule,
 } from "./api";
 
@@ -44,6 +46,8 @@ type Props = {
   initialSelectionId?: string;
   onPreferencesSaved: (locale: string, timezone: string) => void;
   onComposeMail: (email: string) => void;
+  onOpenWorkspaceSettings: (target: "mail" | "approval" | "calendar") => void;
+  calendarSettingsRequestKey: number;
 };
 
 const panelStyle = { borderRadius: 18, padding: 16, background: "#fff", border: "1px solid #dbe4ec", minHeight: 0, overflow: "auto" } as const;
@@ -64,7 +68,7 @@ function WorkspaceModal({ title, children, showScheduleError, error, onClose }: 
   return <div role="dialog" aria-modal="true" style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(15,23,42,.42)", display: "grid", placeItems: "center", padding: 24 }}><section style={{ width: "min(640px, 100%)", maxHeight: "min(760px, calc(100vh - 48px))", overflow: "auto", borderRadius: 18, padding: 20, background: "#fff", boxShadow: "0 24px 64px rgba(15,23,42,.28)" }}><header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}><h2 style={{ margin: 0, fontSize: 22 }}>{title}</h2><button type="button" onClick={onClose} style={buttonStyle}>{"\uB2EB\uAE30"}</button></header>{showScheduleError && error ? <div role="alert" style={{ marginBottom: 12, color: "#b91c1c", fontSize: 12 }}>{error}</div> : null}{children}</section></div>;
 }
 
-export function WorkspacePanels({ menu, token, locale, timezone, ownerUserId, initialSelectionId, onPreferencesSaved, onComposeMail }: Props) {
+export function WorkspacePanels({ menu, token, locale, timezone, ownerUserId, initialSelectionId, onPreferencesSaved, onComposeMail, onOpenWorkspaceSettings, calendarSettingsRequestKey }: Props) {
   const [schedules, setSchedules] = useState<WorkspaceSchedule[]>([]);
   const [calendarData, setCalendarData] = useState<WorkspaceCalendarData>({ owned: [], subscriptions: [], incomingRequests: [] });
   const [scheduleLoading, setScheduleLoading] = useState(false);
@@ -84,7 +88,7 @@ export function WorkspacePanels({ menu, token, locale, timezone, ownerUserId, in
   const [contactForm, setContactForm] = useState({ name: "", email: "", phone: "", companyName: "", memo: "" });
   const [fileName, setFileName] = useState("");
   const fileUploadRef = useRef<File | null>(null);
-  const [preferenceForm, setPreferenceForm] = useState({ locale, timezone });
+  const [preferenceForm, setPreferenceForm] = useState<WorkspacePreferences>({ locale, timezone, startPage: "home", version: 0 });
   const [contactEditingId, setContactEditingId] = useState<string | null>(null);
   const [fileEditingId, setFileEditingId] = useState<string | null>(null);
 
@@ -181,12 +185,11 @@ export function WorkspacePanels({ menu, token, locale, timezone, ownerUserId, in
   const detail = (title: string, lines: Array<[string, string]>, onEdit?: () => void, onDelete?: () => void) => <article style={panelStyle}><header style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><h2 style={{ margin: 0, fontSize: 22 }}>{title}</h2><div style={{ display: "flex", gap: 8 }}>{onEdit ? <button type="button" onClick={onEdit} style={buttonStyle}>수정</button> : null}{onDelete ? <button type="button" onClick={() => setModal("confirm-delete")} style={{ ...buttonStyle, color: "#9f1239" }}>삭제</button> : null}</div></header><dl style={{ margin: "18px 0 0", display: "grid", gridTemplateColumns: "120px 1fr", gap: "10px 14px", fontSize: 12 }}>{lines.map(([key, value]) => <><dt key={`${key}-k`} style={{ color: "#64748b" }}>{key}</dt><dd key={`${key}-v`} style={{ margin: 0, whiteSpace: "pre-wrap" }}>{value || "-"}</dd></>)}</dl></article>;
 
   let view: React.ReactNode;
-  if (menu === "schedule") view = <CalendarPanel schedules={schedules} selectedId={selectedId} locale={locale} timezone={timezone} loading={scheduleLoading} error={scheduleError} token={token} ownerUserId={ownerUserId} calendarData={calendarData} onCalendarsChanged={refresh} onRetry={() => void refresh()} onCreate={() => openSchedule()} onSelect={setSelectedId} onEdit={openSchedule} onDelete={() => setModal("confirm-delete")} />;
+  if (menu === "schedule") view = <CalendarPanel schedules={schedules} selectedId={selectedId} locale={locale} timezone={timezone} loading={scheduleLoading} error={scheduleError} token={token} ownerUserId={ownerUserId} calendarData={calendarData} settingsRequestKey={calendarSettingsRequestKey} onCalendarsChanged={refresh} onRetry={() => void refresh()} onCreate={() => openSchedule()} onSelect={setSelectedId} onEdit={openSchedule} onDelete={() => setModal("confirm-delete")} />;
   else if (menu === "contacts") view = <AddressBookPanel token={token} initialSelectionId={initialSelectionId} onComposeMail={onComposeMail} />;
   else if (menu === "org") view = <OrganizationPanel token={token} initialSelectionId={initialSelectionId} onComposeMail={onComposeMail} />;
   else if (menu === "files") view = <FilePanel token={token} currentUserId={ownerUserId} initialSelectionId={initialSelectionId} />;
-  else if (menu === "settings") view = <section style={{ display: "grid", gridTemplateColumns: "minmax(300px,.9fr) minmax(420px,1.1fr)", gap: 16, minHeight: 0, height: "100%" }}><article style={panelStyle}><h2 style={{ margin: 0, fontSize: 22 }}>내 설정</h2><dl style={{ margin: "18px 0", display: "grid", gridTemplateColumns: "100px 1fr", gap: 10, fontSize: 12 }}><dt>언어</dt><dd style={{ margin: 0 }}>{preferenceForm.locale}</dd><dt>시간대</dt><dd style={{ margin: 0 }}>{preferenceForm.timezone}</dd></dl><button type="button" onClick={() => setModal("settings")} style={primaryButtonStyle}>설정 변경</button></article><article style={panelStyle}><h2 style={{ margin: 0, fontSize: 22 }}>화면 적용</h2><p style={{ fontSize: 12, color: "#475569" }}>언어와 시간대는 사용자 계정에 저장되며 다시 로그인해도 같은 값으로 조회됩니다.</p></article></section>;
-  else view = <section style={{ display: "grid", gridTemplateColumns: "minmax(280px,.8fr) minmax(420px,1.2fr)", gap: 16, minHeight: 0, height: "100%" }}><article style={panelStyle}><h2 style={{ margin: 0, fontSize: 22 }}>Help / 정책</h2><div style={{ marginTop: 12, display: "grid", gap: 6 }}>{helpPolicies.map((item) => <button type="button" key={item.id} onClick={() => setSelectedId(item.id)} style={{ ...buttonStyle, height: "auto", minHeight: 50, textAlign: "left", background: selectedId === item.id ? "#e6fffb" : "#fff" }}><strong>{item.title}</strong><div style={{ color: "#64748b", marginTop: 4 }}>{item.category}</div></button>)}</div></article>{selectedHelp ? detail(selectedHelp.title, [["분류", selectedHelp.category], ["본문", selectedHelp.content]]) : detail("문서 선택", [["안내", "공개된 도움말과 정책 문서를 선택하세요."]])}</section>;
+  else view = <SettingsHelpPanel mode={menu === "settings" ? "settings" : "help"} token={token} onPreferencesSaved={onPreferencesSaved} onOpenWorkspaceSettings={onOpenWorkspaceSettings} />;
 
   return <section style={{ minHeight: 0, height: "100%", display: "grid", gridTemplateRows: "auto minmax(0,1fr)", gap: 8 }}><div style={{ minHeight: 20, fontSize: 12, color: error ? "#b91c1c" : "#0f766e" }}>{error || notice}</div>{view}<ScheduleComposePopup open={schedulePopupOpen} draft={scheduleDraft} users={directory.users} ownerUserId={ownerUserId} ownedCalendars={calendarData.owned} saving={scheduleSaving} error={schedulePopupError} onClose={() => setSchedulePopupOpen(false)} onSave={submitSchedule} />{modal === "none" ? null : <WorkspaceModal title={modal === "contact" ? (selectedContact ? "연락처 수정" : "연락처 추가") : modal === "file" ? (fileEditingId ? "파일 이름 변경" : "파일 업로드") : modal === "settings" ? "내 설정 변경" : "삭제 확인"} showScheduleError={false} error={error} onClose={() => setModal("none")}>{modal === "contact" ? <form onSubmit={submitContact} style={{ display: "grid", gap: 10 }}><input required value={contactForm.name} onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })} placeholder="이름"/><input required type="email" value={contactForm.email} onChange={(e) => setContactForm({ ...contactForm, email: e.target.value })} placeholder="이메일"/><input value={contactForm.phone} onChange={(e) => setContactForm({ ...contactForm, phone: e.target.value })} placeholder="전화"/><input value={contactForm.companyName} onChange={(e) => setContactForm({ ...contactForm, companyName: e.target.value })} placeholder="회사"/><textarea value={contactForm.memo} onChange={(e) => setContactForm({ ...contactForm, memo: e.target.value })} placeholder="메모"/><button style={primaryButtonStyle}>저장</button></form> : null}{modal === "file" ? <form onSubmit={submitFile} style={{ display: "grid", gap: 10 }}>{fileEditingId ? <input required value={fileName} onChange={(e) => setFileName(e.target.value)} placeholder="파일 이름"/> : <input required type="file" onChange={(e) => fileUploadRef.current = e.target.files?.[0] ?? null}/>}<button style={primaryButtonStyle}>{fileEditingId ? "이름 저장" : "업로드"}</button></form> : null}{modal === "settings" ? <form onSubmit={submitPreferences} style={{ display: "grid", gap: 10 }}><select value={preferenceForm.locale} onChange={(e) => setPreferenceForm({ ...preferenceForm, locale: e.target.value })}><option value="ko">ko</option><option value="en">en</option><option value="ja">ja</option></select><input value={preferenceForm.timezone} onChange={(e) => setPreferenceForm({ ...preferenceForm, timezone: e.target.value })}/><button style={primaryButtonStyle}>저장</button></form> : null}{modal === "confirm-delete" ? <><p style={{ fontSize: 12 }}>선택 항목을 삭제 상태로 변경합니다.</p><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setModal("none")} style={buttonStyle}>취소</button><button type="button" onClick={() => void confirmDelete()} style={{ ...primaryButtonStyle, background: "#9f1239" }}>삭제</button></div></> : null}</WorkspaceModal>}</section>;
 }

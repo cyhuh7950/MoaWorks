@@ -90,6 +90,7 @@ import {
   fetchWorkspaceFiles,
   fetchWorkspaceNotice,
   fetchWorkspaceNotices,
+  fetchWorkspacePreferences,
   fetchTranslationStatus,
   fetchUiContract,
   getUserToken,
@@ -1410,6 +1411,8 @@ export default function App() {
   const [showNotificationPanel, setShowNotificationPanel] = useState(false);
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceTab>("mail");
   const [activePortalMenu, setActivePortalMenu] = useState<UserPortalMenu>("home");
+  const [calendarSettingsRequestKey, setCalendarSettingsRequestKey] = useState(0);
+  const appliedPreferenceTokenRef = useRef("");
   const [activeMailbox, setActiveMailbox] = useState<MailboxType>("inbox");
   const [activeMailFolder, setActiveMailFolder] = useState<MailFolderType>("inbox");
   const [quickComposeMode, setQuickComposeMode] = useState<QuickComposeMode>("none");
@@ -2394,6 +2397,22 @@ export default function App() {
     await openMailSettings("basic");
   }
 
+  function onOpenWorkspaceSettings(target: "mail" | "approval" | "calendar") {
+    if (target === "mail") {
+      setActivePortalMenu("mail");
+      void openMailBasicSettings();
+      return;
+    }
+    if (target === "approval") {
+      setApprovalShellMenu("settings");
+      setApprovalSettingsTab("basic");
+      setActivePortalMenu("approval");
+      return;
+    }
+    setCalendarSettingsRequestKey(current => current + 1);
+    setActivePortalMenu("schedule");
+  }
+
   async function saveMailboxPolicy(mailbox: MailboxSettingsRow, retentionDays: MailboxSettingsRow["retentionDays"]): Promise<boolean> {
     if (!token || mailboxSettingsBusyKey) return false;
     setMailboxSettingsBusyKey(`policy:${mailbox.mailboxKey}`);
@@ -3352,6 +3371,7 @@ export default function App() {
 
   useEffect(() => {
     if (!token) {
+      appliedPreferenceTokenRef.current = "";
       setMe(null);
       setTranslationStatus(null);
       setTranslationResult([]);
@@ -3387,6 +3407,18 @@ export default function App() {
         setApprovalError("세션이 만료되었거나 접근이 제한되었습니다. 다시 로그인해 주세요.");
       });
   }, [token]);
+
+  useEffect(() => {
+    if (!token || !me || me.mustChangePassword || appliedPreferenceTokenRef.current === token) return;
+    appliedPreferenceTokenRef.current = token;
+    void fetchWorkspacePreferences(token)
+      .then((preference) => {
+        saveLocale(resolveLocale(preference.locale));
+        saveTimezone(preference.timezone);
+        setActivePortalMenu(preference.startPage);
+      })
+      .catch(() => { appliedPreferenceTokenRef.current = ""; });
+  }, [token, me?.userId, me?.mustChangePassword]);
 
   async function handleLogin(event: FormEvent) {
     event.preventDefault();
@@ -4642,6 +4674,8 @@ export default function App() {
               saveTimezone(nextTimezone);
             }}
             onComposeMail={openAddressBookMailCompose}
+            onOpenWorkspaceSettings={onOpenWorkspaceSettings}
+            calendarSettingsRequestKey={calendarSettingsRequestKey}
           />
         );
       }
