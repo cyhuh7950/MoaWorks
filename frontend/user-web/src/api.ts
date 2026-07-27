@@ -1735,9 +1735,14 @@ export type ContactImportPreview = { digest: string; totalRows: number; newCount
 export type ContactImportResult = { digest: string; createdCount: number; skippedCount: number; groupCount: number };
 export type WorkspaceFile = { id: string; file_name: string; content_type: string; size_bytes: number; status: string; created_at: string; updated_at: string };
 export type WorkspaceDirectory = { departments: Array<{ id: string; name: string; parent_id: string | null; department_code: string | null }>; users: Array<{ id: string; name: string; email: string; department_name: string; role_name: string }> };
+export type OrganizationDepartment = { id: string; name: string; departmentCode: string | null; parentId: string | null; directMemberCount: number };
+export type OrganizationMember = { id: string; name: string; email: string; departmentId: string | null; departmentName: string; roleName: string };
 export type WorkspaceHelpPolicy = { id: string; title: string; category: string; content: string; updated_at: string };
 export type WorkspaceNotice = { id: string; title: string; content: string; author_name: string; published_at: string; is_read: boolean };
 export async function fetchWorkspaceDirectory(token: string) { return request<WorkspaceDirectory>("/workspace/directory", { headers: authHeaders(token) }); }
+export async function fetchOrganizationDepartments(token: string) { return request<{ items: OrganizationDepartment[] }>("/workspace/organization/departments", { headers: authHeaders(token) }); }
+export async function fetchOrganizationMembers(token: string, options: { departmentId?: string; query?: string } = {}) { const params = new URLSearchParams(); if (options.departmentId) params.set("departmentId", options.departmentId); if (options.query) params.set("query", options.query); const suffix = params.size ? `?${params}` : ""; const path = "/workspace/organization/members"; return request<{ items: OrganizationMember[] }>(`${path}${suffix}`, { headers: authHeaders(token) }); }
+export async function fetchOrganizationMemberDetail(token: string, userId: string) { return request<OrganizationMember>(`/workspace/organization/members/${encodeURIComponent(userId)}`, { headers: authHeaders(token) }); }
 export async function fetchCalendars(token: string) { return request<WorkspaceCalendarData>("/workspace/calendars", { headers: authHeaders(token) }); }
 export async function discoverCalendars(token: string, query: string) { return request<{ items: WorkspaceCalendar[] }>(`/workspace/calendars/discover?query=${encodeURIComponent(query)}`, { headers: authHeaders(token) }); }
 export async function createCalendar(token: string, payload: { name: string; color: string }) { return request<WorkspaceCalendar>("/workspace/calendars", { method: "POST", headers: authHeaders(token), body: JSON.stringify(payload) }); }

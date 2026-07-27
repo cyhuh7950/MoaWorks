@@ -21,6 +21,21 @@ def directory(user: AuthUserSummary = Depends(permission_required("profile:read"
     return _service().directory(user)
 
 
+@router.get('/organization/departments')
+def organization_departments(user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().organization_departments(user)
+
+
+@router.get('/organization/members')
+def organization_members(departmentId: str | None = Query(default=None), query: str = Query(default="", max_length=120), user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().organization_members(user, departmentId, query)
+
+
+@router.get('/organization/members/{user_id}')
+def organization_member_detail(user_id: str, user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().organization_member_detail(user, user_id)
+
+
 @router.get('/calendars')
 def list_calendars(user: AuthUserSummary = Depends(permission_required("profile:read"))):
     return _service().list_calendars(user)

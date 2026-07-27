@@ -44,6 +44,7 @@ class Ui042OrganizationChartTests(unittest.TestCase):
     def test_member_detail_audit_excludes_pii(self) -> None:
         service = (ROOT / "app" / "services" / "workspace_service.py").read_text(encoding="utf-8")
         detail = service[service.index("def organization_member_detail"):] if "def organization_member_detail" in service else ""
+        detail = detail[:detail.index("\n    def ", 1)] if "\n    def " in detail[1:] else detail
         self.assertIn('"workspace.organization.member_viewed"', detail)
         audit = detail[detail.index('"workspace.organization.member_viewed"'):] if "workspace.organization.member_viewed" in detail else ""
         self.assertNotIn('row["email"]', audit)

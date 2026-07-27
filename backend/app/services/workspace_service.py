@@ -58,6 +58,86 @@ class WorkspaceService:
             users = [dict(row) for row in cursor.fetchall()]
         return {"departments": departments, "users": users}
 
+    def organization_departments(self, user: AuthUserSummary) -> dict:
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT department.id,department.name,department.department_code,department.parent_id,
+                       COUNT(role.id) AS direct_member_count
+                FROM departments department
+                LEFT JOIN users member ON member.department_id=department.id
+                    AND member.company_id=department.company_id AND member.status='active'
+                LEFT JOIN roles role ON role.id=member.role_id AND role.status='active'
+                WHERE department.company_id=%s AND department.status='active'
+                GROUP BY department.id,department.name,department.department_code,department.parent_id
+                ORDER BY department.name,department.id
+                """,
+                (user.companyId,),
+            )
+            rows = cursor.fetchall()
+        return {"items": [{
+            "id": row["id"], "name": row["name"], "departmentCode": row["department_code"],
+            "parentId": row["parent_id"], "directMemberCount": int(row["direct_member_count"]),
+        } for row in rows]}
+
+    def organization_members(self, user: AuthUserSummary, department_id: str | None = None, query: str = "") -> dict:
+        normalized_query = query.strip()
+        search = f"%{normalized_query}%"
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            if department_id:
+                cursor.execute(
+                    "SELECT department.id FROM departments department WHERE department.id=%s AND department.company_id=%s AND department.status='active'",
+                    (department_id, user.companyId),
+                )
+                if not cursor.fetchone():
+                    raise self._missing()
+            department_filter = " AND member.department_id=%s" if department_id else ""
+            params: tuple = (user.companyId, normalized_query, search, search)
+            if department_id:
+                params = (user.companyId, department_id, normalized_query, search, search)
+            cursor.execute(
+                f"""
+                SELECT member.id,member.name,member.email,member.department_id,
+                       COALESCE(department.name,'') AS department_name,role.name AS role_name
+                FROM users member
+                JOIN roles role ON role.id=member.role_id AND role.status='active'
+                LEFT JOIN departments department ON department.id=member.department_id AND department.company_id=member.company_id AND department.status='active'
+                WHERE member.company_id=%s AND member.status='active'{department_filter}
+                  AND (%s='' OR LOWER(member.name) LIKE LOWER(%s) OR LOWER(member.email) LIKE LOWER(%s))
+                ORDER BY member.name,member.id LIMIT 500
+                """,
+                params,
+            )
+            rows = cursor.fetchall()
+        return {"items": [{
+            "id": row["id"], "name": row["name"], "email": row["email"],
+            "departmentId": row["department_id"], "departmentName": row["department_name"], "roleName": row["role_name"],
+        } for row in rows]}
+
+    def organization_member_detail(self, user: AuthUserSummary, user_id: str) -> dict:
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT member.id,member.name,member.email,member.department_id,
+                       COALESCE(department.name,'') AS department_name,role.name AS role_name
+                FROM users member
+                JOIN roles role ON role.id=member.role_id AND role.status='active'
+                LEFT JOIN departments department ON department.id=member.department_id AND department.company_id=member.company_id AND department.status='active'
+                WHERE member.id=%s AND member.company_id=%s AND member.status='active'
+                """,
+                (user_id, user.companyId),
+            )
+            row = cursor.fetchone()
+            if not row:
+                raise self._missing()
+            member = {
+                "id": row["id"], "name": row["name"], "email": row["email"],
+                "departmentId": row["department_id"], "departmentName": row["department_name"], "roleName": row["role_name"],
+            }
+            self._audit(cursor, user, "organization_member", user_id, "workspace.organization.member_viewed", None, None, json.dumps({"source": "organization_member_detail"}, separators=(",", ":")))
+            conn.commit()
+        return member
+
     @staticmethod
     def _calendar_record(row: dict) -> dict:
         return {

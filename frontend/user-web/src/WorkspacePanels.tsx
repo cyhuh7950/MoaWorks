@@ -2,6 +2,7 @@ import React, { FormEvent, useEffect, useRef, useState } from "react";
 
 import { AddressBookPanel } from "./AddressBookPanel";
 import { CalendarPanel } from "./CalendarPanel";
+import { OrganizationPanel } from "./OrganizationPanel";
 import { ScheduleComposePopup } from "./ScheduleComposePopup";
 import { createScheduleDraft, type ScheduleDraft } from "./scheduleForm";
 
@@ -72,7 +73,6 @@ export function WorkspacePanels({ menu, token, locale, timezone, ownerUserId, in
   const [directory, setDirectory] = useState<WorkspaceDirectory>({ departments: [], users: [] });
   const [helpPolicies, setHelpPolicies] = useState<WorkspaceHelpPolicy[]>([]);
   const [selectedId, setSelectedId] = useState("");
-  const [selectedDepartmentId, setSelectedDepartmentId] = useState("");
   const [modal, setModal] = useState<ModalMode>("none");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -91,7 +91,6 @@ export function WorkspacePanels({ menu, token, locale, timezone, ownerUserId, in
   const selectedContact = contacts.find((item) => item.id === selectedId) ?? null;
   const selectedFile = files.find((item) => item.id === selectedId) ?? null;
   const selectedHelp = helpPolicies.find((item) => item.id === selectedId) ?? null;
-  const selectedMember = directory.users.find((item) => item.id === selectedId) ?? null;
   const defaultCalendar = calendarData.owned.find((item) => item.isDefault) ?? calendarData.owned[0];
 
   async function refresh(): Promise<void> {
@@ -113,11 +112,6 @@ export function WorkspacePanels({ menu, token, locale, timezone, ownerUserId, in
         const response = await fetchWorkspaceFiles(token);
         setFiles(response.items);
         setSelectedId((current) => response.items.some((item) => item.id === initialSelectionId) ? initialSelectionId ?? "" : response.items.some((item) => item.id === current) ? current : response.items[0]?.id ?? "");
-      } else if (menu === "org") {
-        const response = await fetchWorkspaceDirectory(token);
-        setDirectory(response);
-        setSelectedDepartmentId((current) => response.departments.some((item) => item.id === initialSelectionId) ? initialSelectionId ?? "" : response.departments.some((item) => item.id === current) ? current : response.departments[0]?.id ?? "");
-        setSelectedId((current) => response.users.some((item) => item.id === initialSelectionId) ? initialSelectionId ?? "" : response.users.some((item) => item.id === current) ? current : response.users[0]?.id ?? "");
       } else if (menu === "settings") {
         const response = await fetchWorkspacePreferences(token);
         setPreferenceForm(response);
@@ -188,7 +182,7 @@ export function WorkspacePanels({ menu, token, locale, timezone, ownerUserId, in
   let view: React.ReactNode;
   if (menu === "schedule") view = <CalendarPanel schedules={schedules} selectedId={selectedId} locale={locale} timezone={timezone} loading={scheduleLoading} error={scheduleError} token={token} ownerUserId={ownerUserId} calendarData={calendarData} onCalendarsChanged={refresh} onRetry={() => void refresh()} onCreate={() => openSchedule()} onSelect={setSelectedId} onEdit={openSchedule} onDelete={() => setModal("confirm-delete")} />;
   else if (menu === "contacts") view = <AddressBookPanel token={token} initialSelectionId={initialSelectionId} onComposeMail={onComposeMail} />;
-  else if (menu === "org") view = <section style={{ display: "grid", gridTemplateColumns: "minmax(280px,.8fr) minmax(420px,1.2fr)", gap: 16, minHeight: 0, height: "100%" }}><article style={panelStyle}><h2 style={{ margin: 0, fontSize: 22 }}>조직도</h2><div style={{ marginTop: 12, display: "grid", gap: 8 }}>{directory.departments.map((department) => <section key={department.id} style={{ border: "1px solid #dbe4ec", borderRadius: 12, padding: 10 }}><strong>{department.name}</strong><div style={{ marginTop: 8, display: "grid", gap: 4 }}>{directory.users.filter((user) => user.department_name === department.name).map((user) => <button type="button" key={user.id} onClick={() => setSelectedId(user.id)} style={{ ...buttonStyle, textAlign: "left", background: selectedId === user.id ? "#e6fffb" : "#fff" }}>{user.name}</button>)}</div></section>)}</div></article>{selectedMember ? detail(selectedMember.name, [["이메일", selectedMember.email], ["부서", selectedMember.department_name], ["역할", selectedMember.role_name]]) : detail("조직 사용자", [["안내", "조직 정보는 조회 전용이며 변경은 관리자 콘솔에서 처리합니다."]])}</section>;
+  else if (menu === "org") view = <OrganizationPanel token={token} initialSelectionId={initialSelectionId} onComposeMail={onComposeMail} />;
   else if (menu === "files") view = <section style={{ display: "grid", gridTemplateColumns: "minmax(280px,.8fr) minmax(420px,1.2fr)", gap: 16, minHeight: 0, height: "100%" }}><article style={panelStyle}><header style={{ display: "flex", justifyContent: "space-between" }}><h2 style={{ margin: 0, fontSize: 22 }}>파일</h2><button type="button" onClick={() => { setSelectedId(""); setFileEditingId(null); fileUploadRef.current = null; setModal("file"); }} style={primaryButtonStyle}>업로드</button></header><div style={{ marginTop: 12, display: "grid", gap: 6 }}>{files.map((item) => <button type="button" key={item.id} onClick={() => setSelectedId(item.id)} onDoubleClick={() => { setSelectedId(item.id); setFileEditingId(item.id); setFileName(item.file_name); setModal("file"); }} style={{ ...buttonStyle, height: "auto", minHeight: 54, textAlign: "left", background: selectedId === item.id ? "#e6fffb" : "#fff" }}><strong>{item.file_name}</strong><div style={{ color: "#64748b", marginTop: 4 }}>{item.size_bytes} bytes / {formatDate(item.updated_at)}</div></button>)}</div></article>{selectedFile ? detail(selectedFile.file_name, [["형식", selectedFile.content_type], ["크기", `${selectedFile.size_bytes} bytes`], ["수정", formatDate(selectedFile.updated_at)]], () => { setFileEditingId(selectedFile.id); setFileName(selectedFile.file_name); setModal("file"); }, () => setModal("confirm-delete")) : detail("선택 파일", [["안내", "파일을 선택하거나 업로드하세요."]])}</section>;
   else if (menu === "settings") view = <section style={{ display: "grid", gridTemplateColumns: "minmax(300px,.9fr) minmax(420px,1.1fr)", gap: 16, minHeight: 0, height: "100%" }}><article style={panelStyle}><h2 style={{ margin: 0, fontSize: 22 }}>내 설정</h2><dl style={{ margin: "18px 0", display: "grid", gridTemplateColumns: "100px 1fr", gap: 10, fontSize: 12 }}><dt>언어</dt><dd style={{ margin: 0 }}>{preferenceForm.locale}</dd><dt>시간대</dt><dd style={{ margin: 0 }}>{preferenceForm.timezone}</dd></dl><button type="button" onClick={() => setModal("settings")} style={primaryButtonStyle}>설정 변경</button></article><article style={panelStyle}><h2 style={{ margin: 0, fontSize: 22 }}>화면 적용</h2><p style={{ fontSize: 12, color: "#475569" }}>언어와 시간대는 사용자 계정에 저장되며 다시 로그인해도 같은 값으로 조회됩니다.</p></article></section>;
   else view = <section style={{ display: "grid", gridTemplateColumns: "minmax(280px,.8fr) minmax(420px,1.2fr)", gap: 16, minHeight: 0, height: "100%" }}><article style={panelStyle}><h2 style={{ margin: 0, fontSize: 22 }}>Help / 정책</h2><div style={{ marginTop: 12, display: "grid", gap: 6 }}>{helpPolicies.map((item) => <button type="button" key={item.id} onClick={() => setSelectedId(item.id)} style={{ ...buttonStyle, height: "auto", minHeight: 50, textAlign: "left", background: selectedId === item.id ? "#e6fffb" : "#fff" }}><strong>{item.title}</strong><div style={{ color: "#64748b", marginTop: 4 }}>{item.category}</div></button>)}</div></article>{selectedHelp ? detail(selectedHelp.title, [["분류", selectedHelp.category], ["본문", selectedHelp.content]]) : detail("문서 선택", [["안내", "공개된 도움말과 정책 문서를 선택하세요."]])}</section>;
