@@ -1821,7 +1821,11 @@ class MailMessengerService:
         self.db.ensure_migrations_applied()
         now = self._now()
         room_id = self._new_id("room")
+        if len(payload.participantUserIds) > 100:
+            raise ValueError("대화방 참여자는 최대 100명까지 지정할 수 있습니다.")
         participant_ids = self._dedupe([actor.userId, *payload.participantUserIds])
+        if len(participant_ids) > 100:
+            raise ValueError("대화방 참여자는 본인을 포함해 최대 100명입니다.")
         if len(participant_ids) < 2 or (payload.roomType == "direct" and len(participant_ids) != 2):
             raise ValueError("대화방은 본인을 포함해 2명 이상이어야 합니다.")
         with self.db.connect() as connection, connection.cursor() as cursor:
@@ -1873,7 +1877,11 @@ class MailMessengerService:
     def update_room_participants(self, actor: AuthUserSummary, room_id: str, payload: MessengerRoomParticipantsRequest) -> MessengerRoomDetailResponse:
         self.db.ensure_migrations_applied()
         now = self._now()
+        if len(payload.participantUserIds) > 100:
+            raise ValueError("대화방 참여자는 최대 100명까지 지정할 수 있습니다.")
         participant_ids = self._dedupe(payload.participantUserIds)
+        if len(participant_ids) > 100:
+            raise ValueError("대화방 참여자는 최대 100명까지 지정할 수 있습니다.")
         if actor.userId not in participant_ids or len(participant_ids) < 2:
             raise ValueError("방 생성자를 포함한 최소 2명의 참여자가 필요합니다.")
         with self.db.connect() as connection, connection.cursor() as cursor:
@@ -1904,8 +1912,9 @@ class MailMessengerService:
                     "INSERT INTO messenger_room_members (id,room_id,user_id,joined_at) VALUES (%s,%s,%s,%s)",
                     (self._new_id("member"), room_id, user_id, now),
                 )
-            cursor.execute("UPDATE messenger_rooms SET updated_at=%s WHERE id=%s", (now, room_id))
-            self._write_messenger_audit(cursor, actor, room_id, "messenger.room.participants_changed", "active", "active", {"beforeUserIds": before_ids, "afterUserIds": participant_ids}, now)
+            if removed or added:
+                cursor.execute("UPDATE messenger_rooms SET updated_at=%s WHERE id=%s", (now, room_id))
+                self._write_messenger_audit(cursor, actor, room_id, "messenger.room.participants_changed", "active", "active", {"beforeUserIds": before_ids, "afterUserIds": participant_ids}, now)
             connection.commit()
         return self.get_room(actor, room_id)
 
@@ -1977,6 +1986,7 @@ class MailMessengerService:
             raise MessengerAttachmentTooLargeError("첨부 파일의 전체 용량 제한을 초과했습니다.")
         now = self._now()
         message_id = self._new_id("msg")
+        marked_upload_ids: list[str] = []
         with self.db.connect() as connection, connection.cursor() as cursor:
             self._fetch_accessible_room(cursor, actor, room_id)
             cursor.execute(
@@ -1998,9 +2008,23 @@ class MailMessengerService:
             )
             cursor.execute("UPDATE messenger_rooms SET updated_at=%s WHERE id=%s", (now, room_id))
             self._write_messenger_audit(cursor, actor, message_id, "messenger.message.sent", None, "sent", {"messageType": payload.messageType, "attachmentCount": len(resolved)}, now)
+            try:
+                for item in resolved:
+                    self.messenger_attachment_storage.mark_attached(item["upload_id"], message_id)
+                    marked_upload_ids.append(item["upload_id"])
+            except Exception:
+                try:
+                    connection.rollback()
+                except Exception:
+                    logger.exception("메신저 첨부 연결 실패 후 DB rollback에 실패했습니다.")
+                    raise
+                for upload_id in reversed(marked_upload_ids):
+                    try:
+                        self.messenger_attachment_storage.restore_unattached(upload_id, message_id)
+                    except Exception:
+                        logger.exception("rollback 완료 후 메신저 첨부 metadata 보상에 실패했습니다.")
+                raise
             connection.commit()
-        for item in resolved:
-            self.messenger_attachment_storage.mark_attached(item["upload_id"])
         return MessengerMessageSendResponse(messageId=message_id, roomId=room_id, createdAt=now)
 
     def mark_room_read(self, actor: AuthUserSummary, room_id: str) -> MessengerReadResponse:

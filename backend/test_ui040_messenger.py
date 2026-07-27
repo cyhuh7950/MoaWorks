@@ -290,6 +290,40 @@ class Ui040MessengerTests(unittest.TestCase):
         self.assertFalse(any(sql.startswith("UPDATE messenger_rooms") for sql in statements))
         self.assertEqual(audits, [])
 
+    def test_service_enforces_participant_limit_before_and_after_deduplication(self) -> None:
+        from app.schemas.mail_messenger import MessengerRoomCreateRequest, MessengerRoomParticipantsRequest
+        from app.services.mail_messenger_service import MailMessengerService
+
+        class NoConnectDb:
+            def ensure_migrations_applied(self):
+                return None
+
+            def connect(self):
+                raise AssertionError("participant limit must be rejected before DB access")
+
+        service = MailMessengerService()
+        service.db = NoConnectDb()
+        raw_over_limit = MessengerRoomParticipantsRequest.model_construct(
+            participantUserIds=["user-a", "user-b"] * 51,
+            expectedUpdatedAt=datetime.now(UTC),
+        )
+        deduped_over_limit = MessengerRoomParticipantsRequest.model_construct(
+            participantUserIds=[f"user-{index}" for index in range(101)],
+            expectedUpdatedAt=datetime.now(UTC),
+        )
+        actor_added_over_limit = MessengerRoomCreateRequest.model_construct(
+            roomName="대화방",
+            roomType="group",
+            participantUserIds=[f"member-{index}" for index in range(100)],
+        )
+
+        with self.assertRaisesRegex(ValueError, "최대 100명"):
+            service.update_room_participants(self.actor(), "room-a", raw_over_limit)
+        with self.assertRaisesRegex(ValueError, "최대 100명"):
+            service.update_room_participants(self.actor(), "room-a", deduped_over_limit)
+        with self.assertRaisesRegex(ValueError, "최대 100명"):
+            service.create_room(self.actor(), actor_added_over_limit)
+
     def test_attachment_storage_enforces_owner_integrity_reuse_and_size(self) -> None:
         from app.schemas.mail_messenger import MessengerAttachmentMeta
         from app.services.messenger_attachment_storage import MessengerAttachmentStorage
@@ -307,7 +341,7 @@ class Ui040MessengerTests(unittest.TestCase):
             resolved = storage.resolve(self.actor(), meta)
             self.assertNotIn("storageKey", uploaded.model_dump())
             self.assertTrue(str(resolved["storage_key"]).startswith("messenger/uploads/"))
-            storage.mark_attached(uploaded.uploadId)
+            storage.mark_attached(uploaded.uploadId, "message-a")
             with self.assertRaisesRegex(ValueError, "이미 사용"):
                 storage.resolve(self.actor(), meta)
             with self.assertRaises(PermissionError):

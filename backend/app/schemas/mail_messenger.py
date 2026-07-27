@@ -1095,7 +1095,7 @@ class MailDetailResponse(BaseModel):
 class MessengerRoomCreateRequest(BaseModel):
     roomName: str = Field(min_length=1, max_length=80)
     roomType: Literal["direct", "group"] = Field(default="group")
-    participantUserIds: list[str] = Field(default_factory=list)
+    participantUserIds: list[str] = Field(default_factory=list, max_length=100)
 
     @field_validator("roomName")
     @classmethod
@@ -1129,7 +1129,7 @@ class MessengerRoomFavoriteRequest(BaseModel):
 
 
 class MessengerRoomParticipantsRequest(BaseModel):
-    participantUserIds: list[str] = Field(min_length=2)
+    participantUserIds: list[str] = Field(min_length=2, max_length=100)
     expectedUpdatedAt: datetime
 
 

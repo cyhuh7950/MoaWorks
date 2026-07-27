@@ -33,7 +33,6 @@ class MessengerAttachmentStorage:
         upload_id = uuid4().hex
         self.upload_root.mkdir(parents=True, exist_ok=True)
         data_path = self._data_path(upload_id)
-        metadata_path = self._metadata_path(upload_id)
         data_path.write_bytes(content)
         metadata = {
             "uploadId": upload_id,
@@ -47,7 +46,7 @@ class MessengerAttachmentStorage:
             "createdAt": datetime.now(UTC).isoformat(),
         }
         try:
-            metadata_path.write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+            self._write_metadata_atomic(upload_id, metadata)
         except Exception:
             data_path.unlink(missing_ok=True)
             raise
@@ -79,11 +78,25 @@ class MessengerAttachmentStorage:
             "storage_key": metadata["storageKey"],
         }
 
-    def mark_attached(self, upload_id: str) -> None:
+    def mark_attached(self, upload_id: str, message_id: str) -> None:
         metadata = self._load_metadata(upload_id)
+        if metadata.get("attached"):
+            raise ValueError("이미 사용된 첨부 업로드입니다.")
         metadata["attached"] = True
+        metadata["attachedMessageId"] = message_id
         metadata["attachedAt"] = datetime.now(UTC).isoformat()
-        self._metadata_path(upload_id).write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+        self._write_metadata_atomic(upload_id, metadata)
+
+    def restore_unattached(self, upload_id: str, message_id: str) -> None:
+        metadata = self._load_metadata(upload_id)
+        if not metadata.get("attached"):
+            return
+        if metadata.get("attachedMessageId") != message_id:
+            raise ValueError("다른 메시지에 연결된 첨부 업로드입니다.")
+        metadata["attached"] = False
+        metadata.pop("attachedMessageId", None)
+        metadata.pop("attachedAt", None)
+        self._write_metadata_atomic(upload_id, metadata)
 
     def stored_path(self, storage_key: str) -> Path:
         upload_id = self._upload_id_from_storage_key(storage_key)
@@ -123,6 +136,15 @@ class MessengerAttachmentStorage:
     def _metadata_path(self, upload_id: str) -> Path:
         self._validate_upload_id(upload_id)
         return self.upload_root / f"{upload_id}.json"
+
+    def _write_metadata_atomic(self, upload_id: str, metadata: dict) -> None:
+        metadata_path = self._metadata_path(upload_id)
+        temporary_path = metadata_path.with_name(f"{metadata_path.name}.{uuid4().hex}.tmp")
+        try:
+            temporary_path.write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+            temporary_path.replace(metadata_path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
     @staticmethod
     def _validate_upload_id(upload_id: str) -> None:
