@@ -1798,8 +1798,10 @@ class MailMessengerService:
                 FROM messenger_rooms room
                 JOIN messenger_room_members self_member ON self_member.room_id=room.id AND self_member.user_id=%s
                 LEFT JOIN LATERAL (
-                    SELECT jsonb_agg(user_id ORDER BY joined_at) AS participant_ids, COUNT(*) AS participant_count
-                    FROM messenger_room_members WHERE room_id=room.id
+                    SELECT jsonb_agg(member.user_id ORDER BY member.joined_at) AS participant_ids, COUNT(*) AS participant_count
+                    FROM messenger_room_members member
+                    JOIN users active_member ON active_member.id=member.user_id AND active_member.status='active'
+                    WHERE member.room_id=room.id
                 ) member_ids ON TRUE
                 LEFT JOIN LATERAL (
                     SELECT body,created_at FROM messenger_messages WHERE room_id=room.id ORDER BY created_at DESC LIMIT 1
@@ -1930,9 +1932,9 @@ class MailMessengerService:
                 SELECT msg.id AS message_id,msg.room_id,msg.sender_user_id,u.name AS sender_user_name,
                        msg.message_type,msg.body,msg.attachment_meta,msg.created_at,msg.retention_expires_at,
                        COALESCE(reads.read_by,'[]'::jsonb) AS read_by,
-                       GREATEST(COALESCE(members.participant_count,1)-1,0) AS recipient_count,
+                       COALESCE(members.recipient_count,0) AS recipient_count,
                        COALESCE(reads.read_count,0) AS read_count,
-                       GREATEST(COALESCE(members.participant_count,1)-1-COALESCE(reads.read_count,0),0) AS unread_count,
+                       GREATEST(COALESCE(members.recipient_count,0)-COALESCE(reads.read_count,0),0) AS unread_count,
                        COALESCE(files.attachments,'[]'::jsonb) AS attachments
                 FROM messenger_messages msg JOIN users u ON u.id=msg.sender_user_id
                 LEFT JOIN LATERAL (
@@ -1940,9 +1942,15 @@ class MailMessengerService:
                            COUNT(*) FILTER (WHERE reads.user_id<>msg.sender_user_id) AS read_count
                     FROM messenger_message_reads reads
                     JOIN messenger_room_members current_member ON current_member.room_id=msg.room_id AND current_member.user_id=reads.user_id
+                    JOIN users active_reader ON active_reader.id=current_member.user_id AND active_reader.status='active'
                     WHERE reads.message_id=msg.id
                 ) reads ON TRUE
-                LEFT JOIN LATERAL (SELECT COUNT(*) AS participant_count FROM messenger_room_members WHERE room_id=msg.room_id) members ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT COUNT(*) AS recipient_count
+                    FROM messenger_room_members member
+                    JOIN users active_member ON active_member.id=member.user_id AND active_member.status='active'
+                    WHERE member.room_id=msg.room_id AND member.user_id<>msg.sender_user_id
+                ) members ON TRUE
                 LEFT JOIN LATERAL (
                     SELECT jsonb_agg(jsonb_build_object('attachmentId',id,'fileName',file_name,'contentType',content_type,'sizeBytes',size_bytes) ORDER BY created_at) AS attachments
                     FROM messenger_attachments WHERE message_id=msg.id
@@ -2670,9 +2678,10 @@ class MailMessengerService:
             FROM messenger_rooms room
             JOIN messenger_room_members self_member ON self_member.room_id=room.id AND self_member.user_id=%s
             LEFT JOIN LATERAL (
-                SELECT jsonb_agg(user_id ORDER BY joined_at) AS participant_ids, COUNT(*) AS participant_count
-                FROM messenger_room_members
-                WHERE room_id = room.id
+                SELECT jsonb_agg(member.user_id ORDER BY member.joined_at) AS participant_ids, COUNT(*) AS participant_count
+                FROM messenger_room_members member
+                JOIN users active_member ON active_member.id=member.user_id AND active_member.status='active'
+                WHERE member.room_id = room.id
             ) member_ids ON TRUE
             LEFT JOIN LATERAL (
                 SELECT body, created_at
