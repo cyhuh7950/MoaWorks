@@ -164,5 +164,27 @@ class Ui043RemediationTests(unittest.TestCase):
         self.assertFalse(legacy.db.cursor.executions[0][1][-3])
         self.assertTrue(root.db.cursor.executions[0][1][-3])
 
+    def test_deleted_owner_trash_detail_is_restore_only(self):
+        service=service_with([
+            {"id":"f1","company_id":"company-a","owner_user_id":"user-a","file_name":"trash.pdf","content_type":"application/pdf","size_bytes":3,"status":"deleted","current_version":1,"version":4,"effective_permission":"owner"},
+            [],[],[],
+        ])
+        detail=service.file_detail(actor(),"f1",include_deleted=True)
+        self.assertEqual(detail["status"],"deleted")
+        self.assertEqual(detail["permissions"],{"download":False,"favorite":False,"rename":False,"newVersion":False,"move":False,"share":False,"trash":False,"restore":True})
+
+    def test_deleted_shared_trash_detail_and_default_active_detail_are_404(self):
+        shared=service_with([{"id":"f1","company_id":"company-a","owner_user_id":"owner","status":"deleted","effective_permission":"viewer"}])
+        with self.assertRaises(HTTPException) as denied: shared.file_detail(actor(),"f1",include_deleted=True)
+        self.assertEqual(denied.exception.status_code,404)
+        owner_default=service_with([{"id":"f1","company_id":"company-a","owner_user_id":"user-a","status":"deleted","effective_permission":"owner"}])
+        with self.assertRaises(HTTPException) as active_only: owner_default.file_detail(actor(),"f1")
+        self.assertEqual(active_only.exception.status_code,404)
+
+    def test_non_mine_scopes_omit_explicit_folder_filter(self):
+        for scope in ("shared","department","recent","favorites","trash"):
+            service=service_with([[]]); service.list_files(actor(),scope=scope,folder_specified=False)
+            self.assertFalse(service.db.cursor.executions[0][1][-3],scope)
+
 
 if __name__ == "__main__": unittest.main()
