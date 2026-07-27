@@ -17,6 +17,11 @@ for (const marker of ["전체", "사용자 가이드", "정책", "오류 안내"
 for (const endpoint of ["/workspace/profile", "/workspace/preferences", "/workspace/help-policies", "/notifications/preferences", "/auth/change-password"]) assert.ok(api.includes(endpoint), endpoint);
 for (const marker of ["startPage", "expectedVersion", "ko-KR", "en-US", "ja-JP", "zh-CN", "es-ES", "fr-FR", "de-DE"]) assert.ok(`${panel}\n${api}\n${i18n}`.includes(marker), marker);
 assert.ok(shell.includes("<SettingsHelpPanel"));
+for (const legacyOwner of [
+  "fetchWorkspacePreferences", "fetchWorkspaceHelpPolicies", "saveWorkspacePreferences",
+  "WorkspaceHelpPolicy", "WorkspacePreferences", "helpPolicies", "preferenceForm",
+  "selectedHelp", "submitPreferences", 'modal === "settings"',
+]) assert.ok(!shell.includes(legacyOwner), `WorkspacePanels must not own ${legacyOwner}`);
 assert.ok(app.includes("onOpenWorkspaceSettings"));
 assert.ok(calendar.includes("settingsRequestKey"));
 assert.match(css, /\.ui044-settings-help[^}]*font-size:\s*12px/s);
