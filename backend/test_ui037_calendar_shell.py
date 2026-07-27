@@ -90,8 +90,9 @@ class Ui037CalendarShellContractTests(unittest.TestCase):
         normalized = " ".join(cursor.query.split())
         self.assertIn("owner_user_id=%s", normalized)
         self.assertIn("status='active'", normalized)
+        self.assertIn("user_calendar_subscriptions", normalized)
         self.assertIn("ORDER BY starts_at", normalized)
-        self.assertEqual(cursor.params, ("owner_1",))
+        self.assertEqual(cursor.params, ("owner_1", "owner_1", "company_1", "owner_1"))
 
     def test_workspace_routes_keep_profile_permission_and_existing_crud(self) -> None:
         source = (ROOT / "app" / "api" / "routes" / "workspace.py").read_text(encoding="utf-8")

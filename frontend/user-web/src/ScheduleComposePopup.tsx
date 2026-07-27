@@ -1,7 +1,7 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { CommonPopup } from "./components/CommonPopup";
-import type { WorkspaceDirectory } from "./api";
+import type { WorkspaceCalendar, WorkspaceDirectory } from "./api";
 import { scheduleDraftPayload, type ScheduleDraft } from "./scheduleForm";
 
 type Props = {
@@ -9,6 +9,7 @@ type Props = {
   draft: ScheduleDraft;
   users: WorkspaceDirectory["users"];
   ownerUserId: string;
+  ownedCalendars: WorkspaceCalendar[];
   saving: boolean;
   error: string;
   onClose: () => void;
@@ -17,7 +18,7 @@ type Props = {
 
 const alertOptions = [{ value: 0, label: "시작 시" }, { value: 10, label: "10분 전" }, { value: 30, label: "30분 전" }, { value: 60, label: "1시간 전" }, { value: 1440, label: "1일 전" }];
 
-export function ScheduleComposePopup({ open, draft, users, ownerUserId, saving, error, onClose, onSave }: Props) {
+export function ScheduleComposePopup({ open, draft, users, ownerUserId, ownedCalendars, saving, error, onClose, onSave }: Props) {
   const [form, setForm] = useState(draft);
   const [localError, setLocalError] = useState("");
   const [search, setSearch] = useState("");
@@ -50,6 +51,7 @@ export function ScheduleComposePopup({ open, draft, users, ownerUserId, saving, 
 
   return <CommonPopup title={form.scheduleId === null ? "일정 만들기" : "일정 수정"} open={open} onClose={onClose} dirty={dirty} saving={saving} error={localError || error} initialFocusRef={initialFocusRef} closeRequestRef={closeRequestRef} className="ui038-schedule-popup">
     <form className="ui038-schedule-form" onSubmit={submit}>
+      <label className="is-wide"><span>캘린더</span><select required value={form.calendarId} onChange={(event) => update("calendarId", event.target.value)}>{ownedCalendars.map((calendar) => <option key={calendar.id} value={calendar.id}>{calendar.name}{calendar.isDefault ? " (기본)" : ""}</option>)}</select></label>
       <label className="is-wide"><span>제목</span><input ref={initialFocusRef} required maxLength={160} value={form.title} onChange={(event) => update("title", event.target.value)} /></label>
       <label><span>시작</span><input required type="datetime-local" value={form.startsAt} onChange={(event) => update("startsAt", event.target.value)} /></label>
       <label><span>종료</span><input required type="datetime-local" value={form.endsAt} onChange={(event) => update("endsAt", event.target.value)} /></label>

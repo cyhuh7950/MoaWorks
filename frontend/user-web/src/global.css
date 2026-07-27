@@ -2801,3 +2801,32 @@ textarea {
 .ui038-schedule-form footer { display: flex; justify-content: flex-end; gap: 8px; }
 .ui038-schedule-form footer button { min-width: 72px; height: 34px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; }
 .ui038-schedule-form footer .is-primary { border-color: #0f766e; color: #fff; background: #0f766e; font-weight: 700; }
+
+/* UI-039 calendar settings */
+.ui039-calendar-settings { min-width: 0; height: 100%; overflow: auto; padding: 16px; box-sizing: border-box; background: #fff; font-size: 12px; }
+.ui039-calendar-settings > header, .ui039-calendar-settings > header > div, .ui039-calendar-settings nav, .ui039-actions, .ui039-confirm { display: flex; align-items: center; gap: 8px; }
+.ui039-calendar-settings > header { justify-content: space-between; margin-bottom: 12px; }
+.ui039-calendar-settings h2 { margin: 0; font-size: 16px; }
+.ui039-calendar-settings h3 { margin: 16px 0 8px; font-size: 14px; }
+.ui039-calendar-settings button, .ui039-calendar-settings input, .ui039-calendar-settings select { min-height: 32px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0 9px; background: #fff; font: inherit; }
+.ui039-calendar-settings button { cursor: pointer; }
+.ui039-calendar-settings button:disabled { opacity: .5; cursor: not-allowed; }
+.ui039-calendar-settings nav { padding: 4px; border-radius: 10px; background: #eef2f6; }
+.ui039-calendar-settings nav button { flex: 1; border: 0; background: transparent; }
+.ui039-calendar-settings nav button[aria-pressed="true"] { background: #fff; color: #0f766e; font-weight: 800; }
+.ui039-add, .ui039-search { display: grid; grid-template-columns: minmax(180px, 1fr) 180px auto; gap: 8px; margin-top: 12px; align-items: end; }
+.ui039-add label, .ui039-search label, .ui039-owned-list article > label { display: grid; gap: 4px; }
+.ui039-owned-list { display: grid; gap: 8px; margin-top: 12px; }
+.ui039-owned-list > article { position: relative; display: grid; grid-template-columns: 12px minmax(130px, 1fr) 120px 140px auto auto; gap: 8px; align-items: end; padding: 10px; border: 1px solid #dbe4ec; border-radius: 10px; }
+.ui039-owned-list > article > i, .ui039-sub-row > i, .ui037-calendar-source label > i, .ui037-calendar-detail dd > i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }
+.ui039-default { display: flex !important; align-items: center; white-space: nowrap; }
+.ui039-default input { min-height: auto; }
+.ui039-confirm { grid-column: 1 / -1; justify-content: flex-end; padding-top: 8px; border-top: 1px solid #fecaca; }
+.ui039-confirm p { margin: 0 auto 0 0; color: #991b1b; }
+.ui039-calendar-settings .is-danger { border-color: #be123c; color: #fff; background: #be123c; }
+.ui039-incoming article, .ui039-sub-row { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(140px, 1fr) auto; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid #eef2f6; }
+.ui039-incoming article span, .ui039-sub-row span { display: grid; gap: 2px; }
+.ui039-calendar-settings small { color: #64748b; font-size: 10px; }
+.ui039-error { padding: 9px; border-radius: 8px; background: #fff1f2; color: #9f1239; }
+.ui039-settings-button { width: 100%; margin-top: auto; }
+.ui037-event { border-left: 4px solid #0f766e; }

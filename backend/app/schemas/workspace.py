@@ -18,6 +18,7 @@ class SchedulePayload(BaseModel):
     repeatUntil: date | None = None
     alertMinutes: list[int] = Field(default_factory=list, max_length=3)
     timezone: str = Field(default="Asia/Seoul", min_length=1, max_length=80)
+    calendarId: str | None = None
 
     @field_validator("endsAt")
     @classmethod
@@ -59,6 +60,81 @@ class SchedulePayload(BaseModel):
         if self.repeatUntil < self.startsAt.astimezone(ZoneInfo(self.timezone)).date():
             raise ValueError("반복 종료일은 시작일보다 빠를 수 없습니다.")
         return self
+
+
+CalendarVisibility = Literal["public", "approval_required", "private"]
+CALENDAR_COLORS = {"#0f766e", "#2563eb", "#7c3aed", "#db2777", "#dc2626", "#d97706", "#65a30d", "#0891b2"}
+
+
+class CalendarCreatePayload(BaseModel):
+    name: str = Field(min_length=1, max_length=32)
+    color: str
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("캘린더 이름을 입력하세요.")
+        return normalized
+
+    @field_validator("color")
+    @classmethod
+    def validate_color(cls, value: str) -> str:
+        if value not in CALENDAR_COLORS:
+            raise ValueError("허용된 캘린더 색상을 선택하세요.")
+        return value
+
+
+class CalendarUpdatePayload(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=32)
+    color: str | None = None
+    visibility: CalendarVisibility | None = None
+    isDefault: bool | None = None
+    expectedVersion: int = Field(ge=0)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_optional_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("캘린더 이름을 입력하세요.")
+        return normalized
+
+    @field_validator("color")
+    @classmethod
+    def validate_optional_color(cls, value: str | None) -> str | None:
+        if value is not None and value not in CALENDAR_COLORS:
+            raise ValueError("허용된 캘린더 색상을 선택하세요.")
+        return value
+
+    @model_validator(mode="after")
+    def require_change(self):
+        if self.name is None and self.color is None and self.visibility is None and self.isDefault is None:
+            raise ValueError("변경할 값을 입력하세요.")
+        return self
+
+
+class CalendarOrderItem(BaseModel):
+    calendarId: str = Field(min_length=1)
+    expectedVersion: int = Field(ge=0)
+
+
+class CalendarOrderPayload(BaseModel):
+    items: list[CalendarOrderItem] = Field(min_length=1, max_length=100)
+
+    @field_validator("items")
+    @classmethod
+    def unique_items(cls, value: list[CalendarOrderItem]) -> list[CalendarOrderItem]:
+        if len({item.calendarId for item in value}) != len(value):
+            raise ValueError("캘린더는 중복 없이 제출하세요.")
+        return value
+
+
+class CalendarSubscriptionPayload(BaseModel):
+    calendarId: str = Field(min_length=1)
 
 
 class ContactPayload(BaseModel):

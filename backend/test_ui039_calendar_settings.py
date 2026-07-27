@@ -65,12 +65,12 @@ class Ui039CalendarSettingsTests(unittest.TestCase):
         source = (ROOT / "app" / "api" / "routes" / "workspace.py").read_text(encoding="utf-8")
         for route in (
             "@router.get('/calendars')", "@router.get('/calendars/discover')", "@router.post('/calendars')",
-            "@router.patch('/calendars/{calendar_id}')", "@router.put('/calendars/order')", "@router.delete('/calendars/{calendar_id}')",
-            "@router.post('/calendar-subscriptions')", "@router.delete('/calendar-subscriptions/{subscription_id}')",
+            "@router.patch('/calendars/{calendar_id}')", "@router.put('/calendars/order')", "@router.delete('/calendars/{calendar_id}'",
+            "@router.post('/calendar-subscriptions')", "@router.delete('/calendar-subscriptions/{subscription_id}'",
             "@router.post('/calendar-subscriptions/{subscription_id}/accept')", "@router.post('/calendar-subscriptions/{subscription_id}/reject')",
         ):
             self.assertIn(route, source)
-        self.assertLess(source.index("@router.get('/calendars')"), source.index("@router.get('/schedules')"))
+        self.assertLess(source.index("@router.get('/calendars')"), source.index("@router.get('/schedules'"))
         self.assertGreaterEqual(source.count('permission_required("profile:read")'), 14)
 
     def test_service_enforces_owner_company_version_soft_delete_and_transactional_events(self) -> None:
@@ -93,7 +93,7 @@ class Ui039CalendarSettingsTests(unittest.TestCase):
         schema = (ROOT / "app" / "schemas" / "workspace.py").read_text(encoding="utf-8")
         service = (ROOT / "app" / "services" / "workspace_service.py").read_text(encoding="utf-8")
         self.assertIn("calendarId: str | None = None", schema)
-        for token in ("_resolve_owned_calendar", "user_calendar_subscriptions", "subscription.status='active'", "calendar.visibility <> 'private'", '"canEdit"', '"calendarId"', "calendar_id"):
+        for token in ("_resolve_owned_calendar", "user_calendar_subscriptions", "subscription.status='active'", ".visibility <> 'private'", '"canEdit"', '"calendarId"', "calendar_id"):
             self.assertIn(token, service)
 
 

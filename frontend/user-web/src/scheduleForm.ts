@@ -13,6 +13,7 @@ export type ScheduleDraft = {
   alertMinutes: number[];
   description: string;
   timezone: string;
+  calendarId: string;
 };
 
 const localPattern = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
@@ -60,19 +61,19 @@ function addMonthsClamped(value: string, months: number): string {
   return `${targetYear}-${String(targetMonth).padStart(2, "0")}-${String(targetDay).padStart(2, "0")}`;
 }
 
-export function createScheduleDraft(schedule: WorkspaceSchedule | null, timezone: string, now = new Date()): ScheduleDraft {
+export function createScheduleDraft(schedule: WorkspaceSchedule | null, timezone: string, now = new Date(), defaultCalendarId = ""): ScheduleDraft {
   if (schedule) return {
     scheduleId: schedule.id, title: schedule.title,
     startsAt: utcToLocalDateTime(schedule.starts_at, schedule.timezone || timezone),
     endsAt: utcToLocalDateTime(schedule.ends_at, schedule.timezone || timezone),
     location: schedule.location ?? "", attendeeUserIds: schedule.attendees.map((item) => item.userId),
     repeatType: schedule.repeatType, repeatUntil: schedule.repeatUntil ?? "",
-    alertMinutes: [...schedule.alertMinutes], description: schedule.description, timezone: schedule.timezone || timezone,
+    alertMinutes: [...schedule.alertMinutes], description: schedule.description, timezone: schedule.timezone || timezone, calendarId: schedule.calendarId ?? defaultCalendarId,
   };
   const rounded = new Date(Math.ceil(now.getTime() / 1_800_000) * 1_800_000);
   const end = new Date(rounded.getTime() + 3_600_000);
   const startsAt = utcToLocalDateTime(rounded, timezone);
-  return { scheduleId: null, title: "", startsAt, endsAt: utcToLocalDateTime(end, timezone), location: "", attendeeUserIds: [], repeatType: "none", repeatUntil: addMonthsClamped(localDate(startsAt), 3), alertMinutes: [], description: "", timezone };
+  return { scheduleId: null, title: "", startsAt, endsAt: utcToLocalDateTime(end, timezone), location: "", attendeeUserIds: [], repeatType: "none", repeatUntil: addMonthsClamped(localDate(startsAt), 3), alertMinutes: [], description: "", timezone, calendarId: defaultCalendarId };
 }
 
 export function scheduleDraftPayload(draft: ScheduleDraft) {
@@ -81,7 +82,8 @@ export function scheduleDraftPayload(draft: ScheduleDraft) {
   const endsAt = localDateTimeToUtc(draft.endsAt, draft.timezone);
   if (new Date(endsAt) <= new Date(startsAt)) throw new Error("종료 시각은 시작 시각보다 뒤여야 합니다.");
   if (draft.repeatType !== "none" && (!draft.repeatUntil || draft.repeatUntil < localDate(draft.startsAt))) throw new Error("반복 종료일을 확인하세요.");
-  return { title: draft.title.trim(), startsAt, endsAt, description: draft.description.trim(), location: draft.location.trim(), attendeeUserIds: draft.attendeeUserIds, repeatType: draft.repeatType, repeatUntil: draft.repeatType === "none" ? null : draft.repeatUntil, alertMinutes: [...draft.alertMinutes].sort((a, b) => a - b), timezone: draft.timezone };
+  if (!draft.calendarId) throw new Error("캘린더를 선택하세요.");
+  return { title: draft.title.trim(), startsAt, endsAt, description: draft.description.trim(), location: draft.location.trim(), attendeeUserIds: draft.attendeeUserIds, repeatType: draft.repeatType, repeatUntil: draft.repeatType === "none" ? null : draft.repeatUntil, alertMinutes: [...draft.alertMinutes].sort((a, b) => a - b), timezone: draft.timezone, calendarId: draft.calendarId };
 }
 
 function daysInMonth(year: number, month: number): number { return new Date(Date.UTC(year, month, 0)).getUTCDate(); }

@@ -1,7 +1,9 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
-import type { WorkspaceSchedule } from "./api";
+import type { WorkspaceCalendarData, WorkspaceSchedule } from "./api";
+import { CalendarSettingsPanel } from "./CalendarSettingsPanel";
 import { calendarDays, dateKey, eventsForDay, filterCalendarEvents, formatCalendarListTitle, formatCalendarRangeTitle, getCalendarListRange, getCalendarRange, navigateCalendarDate, navigateCalendarListDate, normalizeCalendarPreferences, type CalendarView } from "./calendar";
+import { canEditSchedule, initialSelectedCalendarIds } from "./calendarSettings";
 import { expandScheduleOccurrences } from "./scheduleForm";
 
 type Props = {
@@ -11,6 +13,10 @@ type Props = {
   timezone: string;
   loading: boolean;
   error: string;
+  token: string;
+  ownerUserId: string;
+  calendarData: WorkspaceCalendarData;
+  onCalendarsChanged: () => Promise<void>;
   onRetry: () => void;
   onCreate: () => void;
   onSelect: (id: string) => void;
@@ -34,19 +40,22 @@ function dateTimeLabel(value: string, locale: string, timezone: string): string 
 }
 
 function EventButton({ item, selected, locale, timezone, onSelect }: { item: WorkspaceSchedule; selected: boolean; locale: string; timezone: string; onSelect: (id: string) => void }) {
-  return <button type="button" className={`ui037-event${selected ? " is-selected" : ""}`} onClick={() => onSelect(item.id)} title={`${dateTimeLabel(item.starts_at, locale, timezone)} – ${dateTimeLabel(item.ends_at, locale, timezone)}`}><span>{timeLabel(item.starts_at, locale, timezone)}</span><strong>{item.title}</strong></button>;
+  return <button type="button" className={`ui037-event${selected ? " is-selected" : ""}`} style={{ borderLeftColor: item.calendarColor }} onClick={() => onSelect(item.id)} title={`${dateTimeLabel(item.starts_at, locale, timezone)} – ${dateTimeLabel(item.ends_at, locale, timezone)}`}><span>{timeLabel(item.starts_at, locale, timezone)}</span><strong>{item.title}</strong></button>;
 }
 
-export function CalendarPanel({ schedules, selectedId, locale, timezone, loading, error, onRetry, onCreate, onSelect, onEdit, onDelete }: Props) {
+export function CalendarPanel({ schedules, selectedId, locale, timezone, loading, error, token, ownerUserId, calendarData, onCalendarsChanged, onRetry, onCreate, onSelect, onEdit, onDelete }: Props) {
   const [view, setView] = useState<CalendarView>("month");
   const [baseDate, setBaseDate] = useState(() => new Date());
   const [focusedListDate, setFocusedListDate] = useState<Date | null>(null);
   const [query, setQuery] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [selectedCalendarIds, setSelectedCalendarIds] = useState<string[]>(() => initialSelectedCalendarIds(calendarData));
+  useEffect(() => { setSelectedCalendarIds((current) => { const available = initialSelectedCalendarIds(calendarData); const retained = current.filter((id) => available.includes(id)); return retained.length || !available.length ? retained : available; }); }, [calendarData]);
   const preferences = useMemo(() => normalizeCalendarPreferences(locale, timezone), [locale, timezone]);
   const safeLocale = preferences.locale;
   const safeTimezone = preferences.timezone;
   const range = useMemo(() => view === "list" ? getCalendarListRange(baseDate, focusedListDate, safeTimezone) : getCalendarRange(view, baseDate, safeTimezone), [view, baseDate, focusedListDate, safeTimezone]);
-  const occurrences = useMemo(() => schedules.flatMap((schedule) => expandScheduleOccurrences(schedule, range)), [schedules, range]);
+  const occurrences = useMemo(() => schedules.filter((schedule) => selectedCalendarIds.includes(schedule.calendarId)).flatMap((schedule) => expandScheduleOccurrences(schedule, range)), [schedules, range, selectedCalendarIds]);
   const visible = useMemo(() => filterCalendarEvents(occurrences, range, query), [occurrences, range, query]);
   const days = useMemo(() => calendarDays(view, baseDate, safeTimezone), [view, baseDate, safeTimezone]);
   const selected = schedules.find((item) => item.id === selectedId) ?? null;
@@ -64,16 +73,19 @@ export function CalendarPanel({ schedules, selectedId, locale, timezone, loading
   const moveToday = () => { const today = new Date(); setBaseDate(today); if (view === "list" && focusedListDate) setFocusedListDate(today); };
   const openDayList = (day: Date) => { setBaseDate(day); setFocusedListDate(day); setView("list"); };
   const selectView = (nextView: CalendarView) => { if (nextView === "list") setFocusedListDate(null); setView(nextView); };
+  const toggleCalendar = (calendarId: string) => setSelectedCalendarIds((current) => current.includes(calendarId) ? current.filter((id) => id !== calendarId) : [...current, calendarId]);
 
   const empty = !loading && !error && visible.length === 0;
   return <section className={`ui037-calendar-shell${loading ? " is-loading" : ""}`} aria-busy={loading}>
     <aside className="ui037-calendar-source" aria-label="캘린더 목록">
       <button type="button" className="ui037-primary" onClick={onCreate} disabled={loading}>일정 만들기</button>
-      <section><h3>내 캘린더</h3><label><input type="checkbox" checked readOnly disabled={loading} /> 내 일정</label></section>
-      {(["관심 캘린더", "부서 캘린더", "전사 캘린더"] as const).map((title) => <section key={title}><h3>{title}</h3><p>등록된 캘린더 없음</p></section>)}
+      <section><h3>내 캘린더</h3>{calendarData.owned.length ? calendarData.owned.map((calendar) => <label key={calendar.id}><input type="checkbox" checked={selectedCalendarIds.includes(calendar.id)} onChange={() => toggleCalendar(calendar.id)} disabled={loading} /><i style={{ background: calendar.color }} /> {calendar.name}</label>) : <p>등록된 캘린더 없음</p>}</section>
+      <section><h3>관심 캘린더</h3>{calendarData.subscriptions.filter((item) => item.status === "active").length ? calendarData.subscriptions.filter((item) => item.status === "active").map((item) => <label key={item.subscriptionId}><input type="checkbox" checked={selectedCalendarIds.includes(item.calendar.id)} onChange={() => toggleCalendar(item.calendar.id)} disabled={loading} /><i style={{ background: item.calendar.color }} /> {item.calendar.ownerUserName} · {item.calendar.name}</label>) : <p>등록된 캘린더 없음</p>}</section>
+      {(["부서 캘린더", "전사 캘린더"] as const).map((title) => <section key={title}><h3>{title}</h3><p>등록된 캘린더 없음</p></section>)}
+      <button type="button" className="ui039-settings-button" onClick={() => setSettingsOpen(true)}>캘린더 환경설정</button>
     </aside>
 
-    <main className="ui037-calendar-main">
+    {settingsOpen ? <CalendarSettingsPanel token={token} data={calendarData} onChanged={onCalendarsChanged} onBack={() => setSettingsOpen(false)} /> : <main className="ui037-calendar-main">
       <header className="ui037-toolbar">
         <div className="ui037-navigation"><button type="button" onClick={() => move(-1)} aria-label="이전 범위" disabled={loading}>‹</button><button type="button" onClick={moveToday} disabled={loading}>오늘</button><button type="button" onClick={() => move(1)} aria-label="다음 범위" disabled={loading}>›</button></div>
         <h2>{view === "list" ? formatCalendarListTitle(baseDate, focusedListDate, safeLocale, safeTimezone) : formatCalendarRangeTitle(view, baseDate, safeLocale, safeTimezone)}</h2>
@@ -90,10 +102,10 @@ export function CalendarPanel({ schedules, selectedId, locale, timezone, loading
       {!loading && !error && !empty && (view === "week" || view === "day") ? <section className={`ui037-time-grid is-${view}`} aria-label={view === "week" ? "주간 일정" : "일간 일정"}><header><span />{days.map((day) => <strong key={dateKey(day, safeTimezone)}>{new Intl.DateTimeFormat(safeLocale, { timeZone: safeTimezone, weekday: "short", month: "2-digit", day: "2-digit" }).format(day)}</strong>)}</header>{hours.map((hour) => <div className="ui037-time-row" key={hour}><time>{String(hour).padStart(2, "0")}:00</time>{days.map((day) => <section key={dateKey(day, safeTimezone)}>{eventsForDay(visible, day, safeTimezone).filter((item) => Number(new Intl.DateTimeFormat("en-US", { timeZone: safeTimezone, hour: "2-digit", hourCycle: "h23" }).format(new Date(item.starts_at))) === hour).map((item) => <EventButton key={item.occurrence_key ?? item.id} item={item} selected={item.id === selectedId} locale={safeLocale} timezone={safeTimezone} onSelect={onSelect} />)}</section>)}</div>)}</section> : null}
 
       {!loading && !error && !empty && view === "list" ? <section className="ui037-list" aria-label="일정 목록">{visible.map((item) => <button type="button" key={item.occurrence_key ?? item.id} className={item.id === selectedId ? "is-selected" : ""} onClick={() => onSelect(item.id)}><time>{dateTimeLabel(item.starts_at, safeLocale, safeTimezone)}</time><strong>{item.title}</strong><span>{timeLabel(item.ends_at, safeLocale, safeTimezone)} 종료</span><p>{item.description || "설명 없음"}</p></button>)}</section> : null}
-    </main>
+    </main>}
 
-    <aside className="ui037-calendar-detail" aria-label="선택 일정 상세">
-      {selected ? <><header><h2>{selected.title}</h2><div><button type="button" onClick={() => onEdit(selected)}>수정</button><button type="button" className="is-danger" onClick={onDelete}>삭제</button></div></header><dl><dt>시작</dt><dd>{dateTimeLabel(selected.starts_at, safeLocale, safeTimezone)}</dd><dt>종료</dt><dd>{dateTimeLabel(selected.ends_at, safeLocale, safeTimezone)}</dd><dt>위치</dt><dd>{selected.location || "-"}</dd><dt>참석자</dt><dd>{selected.attendees.length ? selected.attendees.map((item) => item.name).join(", ") : "-"}</dd><dt>반복</dt><dd>{selected.repeatType === "none" ? "반복 없음" : `${selected.repeatType} · ${selected.repeatUntil ?? "-"}까지`}</dd><dt>알림</dt><dd>{selected.alertMinutes.length ? selected.alertMinutes.map((item) => item === 0 ? "시작 시" : `${item}분 전`).join(", ") : "-"}</dd><dt>설명</dt><dd>{selected.description || "-"}</dd></dl></> : <div className="ui037-detail-empty">일정을 선택하세요.</div>}
-    </aside>
+    {settingsOpen ? <aside className="ui037-calendar-detail"><div className="ui037-detail-empty">캘린더 설정을 편집하고 있습니다.</div></aside> : <aside className="ui037-calendar-detail" aria-label="선택 일정 상세">
+      {selected ? <><header><h2>{selected.title}</h2>{canEditSchedule(selected, ownerUserId) ? <div><button type="button" onClick={() => onEdit(selected)}>수정</button><button type="button" className="is-danger" onClick={onDelete}>삭제</button></div> : <span>읽기 전용</span>}</header><dl><dt>캘린더</dt><dd><i style={{ background: selected.calendarColor }} /> {selected.ownerUserName} · {selected.calendarName}</dd><dt>시작</dt><dd>{dateTimeLabel(selected.starts_at, safeLocale, safeTimezone)}</dd><dt>종료</dt><dd>{dateTimeLabel(selected.ends_at, safeLocale, safeTimezone)}</dd><dt>위치</dt><dd>{selected.location || "-"}</dd><dt>참석자</dt><dd>{selected.attendees.length ? selected.attendees.map((item) => item.name).join(", ") : "-"}</dd><dt>반복</dt><dd>{selected.repeatType === "none" ? "반복 없음" : `${selected.repeatType} · ${selected.repeatUntil ?? "-"}까지`}</dd><dt>알림</dt><dd>{selected.alertMinutes.length ? selected.alertMinutes.map((item) => item === 0 ? "시작 시" : `${item}분 전`).join(", ") : "-"}</dd><dt>설명</dt><dd>{selected.description || "-"}</dd></dl></> : <div className="ui037-detail-empty">일정을 선택하세요.</div>}
+    </aside>}
   </section>;
 }

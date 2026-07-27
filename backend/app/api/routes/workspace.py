@@ -1,9 +1,9 @@
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 
 from app.api.dependencies import permission_required
 from app.schemas.directory import AuthUserSummary
-from app.schemas.workspace import ContactPayload, FileRenamePayload, NoticeListResponse, NoticeRecord, PreferencePayload, SchedulePayload, WorkspaceDirectoryResponse, WorkspaceItemList, WorkspacePreferencesResponse
+from app.schemas.workspace import CalendarCreatePayload, CalendarOrderPayload, CalendarSubscriptionPayload, CalendarUpdatePayload, ContactPayload, FileRenamePayload, NoticeListResponse, NoticeRecord, PreferencePayload, SchedulePayload, WorkspaceDirectoryResponse, WorkspaceItemList, WorkspacePreferencesResponse
 from app.services.workspace_service import WorkspaceService
 
 router = APIRouter()
@@ -16,6 +16,56 @@ def _service() -> WorkspaceService:
 @router.get('/directory', response_model=WorkspaceDirectoryResponse)
 def directory(user: AuthUserSummary = Depends(permission_required("profile:read"))):
     return _service().directory(user)
+
+
+@router.get('/calendars')
+def list_calendars(user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().list_calendars(user)
+
+
+@router.get('/calendars/discover')
+def discover_calendars(query: str = Query(default="", max_length=120), user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return {"items": _service().discover_calendars(user, query)}
+
+
+@router.post('/calendars')
+def create_calendar(payload: CalendarCreatePayload, user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().create_calendar(user, payload)
+
+
+@router.put('/calendars/order')
+def reorder_calendars(payload: CalendarOrderPayload, user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().reorder_calendars(user, payload)
+
+
+@router.patch('/calendars/{calendar_id}')
+def update_calendar(calendar_id: str, payload: CalendarUpdatePayload, user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().update_calendar(user, calendar_id, payload)
+
+
+@router.delete('/calendars/{calendar_id}', status_code=204)
+def delete_calendar(calendar_id: str, expectedVersion: int = Query(ge=0), user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    _service().delete_calendar(user, calendar_id, expectedVersion)
+
+
+@router.post('/calendar-subscriptions')
+def create_calendar_subscription(payload: CalendarSubscriptionPayload, user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().create_calendar_subscription(user, payload)
+
+
+@router.delete('/calendar-subscriptions/{subscription_id}', status_code=204)
+def cancel_calendar_subscription(subscription_id: str, user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    _service().cancel_calendar_subscription(user, subscription_id)
+
+
+@router.post('/calendar-subscriptions/{subscription_id}/accept')
+def accept_calendar_subscription(subscription_id: str, user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().decide_calendar_subscription(user, subscription_id, "accepted")
+
+
+@router.post('/calendar-subscriptions/{subscription_id}/reject')
+def reject_calendar_subscription(subscription_id: str, user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().decide_calendar_subscription(user, subscription_id, "rejected")
 
 
 @router.get('/schedules', response_model=WorkspaceItemList)
