@@ -17,4 +17,12 @@ assert.ok(shell.includes("<FilePanel"), "files shell must delegate to FilePanel"
 assert.match(css, /\.ui043-files[^}]*font-size:\s*12px/s);
 assert.match(css, /grid-template-columns:\s*220px\s+minmax\(0,\s*1fr\)\s+320px/);
 assert.ok(!`${panel}\n${api}`.match(/https?:\/\/|localhost|127\.0\.0\.1|storageKey|storage_key|serverPath|server_path/));
+assert.ok(!panel.includes('사용자 ID'), "raw share target ID input must not be exposed");
+for (const marker of ["fetchWorkspaceDirectory", "targetType", "department", "shareDraft", "공유 해제", "권한 변경", "renameWorkspaceFolder", "deleteWorkspaceFolder", "folderChildren", "onDoubleClick", "downloadVersion"]) assert.ok(panel.includes(marker), marker);
+assert.ok(api.includes('Object.prototype.hasOwnProperty.call(options, "folderId")'), "explicit root request must differ from legacy call");
+assert.match(css, /\.ui043-files__screen-title[^}]*font-size:\s*16px/);
+assert.match(css, /\.ui043-files__section-title[^}]*font-size:\s*14px/);
+assert.match(css, /\.ui043-files :where\(button,input,select,label\)[^}]*font-size:\s*12px/);
+assert.match(css, /\.ui043-files__helper[^}]*font-size:\s*10px/);
+assert.ok(panel.includes('aria-label="파일 화면 설명"') && panel.includes('title='), "i tooltip is required");
 console.log("UI-043 files static verification passed");
