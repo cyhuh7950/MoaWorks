@@ -18,24 +18,19 @@ import {
   fetchSchedules,
   fetchWorkspaceDirectory,
   fetchWorkspaceFiles,
-  fetchWorkspaceHelpPolicies,
-  fetchWorkspacePreferences,
   renameWorkspaceFile,
   saveContact,
   saveSchedule,
-  saveWorkspacePreferences,
   uploadWorkspaceFile,
   type WorkspaceContact,
   type WorkspaceCalendarData,
   type WorkspaceDirectory,
   type WorkspaceFile,
-  type WorkspaceHelpPolicy,
-  type WorkspacePreferences,
   type WorkspaceSchedule,
 } from "./api";
 
 type WorkspaceMenu = "schedule" | "contacts" | "org" | "files" | "settings" | "help";
-type ModalMode = "none" | "contact" | "file" | "settings" | "confirm-delete";
+type ModalMode = "none" | "contact" | "file" | "confirm-delete";
 
 type Props = {
   menu: WorkspaceMenu;
@@ -76,7 +71,6 @@ export function WorkspacePanels({ menu, token, locale, timezone, ownerUserId, in
   const [contacts, setContacts] = useState<WorkspaceContact[]>([]);
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
   const [directory, setDirectory] = useState<WorkspaceDirectory>({ departments: [], users: [] });
-  const [helpPolicies, setHelpPolicies] = useState<WorkspaceHelpPolicy[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [modal, setModal] = useState<ModalMode>("none");
   const [error, setError] = useState("");
@@ -88,14 +82,12 @@ export function WorkspacePanels({ menu, token, locale, timezone, ownerUserId, in
   const [contactForm, setContactForm] = useState({ name: "", email: "", phone: "", companyName: "", memo: "" });
   const [fileName, setFileName] = useState("");
   const fileUploadRef = useRef<File | null>(null);
-  const [preferenceForm, setPreferenceForm] = useState<WorkspacePreferences>({ locale, timezone, startPage: "home", version: 0 });
   const [contactEditingId, setContactEditingId] = useState<string | null>(null);
   const [fileEditingId, setFileEditingId] = useState<string | null>(null);
 
   const selectedSchedule = schedules.find((item) => item.id === selectedId) ?? null;
   const selectedContact = contacts.find((item) => item.id === selectedId) ?? null;
   const selectedFile = files.find((item) => item.id === selectedId) ?? null;
-  const selectedHelp = helpPolicies.find((item) => item.id === selectedId) ?? null;
   const defaultCalendar = calendarData.owned.find((item) => item.isDefault) ?? calendarData.owned[0];
 
   async function refresh(): Promise<void> {
@@ -117,13 +109,6 @@ export function WorkspacePanels({ menu, token, locale, timezone, ownerUserId, in
         const response = await fetchWorkspaceFiles(token);
         setFiles(response.items);
         setSelectedId((current) => response.items.some((item) => item.id === initialSelectionId) ? initialSelectionId ?? "" : response.items.some((item) => item.id === current) ? current : response.items[0]?.id ?? "");
-      } else if (menu === "settings") {
-        const response = await fetchWorkspacePreferences(token);
-        setPreferenceForm(response);
-      } else if (menu === "help") {
-        const response = await fetchWorkspaceHelpPolicies(token);
-        setHelpPolicies(response.items);
-        setSelectedId((current) => response.items.some((item) => item.id === current) ? current : response.items[0]?.id ?? "");
       }
     } catch (cause) {
       const message = errorMessage(cause);
@@ -167,11 +152,6 @@ export function WorkspacePanels({ menu, token, locale, timezone, ownerUserId, in
       setNotice(fileEditingId ? "파일 이름을 변경했습니다." : "파일을 업로드했습니다."); setModal("none"); await refresh();
     } catch (cause) { setError(errorMessage(cause)); }
   }
-  async function submitPreferences(event: FormEvent) {
-    event.preventDefault();
-    try { const saved = await saveWorkspacePreferences(token, preferenceForm); onPreferencesSaved(saved.locale, saved.timezone); setNotice("설정을 저장했습니다."); setModal("none"); await refresh(); }
-    catch (cause) { setError(errorMessage(cause)); }
-  }
   async function confirmDelete() {
     try {
       if (menu === "schedule" && selectedSchedule) await deleteSchedule(token, selectedSchedule.id);
@@ -191,5 +171,15 @@ export function WorkspacePanels({ menu, token, locale, timezone, ownerUserId, in
   else if (menu === "files") view = <FilePanel token={token} currentUserId={ownerUserId} initialSelectionId={initialSelectionId} />;
   else view = <SettingsHelpPanel mode={menu === "settings" ? "settings" : "help"} token={token} onPreferencesSaved={onPreferencesSaved} onOpenWorkspaceSettings={onOpenWorkspaceSettings} />;
 
-  return <section style={{ minHeight: 0, height: "100%", display: "grid", gridTemplateRows: "auto minmax(0,1fr)", gap: 8 }}><div style={{ minHeight: 20, fontSize: 12, color: error ? "#b91c1c" : "#0f766e" }}>{error || notice}</div>{view}<ScheduleComposePopup open={schedulePopupOpen} draft={scheduleDraft} users={directory.users} ownerUserId={ownerUserId} ownedCalendars={calendarData.owned} saving={scheduleSaving} error={schedulePopupError} onClose={() => setSchedulePopupOpen(false)} onSave={submitSchedule} />{modal === "none" ? null : <WorkspaceModal title={modal === "contact" ? (selectedContact ? "연락처 수정" : "연락처 추가") : modal === "file" ? (fileEditingId ? "파일 이름 변경" : "파일 업로드") : modal === "settings" ? "내 설정 변경" : "삭제 확인"} showScheduleError={false} error={error} onClose={() => setModal("none")}>{modal === "contact" ? <form onSubmit={submitContact} style={{ display: "grid", gap: 10 }}><input required value={contactForm.name} onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })} placeholder="이름"/><input required type="email" value={contactForm.email} onChange={(e) => setContactForm({ ...contactForm, email: e.target.value })} placeholder="이메일"/><input value={contactForm.phone} onChange={(e) => setContactForm({ ...contactForm, phone: e.target.value })} placeholder="전화"/><input value={contactForm.companyName} onChange={(e) => setContactForm({ ...contactForm, companyName: e.target.value })} placeholder="회사"/><textarea value={contactForm.memo} onChange={(e) => setContactForm({ ...contactForm, memo: e.target.value })} placeholder="메모"/><button style={primaryButtonStyle}>저장</button></form> : null}{modal === "file" ? <form onSubmit={submitFile} style={{ display: "grid", gap: 10 }}>{fileEditingId ? <input required value={fileName} onChange={(e) => setFileName(e.target.value)} placeholder="파일 이름"/> : <input required type="file" onChange={(e) => fileUploadRef.current = e.target.files?.[0] ?? null}/>}<button style={primaryButtonStyle}>{fileEditingId ? "이름 저장" : "업로드"}</button></form> : null}{modal === "settings" ? <form onSubmit={submitPreferences} style={{ display: "grid", gap: 10 }}><select value={preferenceForm.locale} onChange={(e) => setPreferenceForm({ ...preferenceForm, locale: e.target.value })}><option value="ko">ko</option><option value="en">en</option><option value="ja">ja</option></select><input value={preferenceForm.timezone} onChange={(e) => setPreferenceForm({ ...preferenceForm, timezone: e.target.value })}/><button style={primaryButtonStyle}>저장</button></form> : null}{modal === "confirm-delete" ? <><p style={{ fontSize: 12 }}>선택 항목을 삭제 상태로 변경합니다.</p><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setModal("none")} style={buttonStyle}>취소</button><button type="button" onClick={() => void confirmDelete()} style={{ ...primaryButtonStyle, background: "#9f1239" }}>삭제</button></div></> : null}</WorkspaceModal>}</section>;
+  const modalTitle = modal === "contact" ? (selectedContact ? "연락처 수정" : "연락처 추가") : modal === "file" ? (fileEditingId ? "파일 이름 변경" : "파일 업로드") : "삭제 확인";
+  return <section style={{ minHeight: 0, height: "100%", display: "grid", gridTemplateRows: "auto minmax(0,1fr)", gap: 8 }}>
+    <div style={{ minHeight: 20, fontSize: 12, color: error ? "#b91c1c" : "#0f766e" }}>{error || notice}</div>
+    {view}
+    <ScheduleComposePopup open={schedulePopupOpen} draft={scheduleDraft} users={directory.users} ownerUserId={ownerUserId} ownedCalendars={calendarData.owned} saving={scheduleSaving} error={schedulePopupError} onClose={() => setSchedulePopupOpen(false)} onSave={submitSchedule} />
+    {modal === "none" ? null : <WorkspaceModal title={modalTitle} showScheduleError={false} error={error} onClose={() => setModal("none")}>
+      {modal === "contact" ? <form onSubmit={submitContact} style={{ display: "grid", gap: 10 }}><input required value={contactForm.name} onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })} placeholder="이름"/><input required type="email" value={contactForm.email} onChange={(e) => setContactForm({ ...contactForm, email: e.target.value })} placeholder="이메일"/><input value={contactForm.phone} onChange={(e) => setContactForm({ ...contactForm, phone: e.target.value })} placeholder="전화"/><input value={contactForm.companyName} onChange={(e) => setContactForm({ ...contactForm, companyName: e.target.value })} placeholder="회사"/><textarea value={contactForm.memo} onChange={(e) => setContactForm({ ...contactForm, memo: e.target.value })} placeholder="메모"/><button style={primaryButtonStyle}>저장</button></form> : null}
+      {modal === "file" ? <form onSubmit={submitFile} style={{ display: "grid", gap: 10 }}>{fileEditingId ? <input required value={fileName} onChange={(e) => setFileName(e.target.value)} placeholder="파일 이름"/> : <input required type="file" onChange={(e) => fileUploadRef.current = e.target.files?.[0] ?? null}/>}<button style={primaryButtonStyle}>{fileEditingId ? "이름 저장" : "업로드"}</button></form> : null}
+      {modal === "confirm-delete" ? <><p style={{ fontSize: 12 }}>선택 항목을 삭제 상태로 변경합니다.</p><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setModal("none")} style={buttonStyle}>취소</button><button type="button" onClick={() => void confirmDelete()} style={{ ...primaryButtonStyle, background: "#9f1239" }}>삭제</button></div></> : null}
+    </WorkspaceModal>}
+  </section>;
 }
