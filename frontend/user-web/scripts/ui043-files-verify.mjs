@@ -29,4 +29,8 @@ assert.ok(panel.includes('fetchWorkspaceFileDetail(token,selectedId,scope==="tra
 assert.ok(panel.includes('scope==="mine"?{scope,folderId,query:debouncedQuery,sort}:{scope,query:debouncedQuery,sort}'), "only mine may send folderId");
 assert.ok(panel.includes('scope==="mine"?<button className="is-primary"') && panel.includes('scope==="mine"?<><h2'), "upload and folder controls must be mine-only");
 assert.ok(api.includes('includeDeleted') && api.includes('includeDeleted=true'), "detail API must expose explicit trash context only");
+assert.ok(panel.includes("function clearFileSelection()") && panel.includes("detailRequestSequence.current+=1") && panel.includes('setSelectedId("")') && panel.includes("setDetail(null)") && panel.includes('setDetailError("")'), "selection clear must invalidate detail and remove stale UI");
+assert.ok(panel.includes('const selectionMayLeaveList=["trash","move","rename"].includes(popupMode)') && panel.includes("if(selectionMayLeaveList)clearFileSelection()"), "range-changing mutations must clear selection before refresh");
+assert.ok(panel.includes('scope==="favorites"&&detail.isFavorite') && panel.includes("clearFileSelection()"), "favorite removal must clear a filtered selection");
+assert.ok(!panel.includes("await loadList();await loadDetail();"), "successful mutations must not unconditionally refetch stale detail");
 console.log("UI-043 files static verification passed");
