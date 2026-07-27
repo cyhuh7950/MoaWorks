@@ -1198,17 +1198,19 @@ class WorkspaceService:
     def list_help(self, user: AuthUserSummary, query: str = "", category: str | None = None) -> dict:
         normalized_query = query.strip()
         search = f"%{normalized_query}%"
+        category_clause = " AND category=%s" if category is not None else ""
+        params = (normalized_query,search,search,search) + ((category,) if category is not None else ())
         with self.db.connect() as conn, conn.cursor() as cursor:
             cursor.execute(
-                """
+                f"""
                 SELECT id,code,title,category,audience,content,version,published_at,updated_at
                 FROM help_policy_documents
                 WHERE status='published' AND audience IN ('user','both','all')
                   AND (%s='' OR LOWER(title) LIKE LOWER(%s) OR LOWER(code) LIKE LOWER(%s) OR LOWER(content) LIKE LOWER(%s))
-                  AND (%s IS NULL OR category=%s)
+                  {category_clause}
                 ORDER BY updated_at DESC,id
                 """,
-                (normalized_query,search,search,search,category,category),
+                params,
             )
             items = [dict(row) for row in cursor.fetchall()]
             self._audit(cursor,user,"help",user.userId,"workspace.help.viewed",None,None,json.dumps({"category":category or "all","resultCount":len(items)},separators=(",",":")))
