@@ -12,6 +12,7 @@ body,
 .ui041-groups { padding: 12px; }
 .ui041-groups header, .ui041-list header > div, .ui041-groups__title, .ui041-detail__actions, .ui041-confirm, .ui041-form footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .ui041-groups h2, .ui041-list h1, .ui041-detail h2 { margin: 0; font-size: 16px; }
+#root .ui041-address-book :where(h1, h2) { font-size: 16px !important; }
 .ui041-groups nav, .ui041-groups section { display: grid; gap: 5px; margin-top: 12px; }
 .ui041-groups__title { font-size: 14px; margin-bottom: 3px; }
 .ui041-groups button, .ui041-list button, .ui041-detail button, .ui041-form button, .ui041-import button, .ui041-confirm button { min-height: 30px; border: 1px solid #cbd7e1; border-radius: 8px; background: #fff; color: inherit; font: inherit; cursor: pointer; }
