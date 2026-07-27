@@ -12,7 +12,7 @@ assert.match(panel, /defaultValue=\{calendar\.name\}[^>]*maxLength=\{32\}/s, "ca
 assert.ok(panel.includes('item.status === "pending"'), "pending and active viewers must render differently");
 assert.ok(panel.includes("열람 중"), "active viewer status must stay visible");
 assert.doesNotMatch(panel, /https?:\/\/(?:localhost|127\.0\.0\.1)|NEXT_PUBLIC_API_BASE_URL|host\.docker\.internal/);
-assert.match(styles, /\.ui039-calendar-settings h2\s*\{[^}]*font-size:\s*16px\s*!important\s*;/s, "UI-039 h2 must override the common important heading rule");
-assert.match(styles, /\.ui039-calendar-settings h3\s*\{[^}]*font-size:\s*14px\s*!important\s*;/s, "UI-039 h3 must override the common important heading rule");
+assert.match(styles, /#root\s+\.ui039-calendar-settings h2\s*\{[^}]*font-size:\s*16px\s*!important\s*;/s, "UI-039 h2 selector must outrank the common root important heading rule");
+assert.match(styles, /#root\s+\.ui039-calendar-settings h3\s*\{[^}]*font-size:\s*14px\s*!important\s*;/s, "UI-039 h3 selector must outrank the common root important heading rule");
 
 console.log("UI-039 remediation verifier: 7/7 passed");
