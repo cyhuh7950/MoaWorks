@@ -1,0 +1,23 @@
+{
+  "taskId": "TASK-ID",
+  "issueId": "ISSUE-ID",
+  "title": "작업 제목",
+  "approvedDesignPaths": [],
+  "executionPlanPaths": [],
+  "workorderPath": "docs/path-to-workorder.md",
+  "workerPromptPath": "docs/path-to-worker-prompt.md",
+  "scope": [],
+  "allowedFiles": [],
+  "forbidden": [],
+  "requiredValidation": [],
+  "approvalTriggers": [
+    "기능 범위 변경",
+    "확정 요구사항 변경",
+    "중요 위험 또는 운영 영향 변경"
+  ],
+  "protectedResources": [
+    "admin",
+    "cyhuh",
+    "ysla"
+  ]
+}
