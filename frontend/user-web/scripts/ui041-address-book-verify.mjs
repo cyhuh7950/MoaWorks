@@ -10,6 +10,11 @@ const workspace = read("src/WorkspacePanels.tsx");
 const styles = read("src/global.css");
 const panelPath = path.join(root, "src/AddressBookPanel.tsx");
 const panel = fs.existsSync(panelPath) ? fs.readFileSync(panelPath, "utf8") : "";
+const addressBookComposeStart = app.indexOf("function openAddressBookMailCompose");
+const addressBookComposeEnd = app.indexOf("\n  }", addressBookComposeStart);
+const addressBookCompose = addressBookComposeStart >= 0 && addressBookComposeEnd >= 0
+  ? app.slice(addressBookComposeStart, addressBookComposeEnd)
+  : "";
 
 const checks = [
   ["주소록 전용 컴포넌트", panel.includes("export function AddressBookPanel")],
@@ -21,6 +26,7 @@ const checks = [
   ["CSV preview/apply", panel.includes("previewContactImport") && panel.includes("applyContactImport")],
   ["공통 popup", panel.includes("CommonPopup")],
   ["메일 작성 연결", panel.includes("onComposeMail") && app.includes("openAddressBookMailCompose")],
+  ["메일 작업면·새 작성·받는 사람 연결", addressBookCompose.includes('setActivePortalMenu("mail")') && addressBookCompose.includes("openNewMailCompose()") && addressBookCompose.includes("to: email")],
   ["API 그룹", api.includes('"/workspace/contact-groups"')],
   ["API 공용", api.includes("/workspace/public-contacts")],
   ["API 가져오기", api.includes('"/workspace/contacts/import') && api.includes("expectedDigest")],
