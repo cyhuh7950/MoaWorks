@@ -28,7 +28,7 @@ const checks = [
   ["UI-013 checkbox 16px 범위 보정", styles.includes('#root .notification-settings-form input[type="checkbox"]') && styles.includes("flex: 0 0 16px") && styles.includes("height: 16px")],
   ["UI-013 popup 제목 16px 범위 보정", styles.includes("#root .common-popup:has(.notification-settings-form) .common-popup-header h2") && styles.includes("font-size: 16px !important")],
   ["제외된 backdrop 동작 미변경", !popup.includes("event.target === event.currentTarget")],
-  ["제외된 saving 닫기 동작 미변경", !popup.includes("if (saving) return")],
+  ["저장 중 닫기 방지 계약", popup.includes("if (saving) return") && popup.includes("disabled={saving}")],
 ];
 
 const failures = checks.filter(([, passed]) => !passed);

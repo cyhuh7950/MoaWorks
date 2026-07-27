@@ -341,7 +341,7 @@ textarea {
 }
 
 #root :where(h1, h2) {
-  font-size: 22px !important;
+  font-size: 16px !important;
   line-height: 1.15 !important;
 }
 
@@ -453,8 +453,8 @@ textarea {
 :root {
   --mw-font-body: 12px;
   --mw-font-menu: 14px;
-  --mw-font-title: 22px;
-  --mw-font-badge: 10px;
+  --mw-font-title: 16px;
+  --mw-font-badge: 9px;
   --mw-font-hint: 9px;
   --mw-control-height: 36px;
   --mw-shell-gap: 12px;
