@@ -31,6 +31,7 @@ const checks = [
   ["organization 분기만 교체", workspace.includes('menu === "org"') && workspace.includes("OrganizationPanel")],
   ["UI-042 범위 CSS", styles.includes(".ui042-organization") && styles.includes("font-size: 12px")],
   ["표준 폰트", styles.includes(".ui042-screen-title") && styles.includes("font-size: 16px") && styles.includes(".ui042-section-title") && styles.includes("font-size: 14px")],
+  ["보조 문구 실제 10px 우선순위", /#root\s+\.ui042-header p\s*\{[^}]*font-size:\s*10px\s*!important/.test(styles)],
   ["raw HTML 미사용", !panel.includes("dangerouslySetInnerHTML")],
   ["브라우저 내부주소 미사용", !/localhost|127\.0\.0\.1|host\.docker\.internal|NEXT_PUBLIC_API_BASE_URL/.test(`${panel}\n${api}`)],
 ];
