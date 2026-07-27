@@ -206,3 +206,19 @@ def test_password_success_hashes_before_update_and_returns_no_secret_fields():
     serialized = response.model_dump()
     assert "password" not in str(serialized).lower()
     assert store.audits[0]["event"] == "auth.password.changed"
+
+
+@pytest.mark.parametrize(("category", "expected_parameter_count"), [("error", 5), (None, 4)])
+def test_help_category_uses_dynamic_typed_clause(category, expected_parameter_count):
+    from app.services.workspace_service import WorkspaceService
+
+    cursor = FakeCursor([[]])
+    service = WorkspaceService.__new__(WorkspaceService)
+    service.db = FakeDb(cursor)
+    service.list_help(actor(), "ERROR", category)
+    select_sql, params = next((sql, params) for sql, params in cursor.executed if sql.startswith("SELECT id,code,title"))
+    assert "%s IS NULL" not in select_sql
+    assert ("AND category=%s" in select_sql) is (category is not None)
+    assert len(params) == expected_parameter_count
+    if category is not None:
+        assert params[-1] == category
