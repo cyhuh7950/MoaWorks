@@ -6,7 +6,8 @@ from fastapi.responses import Response
 
 from app.api.dependencies import permission_required
 from app.schemas.directory import AuthUserSummary
-from app.schemas.workspace import CalendarCreatePayload, CalendarOrderPayload, CalendarSubscriptionPayload, CalendarUpdatePayload, ContactGroupCreatePayload, ContactGroupUpdatePayload, ContactPayload, FileRenamePayload, NoticeListResponse, NoticeRecord, PreferencePayload, SchedulePayload, WorkspaceDirectoryResponse, WorkspaceItemList, WorkspacePreferencesResponse
+from app.schemas.workspace import CalendarCreatePayload, CalendarOrderPayload, CalendarSubscriptionPayload, CalendarUpdatePayload, ContactGroupCreatePayload, ContactGroupUpdatePayload, ContactPayload, FilePatchPayload, FileScope, FileShareSnapshotPayload, FileSort, FolderCreatePayload, FolderPatchPayload, NoticeListResponse, NoticeRecord, PreferencePayload, SchedulePayload, WorkspaceDirectoryResponse, WorkspaceItemList, WorkspacePreferencesResponse
+from app.services.workspace_file_storage import ContentTypeRejected, WorkspaceFileStorage
 from app.services.workspace_service import WorkspaceService
 
 router = APIRouter()
@@ -165,33 +166,101 @@ def list_public_contacts(query: str = Query(default="", max_length=120), user: A
     return {"items": _service().list_public_contacts(user, query)}
 
 
+@router.get('/file-folders')
+def list_file_folders(user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().list_file_folders(user)
+
+
+@router.post('/file-folders')
+def create_file_folder(payload: FolderCreatePayload, user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().create_file_folder(user, payload)
+
+
+@router.patch('/file-folders/{folder_id}')
+def rename_file_folder(folder_id: str, payload: FolderPatchPayload, user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().rename_file_folder(user, folder_id, payload)
+
+
+@router.delete('/file-folders/{folder_id}', status_code=204)
+def delete_file_folder(folder_id: str, expectedVersion: int = Query(ge=0), user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    _service().delete_file_folder(user, folder_id, expectedVersion)
+
+
 @router.get('/files', response_model=WorkspaceItemList)
-def list_files(user: AuthUserSummary = Depends(permission_required("profile:read"))):
-    return _service().list_files(user)
+def list_files(scope: FileScope = "mine", folderId: str | None = None, query: str = Query(default="", max_length=120), sort: FileSort = "updated_desc", user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().list_files(user, scope, folderId, query, sort)
 
 
 @router.post('/files')
-async def upload_file(file: UploadFile = File(...), user: AuthUserSummary = Depends(permission_required("profile:read"))):
-    content = await file.read()
+async def upload_file(file: UploadFile = File(...), folderId: str | None = None, user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    storage = WorkspaceFileStorage()
+    content = await file.read(storage.max_bytes + 1)
     if not content:
         raise HTTPException(status_code=400, detail={"code": "FILE_EMPTY", "userMessage": "빈 파일은 업로드할 수 없습니다."})
-    return _service().create_file(user, file.filename or 'upload.bin', file.content_type or 'application/octet-stream', content)
+    try:
+        storage.validate(file.content_type or 'application/octet-stream', content)
+    except ContentTypeRejected:
+        raise HTTPException(status_code=400, detail={"code": "FILE_TYPE_REJECTED", "userMessage": "허용되지 않는 파일 형식입니다."})
+    except ValueError:
+        raise HTTPException(status_code=413, detail={"code": "FILE_TOO_LARGE", "userMessage": "파일 크기 제한을 초과했습니다."})
+    return _service().create_file(user, storage.safe_name(file.filename or 'upload.bin'), file.content_type or 'application/octet-stream', content, folderId, storage)
 
 
 @router.patch('/files/{item_id}')
-def rename_file(item_id: str, payload: FileRenamePayload, user: AuthUserSummary = Depends(permission_required("profile:read"))):
-    return _service().rename_file(user, item_id, payload.fileName)
+def rename_file(item_id: str, payload: FilePatchPayload, user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().update_file(user, item_id, payload)
 
 
 @router.delete('/files/{item_id}', status_code=204)
-def delete_file(item_id: str, user: AuthUserSummary = Depends(permission_required("profile:read"))):
-    _service().delete_file(user, item_id)
+def delete_file(item_id: str, expectedVersion: int | None = None, user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    _service().delete_file(user, item_id, expectedVersion)
+
+
+@router.post('/files/{item_id}/versions')
+async def create_file_version(item_id: str, file: UploadFile = File(...), expectedVersion: int = Query(ge=0), user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    storage = WorkspaceFileStorage()
+    content = await file.read(storage.max_bytes + 1)
+    try:
+        storage.validate(file.content_type or 'application/octet-stream', content)
+    except (ContentTypeRejected, ValueError):
+        raise HTTPException(status_code=400, detail={"code": "FILE_UPLOAD_INVALID", "userMessage": "파일 형식 또는 크기를 확인하세요."})
+    return _service().create_file_version(user, item_id, storage.safe_name(file.filename or 'upload.bin'), file.content_type or 'application/octet-stream', content, expectedVersion, storage)
+
+
+@router.post('/files/{item_id}/restore')
+def restore_file(item_id: str, expectedVersion: int = Query(ge=0), user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().restore_file(user, item_id, expectedVersion)
+
+
+@router.put('/files/{item_id}/favorite')
+def favorite_file(item_id: str, user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().set_file_favorite(user, item_id, True)
+
+
+@router.delete('/files/{item_id}/favorite', status_code=204)
+def unfavorite_file(item_id: str, user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    _service().set_file_favorite(user, item_id, False)
+
+
+@router.put('/files/{item_id}/shares')
+def save_file_shares(item_id: str, payload: FileShareSnapshotPayload, user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().save_file_shares(user, item_id, payload)
 
 
 @router.get('/files/{item_id}/download')
-def download_file(item_id: str, user: AuthUserSummary = Depends(permission_required("profile:read"))):
-    item = _service().file_metadata(user, item_id, include_content=True)
-    return Response(content=item['content'], media_type=item['content_type'], headers={'Content-Disposition': f'attachment; filename="{item["file_name"]}"'})
+def download_file(item_id: str, version: int | None = Query(default=None, ge=1), user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    from urllib.parse import quote
+    item = _service().download_file(user, item_id, version, WorkspaceFileStorage())
+    safe_ascii = "download" + ("." + item['file_name'].rsplit(".", 1)[-1] if "." in item['file_name'] else "")
+    return Response(content=item['content'], media_type=item['content_type'], headers={
+        'Content-Disposition': f"attachment; filename=\"{safe_ascii}\"; filename*=UTF-8''{quote(item['file_name'])}",
+        'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, no-store',
+    })
+
+
+@router.get('/files/{item_id}')
+def file_detail(item_id: str, user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().file_detail(user, item_id)
 
 
 @router.get('/preferences', response_model=WorkspacePreferencesResponse)

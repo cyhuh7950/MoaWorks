@@ -194,6 +194,55 @@ class FileRenamePayload(BaseModel):
     fileName: str = Field(min_length=1, max_length=255)
 
 
+FileScope = Literal["mine", "shared", "department", "recent", "favorites", "trash"]
+FileSort = Literal["updated_desc", "updated_asc", "name_asc", "name_desc", "size_desc"]
+
+
+class FilePatchPayload(BaseModel):
+    fileName: str | None = Field(default=None, min_length=1, max_length=255)
+    folderId: str | None = None
+    expectedVersion: int | None = Field(default=None, ge=0)
+
+    @field_validator("fileName")
+    @classmethod
+    def normalize_file_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.split())
+        if not normalized or "/" in normalized or "\\" in normalized:
+            raise ValueError("올바른 파일 이름을 입력하세요.")
+        return normalized
+
+
+class FileShareItem(BaseModel):
+    targetType: Literal["user", "department"]
+    targetId: str = Field(min_length=1)
+    permission: Literal["viewer", "editor"]
+
+
+class FileShareSnapshotPayload(BaseModel):
+    expectedVersion: int = Field(ge=0)
+    shares: list[FileShareItem] = Field(default_factory=list, max_length=200)
+
+    @field_validator("shares")
+    @classmethod
+    def unique_targets(cls, value: list[FileShareItem]) -> list[FileShareItem]:
+        keys = [(item.targetType, item.targetId) for item in value]
+        if len(keys) != len(set(keys)):
+            raise ValueError("공유 대상은 중복될 수 없습니다.")
+        return value
+
+
+class FolderCreatePayload(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    parentId: str | None = None
+
+
+class FolderPatchPayload(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    expectedVersion: int = Field(ge=0)
+
+
 class WorkspaceItemList(BaseModel):
     items: list[dict]
 
