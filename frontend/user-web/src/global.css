@@ -2806,8 +2806,8 @@ textarea {
 .ui039-calendar-settings { min-width: 0; height: 100%; overflow: auto; padding: 16px; box-sizing: border-box; background: #fff; font-size: 12px; }
 .ui039-calendar-settings > header, .ui039-calendar-settings > header > div, .ui039-calendar-settings nav, .ui039-actions, .ui039-confirm { display: flex; align-items: center; gap: 8px; }
 .ui039-calendar-settings > header { justify-content: space-between; margin-bottom: 12px; }
-.ui039-calendar-settings h2 { margin: 0; font-size: 16px !important; }
-.ui039-calendar-settings h3 { margin: 16px 0 8px; font-size: 14px !important; }
+#root .ui039-calendar-settings h2 { margin: 0; font-size: 16px !important; }
+#root .ui039-calendar-settings h3 { margin: 16px 0 8px; font-size: 14px !important; }
 .ui039-calendar-settings button, .ui039-calendar-settings input, .ui039-calendar-settings select { min-height: 32px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0 9px; background: #fff; font: inherit; }
 .ui039-calendar-settings button { cursor: pointer; }
 .ui039-calendar-settings button:disabled { opacity: .5; cursor: not-allowed; }
