@@ -8,6 +8,11 @@ const api = read("src/api.ts");
 const app = read("src/App.tsx");
 const workspace = read("src/WorkspacePanels.tsx");
 const styles = read("src/global.css");
+const cssRule = (selector) => {
+  const start = styles.indexOf(`${selector} {`);
+  const end = start >= 0 ? styles.indexOf("}", start) : -1;
+  return start >= 0 && end >= 0 ? styles.slice(start, end + 1) : "";
+};
 const panelPath = path.join(root, "src/AddressBookPanel.tsx");
 const panel = fs.existsSync(panelPath) ? fs.readFileSync(panelPath, "utf8") : "";
 const addressBookComposeStart = app.indexOf("function openAddressBookMailCompose");
@@ -32,6 +37,10 @@ const checks = [
   ["API 가져오기", api.includes('"/workspace/contacts/import') && api.includes("expectedDigest")],
   ["기존 contacts 경로 보존", api.includes('"/workspace/contacts') && workspace.includes("AddressBookPanel")],
   ["UI-041 범위 CSS", styles.includes(".ui041-address-book") && styles.includes("font-size: 12px")],
+  ["UI-041 제목 실제 16px override", cssRule("#root .ui041-address-book :where(h1, h2)").includes("font-size: 16px !important")],
+  ["UI-041 본문 12px", cssRule(".ui041-address-book").includes("font-size: 12px")],
+  ["UI-041 작은 설명 10px", cssRule(".ui041-groups p").includes("font-size: 10px") && cssRule(".ui041-detail > header span").includes("font-size: 10px")],
+  ["UI-041 그룹 제목 14px", cssRule(".ui041-groups__title").includes("font-size: 14px")],
   ["설명 인터페이스", panel.includes('aria-label="주소록 안내"') && panel.includes('title="')],
   ["raw HTML 미사용", !panel.includes("dangerouslySetInnerHTML")],
   ["브라우저 내부주소 미사용", !/localhost|127\.0\.0\.1|host\.docker\.internal|NEXT_PUBLIC_API_BASE_URL/.test(`${panel}\n${api}`)],
