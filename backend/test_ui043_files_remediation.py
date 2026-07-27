@@ -157,12 +157,21 @@ class Ui043RemediationTests(unittest.TestCase):
         self.assertEqual(occupied.exception.status_code,409)
         self.assertEqual(occupied.exception.detail["code"],"FOLDER_NOT_EMPTY")
 
-    def test_explicit_root_and_legacy_default_generate_different_filters(self):
+    def test_folder_filter_sql_and_parameters_are_typed_for_postgresql(self):
         legacy=service_with([[]]); legacy.list_files(actor())
         root=service_with([[]]); root.list_files(actor(),folder_id=None,folder_specified=True)
-        self.assertIn("f.folder_id IS NULL",legacy.db.cursor.executions[0][0])
-        self.assertFalse(legacy.db.cursor.executions[0][1][-3])
-        self.assertTrue(root.db.cursor.executions[0][1][-3])
+        child=service_with([[]]); child.list_files(actor(),folder_id="folder-a",folder_specified=True)
+        legacy_sql,legacy_params=legacy.db.cursor.executions[0]
+        root_sql,root_params=root.db.cursor.executions[0]
+        child_sql,child_params=child.db.cursor.executions[0]
+        self.assertNotIn("AND f.folder_id IS NULL",legacy_sql)
+        self.assertNotIn("AND f.folder_id=%s",legacy_sql)
+        self.assertIn("AND f.folder_id IS NULL",root_sql)
+        self.assertNotIn(None,root_params)
+        self.assertIn("AND f.folder_id=%s",child_sql)
+        self.assertEqual(child_params[-1],"folder-a")
+        self.assertEqual(len(root_params),len(legacy_params))
+        self.assertEqual(len(child_params),len(legacy_params)+1)
 
     def test_deleted_owner_trash_detail_is_restore_only(self):
         service=service_with([
