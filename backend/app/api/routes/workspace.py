@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
 
 from app.api.dependencies import permission_required
@@ -187,8 +187,8 @@ def delete_file_folder(folder_id: str, expectedVersion: int = Query(ge=0), user:
 
 
 @router.get('/files', response_model=WorkspaceItemList)
-def list_files(scope: FileScope = "mine", folderId: str | None = None, query: str = Query(default="", max_length=120), sort: FileSort = "updated_desc", user: AuthUserSummary = Depends(permission_required("profile:read"))):
-    return _service().list_files(user, scope, folderId, query, sort)
+def list_files(request: Request, scope: FileScope = "mine", folderId: str | None = None, query: str = Query(default="", max_length=120), sort: FileSort = "updated_desc", user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().list_files(user, scope, folderId or None, query, sort, folder_specified="folderId" in request.query_params)
 
 
 @router.post('/files')
@@ -197,13 +197,16 @@ async def upload_file(file: UploadFile = File(...), folderId: str | None = None,
     content = await file.read(storage.max_bytes + 1)
     if not content:
         raise HTTPException(status_code=400, detail={"code": "FILE_EMPTY", "userMessage": "빈 파일은 업로드할 수 없습니다."})
+    try: safe_name = storage.safe_name(file.filename or 'upload.bin')
+    except ValueError:
+        raise HTTPException(status_code=400, detail={"code": "FILE_NAME_INVALID", "userMessage": "파일 이름을 확인하세요."})
     try:
-        storage.validate(file.content_type or 'application/octet-stream', content)
+        storage.validate(safe_name, file.content_type or 'application/octet-stream', content)
     except ContentTypeRejected:
         raise HTTPException(status_code=400, detail={"code": "FILE_TYPE_REJECTED", "userMessage": "허용되지 않는 파일 형식입니다."})
     except ValueError:
         raise HTTPException(status_code=413, detail={"code": "FILE_TOO_LARGE", "userMessage": "파일 크기 제한을 초과했습니다."})
-    return _service().create_file(user, storage.safe_name(file.filename or 'upload.bin'), file.content_type or 'application/octet-stream', content, folderId, storage)
+    return _service().create_file(user, safe_name, file.content_type or 'application/octet-stream', content, folderId, storage)
 
 
 @router.patch('/files/{item_id}')
@@ -220,11 +223,14 @@ def delete_file(item_id: str, expectedVersion: int | None = None, user: AuthUser
 async def create_file_version(item_id: str, file: UploadFile = File(...), expectedVersion: int = Query(ge=0), user: AuthUserSummary = Depends(permission_required("profile:read"))):
     storage = WorkspaceFileStorage()
     content = await file.read(storage.max_bytes + 1)
+    try: safe_name = storage.safe_name(file.filename or 'upload.bin')
+    except ValueError:
+        raise HTTPException(status_code=400, detail={"code": "FILE_NAME_INVALID", "userMessage": "파일 이름을 확인하세요."})
     try:
-        storage.validate(file.content_type or 'application/octet-stream', content)
+        storage.validate(safe_name, file.content_type or 'application/octet-stream', content)
     except (ContentTypeRejected, ValueError):
         raise HTTPException(status_code=400, detail={"code": "FILE_UPLOAD_INVALID", "userMessage": "파일 형식 또는 크기를 확인하세요."})
-    return _service().create_file_version(user, item_id, storage.safe_name(file.filename or 'upload.bin'), file.content_type or 'application/octet-stream', content, expectedVersion, storage)
+    return _service().create_file_version(user, item_id, safe_name, file.content_type or 'application/octet-stream', content, expectedVersion, storage)
 
 
 @router.post('/files/{item_id}/restore')

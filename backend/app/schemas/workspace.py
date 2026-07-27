@@ -237,10 +237,23 @@ class FolderCreatePayload(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     parentId: str | None = None
 
+    @field_validator("name")
+    @classmethod
+    def normalize_folder_name(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized or "/" in normalized or "\\" in normalized:
+            raise ValueError("올바른 폴더 이름을 입력하세요.")
+        return normalized
+
 
 class FolderPatchPayload(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     expectedVersion: int = Field(ge=0)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_folder_name(cls, value: str) -> str:
+        return FolderCreatePayload.normalize_folder_name(value)
 
 
 class WorkspaceItemList(BaseModel):

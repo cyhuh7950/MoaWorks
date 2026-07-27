@@ -8,7 +8,7 @@ import unittest
 from fastapi import HTTPException
 
 from app.schemas.directory import AuthUserSummary
-from app.schemas.workspace import FolderCreatePayload, FolderPatchPayload
+from app.schemas.workspace import FilePatchPayload, FileShareSnapshotPayload, FolderCreatePayload, FolderPatchPayload
 from app.services.workspace_file_storage import ContentTypeRejected, WorkspaceFileStorage
 from app.services.workspace_service import WorkspaceService
 
@@ -47,6 +47,11 @@ class FailingStorage:
     def read(self,_key): raise FileNotFoundError("missing blob")
 
 
+class RecordingStorage:
+    def __init__(self,events): self.events=events
+    def read(self,_key): self.events.append("read"); return b"ok"
+
+
 class Ui043RemediationTests(unittest.TestCase):
     def test_public_file_view_is_allowlist_and_removes_internal_fields(self):
         row={"id":"f1","file_name":"report.pdf","content_type":"application/pdf","size_bytes":3,"status":"active","folder_id":None,"current_version":1,"version":0,"owner_user_id":"user-a","created_at":"now","updated_at":"now","content":b"raw","checksum":"secret","storage_key":"server-key","server_path":"/app/data/private","is_favorite":False,"effective_permission":"owner"}
@@ -69,19 +74,42 @@ class Ui043RemediationTests(unittest.TestCase):
         self.assertEqual(denied.exception.status_code,404)
         self.assertIn("FOR UPDATE",good.db.cursor.executions[0][0])
 
+    def test_revoked_editor_cannot_mutate_and_foreign_folder_move_stops_before_update(self):
+        revoked=service_with([{"id":"f1","company_id":"company-a","owner_user_id":"owner","status":"active","version":1,"effective_permission":"viewer"}])
+        with self.assertRaises(HTTPException) as denied: revoked.update_file(actor(),"f1",FilePatchPayload(fileName="safe.pdf",expectedVersion=1))
+        self.assertEqual(denied.exception.status_code,403)
+        self.assertEqual(len(revoked.db.cursor.executions),1)
+        foreign=service_with([None])
+        with self.assertRaises(HTTPException) as missing: foreign.update_file(actor(),"f1",FilePatchPayload(folderId="folder-b",expectedVersion=1))
+        self.assertEqual(missing.exception.status_code,404)
+        self.assertEqual(len(foreign.db.cursor.executions),1)
+
     def test_download_read_failure_has_no_success_audit_or_commit(self):
-        service=service_with([{"file_name":"report.pdf","content_type":"application/pdf","storage_key":"missing","content":None}])
-        service.file_metadata=lambda *_args,**_kwargs:{"id":"f1","currentVersion":1}
+        service=service_with([
+            {"id":"f1","company_id":"company-a","owner_user_id":"user-a","status":"active","current_version":1,"effective_permission":"owner"},
+            {"file_name":"report.pdf","content_type":"application/pdf","storage_key":"missing","content":None},
+        ])
         audits=[]; service._audit=lambda *_args,**_kwargs:audits.append(_args)
         with self.assertRaises(HTTPException): service.download_file(actor(),"f1",None,FailingStorage())
         self.assertEqual(audits,[])
         self.assertEqual(service.db.connection.commit_count,0)
 
+    def test_download_success_reads_blob_before_audit_and_commits_once(self):
+        service=service_with([
+            {"id":"f1","company_id":"company-a","owner_user_id":"user-a","status":"active","current_version":1,"effective_permission":"owner"},
+            {"file_name":"report.pdf","content_type":"application/pdf","storage_key":"key","content":None},
+        ])
+        events=[]; service._audit=lambda *_args,**_kwargs:events.append("audit")
+        result=service.download_file(actor(),"f1",None,RecordingStorage(events))
+        self.assertEqual(result["content"],b"ok")
+        self.assertEqual(events,["read","audit"])
+        self.assertEqual(service.db.connection.commit_count,1)
+
     def test_extension_and_mime_are_validated_together(self):
         with tempfile.TemporaryDirectory() as root:
             storage=WorkspaceFileStorage(root,max_bytes=20)
             storage.validate("report.pdf","application/pdf",b"pdf")
-            for name,mime in (("report.exe","text/plain"),("report.pdf.exe","application/pdf"),("image.jpg","application/pdf")):
+            for name,mime in (("report.exe","text/plain"),("report.pdf.exe","application/pdf"),("report.exe.pdf","application/pdf"),("image.jpg","application/pdf")):
                 with self.assertRaises(ContentTypeRejected): storage.validate(name,mime,b"x")
             with self.assertRaises(ValueError): storage.safe_name("../report.pdf")
             with self.assertRaises(ValueError): storage.safe_name("bad\r\nname.pdf")
@@ -92,11 +120,49 @@ class Ui043RemediationTests(unittest.TestCase):
         for payload in (lambda:FolderCreatePayload(name="  "),lambda:FolderPatchPayload(name="\n",expectedVersion=0)):
             with self.assertRaises(ValueError): payload()
 
+    def test_share_snapshot_supports_user_department_change_and_removal_atomically(self):
+        service=service_with([
+            {"id":"f1","company_id":"company-a","owner_user_id":"user-a","status":"active","version":2,"effective_permission":"owner"},
+            None,None,{"id":"user-b"},None,{"id":"dept-a"},None,None,
+        ])
+        service.file_detail=lambda *_args:{"saved":True}
+        payload=FileShareSnapshotPayload(expectedVersion=2,shares=[
+            {"targetType":"user","targetId":"user-b","permission":"editor"},
+            {"targetType":"department","targetId":"dept-a","permission":"viewer"},
+        ])
+        self.assertEqual(service.save_file_shares(actor(),"f1",payload),{"saved":True})
+        sql="\n".join(item[0] for item in service.db.cursor.executions)
+        self.assertIn("UPDATE workspace_file_shares SET status='inactive'",sql)
+        self.assertEqual(sql.count("INSERT INTO workspace_file_shares"),2)
+        self.assertIn("FROM users",sql); self.assertIn("FROM departments",sql)
+        self.assertEqual(service.db.connection.commit_count,1)
+
+    def test_share_snapshot_rejects_self_and_duplicate_targets(self):
+        with self.assertRaises(ValueError): FileShareSnapshotPayload(expectedVersion=0,shares=[
+            {"targetType":"user","targetId":"user-b","permission":"viewer"},
+            {"targetType":"user","targetId":"user-b","permission":"editor"},
+        ])
+        service=service_with([{"id":"f1","company_id":"company-a","owner_user_id":"user-a","status":"active","version":0,"effective_permission":"owner"},None,None])
+        with self.assertRaises(HTTPException) as denied: service.save_file_shares(actor(),"f1",FileShareSnapshotPayload(expectedVersion=0,shares=[{"targetType":"user","targetId":"user-a","permission":"viewer"}]))
+        self.assertEqual(denied.exception.status_code,400)
+        self.assertEqual(service.db.connection.commit_count,0)
+
+    def test_folder_tree_rename_conflict_and_non_empty_delete_have_stable_409(self):
+        conflict=service_with([{"id":"folder-a","company_id":"company-a","owner_user_id":"user-a","status":"active","version":2}])
+        with self.assertRaises(HTTPException) as version: conflict.rename_file_folder(actor(),"folder-a",FolderPatchPayload(name="새 이름",expectedVersion=1))
+        self.assertEqual(version.exception.status_code,409)
+        self.assertEqual(version.exception.detail["code"],"FOLDER_VERSION_CONFLICT")
+        non_empty=service_with([{"id":"folder-a","company_id":"company-a","owner_user_id":"user-a","status":"active","version":2},{"id":"child"},None])
+        with self.assertRaises(HTTPException) as occupied: non_empty.delete_file_folder(actor(),"folder-a",2)
+        self.assertEqual(occupied.exception.status_code,409)
+        self.assertEqual(occupied.exception.detail["code"],"FOLDER_NOT_EMPTY")
+
     def test_explicit_root_and_legacy_default_generate_different_filters(self):
         legacy=service_with([[]]); legacy.list_files(actor())
         root=service_with([[]]); root.list_files(actor(),folder_id=None,folder_specified=True)
-        self.assertNotIn("f.folder_id IS NULL",legacy.db.cursor.executions[0][0])
-        self.assertIn("f.folder_id IS NULL",root.db.cursor.executions[0][0])
+        self.assertIn("f.folder_id IS NULL",legacy.db.cursor.executions[0][0])
+        self.assertFalse(legacy.db.cursor.executions[0][1][-3])
+        self.assertTrue(root.db.cursor.executions[0][1][-3])
 
 
 if __name__ == "__main__": unittest.main()

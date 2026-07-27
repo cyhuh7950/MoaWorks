@@ -14,6 +14,13 @@ ALLOWED_CONTENT_TYPES = {
     "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     "image/jpeg", "image/png", "image/gif", "image/webp",
 }
+ALLOWED_FILE_TYPES = {
+    ".txt": {"text/plain"}, ".csv": {"text/csv", "text/plain"}, ".pdf": {"application/pdf"}, ".zip": {"application/zip"},
+    ".doc": {"application/msword"}, ".docx": {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+    ".xls": {"application/vnd.ms-excel"}, ".xlsx": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+    ".ppt": {"application/vnd.ms-powerpoint"}, ".pptx": {"application/vnd.openxmlformats-officedocument.presentationml.presentation"},
+    ".jpg": {"image/jpeg"}, ".jpeg": {"image/jpeg"}, ".png": {"image/png"}, ".gif": {"image/gif"}, ".webp": {"image/webp"},
+}
 
 
 class ContentTypeRejected(ValueError):
@@ -28,16 +35,27 @@ class WorkspaceFileStorage:
 
     @staticmethod
     def safe_name(value: str) -> str:
-        value = re.sub(r"[\x00-\x1f\x7f]", "", value.replace("\\", "/").split("/")[-1]).strip()
-        if not value or len(value) > 255:
+        if "/" in value or "\\" in value or re.search(r"[\x00-\x1f\x7f]", value):
+            raise ValueError("invalid file name")
+        value = " ".join(value.split())
+        if not value or len(value) > 255 or value in {".", ".."}:
             raise ValueError("invalid file name")
         return value
 
-    def validate(self, content_type: str, content: bytes) -> None:
-        if content_type not in ALLOWED_CONTENT_TYPES:
-            raise ContentTypeRejected(content_type)
+    def validate(self, file_name: str, content_type: str, content: bytes) -> None:
+        self.validate_name_type(file_name, content_type)
         if not content or len(content) > self.max_bytes:
             raise ValueError("invalid file size")
+
+    @classmethod
+    def validate_name_type(cls, file_name: str, content_type: str) -> None:
+        safe_name = cls.safe_name(file_name)
+        lowered = safe_name.lower()
+        if any(blocked in lowered for blocked in (".exe.", ".bat.", ".cmd.", ".com.", ".msi.", ".ps1.", ".sh.", ".scr.")):
+            raise ContentTypeRejected(content_type)
+        extension = Path(safe_name).suffix.lower()
+        if content_type not in ALLOWED_CONTENT_TYPES or content_type not in ALLOWED_FILE_TYPES.get(extension, set()):
+            raise ContentTypeRejected(content_type)
 
     def write(self, content: bytes) -> str:
         storage_key = uuid4().hex

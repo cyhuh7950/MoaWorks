@@ -9,12 +9,13 @@ import re
 from uuid import uuid4
 
 from fastapi import HTTPException
+from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 
 from app.schemas.directory import AuthUserSummary
 from app.schemas.observability import EventEnvelope, MonitoringCategory, SeverityLevel, Visibility
 from app.schemas.workspace import CalendarCreatePayload, CalendarOrderPayload, CalendarSubscriptionPayload, CalendarUpdatePayload, ContactGroupCreatePayload, ContactGroupUpdatePayload, ContactPayload, FilePatchPayload, FileShareSnapshotPayload, FolderCreatePayload, FolderPatchPayload, PreferencePayload, SchedulePayload
-from app.services.workspace_file_storage import WorkspaceFileStorage
+from app.services.workspace_file_storage import ContentTypeRejected, WorkspaceFileStorage
 from app.services.calendar_rules import subscription_action_for_visibility_change, subscription_status_for_visibility, validate_order_snapshot
 from app.services.observability_service import ObservabilityService
 from app.services.postgres_service import PostgresService
@@ -920,13 +921,40 @@ class WorkspaceService:
             conn.commit()
         return {"createdCount": len(created_contact_ids), "skippedCount": plan["existingEmailCount"] + plan["fileDuplicateCount"], "groupCount": len(plan["groupsToCreate"]), "digest": parsed["digest"]}
 
+    def list_files(self, user: AuthUserSummary, scope: str = "mine", folder_id: str | None = None, query: str = "", sort: str = "updated_desc", folder_specified: bool = False) -> dict:
+        return self._list_files(user, scope, folder_id, query, sort, folder_specified)
+
     @staticmethod
     def _file_access_sql() -> str:
-        return """f.company_id=%s AND (f.owner_user_id=%s OR EXISTS (
+        return """f.company_id=%s AND EXISTS(SELECT 1 FROM users actor WHERE actor.id=%s AND actor.company_id=f.company_id AND actor.status='active') AND (f.owner_user_id=%s OR EXISTS (
             SELECT 1 FROM workspace_file_shares s WHERE s.file_id=f.id AND s.status='active' AND
-            ((s.target_type='user' AND s.target_id=%s) OR (s.target_type='department' AND s.target_id=(SELECT department_id FROM users WHERE id=%s)))) )"""
+            ((s.target_type='user' AND s.target_id=%s) OR (s.target_type='department' AND s.target_id=(SELECT actor.department_id FROM users actor JOIN departments d ON d.id=actor.department_id AND d.company_id=actor.company_id AND d.status='active' WHERE actor.id=%s AND actor.status='active')))) )"""
 
-    def list_files(self, user: AuthUserSummary, scope: str = "mine", folder_id: str | None = None, query: str = "", sort: str = "updated_desc") -> dict:
+    @staticmethod
+    def _file_columns() -> str:
+        return "f.id,f.company_id,f.owner_user_id,f.folder_id,f.file_name,f.content_type,f.size_bytes,f.status,f.current_version,f.version,f.created_at,f.updated_at"
+
+    def _lock_file_access(self, cursor, user: AuthUserSummary, item_id: str, action: str, required_status: str = "active", *, lock: bool = True) -> dict:
+        cursor.execute(f"""SELECT {self._file_columns()},
+            EXISTS(SELECT 1 FROM workspace_file_favorites fav WHERE fav.file_id=f.id AND fav.user_id=%s) AS is_favorite,
+            CASE WHEN f.owner_user_id=%s THEN 'owner' WHEN EXISTS(SELECT 1 FROM workspace_file_shares ep WHERE ep.file_id=f.id AND ep.status='active' AND ep.permission='editor' AND ((ep.target_type='user' AND ep.target_id=%s) OR (ep.target_type='department' AND ep.target_id=(SELECT actor.department_id FROM users actor JOIN departments d ON d.id=actor.department_id AND d.status='active' WHERE actor.id=%s AND actor.status='active')))) THEN 'editor' ELSE 'viewer' END AS effective_permission
+            FROM workspace_files f WHERE f.id=%s AND {self._file_access_sql()} {"FOR UPDATE" if lock else ""}""",
+            (user.userId,user.userId,user.userId,user.userId,item_id,user.companyId,user.userId,user.userId,user.userId,user.userId))
+        row=cursor.fetchone()
+        if not row or row.get("status") != required_status: raise self._missing()
+        permission = "owner" if row.get("owner_user_id") == user.userId else row.get("effective_permission","viewer")
+        allowed = {"owner":{"detail","download","rename","version","move","share","favorite","trash","restore"},"editor":{"detail","download","rename","version","favorite"},"viewer":{"detail","download","favorite"}}
+        if action not in allowed.get(permission,set()):
+            raise HTTPException(status_code=403,detail={"code":"FILE_FORBIDDEN","userMessage":"이 작업을 수행할 권한이 없습니다."})
+        return dict(row)
+
+    def _lock_owned_folder(self, cursor, user: AuthUserSummary, folder_id: str) -> dict:
+        cursor.execute("SELECT id,company_id,owner_user_id,parent_id,name,status,version FROM workspace_folders WHERE id=%s AND company_id=%s AND owner_user_id=%s AND status='active' FOR UPDATE",(folder_id,user.companyId,user.userId))
+        row=cursor.fetchone()
+        if not row: raise self._missing()
+        return dict(row)
+
+    def _list_files(self, user: AuthUserSummary, scope: str = "mine", folder_id: str | None = None, query: str = "", sort: str = "updated_desc", folder_specified: bool = False) -> dict:
         access = self._file_access_sql()
         clauses = {"mine": "f.owner_user_id=%s AND f.status='active'", "shared": "f.owner_user_id<>%s AND f.status='active' AND EXISTS (SELECT 1 FROM workspace_file_shares s WHERE s.file_id=f.id AND s.target_type='user' AND s.target_id=%s AND s.status='active')", "department": "f.status='active' AND EXISTS (SELECT 1 FROM workspace_file_shares s WHERE s.file_id=f.id AND s.target_type='department' AND s.target_id=(SELECT department_id FROM users WHERE id=%s) AND s.status='active')", "recent": "f.status='active' AND f.updated_at>=NOW()-INTERVAL '30 days'", "favorites": "f.status='active' AND EXISTS (SELECT 1 FROM workspace_file_favorites fav WHERE fav.file_id=f.id AND fav.user_id=%s)", "trash": "f.owner_user_id=%s AND f.status='deleted'"}
         scope_clause = clauses[scope]
@@ -937,25 +965,23 @@ class WorkspaceService:
                 f.created_at,f.updated_at,EXISTS(SELECT 1 FROM workspace_file_favorites fav WHERE fav.file_id=f.id AND fav.user_id=%s) AS is_favorite,
                 CASE WHEN f.owner_user_id=%s THEN 'owner' WHEN EXISTS(SELECT 1 FROM workspace_file_shares ep WHERE ep.file_id=f.id AND ep.status='active' AND ep.permission='editor' AND ((ep.target_type='user' AND ep.target_id=%s) OR (ep.target_type='department' AND ep.target_id=(SELECT department_id FROM users WHERE id=%s)))) THEN 'editor' ELSE 'viewer' END AS effective_permission
                 FROM workspace_files f WHERE {access} AND {scope_clause} AND (%s='' OR f.file_name ILIKE '%%'||%s||'%%')
-                AND (%s IS NULL OR f.folder_id=%s) ORDER BY {order}""",
-                (user.userId,user.userId,user.userId,user.userId,user.companyId,user.userId,user.userId,user.userId,*scope_args,query,query,folder_id,folder_id))
+                AND (NOT %s OR (%s IS NULL AND f.folder_id IS NULL) OR f.folder_id=%s) ORDER BY {order}""",
+                (user.userId,user.userId,user.userId,user.userId,user.companyId,user.userId,user.userId,user.userId,user.userId,*scope_args,query,query,folder_specified,folder_id,folder_id))
             return {"items": [self._file_view(dict(row), user.userId) for row in cursor.fetchall()]}
 
     @staticmethod
     def _file_view(row: dict, actor_id: str) -> dict:
-        row["fileName"] = row.get("file_name"); row["contentType"] = row.get("content_type"); row["sizeBytes"] = row.get("size_bytes")
-        row["folderId"] = row.get("folder_id"); row["currentVersion"] = row.get("current_version", 1); row["isFavorite"] = bool(row.get("is_favorite"))
         owner = row.get("owner_user_id") == actor_id or row.get("effective_permission") == "owner"; editor = row.get("effective_permission") == "editor"
-        row["permissions"] = {"download": True, "favorite": True, "rename": owner or editor, "newVersion": owner or editor, "move": owner, "share": owner, "trash": owner, "restore": owner}
-        return row
+        return {"id":row.get("id"),"file_name":row.get("file_name"),"content_type":row.get("content_type"),"size_bytes":row.get("size_bytes"),"status":row.get("status"),
+            "folderId":row.get("folder_id"),"fileName":row.get("file_name"),"contentType":row.get("content_type"),"sizeBytes":row.get("size_bytes"),
+            "currentVersion":row.get("current_version",1),"version":row.get("version",0),"owner_user_id":row.get("owner_user_id"),"isFavorite":bool(row.get("is_favorite")),
+            "created_at":row.get("created_at"),"updated_at":row.get("updated_at"),"permissions":{"download":True,"favorite":True,"rename":owner or editor,"newVersion":owner or editor,"move":owner,"share":owner,"trash":owner,"restore":owner}}
 
     def create_file(self, user: AuthUserSummary, file_name: str, content_type: str, content: bytes, folder_id: str | None = None, storage: WorkspaceFileStorage | None = None) -> dict:
-        storage = storage or WorkspaceFileStorage(); item_id = f"wfl_{uuid4().hex[:12]}"; storage_key = storage.write(content); digest = sha256(content).hexdigest()
+        storage = storage or WorkspaceFileStorage(); file_name=storage.safe_name(file_name); storage.validate(file_name,content_type,content); item_id = f"wfl_{uuid4().hex[:12]}"; storage_key = storage.write(content); digest = sha256(content).hexdigest()
         try:
             with self.db.connect() as conn, conn.cursor() as cursor:
-                if folder_id:
-                    cursor.execute("SELECT id FROM workspace_folders WHERE id=%s AND company_id=%s AND owner_user_id=%s AND status='active'",(folder_id,user.companyId,user.userId))
-                    if not cursor.fetchone(): raise self._missing()
+                if folder_id: self._lock_owned_folder(cursor,user,folder_id)
                 cursor.execute("INSERT INTO workspace_files (id,company_id,owner_user_id,folder_id,file_name,content_type,size_bytes,content,checksum,current_version,version,status,created_at,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,NULL,%s,1,0,'active',NOW(),NOW())", (item_id,user.companyId,user.userId,folder_id,file_name,content_type,len(content),digest))
                 cursor.execute("INSERT INTO workspace_file_versions(id,file_id,version_no,file_name,content_type,size_bytes,checksum,storage_key,created_by_user_id) VALUES(%s,%s,1,%s,%s,%s,%s,%s,%s)", (f"wfv_{uuid4().hex[:12]}",item_id,file_name,content_type,len(content),digest,storage_key,user.userId))
                 self._audit(cursor,user,"file",item_id,"workspace.file.uploaded",None,"active",json.dumps({"version":1}))
@@ -967,37 +993,40 @@ class WorkspaceService:
 
     def file_metadata(self, user: AuthUserSummary, item_id: str, include_content: bool = False) -> dict:
         with self.db.connect() as conn, conn.cursor() as cursor:
-            cursor.execute(f"""SELECT f.*,EXISTS(SELECT 1 FROM workspace_file_favorites fav WHERE fav.file_id=f.id AND fav.user_id=%s) AS is_favorite,
-                CASE WHEN f.owner_user_id=%s THEN 'owner' WHEN EXISTS(SELECT 1 FROM workspace_file_shares ep WHERE ep.file_id=f.id AND ep.status='active' AND ep.permission='editor' AND ((ep.target_type='user' AND ep.target_id=%s) OR (ep.target_type='department' AND ep.target_id=(SELECT department_id FROM users WHERE id=%s)))) THEN 'editor' ELSE 'viewer' END AS effective_permission
-                FROM workspace_files f WHERE f.id=%s AND {self._file_access_sql()}""", (user.userId,user.userId,user.userId,user.userId,item_id,user.companyId,user.userId,user.userId,user.userId))
-            row = cursor.fetchone()
-        if not row: raise self._missing()
-        return self._file_view(dict(row), user.userId)
+            row=self._lock_file_access(cursor,user,item_id,"detail","active",lock=False)
+        return self._file_view(row,user.userId)
 
     def file_detail(self, user: AuthUserSummary, item_id: str) -> dict:
-        item = self.file_metadata(user,item_id)
         with self.db.connect() as conn, conn.cursor() as cursor:
+            item=self._file_view(self._lock_file_access(cursor,user,item_id,"detail","active",lock=False),user.userId)
             cursor.execute("SELECT version_no,file_name,content_type,size_bytes,created_at FROM workspace_file_versions WHERE file_id=%s ORDER BY version_no DESC",(item_id,)); versions=[dict(x) for x in cursor.fetchall()]
-            cursor.execute("SELECT target_type,target_id,permission FROM workspace_file_shares WHERE file_id=%s AND status='active' ORDER BY target_type,target_id",(item_id,)); shares=[dict(x) for x in cursor.fetchall()]
+            cursor.execute("""SELECT s.target_type,s.target_id,s.permission,COALESCE(u.name,d.name,'') AS target_name
+                FROM workspace_file_shares s LEFT JOIN users u ON s.target_type='user' AND u.id=s.target_id LEFT JOIN departments d ON s.target_type='department' AND d.id=s.target_id
+                WHERE s.file_id=%s AND s.status='active' ORDER BY s.target_type,target_name,s.target_id""",(item_id,)); shares=[dict(x) for x in cursor.fetchall()]
             cursor.execute("SELECT actor_user_name,event,created_at FROM audit_logs WHERE company_id=%s AND target_type='file' AND target_id=%s ORDER BY created_at DESC LIMIT 50",(user.companyId,item_id)); activity=[dict(x) for x in cursor.fetchall()]
         return {**item,"versions":versions,"shares":shares,"activity":activity}
 
     def update_file(self, user: AuthUserSummary, item_id: str, payload: FilePatchPayload) -> dict:
-        current=self.file_metadata(user,item_id)
-        if not current["permissions"]["rename"]: raise HTTPException(status_code=403, detail={"code":"FILE_FORBIDDEN","userMessage":"변경 권한이 없습니다."})
         moving = "folderId" in payload.model_fields_set
-        if moving and not current["permissions"]["move"]: raise HTTPException(status_code=403, detail={"code":"FILE_FORBIDDEN","userMessage":"이동 권한이 없습니다."})
+        file_name=WorkspaceFileStorage.safe_name(payload.fileName) if payload.fileName is not None else None
         with self.db.connect() as conn, conn.cursor() as cursor:
-            cursor.execute("UPDATE workspace_files SET file_name=COALESCE(%s,file_name),folder_id=CASE WHEN %s THEN %s ELSE folder_id END,version=version+1,updated_at=NOW() WHERE id=%s AND (%s IS NULL OR version=%s)",(payload.fileName,moving,payload.folderId,item_id,payload.expectedVersion,payload.expectedVersion))
+            if moving and payload.folderId: self._lock_owned_folder(cursor,user,payload.folderId)
+            current=self._lock_file_access(cursor,user,item_id,"move" if moving else "rename","active")
+            if file_name is not None:
+                try: WorkspaceFileStorage.validate_name_type(file_name,current["content_type"])
+                except (ContentTypeRejected,ValueError): raise HTTPException(status_code=400,detail={"code":"FILE_NAME_INVALID","userMessage":"파일 이름과 형식을 확인하세요."})
+            if payload.expectedVersion is not None and current["version"] != payload.expectedVersion: raise HTTPException(status_code=409,detail={"code":"FILE_VERSION_CONFLICT","userMessage":"다른 변경이 먼저 저장되었습니다."})
+            cursor.execute("UPDATE workspace_files SET file_name=COALESCE(%s,file_name),folder_id=CASE WHEN %s THEN %s ELSE folder_id END,version=version+1,updated_at=NOW() WHERE id=%s AND version=%s",(file_name,moving,payload.folderId,item_id,current["version"]))
             if cursor.rowcount != 1: raise HTTPException(status_code=409,detail={"code":"FILE_VERSION_CONFLICT","userMessage":"다른 변경이 먼저 저장되었습니다."})
             event="workspace.file.moved" if moving else "workspace.file.renamed"; self._audit(cursor,user,"file",item_id,event,"active","active",json.dumps({"changed":True})); conn.commit()
         return self.file_metadata(user,item_id)
 
     def create_file_version(self, user, item_id, file_name, content_type, content, expected_version, storage):
-        current=self.file_metadata(user,item_id); storage_key=storage.write(content); digest=sha256(content).hexdigest()
-        if not current["permissions"]["newVersion"]: storage.unlink(storage_key); raise HTTPException(status_code=403,detail={"code":"FILE_FORBIDDEN","userMessage":"버전 추가 권한이 없습니다."})
+        file_name=storage.safe_name(file_name); storage.validate(file_name,content_type,content); storage_key=storage.write(content); digest=sha256(content).hexdigest()
         try:
             with self.db.connect() as conn, conn.cursor() as cursor:
+                current=self._lock_file_access(cursor,user,item_id,"version","active")
+                if current["version"] != expected_version: raise HTTPException(status_code=409,detail={"code":"FILE_VERSION_CONFLICT","userMessage":"다른 변경이 먼저 저장되었습니다."})
                 cursor.execute("UPDATE workspace_files SET file_name=%s,content_type=%s,size_bytes=%s,checksum=%s,current_version=current_version+1,version=version+1,updated_at=NOW() WHERE id=%s AND version=%s RETURNING current_version",(file_name,content_type,len(content),digest,item_id,expected_version)); row=cursor.fetchone()
                 if not row: raise HTTPException(status_code=409,detail={"code":"FILE_VERSION_CONFLICT","userMessage":"다른 변경이 먼저 저장되었습니다."})
                 cursor.execute("INSERT INTO workspace_file_versions(id,file_id,version_no,file_name,content_type,size_bytes,checksum,storage_key,created_by_user_id) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)",(f"wfv_{uuid4().hex[:12]}",item_id,row["current_version"],file_name,content_type,len(content),digest,storage_key,user.userId)); self._audit(cursor,user,"file",item_id,"workspace.file.version_created",None,None,json.dumps({"version":row["current_version"]})); conn.commit()
@@ -1005,70 +1034,84 @@ class WorkspaceService:
         return self.file_detail(user,item_id)
 
     def delete_file(self, user: AuthUserSummary, item_id: str, expected_version: int | None = None) -> None:
-        self.file_metadata(user,item_id)
         with self.db.connect() as conn, conn.cursor() as cursor:
-            cursor.execute("UPDATE workspace_files SET status='deleted',deleted_at=NOW(),version=version+1,updated_at=NOW() WHERE id=%s AND owner_user_id=%s AND status='active' AND (%s IS NULL OR version=%s)",(item_id,user.userId,expected_version,expected_version))
+            current=self._lock_file_access(cursor,user,item_id,"trash","active")
+            if expected_version is not None and current["version"] != expected_version: raise HTTPException(status_code=409,detail={"code":"FILE_VERSION_CONFLICT","userMessage":"파일 상태가 변경되었습니다."})
+            cursor.execute("UPDATE workspace_files SET status='deleted',deleted_at=NOW(),version=version+1,updated_at=NOW() WHERE id=%s AND version=%s",(item_id,current["version"]))
             if cursor.rowcount != 1: raise HTTPException(status_code=409,detail={"code":"FILE_VERSION_CONFLICT","userMessage":"파일 상태가 변경되었습니다."})
             self._audit(cursor,user,"file",item_id,"workspace.file.trashed","active","deleted",json.dumps({"recoverable":True})); conn.commit()
 
     def restore_file(self, user, item_id, expected_version):
         with self.db.connect() as conn, conn.cursor() as cursor:
-            cursor.execute("UPDATE workspace_files SET status='active',deleted_at=NULL,version=version+1,updated_at=NOW() WHERE id=%s AND company_id=%s AND owner_user_id=%s AND status='deleted' AND version=%s",(item_id,user.companyId,user.userId,expected_version))
+            current=self._lock_file_access(cursor,user,item_id,"restore","deleted")
+            if current["version"] != expected_version: raise HTTPException(status_code=409,detail={"code":"FILE_VERSION_CONFLICT","userMessage":"파일 상태가 변경되었습니다."})
+            cursor.execute("UPDATE workspace_files SET status='active',deleted_at=NULL,version=version+1,updated_at=NOW() WHERE id=%s AND version=%s",(item_id,expected_version))
             if cursor.rowcount != 1: raise self._missing()
             self._audit(cursor,user,"file",item_id,"workspace.file.restored","deleted","active",json.dumps({"restored":True})); conn.commit()
         return self.file_metadata(user,item_id)
 
     def set_file_favorite(self,user,item_id,enabled):
-        self.file_metadata(user,item_id)
         with self.db.connect() as conn, conn.cursor() as cursor:
+            self._lock_file_access(cursor,user,item_id,"favorite","active")
             if enabled: cursor.execute("INSERT INTO workspace_file_favorites(file_id,user_id) VALUES(%s,%s) ON CONFLICT DO NOTHING",(item_id,user.userId))
             else: cursor.execute("DELETE FROM workspace_file_favorites WHERE file_id=%s AND user_id=%s",(item_id,user.userId))
             self._audit(cursor,user,"file",item_id,"workspace.file.favorite_set" if enabled else "workspace.file.favorite_cleared",None,None,json.dumps({"enabled":enabled})); conn.commit()
         return {"isFavorite":enabled}
 
     def save_file_shares(self,user,item_id,payload:FileShareSnapshotPayload):
-        item=self.file_metadata(user,item_id)
-        if item.get("owner_user_id") != user.userId: raise HTTPException(status_code=403,detail={"code":"FILE_FORBIDDEN","userMessage":"공유 권한이 없습니다."})
         with self.db.connect() as conn, conn.cursor() as cursor:
+            item=self._lock_file_access(cursor,user,item_id,"share","active")
+            if item["version"] != payload.expectedVersion: raise HTTPException(status_code=409,detail={"code":"FILE_VERSION_CONFLICT","userMessage":"다른 변경이 먼저 저장되었습니다."})
             cursor.execute("UPDATE workspace_files SET version=version+1,updated_at=NOW() WHERE id=%s AND version=%s",(item_id,payload.expectedVersion))
             if cursor.rowcount != 1: raise HTTPException(status_code=409,detail={"code":"FILE_VERSION_CONFLICT","userMessage":"다른 변경이 먼저 저장되었습니다."})
             cursor.execute("UPDATE workspace_file_shares SET status='inactive',updated_at=NOW() WHERE file_id=%s",(item_id,))
             for share in payload.shares:
-                table="users" if share.targetType=="user" else "departments"; cursor.execute(f"SELECT id FROM {table} WHERE id=%s AND company_id=%s AND status='active'",(share.targetId,user.companyId))
+                if share.targetType=="user" and share.targetId==user.userId: raise HTTPException(status_code=400,detail={"code":"FILE_SHARE_SELF","userMessage":"자기 자신은 공유 대상에 추가할 수 없습니다."})
+                table="users" if share.targetType=="user" else "departments"; cursor.execute(f"SELECT id FROM {table} WHERE id=%s AND company_id=%s AND status='active' FOR SHARE",(share.targetId,user.companyId))
                 if not cursor.fetchone(): raise self._missing()
                 cursor.execute("INSERT INTO workspace_file_shares(id,file_id,shared_by_user_id,target_type,target_id,permission,status) VALUES(%s,%s,%s,%s,%s,%s,'active') ON CONFLICT(file_id,target_type,target_id) WHERE status='active' DO UPDATE SET permission=EXCLUDED.permission,shared_by_user_id=EXCLUDED.shared_by_user_id,updated_at=NOW()",(f"wfs_{uuid4().hex[:12]}",item_id,user.userId,share.targetType,share.targetId,share.permission))
             self._audit(cursor,user,"file",item_id,"workspace.file.shared",None,None,json.dumps({"shareCount":len(payload.shares)})); conn.commit()
         return self.file_detail(user,item_id)
 
     def download_file(self,user,item_id,version,storage):
-        item=self.file_metadata(user,item_id)
         with self.db.connect() as conn, conn.cursor() as cursor:
-            cursor.execute("SELECT v.file_name,v.content_type,v.storage_key,f.content FROM workspace_file_versions v JOIN workspace_files f ON f.id=v.file_id WHERE v.file_id=%s AND v.version_no=COALESCE(%s,%s)",(item_id,version,item["currentVersion"])); row=cursor.fetchone()
+            item=self._lock_file_access(cursor,user,item_id,"download","active",lock=False)
+            cursor.execute("SELECT v.file_name,v.content_type,v.storage_key,f.content FROM workspace_file_versions v JOIN workspace_files f ON f.id=v.file_id WHERE v.file_id=%s AND v.version_no=COALESCE(%s,%s)",(item_id,version,item["current_version"])); row=cursor.fetchone()
             if not row: raise self._missing()
-            self._audit(cursor,user,"file",item_id,"workspace.file.downloaded",None,None,json.dumps({"version":version or item["currentVersion"]})); conn.commit()
-        content = storage.read(row["storage_key"]) if row["storage_key"] else row["content"]
-        if content is None: raise self._missing()
+            try: content = storage.read(row["storage_key"]) if row["storage_key"] else row["content"]
+            except (OSError,ValueError): raise HTTPException(status_code=404,detail={"code":"FILE_CONTENT_NOT_FOUND","userMessage":"파일 원본을 찾을 수 없습니다."})
+            if content is None: raise self._missing()
+            self._audit(cursor,user,"file",item_id,"workspace.file.downloaded",None,None,json.dumps({"version":version or item["current_version"]})); conn.commit()
         return {"file_name":row["file_name"],"content_type":row["content_type"],"content":content}
 
     def list_file_folders(self,user):
         with self.db.connect() as conn, conn.cursor() as cursor: cursor.execute("SELECT id,parent_id,name,version,created_at,updated_at FROM workspace_folders WHERE company_id=%s AND owner_user_id=%s AND status='active' ORDER BY lower(name)",(user.companyId,user.userId)); return {"items":[dict(x) for x in cursor.fetchall()]}
     def create_file_folder(self,user,payload:FolderCreatePayload):
         folder_id=f"wfd_{uuid4().hex[:12]}"
-        with self.db.connect() as conn, conn.cursor() as cursor:
-            if payload.parentId:
-                cursor.execute("SELECT id FROM workspace_folders WHERE id=%s AND company_id=%s AND owner_user_id=%s AND status='active'",(payload.parentId,user.companyId,user.userId))
-                if not cursor.fetchone(): raise self._missing()
-            cursor.execute("INSERT INTO workspace_folders(id,company_id,owner_user_id,parent_id,name) VALUES(%s,%s,%s,%s,%s)",(folder_id,user.companyId,user.userId,payload.parentId,payload.name)); self._audit(cursor,user,"folder",folder_id,"workspace.folder.created",None,"active",json.dumps({"created":True})); conn.commit()
+        try:
+            with self.db.connect() as conn, conn.cursor() as cursor:
+                if payload.parentId: self._lock_owned_folder(cursor,user,payload.parentId)
+                cursor.execute("INSERT INTO workspace_folders(id,company_id,owner_user_id,parent_id,name) VALUES(%s,%s,%s,%s,%s)",(folder_id,user.companyId,user.userId,payload.parentId,payload.name)); self._audit(cursor,user,"folder",folder_id,"workspace.folder.created",None,"active",json.dumps({"created":True})); conn.commit()
+        except UniqueViolation: raise HTTPException(status_code=409,detail={"code":"FOLDER_NAME_CONFLICT","userMessage":"같은 위치에 같은 이름의 폴더가 있습니다."})
         return {"id":folder_id,"name":payload.name,"parentId":payload.parentId,"version":0}
     def rename_file_folder(self,user,folder_id,payload:FolderPatchPayload):
-        with self.db.connect() as conn, conn.cursor() as cursor: cursor.execute("UPDATE workspace_folders SET name=%s,version=version+1,updated_at=NOW() WHERE id=%s AND company_id=%s AND owner_user_id=%s AND status='active' AND version=%s RETURNING id,parent_id,name,version",(payload.name,folder_id,user.companyId,user.userId,payload.expectedVersion)); row=cursor.fetchone(); conn.commit()
-        if not row: raise HTTPException(status_code=409,detail={"code":"FOLDER_VERSION_CONFLICT","userMessage":"폴더 상태가 변경되었습니다."})
+        try:
+            with self.db.connect() as conn, conn.cursor() as cursor:
+                current=self._lock_owned_folder(cursor,user,folder_id)
+                if current["version"] != payload.expectedVersion: raise HTTPException(status_code=409,detail={"code":"FOLDER_VERSION_CONFLICT","userMessage":"폴더 상태가 변경되었습니다."})
+                cursor.execute("UPDATE workspace_folders SET name=%s,version=version+1,updated_at=NOW() WHERE id=%s AND version=%s RETURNING id,parent_id,name,version",(payload.name,folder_id,payload.expectedVersion)); row=cursor.fetchone()
+                if not row: raise HTTPException(status_code=409,detail={"code":"FOLDER_VERSION_CONFLICT","userMessage":"폴더 상태가 변경되었습니다."})
+                self._audit(cursor,user,"folder",folder_id,"workspace.folder.renamed","active","active",json.dumps({"changed":True})); conn.commit()
+        except UniqueViolation: raise HTTPException(status_code=409,detail={"code":"FOLDER_NAME_CONFLICT","userMessage":"같은 위치에 같은 이름의 폴더가 있습니다."})
         return dict(row)
     def delete_file_folder(self,user,folder_id,expected_version):
         with self.db.connect() as conn, conn.cursor() as cursor:
-            cursor.execute("SELECT 1 FROM workspace_files WHERE folder_id=%s AND status='active' UNION ALL SELECT 1 FROM workspace_folders WHERE parent_id=%s AND status='active' LIMIT 1",(folder_id,folder_id))
-            if cursor.fetchone(): raise HTTPException(status_code=409,detail={"code":"FOLDER_NOT_EMPTY","userMessage":"빈 폴더만 삭제할 수 있습니다."})
-            cursor.execute("UPDATE workspace_folders SET status='deleted',version=version+1,updated_at=NOW() WHERE id=%s AND company_id=%s AND owner_user_id=%s AND version=%s",(folder_id,user.companyId,user.userId,expected_version));
+            current=self._lock_owned_folder(cursor,user,folder_id)
+            if current["version"] != expected_version: raise HTTPException(status_code=409,detail={"code":"FOLDER_VERSION_CONFLICT","userMessage":"폴더 상태가 변경되었습니다."})
+            cursor.execute("SELECT id FROM workspace_folders WHERE parent_id=%s AND status='active' FOR UPDATE",(folder_id,))
+            child=cursor.fetchone(); cursor.execute("SELECT id FROM workspace_files WHERE folder_id=%s AND status='active' FOR UPDATE",(folder_id,)); file_row=cursor.fetchone()
+            if child or file_row: raise HTTPException(status_code=409,detail={"code":"FOLDER_NOT_EMPTY","userMessage":"빈 폴더만 삭제할 수 있습니다."})
+            cursor.execute("UPDATE workspace_folders SET status='deleted',version=version+1,updated_at=NOW() WHERE id=%s AND version=%s",(folder_id,expected_version));
             if cursor.rowcount != 1: raise self._missing()
             self._audit(cursor,user,"folder",folder_id,"workspace.folder.deleted","active","deleted",json.dumps({"empty":True})); conn.commit()
 
