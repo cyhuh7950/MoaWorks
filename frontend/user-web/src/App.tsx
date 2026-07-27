@@ -1758,6 +1758,7 @@ export default function App() {
   }
 
   function openAddressBookMailCompose(email: string) {
+    setActivePortalMenu("mail");
     openNewMailCompose();
     setMailComposeForm({ ...createEmptyMailComposeForm(), to: email });
   }
