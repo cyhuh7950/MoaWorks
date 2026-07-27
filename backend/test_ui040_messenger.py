@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+import re
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
@@ -377,6 +378,28 @@ class Ui040MessengerTests(unittest.TestCase):
         self.assertNotIn("payload.body", audit_section)
         self.assertNotIn("file_name", audit_section)
         self.assertNotIn("user_email", audit_section)
+
+    def test_room_and_message_aggregates_only_count_active_members(self) -> None:
+        source = (ROOT / "app" / "services" / "mail_messenger_service.py").read_text(encoding="utf-8")
+        room_list_sql = source[source.index("def list_rooms"):source.index("def create_room")]
+        message_list_sql = source[source.index("def list_messages"):source.index("def stage_messenger_attachment")]
+        room_detail_sql = source[
+            source.index("def _room_row_to_summary_with_participants"):
+            source.index("def _to_mail_summary")
+        ]
+
+        active_member_join = re.compile(
+            r"JOIN\s+users\s+\w+\s+ON\s+\w+\.id\s*=\s*\w+\.user_id\s+AND\s+\w+\.status\s*=\s*'active'",
+            re.IGNORECASE,
+        )
+        self.assertRegex(room_list_sql, active_member_join)
+        self.assertRegex(room_detail_sql, active_member_join)
+        self.assertGreaterEqual(len(active_member_join.findall(message_list_sql)), 2)
+        self.assertRegex(
+            message_list_sql,
+            re.compile(r"member\.user_id\s*<>\s*msg\.sender_user_id", re.IGNORECASE),
+        )
+        self.assertNotIn("participant_count,1)-1", message_list_sql.replace(" ", ""))
 
     def test_message_schema_preserves_legacy_fields_and_adds_safe_counts(self) -> None:
         source = (ROOT / "app" / "schemas" / "mail_messenger.py").read_text(encoding="utf-8")
