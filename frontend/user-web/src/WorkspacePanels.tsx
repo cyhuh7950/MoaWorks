@@ -1,5 +1,6 @@
 import React, { FormEvent, useEffect, useRef, useState } from "react";
 
+import { AddressBookPanel } from "./AddressBookPanel";
 import { CalendarPanel } from "./CalendarPanel";
 import { ScheduleComposePopup } from "./ScheduleComposePopup";
 import { createScheduleDraft, type ScheduleDraft } from "./scheduleForm";
@@ -40,6 +41,7 @@ type Props = {
   ownerUserId: string;
   initialSelectionId?: string;
   onPreferencesSaved: (locale: string, timezone: string) => void;
+  onComposeMail: (email: string) => void;
 };
 
 const panelStyle = { borderRadius: 18, padding: 16, background: "#fff", border: "1px solid #dbe4ec", minHeight: 0, overflow: "auto" } as const;
@@ -60,7 +62,7 @@ function WorkspaceModal({ title, children, showScheduleError, error, onClose }: 
   return <div role="dialog" aria-modal="true" style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(15,23,42,.42)", display: "grid", placeItems: "center", padding: 24 }}><section style={{ width: "min(640px, 100%)", maxHeight: "min(760px, calc(100vh - 48px))", overflow: "auto", borderRadius: 18, padding: 20, background: "#fff", boxShadow: "0 24px 64px rgba(15,23,42,.28)" }}><header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}><h2 style={{ margin: 0, fontSize: 22 }}>{title}</h2><button type="button" onClick={onClose} style={buttonStyle}>{"\uB2EB\uAE30"}</button></header>{showScheduleError && error ? <div role="alert" style={{ marginBottom: 12, color: "#b91c1c", fontSize: 12 }}>{error}</div> : null}{children}</section></div>;
 }
 
-export function WorkspacePanels({ menu, token, locale, timezone, ownerUserId, initialSelectionId, onPreferencesSaved }: Props) {
+export function WorkspacePanels({ menu, token, locale, timezone, ownerUserId, initialSelectionId, onPreferencesSaved, onComposeMail }: Props) {
   const [schedules, setSchedules] = useState<WorkspaceSchedule[]>([]);
   const [calendarData, setCalendarData] = useState<WorkspaceCalendarData>({ owned: [], subscriptions: [], incomingRequests: [] });
   const [scheduleLoading, setScheduleLoading] = useState(false);
@@ -106,9 +108,7 @@ export function WorkspacePanels({ menu, token, locale, timezone, ownerUserId, in
         setCalendarData(calendarResponse);
         setSelectedId((current) => response.items.some((item) => item.id === initialSelectionId) ? initialSelectionId ?? "" : response.items.some((item) => item.id === current) ? current : "");
       } else if (menu === "contacts") {
-        const response = await fetchContacts(token);
-        setContacts(response.items);
-        setSelectedId((current) => response.items.some((item) => item.id === initialSelectionId) ? initialSelectionId ?? "" : response.items.some((item) => item.id === current) ? current : response.items[0]?.id ?? "");
+        setSelectedId(initialSelectionId ?? "");
       } else if (menu === "files") {
         const response = await fetchWorkspaceFiles(token);
         setFiles(response.items);
@@ -187,7 +187,7 @@ export function WorkspacePanels({ menu, token, locale, timezone, ownerUserId, in
 
   let view: React.ReactNode;
   if (menu === "schedule") view = <CalendarPanel schedules={schedules} selectedId={selectedId} locale={locale} timezone={timezone} loading={scheduleLoading} error={scheduleError} token={token} ownerUserId={ownerUserId} calendarData={calendarData} onCalendarsChanged={refresh} onRetry={() => void refresh()} onCreate={() => openSchedule()} onSelect={setSelectedId} onEdit={openSchedule} onDelete={() => setModal("confirm-delete")} />;
-  else if (menu === "contacts") view = <section style={{ display: "grid", gridTemplateColumns: "minmax(280px,.8fr) minmax(420px,1.2fr)", gap: 16, minHeight: 0, height: "100%" }}><article style={panelStyle}><header style={{ display: "flex", justifyContent: "space-between" }}><h2 style={{ margin: 0, fontSize: 22 }}>개인 주소록</h2><button type="button" onClick={() => openContact()} style={primaryButtonStyle}>연락처 추가</button></header><div style={{ marginTop: 12, display: "grid", gap: 6 }}>{contacts.map((item) => <button type="button" key={item.id} onClick={() => setSelectedId(item.id)} onDoubleClick={() => openContact(item)} style={{ ...buttonStyle, height: "auto", minHeight: 54, textAlign: "left", background: selectedId === item.id ? "#e6fffb" : "#fff" }}><strong>{item.name}</strong><div style={{ color: "#64748b", marginTop: 4 }}>{item.email}</div></button>)}</div></article>{selectedContact ? detail(selectedContact.name, [["이메일", selectedContact.email], ["전화", selectedContact.phone], ["회사", selectedContact.company_name], ["메모", selectedContact.memo]], () => openContact(selectedContact), () => setModal("confirm-delete")) : detail("선택 연락처", [["안내", "개인 연락처를 선택하거나 추가하세요."]])}</section>;
+  else if (menu === "contacts") view = <AddressBookPanel token={token} initialSelectionId={initialSelectionId} onComposeMail={onComposeMail} />;
   else if (menu === "org") view = <section style={{ display: "grid", gridTemplateColumns: "minmax(280px,.8fr) minmax(420px,1.2fr)", gap: 16, minHeight: 0, height: "100%" }}><article style={panelStyle}><h2 style={{ margin: 0, fontSize: 22 }}>조직도</h2><div style={{ marginTop: 12, display: "grid", gap: 8 }}>{directory.departments.map((department) => <section key={department.id} style={{ border: "1px solid #dbe4ec", borderRadius: 12, padding: 10 }}><strong>{department.name}</strong><div style={{ marginTop: 8, display: "grid", gap: 4 }}>{directory.users.filter((user) => user.department_name === department.name).map((user) => <button type="button" key={user.id} onClick={() => setSelectedId(user.id)} style={{ ...buttonStyle, textAlign: "left", background: selectedId === user.id ? "#e6fffb" : "#fff" }}>{user.name}</button>)}</div></section>)}</div></article>{selectedMember ? detail(selectedMember.name, [["이메일", selectedMember.email], ["부서", selectedMember.department_name], ["역할", selectedMember.role_name]]) : detail("조직 사용자", [["안내", "조직 정보는 조회 전용이며 변경은 관리자 콘솔에서 처리합니다."]])}</section>;
   else if (menu === "files") view = <section style={{ display: "grid", gridTemplateColumns: "minmax(280px,.8fr) minmax(420px,1.2fr)", gap: 16, minHeight: 0, height: "100%" }}><article style={panelStyle}><header style={{ display: "flex", justifyContent: "space-between" }}><h2 style={{ margin: 0, fontSize: 22 }}>파일</h2><button type="button" onClick={() => { setSelectedId(""); setFileEditingId(null); fileUploadRef.current = null; setModal("file"); }} style={primaryButtonStyle}>업로드</button></header><div style={{ marginTop: 12, display: "grid", gap: 6 }}>{files.map((item) => <button type="button" key={item.id} onClick={() => setSelectedId(item.id)} onDoubleClick={() => { setSelectedId(item.id); setFileEditingId(item.id); setFileName(item.file_name); setModal("file"); }} style={{ ...buttonStyle, height: "auto", minHeight: 54, textAlign: "left", background: selectedId === item.id ? "#e6fffb" : "#fff" }}><strong>{item.file_name}</strong><div style={{ color: "#64748b", marginTop: 4 }}>{item.size_bytes} bytes / {formatDate(item.updated_at)}</div></button>)}</div></article>{selectedFile ? detail(selectedFile.file_name, [["형식", selectedFile.content_type], ["크기", `${selectedFile.size_bytes} bytes`], ["수정", formatDate(selectedFile.updated_at)]], () => { setFileEditingId(selectedFile.id); setFileName(selectedFile.file_name); setModal("file"); }, () => setModal("confirm-delete")) : detail("선택 파일", [["안내", "파일을 선택하거나 업로드하세요."]])}</section>;
   else if (menu === "settings") view = <section style={{ display: "grid", gridTemplateColumns: "minmax(300px,.9fr) minmax(420px,1.1fr)", gap: 16, minHeight: 0, height: "100%" }}><article style={panelStyle}><h2 style={{ margin: 0, fontSize: 22 }}>내 설정</h2><dl style={{ margin: "18px 0", display: "grid", gridTemplateColumns: "100px 1fr", gap: 10, fontSize: 12 }}><dt>언어</dt><dd style={{ margin: 0 }}>{preferenceForm.locale}</dd><dt>시간대</dt><dd style={{ margin: 0 }}>{preferenceForm.timezone}</dd></dl><button type="button" onClick={() => setModal("settings")} style={primaryButtonStyle}>설정 변경</button></article><article style={panelStyle}><h2 style={{ margin: 0, fontSize: 22 }}>화면 적용</h2><p style={{ fontSize: 12, color: "#475569" }}>언어와 시간대는 사용자 계정에 저장되며 다시 로그인해도 같은 값으로 조회됩니다.</p></article></section>;

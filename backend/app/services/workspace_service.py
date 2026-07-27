@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import csv
 from datetime import UTC, datetime
+from hashlib import sha256
+import io
+import json
+import re
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -8,7 +13,7 @@ from psycopg.types.json import Jsonb
 
 from app.schemas.directory import AuthUserSummary
 from app.schemas.observability import EventEnvelope, MonitoringCategory, SeverityLevel, Visibility
-from app.schemas.workspace import CalendarCreatePayload, CalendarOrderPayload, CalendarSubscriptionPayload, CalendarUpdatePayload, ContactPayload, PreferencePayload, SchedulePayload
+from app.schemas.workspace import CalendarCreatePayload, CalendarOrderPayload, CalendarSubscriptionPayload, CalendarUpdatePayload, ContactGroupCreatePayload, ContactGroupUpdatePayload, ContactPayload, PreferencePayload, SchedulePayload
 from app.services.calendar_rules import subscription_action_for_visibility_change, subscription_status_for_visibility, validate_order_snapshot
 from app.services.observability_service import ObservabilityService
 from app.services.postgres_service import PostgresService
@@ -502,27 +507,337 @@ class WorkspaceService:
     def delete_schedule(self, user: AuthUserSummary, item_id: str) -> None:
         self._soft_delete("user_schedule_events","schedule","workspace.schedule.deleted",user,item_id)
 
-    def list_contacts(self, user: AuthUserSummary) -> dict:
-        return self._list_owned("personal_contacts", user, "name")
+    @staticmethod
+    def _contact_conflict(code: str, message: str) -> HTTPException:
+        return HTTPException(status_code=409, detail={"code": code, "userMessage": message})
+
+    @staticmethod
+    def _contact_group_record(row: dict) -> dict:
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "sortOrder": int(row.get("sort_order") or 0),
+            "contactCount": int(row.get("contact_count") or 0),
+            "status": row.get("status", "active"),
+            "createdAt": row.get("created_at"),
+            "updatedAt": row.get("updated_at"),
+        }
+
+    def _lock_contact_owner(self, cursor, user: AuthUserSummary) -> None:
+        cursor.execute("SELECT id FROM users WHERE id=%s AND company_id=%s AND status='active' FOR UPDATE", (user.userId, user.companyId))
+        if not cursor.fetchone():
+            raise self._missing()
+
+    def list_contact_groups(self, user: AuthUserSummary) -> list[dict]:
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT contact_group.*,COUNT(contact.id) FILTER (WHERE contact.status='active') AS contact_count
+                FROM contact_groups contact_group
+                LEFT JOIN personal_contacts contact ON contact.group_id=contact_group.id
+                WHERE contact_group.company_id=%s AND contact_group.owner_user_id=%s AND contact_group.status='active'
+                GROUP BY contact_group.id ORDER BY contact_group.sort_order,contact_group.created_at
+                """,
+                (user.companyId, user.userId),
+            )
+            return [self._contact_group_record(dict(row)) for row in cursor.fetchall()]
+
+    def _owned_contact_group(self, cursor, user: AuthUserSummary, group_id: str, *, lock: bool = False) -> dict:
+        lock_clause = " FOR UPDATE" if lock else ""
+        cursor.execute(
+            f"SELECT * FROM contact_groups WHERE id=%s AND company_id=%s AND owner_user_id=%s AND status='active'{lock_clause}",
+            (group_id, user.companyId, user.userId),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise self._missing()
+        return dict(row)
+
+    def _ensure_contact_group_name_available(self, cursor, user: AuthUserSummary, name: str, exclude_id: str | None = None) -> None:
+        params: tuple = (user.companyId, user.userId, name)
+        exclude_sql = ""
+        if exclude_id:
+            exclude_sql = " AND id<>%s"
+            params = (*params, exclude_id)
+        cursor.execute(
+            f"SELECT id FROM contact_groups WHERE company_id=%s AND owner_user_id=%s AND LOWER(name)=LOWER(%s) AND status='active'{exclude_sql}",
+            params,
+        )
+        if cursor.fetchone():
+            raise self._contact_conflict("CONTACT_GROUP_NAME_CONFLICT", "같은 이름의 연락처 그룹이 있습니다.")
+
+    def create_contact_group(self, user: AuthUserSummary, payload: ContactGroupCreatePayload) -> dict:
+        group_id = f"ctg_{uuid4().hex[:12]}"
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            self._lock_contact_owner(cursor, user)
+            self._ensure_contact_group_name_available(cursor, user, payload.name)
+            cursor.execute("SELECT COALESCE(MAX(sort_order),-1)+1 AS next_sort FROM contact_groups WHERE owner_user_id=%s AND status='active'", (user.userId,))
+            next_sort = int(cursor.fetchone()["next_sort"])
+            cursor.execute(
+                "INSERT INTO contact_groups (id,company_id,owner_user_id,name,sort_order,status,created_at,updated_at) VALUES(%s,%s,%s,%s,%s,'active',NOW(),NOW())",
+                (group_id, user.companyId, user.userId, payload.name, next_sort),
+            )
+            self._audit(cursor, user, "contact_group", group_id, "workspace.contact_group.created", None, "active")
+            conn.commit()
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            return self._contact_group_record(self._owned_contact_group(cursor, user, group_id))
+
+    def update_contact_group(self, user: AuthUserSummary, group_id: str, payload: ContactGroupUpdatePayload) -> dict:
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            self._lock_contact_owner(cursor, user)
+            current = self._owned_contact_group(cursor, user, group_id, lock=True)
+            if current["updated_at"] != payload.expectedUpdatedAt:
+                raise self._contact_conflict("CONTACT_GROUP_VERSION_CONFLICT", "그룹이 변경되었습니다. 새로고침 후 다시 시도하세요.")
+            self._ensure_contact_group_name_available(cursor, user, payload.name, group_id)
+            if current["name"] != payload.name:
+                cursor.execute("UPDATE contact_groups SET name=%s,updated_at=NOW() WHERE id=%s", (payload.name, group_id))
+                self._audit(cursor, user, "contact_group", group_id, "workspace.contact_group.updated", "active", "active")
+            conn.commit()
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            return self._contact_group_record(self._owned_contact_group(cursor, user, group_id))
+
+    def delete_contact_group(self, user: AuthUserSummary, group_id: str, expected_updated_at: datetime) -> None:
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            self._lock_contact_owner(cursor, user)
+            current = self._owned_contact_group(cursor, user, group_id, lock=True)
+            if current["updated_at"] != expected_updated_at:
+                raise self._contact_conflict("CONTACT_GROUP_VERSION_CONFLICT", "그룹이 변경되었습니다. 새로고침 후 다시 시도하세요.")
+            cursor.execute("SELECT COUNT(*) AS contact_count FROM personal_contacts WHERE company_id=%s AND owner_user_id=%s AND group_id=%s AND status='active'", (user.companyId, user.userId, group_id))
+            contact_count = int(cursor.fetchone()["contact_count"])
+            cursor.execute("UPDATE personal_contacts SET group_id=NULL,updated_at=NOW() WHERE company_id=%s AND owner_user_id=%s AND group_id=%s AND status='active'", (user.companyId, user.userId, group_id))
+            cursor.execute("UPDATE contact_groups SET status='deleted',updated_at=NOW() WHERE id=%s", (group_id,))
+            self._audit(cursor, user, "contact_group", group_id, "workspace.contact_group.deleted", "active", "deleted", json.dumps({"contactCount": contact_count}, separators=(",", ":")))
+            conn.commit()
+
+    def _resolve_contact_group(self, cursor, user: AuthUserSummary, group_id: str | None) -> dict | None:
+        return self._owned_contact_group(cursor, user, group_id) if group_id else None
+
+    def _ensure_contact_email_available(self, cursor, user: AuthUserSummary, email: str, exclude_id: str | None = None) -> None:
+        params: tuple = (user.companyId, user.userId, email)
+        exclude_sql = ""
+        if exclude_id:
+            exclude_sql = " AND id<>%s"
+            params = (*params, exclude_id)
+        cursor.execute(
+            f"SELECT id FROM personal_contacts WHERE company_id=%s AND owner_user_id=%s AND LOWER(email)=LOWER(%s) AND status='active'{exclude_sql}",
+            params,
+        )
+        if cursor.fetchone():
+            raise self._contact_conflict("CONTACT_EMAIL_CONFLICT", "이미 등록된 이메일 주소입니다.")
+
+    def _owned_contact(self, user: AuthUserSummary, item_id: str) -> dict:
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT contact.*,contact_group.name AS group_name
+                FROM personal_contacts contact
+                LEFT JOIN contact_groups contact_group ON contact_group.id=contact.group_id AND contact_group.status='active'
+                WHERE contact.id=%s AND contact.company_id=%s AND contact.owner_user_id=%s AND contact.status='active'
+                """,
+                (item_id, user.companyId, user.userId),
+            )
+            row = cursor.fetchone()
+        if not row:
+            raise self._missing()
+        return dict(row)
+
+    def list_contacts(self, user: AuthUserSummary, query: str = "", group_id: str | None = None) -> dict:
+        normalized_query = query.strip()
+        search = f"%{normalized_query}%"
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            self._resolve_contact_group(cursor, user, group_id)
+            cursor.execute(
+                """
+                SELECT contact.*,contact_group.name AS group_name
+                FROM personal_contacts contact
+                LEFT JOIN contact_groups contact_group ON contact_group.id=contact.group_id AND contact_group.status='active'
+                WHERE contact.company_id=%s AND contact.owner_user_id=%s AND contact.status='active'
+                  AND (%s IS NULL OR contact.group_id=%s)
+                  AND (%s='' OR contact.name ILIKE %s OR contact.email ILIKE %s OR contact.phone ILIKE %s OR contact.company_name ILIKE %s OR contact.memo ILIKE %s)
+                ORDER BY contact.name,contact.email LIMIT 500
+                """,
+                (user.companyId, user.userId, group_id, group_id, normalized_query, search, search, search, search, search),
+            )
+            return {"items": [dict(row) for row in cursor.fetchall()]}
 
     def create_contact(self, user: AuthUserSummary, payload: ContactPayload) -> dict:
         item_id = f"ctc_{uuid4().hex[:12]}"
         with self.db.connect() as conn, conn.cursor() as cursor:
-            cursor.execute("INSERT INTO personal_contacts (id,company_id,owner_user_id,name,email,phone,company_name,memo,created_at,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())", (item_id,user.companyId,user.userId,payload.name,payload.email.lower(),payload.phone,payload.companyName,payload.memo))
-            self._audit(cursor,user,"contact",item_id,"workspace.contact.created",None,"active")
+            self._lock_contact_owner(cursor, user)
+            self._resolve_contact_group(cursor, user, payload.groupId)
+            self._ensure_contact_email_available(cursor, user, payload.email)
+            cursor.execute(
+                "INSERT INTO personal_contacts (id,company_id,owner_user_id,group_id,name,email,phone,company_name,memo,created_at,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())",
+                (item_id, user.companyId, user.userId, payload.groupId, payload.name, payload.email, payload.phone, payload.companyName, payload.memo),
+            )
+            self._audit(cursor, user, "contact", item_id, "workspace.contact.created", None, "active")
             conn.commit()
-        return self._owned("personal_contacts",user,item_id)
+        return self._owned_contact(user, item_id)
 
     def update_contact(self, user: AuthUserSummary, item_id: str, payload: ContactPayload) -> dict:
-        current = self._owned("personal_contacts",user,item_id)
+        current = self._owned_contact(user, item_id)
         with self.db.connect() as conn, conn.cursor() as cursor:
-            cursor.execute("UPDATE personal_contacts SET name=%s,email=%s,phone=%s,company_name=%s,memo=%s,updated_at=NOW() WHERE id=%s AND owner_user_id=%s AND status='active'", (payload.name,payload.email.lower(),payload.phone,payload.companyName,payload.memo,item_id,user.userId))
-            self._audit(cursor,user,"contact",item_id,"workspace.contact.updated",current['status'],"active")
+            self._lock_contact_owner(cursor, user)
+            self._resolve_contact_group(cursor, user, payload.groupId)
+            self._ensure_contact_email_available(cursor, user, payload.email, item_id)
+            cursor.execute(
+                "UPDATE personal_contacts SET group_id=%s,name=%s,email=%s,phone=%s,company_name=%s,memo=%s,updated_at=NOW() WHERE id=%s AND company_id=%s AND owner_user_id=%s AND status='active'",
+                (payload.groupId, payload.name, payload.email, payload.phone, payload.companyName, payload.memo, item_id, user.companyId, user.userId),
+            )
+            self._audit(cursor, user, "contact", item_id, "workspace.contact.updated", current["status"], "active")
             conn.commit()
-        return self._owned("personal_contacts",user,item_id)
+        return self._owned_contact(user, item_id)
 
     def delete_contact(self, user: AuthUserSummary, item_id: str) -> None:
-        self._soft_delete("personal_contacts","contact","workspace.contact.deleted",user,item_id)
+        self._owned_contact(user, item_id)
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            cursor.execute("UPDATE personal_contacts SET status='deleted',updated_at=NOW() WHERE id=%s AND company_id=%s AND owner_user_id=%s AND status='active'", (item_id, user.companyId, user.userId))
+            self._audit(cursor, user, "contact", item_id, "workspace.contact.deleted", "active", "deleted")
+            conn.commit()
+
+    def list_public_contacts(self, user: AuthUserSummary, query: str = "") -> list[dict]:
+        normalized_query = query.strip()
+        search = f"%{normalized_query}%"
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT u.id,u.name,u.email,COALESCE(d.name,'') AS department_name,r.name AS role_name
+                FROM users u JOIN roles r ON r.id=u.role_id AND r.status='active'
+                LEFT JOIN departments d ON d.id=u.department_id AND d.status='active'
+                WHERE u.company_id=%s AND u.status='active'
+                  AND (%s='' OR u.name ILIKE %s OR u.email ILIKE %s OR COALESCE(d.name,'') ILIKE %s OR r.name ILIKE %s)
+                ORDER BY u.name,u.email LIMIT 500
+                """,
+                (user.companyId, normalized_query, search, search, search, search),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    @staticmethod
+    def _validate_contact_import_file(file_name: str, content_type: str, content: bytes) -> None:
+        if not file_name.lower().endswith(".csv"):
+            raise HTTPException(status_code=400, detail={"code": "CONTACT_IMPORT_FILE_INVALID", "userMessage": "CSV 파일만 가져올 수 있습니다."})
+        allowed_types = {"text/csv", "application/csv", "application/vnd.ms-excel", "text/plain", "application/octet-stream"}
+        if content_type.lower() not in allowed_types:
+            raise HTTPException(status_code=400, detail={"code": "CONTACT_IMPORT_FILE_INVALID", "userMessage": "CSV 형식의 파일을 선택하세요."})
+        if not content:
+            raise HTTPException(status_code=400, detail={"code": "CONTACT_IMPORT_FILE_EMPTY", "userMessage": "빈 CSV 파일은 가져올 수 없습니다."})
+        if len(content) > 1024 * 1024:
+            raise HTTPException(status_code=413, detail={"code": "CONTACT_IMPORT_FILE_TOO_LARGE", "userMessage": "CSV 파일은 최대 1MB입니다."})
+
+    @staticmethod
+    def _parse_contact_csv(content: bytes) -> dict:
+        digest = sha256(content).hexdigest()
+        try:
+            text = content.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            raise HTTPException(status_code=400, detail={"code": "CONTACT_IMPORT_ENCODING_INVALID", "userMessage": "UTF-8 CSV 파일만 가져올 수 있습니다."})
+        reader = csv.DictReader(io.StringIO(text, newline=""))
+        headers = [header.strip() for header in (reader.fieldnames or []) if header is not None]
+        required_headers = {"name", "email"}
+        allowed_headers = {"name", "email", "phone", "companyName", "memo", "groupName"}
+        errors: list[dict] = []
+        if not required_headers.issubset(headers) or any(header not in allowed_headers for header in headers) or len(headers) != len(set(headers)):
+            errors.append({"rowNumber": 1, "message": "CSV 헤더를 확인하세요. 필수 헤더는 name,email입니다."})
+            return {"digest": digest, "rows": [], "errors": errors, "totalRows": 0}
+        reader.fieldnames = headers
+        raw_rows = list(reader)
+        if len(raw_rows) > 500:
+            errors.append({"rowNumber": 502, "message": "CSV 데이터 행은 최대 500개입니다."})
+            return {"digest": digest, "rows": [], "errors": errors, "totalRows": len(raw_rows)}
+        rows: list[dict] = []
+        for index, raw in enumerate(raw_rows, start=2):
+            name = " ".join((raw.get("name") or "").split())
+            email = (raw.get("email") or "").strip().lower()
+            phone = (raw.get("phone") or "").strip()
+            company_name = (raw.get("companyName") or "").strip()
+            memo = (raw.get("memo") or "").strip()
+            group_name = " ".join((raw.get("groupName") or "").split())
+            row_errors: list[str] = []
+            if None in raw: row_errors.append("허용된 헤더 수보다 값이 많습니다.")
+            if not name or len(name) > 120: row_errors.append("이름은 1~120자여야 합니다.")
+            if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email) or len(email) > 255: row_errors.append("이메일 형식이 올바르지 않습니다.")
+            if len(phone) > 64: row_errors.append("전화번호는 64자 이하여야 합니다.")
+            if len(company_name) > 160: row_errors.append("회사명은 160자 이하여야 합니다.")
+            if len(memo) > 2000: row_errors.append("메모는 2000자 이하여야 합니다.")
+            if len(group_name) > 60: row_errors.append("그룹 이름은 60자 이하여야 합니다.")
+            if row_errors:
+                errors.append({"rowNumber": index, "message": " ".join(row_errors)})
+                continue
+            rows.append({"rowNumber": index, "name": name, "email": email, "phone": phone, "companyName": company_name, "memo": memo, "groupName": group_name})
+        return {"digest": digest, "rows": rows, "errors": errors, "totalRows": len(raw_rows)}
+
+    @staticmethod
+    def _build_contact_import_plan(cursor, user: AuthUserSummary, parsed: dict) -> dict:
+        cursor.execute("SELECT LOWER(email) AS email FROM personal_contacts WHERE company_id=%s AND owner_user_id=%s AND status='active'", (user.companyId, user.userId))
+        existing_emails = {row["email"] for row in cursor.fetchall()}
+        cursor.execute("SELECT id,name FROM contact_groups WHERE company_id=%s AND owner_user_id=%s AND status='active'", (user.companyId, user.userId))
+        existing_groups = {row["name"].lower(): dict(row) for row in cursor.fetchall()}
+        seen: set[str] = set()
+        rows_to_create: list[dict] = []
+        existing_count = 0
+        file_duplicate_count = 0
+        for row in parsed["rows"]:
+            if row["email"] in seen:
+                file_duplicate_count += 1
+                continue
+            seen.add(row["email"])
+            if row["email"] in existing_emails:
+                existing_count += 1
+                continue
+            rows_to_create.append(row)
+        groups_to_create = sorted({row["groupName"] for row in rows_to_create if row["groupName"] and row["groupName"].lower() not in existing_groups})
+        return {
+            "rowsToCreate": rows_to_create,
+            "existingGroups": existing_groups,
+            "existingEmailCount": existing_count,
+            "fileDuplicateCount": file_duplicate_count,
+            "groupsToCreate": groups_to_create,
+        }
+
+    def preview_contact_import(self, user: AuthUserSummary, file_name: str, content_type: str, content: bytes) -> dict:
+        self._validate_contact_import_file(file_name, content_type, content)
+        parsed = self._parse_contact_csv(content)
+        if parsed["errors"]:
+            return {**parsed, "newCount": 0, "existingEmailCount": 0, "fileDuplicateCount": 0, "groupsToCreate": [], "canApply": False}
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            plan = self._build_contact_import_plan(cursor, user, parsed)
+        return {
+            "digest": parsed["digest"], "totalRows": parsed["totalRows"], "errors": [],
+            "newCount": len(plan["rowsToCreate"]), "existingEmailCount": plan["existingEmailCount"],
+            "fileDuplicateCount": plan["fileDuplicateCount"], "groupsToCreate": plan["groupsToCreate"], "canApply": True,
+        }
+
+    def apply_contact_import(self, user: AuthUserSummary, file_name: str, content_type: str, content: bytes, expected_digest: str) -> dict:
+        self._validate_contact_import_file(file_name, content_type, content)
+        parsed = self._parse_contact_csv(content)
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_digest) or parsed["digest"] != expected_digest:
+            raise HTTPException(status_code=409, detail={"code": "CONTACT_IMPORT_DIGEST_CONFLICT", "userMessage": "미리보기와 같은 CSV 파일을 다시 선택하세요."})
+        if parsed["errors"]:
+            raise HTTPException(status_code=400, detail={"code": "CONTACT_IMPORT_ROWS_INVALID", "userMessage": "오류 행을 수정한 뒤 다시 가져오세요."})
+        created_contact_ids: list[str] = []
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            self._lock_contact_owner(cursor, user)
+            plan = self._build_contact_import_plan(cursor, user, parsed)
+            group_by_name = dict(plan["existingGroups"])
+            cursor.execute("SELECT COALESCE(MAX(sort_order),-1)+1 AS next_sort FROM contact_groups WHERE owner_user_id=%s AND status='active'", (user.userId,))
+            next_sort = int(cursor.fetchone()["next_sort"])
+            for offset, group_name in enumerate(plan["groupsToCreate"]):
+                group_id = f"ctg_{uuid4().hex[:12]}"
+                cursor.execute("INSERT INTO contact_groups (id,company_id,owner_user_id,name,sort_order,status,created_at,updated_at) VALUES(%s,%s,%s,%s,%s,'active',NOW(),NOW())", (group_id, user.companyId, user.userId, group_name, next_sort + offset))
+                group_by_name[group_name.lower()] = {"id": group_id, "name": group_name}
+            for row in plan["rowsToCreate"]:
+                contact_id = f"ctc_{uuid4().hex[:12]}"
+                group = group_by_name.get(row["groupName"].lower()) if row["groupName"] else None
+                cursor.execute(
+                    "INSERT INTO personal_contacts (id,company_id,owner_user_id,group_id,name,email,phone,company_name,memo,created_at,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())",
+                    (contact_id, user.companyId, user.userId, group["id"] if group else None, row["name"], row["email"], row["phone"], row["companyName"], row["memo"]),
+                )
+                created_contact_ids.append(contact_id)
+            digest = parsed["digest"]
+            reason = json.dumps({"createdCount": len(created_contact_ids), "skippedCount": plan["existingEmailCount"] + plan["fileDuplicateCount"], "groupCount": len(plan["groupsToCreate"]), "digestPrefix": digest[:12]}, separators=(",", ":"))
+            self._audit(cursor, user, "contact_import", user.userId, "workspace.contact.imported", None, "complete", reason)
+            conn.commit()
+        return {"createdCount": len(created_contact_ids), "skippedCount": plan["existingEmailCount"] + plan["fileDuplicateCount"], "groupCount": len(plan["groupsToCreate"]), "digest": parsed["digest"]}
 
     def list_files(self, user: AuthUserSummary) -> dict:
         with self.db.connect() as conn, conn.cursor() as cursor:

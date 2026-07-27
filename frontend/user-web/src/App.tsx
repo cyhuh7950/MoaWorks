@@ -1757,6 +1757,11 @@ export default function App() {
     setQuickComposeMode("mail");
   }
 
+  function openAddressBookMailCompose(email: string) {
+    openNewMailCompose();
+    setMailComposeForm({ ...createEmptyMailComposeForm(), to: email });
+  }
+
   async function refreshMailSignaturesForCompose() {
     if (!token) return;
     try {
@@ -4635,6 +4640,7 @@ export default function App() {
               saveLocale(resolveLocale(nextLocale));
               saveTimezone(nextTimezone);
             }}
+            onComposeMail={openAddressBookMailCompose}
           />
         );
       }

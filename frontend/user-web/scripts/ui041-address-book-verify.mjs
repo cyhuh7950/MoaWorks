@@ -22,7 +22,7 @@ const checks = [
   ["공통 popup", panel.includes("CommonPopup")],
   ["메일 작성 연결", panel.includes("onComposeMail") && app.includes("openAddressBookMailCompose")],
   ["API 그룹", api.includes('"/workspace/contact-groups"')],
-  ["API 공용", api.includes('"/workspace/public-contacts')],
+  ["API 공용", api.includes("/workspace/public-contacts")],
   ["API 가져오기", api.includes('"/workspace/contacts/import') && api.includes("expectedDigest")],
   ["기존 contacts 경로 보존", api.includes('"/workspace/contacts') && workspace.includes("AddressBookPanel")],
   ["UI-041 범위 CSS", styles.includes(".ui041-address-book") && styles.includes("font-size: 12px")],

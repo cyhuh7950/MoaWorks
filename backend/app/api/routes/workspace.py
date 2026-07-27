@@ -1,9 +1,12 @@
+from datetime import datetime
+from typing import Literal
+
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 
 from app.api.dependencies import permission_required
 from app.schemas.directory import AuthUserSummary
-from app.schemas.workspace import CalendarCreatePayload, CalendarOrderPayload, CalendarSubscriptionPayload, CalendarUpdatePayload, ContactPayload, FileRenamePayload, NoticeListResponse, NoticeRecord, PreferencePayload, SchedulePayload, WorkspaceDirectoryResponse, WorkspaceItemList, WorkspacePreferencesResponse
+from app.schemas.workspace import CalendarCreatePayload, CalendarOrderPayload, CalendarSubscriptionPayload, CalendarUpdatePayload, ContactGroupCreatePayload, ContactGroupUpdatePayload, ContactPayload, FileRenamePayload, NoticeListResponse, NoticeRecord, PreferencePayload, SchedulePayload, WorkspaceDirectoryResponse, WorkspaceItemList, WorkspacePreferencesResponse
 from app.services.workspace_service import WorkspaceService
 
 router = APIRouter()
@@ -89,13 +92,27 @@ def delete_schedule(item_id: str, user: AuthUserSummary = Depends(permission_req
 
 
 @router.get('/contacts', response_model=WorkspaceItemList)
-def list_contacts(user: AuthUserSummary = Depends(permission_required("profile:read"))):
-    return _service().list_contacts(user)
+def list_contacts(query: str = Query(default="", max_length=120), groupId: str | None = Query(default=None), user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().list_contacts(user, query, groupId)
 
 
 @router.post('/contacts')
 def create_contact(payload: ContactPayload, user: AuthUserSummary = Depends(permission_required("profile:read"))):
     return _service().create_contact(user, payload)
+
+
+@router.post('/contacts/import')
+async def import_contacts(
+    file: UploadFile = File(...),
+    mode: Literal["preview", "apply"] = Query(),
+    expectedDigest: str | None = Query(default=None),
+    user: AuthUserSummary = Depends(permission_required("profile:read")),
+):
+    content = await file.read()
+    service = _service()
+    if mode == "preview":
+        return service.preview_contact_import(user, file.filename or "", file.content_type or "", content)
+    return service.apply_contact_import(user, file.filename or "", file.content_type or "", content, expectedDigest or "")
 
 
 @router.patch('/contacts/{item_id}')
@@ -106,6 +123,31 @@ def update_contact(item_id: str, payload: ContactPayload, user: AuthUserSummary 
 @router.delete('/contacts/{item_id}', status_code=204)
 def delete_contact(item_id: str, user: AuthUserSummary = Depends(permission_required("profile:read"))):
     _service().delete_contact(user, item_id)
+
+
+@router.get('/contact-groups')
+def list_contact_groups(user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return {"items": _service().list_contact_groups(user)}
+
+
+@router.post('/contact-groups')
+def create_contact_group(payload: ContactGroupCreatePayload, user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().create_contact_group(user, payload)
+
+
+@router.patch('/contact-groups/{group_id}')
+def update_contact_group(group_id: str, payload: ContactGroupUpdatePayload, user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().update_contact_group(user, group_id, payload)
+
+
+@router.delete('/contact-groups/{group_id}', status_code=204)
+def delete_contact_group(group_id: str, expectedUpdatedAt: datetime = Query(), user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    _service().delete_contact_group(user, group_id, expectedUpdatedAt)
+
+
+@router.get('/public-contacts')
+def list_public_contacts(query: str = Query(default="", max_length=120), user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return {"items": _service().list_public_contacts(user, query)}
 
 
 @router.get('/files', response_model=WorkspaceItemList)

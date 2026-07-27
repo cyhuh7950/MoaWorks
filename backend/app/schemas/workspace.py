@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import re
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -143,6 +144,45 @@ class ContactPayload(BaseModel):
     phone: str = Field(default="", max_length=64)
     companyName: str = Field(default="", max_length=160)
     memo: str = Field(default="", max_length=2000)
+    groupId: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def normalize_contact_name(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("연락처 이름을 입력하세요.")
+        return normalized
+
+    @field_validator("email")
+    @classmethod
+    def normalize_contact_email(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", normalized):
+            raise ValueError("올바른 이메일 주소를 입력하세요.")
+        return normalized
+
+    @field_validator("groupId")
+    @classmethod
+    def normalize_group_id(cls, value: str | None) -> str | None:
+        normalized = value.strip() if value else ""
+        return normalized or None
+
+
+class ContactGroupCreatePayload(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("그룹 이름을 입력하세요.")
+        return normalized
+
+
+class ContactGroupUpdatePayload(ContactGroupCreatePayload):
+    expectedUpdatedAt: datetime
 
 
 class PreferencePayload(BaseModel):
