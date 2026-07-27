@@ -22,7 +22,7 @@ const checks = [
   ["부서·구성원 상태 분리", panel.includes("departmentsLoading") && panel.includes("membersLoading") && panel.includes("departmentsError") && panel.includes("membersError")],
   ["팝업 오류 초기화와 상태", panel.includes('setPopupError("")') && panel.includes("popupLoading") && panel.includes("popupEmpty")],
   ["상세 최신 요청 보호", panel.includes("detailRequestSequence") && panel.includes("sequence === detailRequestSequence.current")],
-  ["목록 밖 선택 해제", panel.includes("members.some((member) => member.id === selectedMemberId)") && panel.includes("setSelectedMemberId(\"\")") && panel.includes("setDetail(null)")],
+  ["목록 밖 선택 해제", panel.includes("members.some((member) => member.id === currentSelectionId)") && panel.includes("setSelectedMemberId(\"\")") && panel.includes("setDetail(null)")],
   ["상세 조회", panel.includes("fetchOrganizationMemberDetail")],
   ["메일 작성 연결", panel.includes("onComposeMail")],
   ["단일 선택 dialog", panel.includes('role="dialog"') && panel.includes('aria-modal="true"') && panel.includes("popupSelectionId")],

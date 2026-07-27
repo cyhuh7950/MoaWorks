@@ -75,7 +75,7 @@ class WorkspaceService:
                 (user.companyId,),
             )
             rows = cursor.fetchall()
-        return {"items": [{
+        return {"departments": [{
             "id": row["id"], "name": row["name"], "departmentCode": row["department_code"],
             "parentId": row["parent_id"], "directMemberCount": int(row["direct_member_count"]),
         } for row in rows]}
@@ -109,7 +109,7 @@ class WorkspaceService:
                 params,
             )
             rows = cursor.fetchall()
-        return {"items": [{
+        return {"members": [{
             "id": row["id"], "name": row["name"], "email": row["email"],
             "departmentId": row["department_id"], "departmentName": row["department_name"], "roleName": row["role_name"],
         } for row in rows]}
