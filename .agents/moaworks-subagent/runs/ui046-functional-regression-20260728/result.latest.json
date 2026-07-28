@@ -1,6 +1,6 @@
 {
   "taskId": "ui046-functional-regression-20260728",
-  "issueId": "UI046_HOME_SEARCH_NOTIFICATION_LIVE_ADAPTER_REMEDIATION",
+  "issueId": "UI046_FUNCTIONAL_API_DB_AUDIT_REGRESSION",
   "agentId": "/root/ui045_mail_compose_focus",
   "outcome": "SUCCESS",
   "judgement": "HOME_ADAPTER_READY_LIVE_INPUT_REQUIRED",
