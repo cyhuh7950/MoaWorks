@@ -2598,6 +2598,15 @@ textarea {
   transform: translateY(-2px);
   transition: opacity .14s ease, transform .14s ease;
 }
+#root .ui031-help[data-tooltip]::after {
+  left: auto;
+  right: 0;
+  width: 8em;
+  max-width: 8em;
+  box-sizing: border-box;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 #root .ui031-help[data-tooltip]:hover::after,
 #root .ui031-help[data-tooltip]:focus-visible::after,
 #root .ui031-primary-wrap[data-tooltip]:hover::after,
