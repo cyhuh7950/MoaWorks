@@ -125,6 +125,15 @@ assert.equal(passed.status, "PASS");
 assert.equal(valid.cleanupCalled(), true);
 checks.push("disposable user and role complete contract");
 
+const lowercaseOwnership = ownershipFixture();
+const lowercaseUser = lowercaseOwnership.records.find((record) => record.kind === "test_user");
+lowercaseUser.loginId = lowercaseUser.loginId.toLowerCase();
+const lowercaseLogin = drivers({ ownership: lowercaseOwnership, browser: browserFixture({ session: { activeLoginId: lowercaseUser.loginId } }) });
+const lowercasePassed = await runHomeSearchNotification({ manifest, runId, evidenceDir: "contract-evidence", browserDriver: lowercaseLogin.browserDriver, dbDriver: lowercaseLogin.dbDriver });
+assert.equal(lowercasePassed.status, "PASS");
+assert.equal(lowercaseLogin.cleanupCalled(), true);
+checks.push("lowercase normalized disposable login contract");
+
 const protectedSession = drivers({ browser: browserFixture({ session: { activeLoginId: "admin" } }) });
 await expectCode("PROTECTED_ACCOUNT_SESSION_REJECTED", protectedSession);
 assert.equal(protectedSession.cleanupCalled(), true);

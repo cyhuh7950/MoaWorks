@@ -69,7 +69,7 @@ function assertOwnership(ownership, runId) {
   if (testUsers.length !== 1 || testRoles.length !== 1) throw contractError("DISPOSABLE_IDENTITY_REQUIRED");
   const [testUser] = testUsers;
   const [testRole] = testRoles;
-  if (typeof testUser.loginId !== "string" || !testUser.loginId.includes(runId) || isProtectedLogin(testUser.loginId) || testUser.roleId !== testRole.id) throw contractError("DISPOSABLE_IDENTITY_INVALID");
+  if (typeof testUser.loginId !== "string" || !testUser.loginId.toLowerCase().includes(runId.toLowerCase()) || isProtectedLogin(testUser.loginId) || testUser.roleId !== testRole.id) throw contractError("DISPOSABLE_IDENTITY_INVALID");
   if (typeof testRole.name !== "string" || !testRole.name.includes(runId)) throw contractError("DISPOSABLE_IDENTITY_INVALID");
   const states = ownership.records.filter((record) => record.kind === "notification_state");
   if (states.length === 0 || states.some((record) => record.userId !== testUser.id)) throw contractError("OWNERSHIP_CONTRACT_INVALID");

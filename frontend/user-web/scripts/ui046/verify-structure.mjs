@@ -35,6 +35,7 @@ const checks = [
   ["영역 계약 필드", manifest.areas.every((area) => area.screenActions.length && area.apiPaths.length && area.dbTables.length && area.auditEvents.length && area.cleanupOwnership)],
   ["홈 검색 알림 READY", readyArea?.status === "READY" && readyArea?.adapter === "home-search-notification" && readyArea.liveInputContract?.missingInputStatus === "LIVE_INPUT_REQUIRED"],
   ["disposable user 안전 계약", JSON.stringify(readyArea?.liveInputContract?.requiredOwnershipKinds) === JSON.stringify(["test_user", "test_role", "notice", "schedule", "notification", "notification_state"]) && readyArea?.liveInputContract?.sessionPolicy === "run-id-disposable-user-only" && readyArea?.liveInputContract?.readAllPolicy === "run-id-owned-notification-state-only" && readyArea?.liveInputContract?.existingStateSnapshotRestore === "forbidden"],
+  ["정규화 login run-id 비교", readyArea?.liveInputContract?.loginRunIdComparison === "case-insensitive"],
   ["나머지 7개 GAP 유지", JSON.stringify(manifest.areas.filter((area) => area.status === "GAP").map((area) => area.id)) === JSON.stringify(expectedGapAreaIds) && manifest.areas.filter((area) => area.status === "GAP").every((area) => area.adapter === null)],
   ["보호 계정 고정", JSON.stringify(manifest.protectedAccounts) === JSON.stringify(["admin", "cyhuh", "ysla"])],
   ["sinsan HTTPS origin", manifest.environment.userOrigin === "https://user.moaworks.sinsan.kr" && manifest.environment.adminOrigin === "https://admin.moaworks.sinsan.kr"],

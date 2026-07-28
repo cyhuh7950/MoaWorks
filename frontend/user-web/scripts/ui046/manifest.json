@@ -34,6 +34,7 @@
         "dbDriverMethods": ["prepareOwnedData", "collectOwnedEvidence", "cleanupOwnedData"],
         "requiredOwnershipKinds": ["test_user", "test_role", "notice", "schedule", "notification", "notification_state"],
         "sessionPolicy": "run-id-disposable-user-only",
+        "loginRunIdComparison": "case-insensitive",
         "readAllPolicy": "run-id-owned-notification-state-only",
         "existingStateSnapshotRestore": "forbidden",
         "secretSource": "runtime-driver-only",
