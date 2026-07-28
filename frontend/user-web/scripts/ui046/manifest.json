@@ -48,12 +48,23 @@
       "label": "메일",
       "screenActions": ["목록·상세", "임시저장·발송·답장·전달", "읽음·중요·분류·이동·스팸·삭제", "수신확인", "설정 9종 저장·재조회"],
       "apiPaths": ["/api/v1/mail", "/api/v1/mail/messages", "/api/v1/mail/bulk", "/api/v1/mail/preferences", "/api/v1/mail/signatures", "/api/v1/mail/settings"],
-      "dbTables": ["mail_messages", "mail_recipients", "mail_attachments", "mail_user_folders", "mail_tags", "mail_delivery_queue", "user_mail_basic_preferences", "user_mail_signatures", "user_mailbox_policies", "user_spam_rules", "mail_auto_classification_rules", "mail_auto_forward_targets", "mail_out_of_office_policies", "mail_external_accounts", "user_recent_mail_recipients", "audit_logs"],
+      "dbTables": ["roles", "users", "mail_accounts", "mail_messages", "mail_recipients", "mail_attachments", "mail_user_folders", "mail_tags", "mail_delivery_queue", "user_mail_basic_preferences", "user_mail_signatures", "user_mailbox_policies", "user_spam_rules", "mail_auto_classification_rules", "mail_auto_forward_targets", "mail_out_of_office_policies", "mail_external_accounts", "user_recent_mail_recipients", "audit_logs"],
       "auditEvents": ["mail.sent", "mail.draft.saved", "mail.preferences.basic.update", "mail.signature.created", "mail.spam.rule.created", "mail.auto_classification.rule.created", "mail.auto_forward.targets.created", "mail.out_of_office.policy.updated", "mail.external.created"],
-      "cleanupOwnership": "UI046 subject, run id recipient, attachment storage key, settings snapshot으로 식별한 데이터만 삭제·원복",
+      "cleanupOwnership": "UI046 run-id 임시 역할 1개, 발신·수신 사용자와 mail account, mail/recipient/attachment/folder/tag/delivery/settings/audit/storage만 제거 또는 soft-delete; 기존 사용자·provider 변경 금지",
       "existingCoverage": ["LIVE_PARTIAL:ui014-mail-shell-verify.mjs", "STATIC:ui014-ui030 frontend and backend tests"],
-      "adapter": null,
-      "status": "GAP"
+      "liveInputContract": {
+        "browserDriverMethods": ["runMailCore", "runMailSettings", "close"],
+        "dbDriverMethods": ["prepareOwnedData", "collectMailEvidence", "cleanupOwnedData"],
+        "identityTopology": "one-run-role-two-run-users-two-mail-accounts",
+        "recipientPolicy": "run-id-internal-users-only",
+        "externalNetworkPolicy": "disabled-dummy-invalid-zero-attempts",
+        "attachmentPolicy": "run-id-txt-max-1024-bytes",
+        "compositePolicy": "core-and-settings-and-cleanup",
+        "secretSource": "runtime-memory-only",
+        "missingInputStatus": "LIVE_INPUT_REQUIRED"
+      },
+      "adapter": "mail",
+      "status": "READY"
     },
     {
       "id": "approval",

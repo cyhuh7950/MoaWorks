@@ -3,6 +3,7 @@ import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { runHomeSearchNotification } from "./adapters/home-search-notification.mjs";
+import { runMail } from "./adapters/mail.mjs";
 import { runPreflight } from "./adapters/preflight.mjs";
 import { runStaticStructure } from "./adapters/static-structure.mjs";
 
@@ -18,6 +19,7 @@ const areaId = areaArg?.slice("--area=".length) || "";
 const driverArg = process.argv.find((value) => value.startsWith("--driver-module="));
 const driverModuleName = driverArg?.slice("--driver-module=".length) || "";
 const runIdRegex = new RegExp(manifest.runIdPattern);
+const isMain = Boolean(process.argv[1]) && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 const sensitiveKey = /password|hash|token|cookie|authorization|secret|set-cookie/i;
 const sensitiveValue = /Bearer\s+[A-Za-z0-9._=-]+|([?&](?:token|access_token|authorization|password|secret)=)[^&\s]+/gi;
@@ -98,29 +100,42 @@ function execute() {
 
 async function executeArea() {
   assertRunId();
-  if (areaId !== "home-search-notification") throw errorWithCode("AREA_NOT_READY");
+  if (!["home-search-notification", "mail"].includes(areaId)) throw errorWithCode("AREA_NOT_READY");
   const directory = safeEvidenceDir();
   const drivers = await loadRuntimeDrivers();
-  const result = await runHomeSearchNotification({ manifest, runId, browserDriver: drivers?.browserDriver, dbDriver: drivers?.dbDriver, evidenceDir: directory });
+  const result = areaId === "mail"
+    ? await runMail({ manifest, runId, browserDriver: drivers?.browserDriver, dbDriver: drivers?.dbDriver, evidenceDir: directory })
+    : await runHomeSearchNotification({ manifest, runId, browserDriver: drivers?.browserDriver, dbDriver: drivers?.dbDriver, evidenceDir: directory });
+  await persistAreaEvidence({ result, directory, selectedAreaId: areaId, selectedRunId: runId });
+  process.stdout.write(`${JSON.stringify({ runId, areaId, status: result.status, evidence: relative(root, directory).replaceAll("\\", "/") })}\n`);
+}
+
+export async function persistAreaEvidence({ result, directory, selectedAreaId, selectedRunId }) {
+  if (!Array.isArray(result?.screenshots) || new Set(result.screenshots).size !== result.screenshots.length) throw errorWithCode("SCREENSHOT_EVIDENCE_DUPLICATE");
   for (const screenshot of result.screenshots) {
     if (!/^screenshots\/[A-Za-z0-9._-]+\.png$/.test(screenshot)) throw errorWithCode("SCREENSHOT_PATH_REJECTED");
     await access(resolve(directory, screenshot)).catch(() => { throw errorWithCode("SCREENSHOT_EVIDENCE_MISSING"); });
   }
   await writeJson(resolve(directory, "manifest.json"), manifest);
-  await writeJson(resolve(directory, "result.json"), { runId, status: result.status, areaId: result.areaId, actions: result.actions, screenshots: result.screenshots });
+  await writeJson(resolve(directory, "result.json"), { runId: selectedRunId, status: result.status, areaId: result.areaId, actions: result.actions, screenshots: result.screenshots, ...(result.mutationOwnership ? { mutationOwnership: result.mutationOwnership } : {}) });
   await writeJson(resolve(directory, "network.json"), result.network);
   await writeJson(resolve(directory, "db-audit.json"), result.dbAudit);
   await writeJson(resolve(directory, "cleanup.json"), result.cleanup);
-  await writeFile(resolve(directory, "report.md"), `판정 -> ${result.status}\n\n판단 이유 -> home-search-notification LIVE adapter가 run-id disposable user 세션, same-origin API, DB, audit, 재조회와 cleanup 계약을 통과했습니다.\n\n조치 -> 나머지 7개 GAP은 유지하고 어울1이 증적을 독립 검수합니다.\n`, "utf8");
-  process.stdout.write(`${JSON.stringify({ runId, areaId, status: result.status, evidence: relative(root, directory).replaceAll("\\", "/") })}\n`);
+  const reportReason = selectedAreaId === "mail"
+    ? "메일 core/settings 화면, 실제 route family, same-origin API, DB/audit, 재조회와 cleanup 계약을 통과했습니다."
+    : "home-search-notification LIVE adapter가 run-id disposable user 세션, same-origin API, DB, audit, 재조회와 cleanup 계약을 통과했습니다.";
+  const remainingGapCount = manifest.areas.filter((area) => area.status === "GAP").length;
+  await writeFile(resolve(directory, "report.md"), `판정 -> ${result.status}\n\n판단 이유 -> ${reportReason}\n\n조치 -> 이 영역만 PASS이며 나머지 ${remainingGapCount}개 GAP과 UI-046 전체 WAIT를 유지하고 어울1이 증적을 독립 검수합니다.\n`, "utf8");
 }
 
 const commands = { plan, preflight, static: staticStructure, execute, "execute-area": executeArea };
-try {
-  if (!commands[command]) throw errorWithCode("USAGE_ERROR");
-  await commands[command]();
-} catch (error) {
-  const errorCode = String(error?.code || "EXECUTION_FAILED").split(":", 1)[0];
-  process.stderr.write(`${JSON.stringify({ status: errorCode === "LIVE_INPUT_REQUIRED" ? "LIVE_INPUT_REQUIRED" : "FAIL", errorCode })}\n`);
-  process.exitCode = errorCode === "LIVE_INPUT_REQUIRED" ? 2 : 1;
+if (isMain) {
+  try {
+    if (!commands[command]) throw errorWithCode("USAGE_ERROR");
+    await commands[command]();
+  } catch (error) {
+    const errorCode = String(error?.code || "EXECUTION_FAILED").split(":", 1)[0];
+    process.stderr.write(`${JSON.stringify({ status: errorCode === "LIVE_INPUT_REQUIRED" ? "LIVE_INPUT_REQUIRED" : "FAIL", errorCode })}\n`);
+    process.exitCode = errorCode === "LIVE_INPUT_REQUIRED" ? 2 : 1;
+  }
 }

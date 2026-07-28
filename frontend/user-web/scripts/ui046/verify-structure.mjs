@@ -14,7 +14,8 @@ const [manifestText, inventoryText, orchestrator] = await Promise.all([
 const manifest = JSON.parse(manifestText);
 const inventory = JSON.parse(inventoryText);
 const readyArea = manifest.areas.find((area) => area.id === "home-search-notification");
-const expectedGapAreaIds = ["mail", "approval", "calendar", "messenger", "address-organization", "files", "personal-help"];
+const mailArea = manifest.areas.find((area) => area.id === "mail");
+const expectedGapAreaIds = ["approval", "calendar", "messenger", "address-organization", "files", "personal-help"];
 
 const frontendFiles = await readdir(scripts);
 const sourceOnly = new Set(inventory.groups.find((group) => group.scope === "frontend-source-verifiers").sourceOnlyAllowlist);
@@ -36,7 +37,9 @@ const checks = [
   ["홈 검색 알림 READY", readyArea?.status === "READY" && readyArea?.adapter === "home-search-notification" && readyArea.liveInputContract?.missingInputStatus === "LIVE_INPUT_REQUIRED"],
   ["disposable user 안전 계약", JSON.stringify(readyArea?.liveInputContract?.requiredOwnershipKinds) === JSON.stringify(["test_user", "test_role", "notice", "schedule", "notification", "notification_state"]) && readyArea?.liveInputContract?.sessionPolicy === "run-id-disposable-user-only" && readyArea?.liveInputContract?.readAllPolicy === "run-id-owned-notification-state-only" && readyArea?.liveInputContract?.existingStateSnapshotRestore === "forbidden"],
   ["정규화 login run-id 비교", readyArea?.liveInputContract?.loginRunIdComparison === "case-insensitive"],
-  ["나머지 7개 GAP 유지", JSON.stringify(manifest.areas.filter((area) => area.status === "GAP").map((area) => area.id)) === JSON.stringify(expectedGapAreaIds) && manifest.areas.filter((area) => area.status === "GAP").every((area) => area.adapter === null)],
+  ["메일 composite READY", mailArea?.status === "READY" && mailArea?.adapter === "mail" && mailArea.liveInputContract?.identityTopology === "one-run-role-two-run-users-two-mail-accounts" && mailArea.liveInputContract?.recipientPolicy === "run-id-internal-users-only" && mailArea.liveInputContract?.externalNetworkPolicy === "disabled-dummy-invalid-zero-attempts" && mailArea.liveInputContract?.compositePolicy === "core-and-settings-and-cleanup"],
+  ["메일 execute-area 지원", orchestrator.includes("runMail") && orchestrator.includes('areaId === "mail"') && orchestrator.includes("SCREENSHOT_EVIDENCE_DUPLICATE")],
+  ["나머지 6개 GAP 유지", JSON.stringify(manifest.areas.filter((area) => area.status === "GAP").map((area) => area.id)) === JSON.stringify(expectedGapAreaIds) && manifest.areas.filter((area) => area.status === "GAP").every((area) => area.adapter === null)],
   ["보호 계정 고정", JSON.stringify(manifest.protectedAccounts) === JSON.stringify(["admin", "cyhuh", "ysla"])],
   ["sinsan HTTPS origin", manifest.environment.userOrigin === "https://user.moaworks.sinsan.kr" && manifest.environment.adminOrigin === "https://admin.moaworks.sinsan.kr"],
   ["same-origin 상대 API", manifest.areas.flatMap((area) => area.apiPaths).every((path) => path.startsWith("/api/v1/"))],
