@@ -63,6 +63,25 @@ class MailDeliveryOperations:
                 worker = cursor.fetchone() or {}
         return {"provider": self._provider_view(provider), "worker": dict(worker), "summary": summary}
 
+    def get_user_status(self, actor):
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """SELECT delivery_enabled,last_test_status FROM mail_provider_configs
+                    WHERE company_id=%s ORDER BY active DESC,updated_at DESC LIMIT 1""",
+                    (actor.companyId,),
+                )
+                provider = cursor.fetchone()
+        if provider is None:
+            raise ValueError("메일 provider를 찾을 수 없습니다.")
+        return {
+            "provider": {
+                "enabled": bool(provider["delivery_enabled"]),
+                "lastTestStatus": provider["last_test_status"],
+            }
+        }
+
     def list_queue(self, actor, status=None, limit=100, offset=0):
         clauses, params = ["q.company_id=%s"], [actor.companyId]
         if status:

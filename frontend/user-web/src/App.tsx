@@ -494,6 +494,11 @@ function parseTrashSelectionKey(key: string): { mailId: string; sourceMailbox: M
   return { mailId: key.slice(0, separator), sourceMailbox: sourceMailbox as MailTrashSource };
 }
 
+export function maskMailReadReceiptAddress(value: string): string {
+  const separator = value.indexOf("@");
+  return separator > 0 && separator < value.length - 1 ? `${value.slice(0, separator)}***${value.slice(separator)}` : "주소 비공개";
+}
+
 function withMailSubjectPrefix(subject: string, mode: MailComposeContext) {
   const prefix = mode === "forward" ? "Fwd:" : "Re:";
   let baseSubject = subject.trim();
@@ -4719,9 +4724,9 @@ export default function App() {
               <div className="user-mail-shell-group user-mail-resource-group" aria-label="사용자 메일함">
                 <div><strong>사용자 메일함</strong><button type="button" title="사용자 메일함 추가" onClick={() => openMailResourceModal("folder")}>+</button></div>
                 {mailFoldersData.map((folder) => <div className="user-mail-resource-row" key={folder.folderId}>
-                  <button type="button" aria-pressed={activeMailFolder === "folder:" + folder.folderId} onClick={() => openMailFolder("folder:" + folder.folderId)}>{folder.name} <span>{folder.messageCount}</span></button>
-                  <button type="button" title="메일함 이름 변경" onClick={() => openMailResourceModal("folder", folder)}>수정</button>
-                  <button type="button" title="메일함 삭제" onClick={() => setMailResourceDelete({ kind: "folder", id: folder.folderId, name: folder.name })}>삭제</button>
+                  <button type="button" aria-label={"메일함 " + folder.name + " 열기"} aria-pressed={activeMailFolder === "folder:" + folder.folderId} onClick={() => openMailFolder("folder:" + folder.folderId)}>{folder.name} <span>{folder.messageCount}</span></button>
+                  <button type="button" aria-label={"메일함 " + folder.name + " 관리"} title="메일함 이름 변경" onClick={(event) => { event.stopPropagation(); openMailResourceModal("folder", folder); }}>수정</button>
+                  <button type="button" aria-label={"메일함 " + folder.name + " 삭제"} title="메일함 삭제" onClick={(event) => { event.stopPropagation(); setMailResourceDelete({ kind: "folder", id: folder.folderId, name: folder.name }); }}>삭제</button>
                 </div>)}
               </div>
               <div className="user-mail-shell-group user-mail-resource-group" aria-label="태그">
@@ -5083,7 +5088,7 @@ export default function App() {
                           <ul>
                             {selectedMailDetail.recipients.map((recipient) => (
                               <li key={`${recipient.recipientKind}:${recipient.recipientEmail}`}>
-                                <span className="user-mail-read-receipt__recipient"><small>{recipient.recipientKind === "to" ? "받는 사람" : recipient.recipientKind === "cc" ? "참조" : recipient.recipientKind === "bcc" ? "숨은참조" : recipient.recipientKind}</small><strong>{recipient.recipientEmail}</strong></span>
+                                <span className="user-mail-read-receipt__recipient"><small>{recipient.recipientKind === "to" ? "받는 사람" : recipient.recipientKind === "cc" ? "참조" : recipient.recipientKind === "bcc" ? "숨은참조" : recipient.recipientKind}</small><strong>{maskMailReadReceiptAddress(recipient.recipientEmail)}</strong></span>
                                 <span className="user-mail-read-receipt__status">{recipient.recipientUserId ? recipient.isRead === true ? <>읽음 · <time dateTime={recipient.readAt || undefined}>{formatMailDate(recipient.readAt)}</time></> : "읽지 않음" : "확인 불가"}</span>
                               </li>
                             ))}

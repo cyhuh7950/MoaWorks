@@ -1489,8 +1489,10 @@ export type MailDeliveryQueueSummary = {
 };
 
 export type MailDeliveryStatusResponse = {
-  provider: MailDeliveryProviderStatus;
-  summary: MailDeliveryQueueSummary;
+  provider: {
+    enabled: boolean;
+    lastTestStatus: string;
+  };
 };
 
 export type MailRecentRecipient = {

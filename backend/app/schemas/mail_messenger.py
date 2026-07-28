@@ -1267,6 +1267,13 @@ class MailDeliveryStatusResponse(BaseModel):
     worker: dict
     summary: dict[str, int]
 
+class MailUserDeliveryProviderStatus(BaseModel):
+    enabled: bool
+    lastTestStatus: str
+
+class MailUserDeliveryStatusResponse(BaseModel):
+    provider: MailUserDeliveryProviderStatus
+
 class MailDeliveryQueueListResponse(BaseModel):
     items: list[MailDeliveryQueueItem]
     total: int

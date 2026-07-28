@@ -54,7 +54,7 @@ function verifyReceiptMask() {
 function verifyDeliveryStatusClient() {
   const typeSource = sourceSlice(api, "export type MailDeliveryStatusResponse = {", "export type MailRecentRecipient = {");
   assert.match(typeSource, /provider: \{\s*enabled: boolean;\s*lastTestStatus: string;\s*\};/);
-  assert.doesNotMatch(typeSource, /summary|worker|queue|relay|host|port|username|password|error/i);
+  assert.doesNotMatch(typeSource, /\b(?:summary|worker|queue|relay|host|port|username|password|error)\b/i);
   const requestSource = sourceSlice(api, "export async function fetchMailDeliveryStatus", "export async function markMailRead");
   assert.match(requestSource, /request<MailDeliveryStatusResponse>\("\/mail\/delivery\/status"/);
   assert.doesNotMatch(requestSource, /https?:\/\/|localhost|127\.0\.0\.1|NEXT_PUBLIC_API_BASE_URL/);

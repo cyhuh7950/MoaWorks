@@ -4,6 +4,10 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.api.routes import mail as mail_routes
 from app.schemas import mail_messenger
 from app.services.mail_delivery_operations import MailDeliveryOperations
 
@@ -74,6 +78,10 @@ class MailLiveCoreTest(unittest.TestCase):
             self.assertNotIn(forbidden, sql)
         self.assertEqual(db.cursor.params, ("company-a",))
 
+    def test_missing_provider_keeps_existing_error_contract(self):
+        with self.assertRaisesRegex(ValueError, "메일 provider를 찾을 수 없습니다"):
+            MailDeliveryOperations(db=FakeDb(None)).get_user_status(self.actor())
+
     def test_user_delivery_schema_is_exact_and_minimal(self):
         schema = getattr(mail_messenger, "MailUserDeliveryStatusResponse", None)
         self.assertIsNotNone(schema)
@@ -95,6 +103,27 @@ class MailLiveCoreTest(unittest.TestCase):
         self.assertIn("get_user_status(user)", route_source)
         self.assertNotIn("get_status(user)", route_source)
         self.assertNotIn("admin", route_source.lower())
+
+    def test_user_route_returns_200_minimal_projection(self):
+        app = FastAPI()
+        app.include_router(mail_routes.router, prefix="/api/v1/mail")
+        route = next(route for route in app.routes if route.path == "/api/v1/mail/delivery/status")
+        dependency = route.dependant.dependencies[0].call
+        app.dependency_overrides[dependency] = self.actor
+
+        class FakeOperations:
+            def get_user_status(self, actor):
+                self.actor = actor
+                return {"provider": {"enabled": True, "lastTestStatus": "success"}}
+
+        original = mail_routes._mail_delivery_operations
+        mail_routes._mail_delivery_operations = FakeOperations
+        try:
+            response = TestClient(app).get("/api/v1/mail/delivery/status")
+        finally:
+            mail_routes._mail_delivery_operations = original
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"provider": {"enabled": True, "lastTestStatus": "success"}})
 
     def test_admin_delivery_contract_remains_unchanged(self):
         admin = (self.root / "app" / "api" / "routes" / "admin.py").read_text(encoding="utf-8")

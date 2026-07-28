@@ -39,6 +39,7 @@ from app.schemas.mail_messenger import (
     MailMailboxSettingsResponse,
     MailSendRequest,
     MailSendResponse,
+    MailUserDeliveryStatusResponse,
     MailStorageResponse,
     MailStatusResponse,
     MailSpamPolicyUpdateRequest,
@@ -102,6 +103,7 @@ from app.services.mail_external_service import (
     ExternalMailTestRequiredError, ExternalMailCollectionBusyError,
     ExternalMailNotFoundError, ExternalMailForbiddenError,
 )
+from app.services.mail_delivery_operations import MailDeliveryOperations
 
 
 router = APIRouter()
@@ -138,6 +140,9 @@ def _out_of_office_service() -> MailOutOfOfficeService:
 
 def _external_mail_service() -> MailExternalService:
     return MailExternalService()
+
+def _mail_delivery_operations() -> MailDeliveryOperations:
+    return MailDeliveryOperations()
 
 
 def _parse_mailbox_scope(mailbox_key: str) -> MailboxScope:
@@ -854,6 +859,17 @@ def set_category(mail_id: str, payload: MailCategoryRequest, user: AuthUserSumma
 def get_mail_storage(user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailStorageResponse:
     try:
         return _service().get_mail_storage(user)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.get("/delivery/status", response_model=MailUserDeliveryStatusResponse)
+def get_mail_delivery_status(
+    user: AuthUserSummary = Depends(permission_required("mail:send")),
+) -> MailUserDeliveryStatusResponse:
+    try:
+        return _mail_delivery_operations().get_user_status(user)
     except Exception as exc:
         _handle_error(exc)
         raise
