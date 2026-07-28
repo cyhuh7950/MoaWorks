@@ -1,0 +1,51 @@
+{
+  "taskId": "ui046-functional-regression-20260728",
+  "issueId": "UI046_FUNCTIONAL_API_DB_AUDIT_REGRESSION",
+  "agentId": "/root/ui045_mail_compose_focus",
+  "outcome": "SUCCESS",
+  "judgement": "FOUNDATION_PASS_UI046_WAIT",
+  "reason": "검증기 전수 인벤토리, 8개 영역 manifest, 안전 오케스트레이터, read-only preflight 및 정적·구조 검증 기반을 완료했지만 핵심 LIVE adapter GAP 8개가 남아 UI-046 전체 완료는 아니다.",
+  "action": "영역별 adapter를 bounded 작업으로 추가하고 각 영역의 화면, same-origin API, DB, audit, 재조회와 cleanup 증거가 완성될 때까지 전체 LIVE 실행과 DEPLOY_READY 판정을 차단한다.",
+  "branch": "feature/ui-046-functional-regression",
+  "baseCommit": "812aa8c468795e3515d832d80692ba85ab4cd97f",
+  "reportPath": "docs/user-web-redesign-reports/UI-046-functional-regression-phase1-worker-report-v2.0-2026-07-28.md",
+  "inventory": {
+    "liveFiles": 1,
+    "staticFiles": 79,
+    "staleFiles": 11,
+    "coreGapAreas": 8
+  },
+  "coreGaps": [
+    "home-search-notification",
+    "mail",
+    "approval",
+    "calendar",
+    "messenger",
+    "address-organization",
+    "files",
+    "personal-help"
+  ],
+  "verification": {
+    "structure": "14/14 PASS",
+    "staticFrontend": "38/38 PASS",
+    "preflight": "3/3 HTTP 200",
+    "preflightRunId": "UI046_20260728T145127_preflight",
+    "liveGapGuard": "PASS",
+    "userWebBuild": "PASS, 56 modules transformed",
+    "backendCompile": "PASS",
+    "nodeCheck": "4/4 PASS",
+    "diffCheck": "PASS"
+  },
+  "cleanup": {
+    "mutationsPerformed": false,
+    "ownedRowsCreated": 0,
+    "ownedStorageObjectsCreated": 0,
+    "protectedAccountsChanged": false
+  },
+  "scopeChange": false,
+  "requirementChange": false,
+  "majorRiskChange": false,
+  "productCodeChanged": false,
+  "pushPerformed": false,
+  "deploymentPerformed": false
+}

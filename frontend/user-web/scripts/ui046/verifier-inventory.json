@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-07-28",
+  "classificationDefinitions": {
+    "LIVE": "sinsan에서 화면 또는 API를 실제 실행할 수 있고 비밀값을 환경변수로만 받으며 증적 마스킹 경계가 확인된 검증기",
+    "STATIC": "제품 소스 구조 또는 격리 단위 테스트만 확인하며 운영 화면, DB, audit 실행 증거를 대신하지 않는 검증기",
+    "STALE": "localhost, 저장소 밖 고정 경로, 코드 내 검수 비밀번호 또는 UI-047 범위를 포함해 UI-046에서 안전하게 직접 실행할 수 없는 기존 검증기",
+    "GAP": "화면, same-origin API, DB, audit, 재조회, cleanup을 동일 run id로 잇는 안전 LIVE 검증기가 없는 핵심 흐름"
+  },
+  "summary": {
+    "liveFiles": 1,
+    "staticFiles": 79,
+    "staleFiles": 11,
+    "coreGapAreas": 8
+  },
+  "groups": [
+    {
+      "classification": "LIVE",
+      "scope": "mail-shell-only",
+      "paths": ["frontend/user-web/scripts/ui014-mail-shell-verify.mjs"],
+      "limitations": ["메일 shell과 storage 조회만 포함", "메일 CRUD, DB 변경, audit, cleanup을 포함하지 않음", "sinsan 실행 시 MOAWORKS_WEB_BASE와 MOAWORKS_API_BASE를 same-origin HTTPS로 강제해야 함"]
+    },
+    {
+      "classification": "STALE",
+      "scope": "legacy-browser-and-live-verifiers",
+      "paths": [
+        "frontend/user-web/scripts/ui004-popup-accessibility-verify.mjs",
+        "frontend/user-web/scripts/ui004-popup-accessibility-worker.mjs",
+        "frontend/user-web/scripts/ui005-split-view-verify.mjs",
+        "frontend/user-web/scripts/ui006-notification-center-verify.mjs",
+        "frontend/user-web/scripts/ui007-common-feedback-verify.mjs",
+        "frontend/user-web/scripts/ui008-user-home-verify.mjs",
+        "frontend/user-web/scripts/ui008_user_home_verify.py",
+        "frontend/user-web/scripts/ui009_common_search_verify.py",
+        "frontend/user-web/scripts/ui010-notification-data-contract-verify.mjs",
+        "frontend/user-web/scripts/ui011-recent-notification-popup-verify.mjs",
+        "frontend/user-web/scripts/ui012-all-notifications-verify.mjs"
+      ],
+      "reasons": ["localhost 또는 127.0.0.1 고정", "D 드라이브 또는 임시 디렉터리 고정 경로", "코드 내 검수 비밀번호 기본값", "일부 검증기가 UI-047 인증·권한 공격 흐름을 혼합"]
+    },
+    {
+      "classification": "STATIC",
+      "scope": "frontend-source-verifiers",
+      "discovery": {
+        "directory": "frontend/user-web/scripts",
+        "expectedCount": 38,
+        "rule": "파일명이 *static-verify.mjs 이거나 source-only allowlist에 포함"
+      },
+      "sourceOnlyAllowlist": [
+        "ui031-approval-action-continuity-verify.mjs",
+        "ui031-approval-shell-verify.mjs",
+        "ui032-approval-list-detail-verify.mjs",
+        "ui033-approval-compose-popup-verify.mjs",
+        "ui034-approval-action-popups-verify.mjs",
+        "ui035-approval-basic-settings-verify.mjs",
+        "ui036-approval-delegation-settings-verify.mjs",
+        "ui037-calendar-shell-verify.mjs",
+        "ui038-calendar-compose-popup-verify.mjs",
+        "ui039-calendar-settings-remediation-verify.mjs",
+        "ui039-calendar-settings-verify.mjs",
+        "ui040-messenger-verify.mjs",
+        "ui041-address-book-verify.mjs",
+        "ui042-organization-chart-verify.mjs",
+        "ui043-files-verify.mjs",
+        "ui044-personal-settings-help-verify.mjs"
+      ]
+    },
+    {
+      "classification": "STATIC",
+      "scope": "backend-isolated-tests",
+      "discovery": {
+        "directory": "backend",
+        "patterns": ["test_*.py", "*_smoke_test.py"],
+        "expectedCount": 41
+      },
+      "limitations": ["mock 또는 격리 저장소 중심", "sinsan PostgreSQL row와 audit 실증이 아님"]
+    },
+    {
+      "classification": "GAP",
+      "scope": "core-live-areas",
+      "areaIds": ["home-search-notification", "mail", "approval", "calendar", "messenger", "address-organization", "files", "personal-help"],
+      "reason": "영역별 정상 흐름 전체를 화면 클릭부터 cleanup까지 동일 UI046 run id로 연결하는 안전 adapter가 없음"
+    }
+  ]
+}

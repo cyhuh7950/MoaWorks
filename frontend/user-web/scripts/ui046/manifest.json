@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 1,
+  "taskId": "ui046-functional-regression-20260728",
+  "runIdPattern": "^UI046_[0-9]{8}T[0-9]{6}_[a-z0-9]{4,12}$",
+  "environment": {
+    "name": "sinsan",
+    "userOrigin": "https://user.moaworks.sinsan.kr",
+    "adminOrigin": "https://admin.moaworks.sinsan.kr",
+    "sameOriginApiPrefix": "/api/v1/"
+  },
+  "protectedAccounts": ["admin", "cyhuh", "ysla"],
+  "evidence": {
+    "root": "docs/evidence/user-web-redesign/UI-046/verify.ui046.sinsan.20260728",
+    "requiredFiles": ["manifest.json", "result.json", "network.json", "db-audit.json", "cleanup.json", "report.md"],
+    "forbiddenRawFields": ["password", "token", "cookie", "authorization", "secret", "set-cookie"],
+    "networkFields": ["method", "path", "status"]
+  },
+  "globalAdapters": [
+    { "id": "preflight", "module": "./adapters/preflight.mjs", "mutatesState": false },
+    { "id": "static-structure", "module": "./adapters/static-structure.mjs", "mutatesState": false }
+  ],
+  "areas": [
+    {
+      "id": "home-search-notification",
+      "label": "홈·통합검색·알림",
+      "screenActions": ["홈 요약 조회", "7개 유형 검색과 원본 이동", "알림 읽음·전체 읽음·보관·환경설정 저장과 재조회"],
+      "apiPaths": ["/api/v1/workspace/home", "/api/v1/workspace/search", "/api/v1/notifications", "/api/v1/notifications/preferences"],
+      "dbTables": ["user_notices", "user_notice_reads", "user_schedule_events", "notifications", "notification_user_states", "notification_preferences", "notification_action_audit", "audit_logs"],
+      "auditEvents": ["workspace.notice.read", "notification.read", "notification.archived", "notification.preferences.updated"],
+      "cleanupOwnership": "UI046 run id로 생성한 notice, schedule, notification state와 preferences 원복만 허용",
+      "existingCoverage": ["STALE:ui006-ui012 live verifiers", "STATIC:ui012-ui013 source verifiers"],
+      "adapter": null,
+      "status": "GAP"
+    },
+    {
+      "id": "mail",
+      "label": "메일",
+      "screenActions": ["목록·상세", "임시저장·발송·답장·전달", "읽음·중요·분류·이동·스팸·삭제", "수신확인", "설정 9종 저장·재조회"],
+      "apiPaths": ["/api/v1/mail", "/api/v1/mail/messages", "/api/v1/mail/bulk", "/api/v1/mail/preferences", "/api/v1/mail/signatures", "/api/v1/mail/settings"],
+      "dbTables": ["mail_messages", "mail_recipients", "mail_attachments", "mail_user_folders", "mail_tags", "mail_delivery_queue", "user_mail_basic_preferences", "user_mail_signatures", "user_mailbox_policies", "user_spam_rules", "mail_auto_classification_rules", "mail_auto_forward_targets", "mail_out_of_office_policies", "mail_external_accounts", "user_recent_mail_recipients", "audit_logs"],
+      "auditEvents": ["mail.sent", "mail.draft.saved", "mail.preferences.basic.update", "mail.signature.created", "mail.spam.rule.created", "mail.auto_classification.rule.created", "mail.auto_forward.targets.created", "mail.out_of_office.policy.updated", "mail.external.created"],
+      "cleanupOwnership": "UI046 subject, run id recipient, attachment storage key, settings snapshot으로 식별한 데이터만 삭제·원복",
+      "existingCoverage": ["LIVE_PARTIAL:ui014-mail-shell-verify.mjs", "STATIC:ui014-ui030 frontend and backend tests"],
+      "adapter": null,
+      "status": "GAP"
+    },
+    {
+      "id": "approval",
+      "label": "전자결재",
+      "screenActions": ["목록·상세", "기안·상신·승인·반려·회수·재기안", "기본설정", "부재·위임 CRUD"],
+      "apiPaths": ["/api/v1/approvals", "/api/v1/approvals/settings", "/api/v1/approvals/delegations"],
+      "dbTables": ["approval_documents", "approval_lines", "approval_attachments", "approval_basic_preferences", "approval_delegations", "audit_logs"],
+      "auditEvents": ["approval.created", "approval.submitted", "approval.approved", "approval.rejected", "approval.withdrawn", "approval.settings.updated", "approval.delegation.created"],
+      "cleanupOwnership": "UI046 제목 문서, 첨부, delegation 및 settings snapshot만 삭제·원복",
+      "existingCoverage": ["STATIC:ui031-ui036 frontend and backend tests"],
+      "adapter": null,
+      "status": "GAP"
+    },
+    {
+      "id": "calendar",
+      "label": "일정",
+      "screenActions": ["월·주·일·목록 조회", "일정 생성·수정·삭제", "캘린더·공유·알림 설정 저장과 재조회"],
+      "apiPaths": ["/api/v1/workspace/schedules", "/api/v1/workspace/calendars", "/api/v1/workspace/calendar-subscriptions"],
+      "dbTables": ["user_schedule_events", "user_schedule_attendees", "user_schedule_notification_deliveries", "user_calendars", "user_calendar_subscriptions", "audit_logs"],
+      "auditEvents": ["workspace.schedule.created", "workspace.schedule.updated", "workspace.schedule.deleted", "workspace.calendar.created", "workspace.calendar.updated"],
+      "cleanupOwnership": "UI046 일정·캘린더·구독 row와 설정 snapshot만 삭제·원복",
+      "existingCoverage": ["STATIC:ui037-ui039 frontend and backend tests"],
+      "adapter": null,
+      "status": "GAP"
+    },
+    {
+      "id": "messenger",
+      "label": "메신저",
+      "screenActions": ["방 조회·생성", "메시지·첨부 전송", "읽음", "참여자 변경"],
+      "apiPaths": ["/api/v1/messenger/rooms", "/api/v1/messenger/messages", "/api/v1/messenger/attachments"],
+      "dbTables": ["messenger_rooms", "messenger_room_members", "messenger_messages", "messenger_message_reads", "messenger_attachments", "audit_logs"],
+      "auditEvents": ["messenger.room.created", "messenger.message.sent", "messenger.room.read", "messenger.room.participants_changed"],
+      "cleanupOwnership": "UI046 room과 message, attachment storage key만 삭제",
+      "existingCoverage": ["STATIC:ui040 frontend and backend tests"],
+      "adapter": null,
+      "status": "GAP"
+    },
+    {
+      "id": "address-organization",
+      "label": "주소록·조직도",
+      "screenActions": ["개인·공용 연락처 CRUD", "그룹 CRUD", "검색", "조직 계층·사용자 상세 조회"],
+      "apiPaths": ["/api/v1/workspace/contacts", "/api/v1/workspace/contact-groups", "/api/v1/workspace/organization"],
+      "dbTables": ["personal_contacts", "contact_groups", "departments", "users", "audit_logs"],
+      "auditEvents": ["workspace.contact.created", "workspace.contact.updated", "workspace.contact.deleted", "workspace.contact_group.created", "workspace.organization.member_viewed"],
+      "cleanupOwnership": "UI046 contact와 group만 삭제; departments와 users는 조회만 허용",
+      "existingCoverage": ["STATIC:ui041-ui042 frontend and backend tests"],
+      "adapter": null,
+      "status": "GAP"
+    },
+    {
+      "id": "files",
+      "label": "파일",
+      "screenActions": ["업로드·다운로드", "이름 변경", "공유", "휴지통·복구·영구삭제"],
+      "apiPaths": ["/api/v1/workspace/files", "/api/v1/workspace/folders", "/api/v1/workspace/file-shares"],
+      "dbTables": ["workspace_folders", "workspace_files", "workspace_file_versions", "workspace_file_shares", "workspace_file_favorites", "audit_logs"],
+      "auditEvents": ["workspace.file.uploaded", "workspace.file.renamed", "workspace.file.shared", "workspace.file.trashed", "workspace.file.restored", "workspace.file.downloaded"],
+      "cleanupOwnership": "UI046 file, version, share, folder row와 해당 storage key만 삭제",
+      "existingCoverage": ["STATIC:ui043 frontend and backend tests"],
+      "adapter": null,
+      "status": "GAP"
+    },
+    {
+      "id": "personal-help",
+      "label": "개인 설정·Help",
+      "screenActions": ["프로필 조회", "언어·시간대·알림 이외 환경설정 저장·재조회", "Help 정책 경로 조회"],
+      "apiPaths": ["/api/v1/workspace/profile", "/api/v1/workspace/preferences", "/api/v1/workspace/help-policies"],
+      "dbTables": ["user_workspace_preferences", "help_policy_documents", "audit_logs"],
+      "auditEvents": ["workspace.profile.viewed", "workspace.preferences.updated", "workspace.help.viewed"],
+      "cleanupOwnership": "preferences before snapshot 원복만 허용; help policy는 조회 전용",
+      "existingCoverage": ["STATIC:ui044 frontend and backend tests"],
+      "adapter": null,
+      "status": "GAP"
+    }
+  ]
+}

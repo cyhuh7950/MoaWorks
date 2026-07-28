@@ -1,0 +1,53 @@
+import assert from "node:assert/strict";
+import { readFile, readdir } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const root = resolve(here, "../../../..");
+const scripts = resolve(root, "frontend/user-web/scripts");
+const [manifestText, inventoryText, orchestrator] = await Promise.all([
+  readFile(resolve(here, "manifest.json"), "utf8"),
+  readFile(resolve(here, "verifier-inventory.json"), "utf8"),
+  readFile(resolve(here, "orchestrator.mjs"), "utf8"),
+]);
+const manifest = JSON.parse(manifestText);
+const inventory = JSON.parse(inventoryText);
+
+const frontendFiles = await readdir(scripts);
+const sourceOnly = new Set(inventory.groups.find((group) => group.scope === "frontend-source-verifiers").sourceOnlyAllowlist);
+const staticFiles = frontendFiles.filter((name) => name.endsWith("static-verify.mjs") || sourceOnly.has(name));
+
+async function backendTestCount(directory) {
+  let count = 0;
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = resolve(directory, entry.name);
+    if (entry.isDirectory()) count += await backendTestCount(path);
+    else if (/^test_.*\.py$|_smoke_test\.py$/.test(entry.name)) count += 1;
+  }
+  return count;
+}
+
+const checks = [
+  ["8개 핵심 영역", manifest.areas.length === 8],
+  ["영역 계약 필드", manifest.areas.every((area) => area.screenActions.length && area.apiPaths.length && area.dbTables.length && area.auditEvents.length && area.cleanupOwnership)],
+  ["핵심 GAP 명시", manifest.areas.every((area) => area.status === "GAP" && area.adapter === null)],
+  ["보호 계정 고정", JSON.stringify(manifest.protectedAccounts) === JSON.stringify(["admin", "cyhuh", "ysla"])],
+  ["sinsan HTTPS origin", manifest.environment.userOrigin === "https://user.moaworks.sinsan.kr" && manifest.environment.adminOrigin === "https://admin.moaworks.sinsan.kr"],
+  ["same-origin 상대 API", manifest.areas.flatMap((area) => area.apiPaths).every((path) => path.startsWith("/api/v1/"))],
+  ["증적 필수 파일", ["manifest.json", "result.json", "network.json", "db-audit.json", "cleanup.json", "report.md"].every((name) => manifest.evidence.requiredFiles.includes(name))],
+  ["frontend STATIC 전수 수 일치", staticFiles.length === inventory.groups.find((group) => group.scope === "frontend-source-verifiers").discovery.expectedCount],
+  ["STALE 파일 존재", inventory.groups.find((group) => group.classification === "STALE").paths.every((path) => frontendFiles.includes(path.split("/").at(-1)))],
+  ["오케스트레이터 shell 실행 금지", !/shell:\s*true/.test(orchestrator)],
+  ["LIVE GAP 실행 차단", orchestrator.includes("핵심 GAP") && orchestrator.includes("!area.adapter")],
+  ["비밀값 마스킹", orchestrator.includes("sensitiveKey") && orchestrator.includes("[REDACTED]")],
+  ["run id 경계", manifest.runIdPattern.startsWith("^UI046_")],
+];
+
+const backendCount = await backendTestCount(resolve(root, "backend"));
+checks.push(["backend STATIC 전수 수 일치", backendCount === inventory.groups.find((group) => group.scope === "backend-isolated-tests").discovery.expectedCount]);
+
+for (const [name, passed] of checks) console.log(`${passed ? "PASS" : "FAIL"} ${name}`);
+const failures = checks.filter(([, passed]) => !passed);
+console.log(JSON.stringify({ passed: checks.length - failures.length, total: checks.length, failures: failures.map(([name]) => name), frontendStaticCount: staticFiles.length, backendStaticCount: backendCount, coreGapCount: manifest.areas.filter((area) => area.status === "GAP").length }));
+assert.equal(failures.length, 0, failures.map(([name]) => name).join(", "));
