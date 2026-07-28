@@ -1453,6 +1453,7 @@ export default function App() {
   const [mailComposeForm, setMailComposeForm] = useState<MailComposeForm>(createEmptyMailComposeForm);
   const [mailComposeFiles, setMailComposeFiles] = useState<MailComposeFile[]>([]);
   const [mailComposeSourceDetail, setMailComposeSourceDetail] = useState<MailDetail | null>(null);
+  const mailComposeToRef = useRef<HTMLInputElement>(null);
   const [selectedForwardAttachmentIds, setSelectedForwardAttachmentIds] = useState<string[]>([]);
   const [recipientPickerTarget, setRecipientPickerTarget] = useState<RecipientPickerTarget | null>(null);
   const [recipientSuggestions, setRecipientSuggestions] = useState<RecipientSuggestion[]>([]);
@@ -4338,6 +4339,10 @@ export default function App() {
 
   const recipientInputMode = mailPreferences?.recipientInputMode ?? "autocomplete";
   const recipientInputLocked = recipientInputMode === "search";
+  useEffect(() => {
+    if (quickComposeMode !== "mail" || recipientInputLocked) return;
+    mailComposeToRef.current?.focus();
+  }, [quickComposeMode, recipientInputLocked]);
   const recipientInputHint = recipientInputMode === "search"
     ? "검색 모드: 조직·연락처 선택으로만 수신자를 추가합니다."
     : recipientInputMode === "name_only"
@@ -4973,7 +4978,7 @@ export default function App() {
                   <div className="user-mail-compose-recipients">
                     <label>
                       <span>받는 사람</span>
-                      <div><input aria-label="mail-compose-to" disabled={recipientInputLocked} value={mailComposeForm.to} onChange={(event) => setMailComposeForm((current) => ({ ...current, to: event.target.value }))} placeholder={recipientInputMode === "name_only" ? "이름 또는 계정" : `admin@${uiContract.company.domain}`} /><button type="button" title="조직·연락처에서 받는 사람 선택" onClick={() => void openRecipientPicker("to")}>선택</button></div>
+                      <div><input ref={mailComposeToRef} aria-label="mail-compose-to" disabled={recipientInputLocked} value={mailComposeForm.to} onChange={(event) => setMailComposeForm((current) => ({ ...current, to: event.target.value }))} placeholder={recipientInputMode === "name_only" ? "이름 또는 계정" : `admin@${uiContract.company.domain}`} /><button type="button" title="조직·연락처에서 받는 사람 선택" onClick={() => void openRecipientPicker("to")}>선택</button></div>
                     </label>
                     <label>
                       <span>참조</span>
