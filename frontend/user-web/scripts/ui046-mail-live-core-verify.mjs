@@ -4,6 +4,7 @@ import ts from "typescript";
 
 const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 const api = readFileSync(new URL("../src/api.ts", import.meta.url), "utf8");
+const css = readFileSync(new URL("../src/global.css", import.meta.url), "utf8");
 const target = process.argv[2] ?? "all";
 
 function sourceSlice(source, start, end) {
@@ -26,6 +27,31 @@ function verifyFolderBoundary() {
   assert.ok(manageButton);
   assert.doesNotMatch(listButton, /openMailResourceModal/);
   assert.doesNotMatch(manageButton, /openMailFolder/);
+}
+
+function verifyFolderHitArea() {
+  const rowRule = css.match(/\.user-mail-resource-row\s*\{[^}]*\}/)?.[0] ?? "";
+  assert.ok(rowRule, "mail resource row CSS rule is missing");
+  assert.match(rowRule, /grid-template-columns:\s*minmax\(0,\s*1fr\)\s+28px\s+28px\s*;/);
+
+  const openRule = css.match(/\.user-mail-resource-row\s*>\s*button:first-child\s*\{[^}]*\}/)?.[0] ?? "";
+  assert.ok(openRule, "mail resource open-button CSS rule is missing");
+  assert.match(openRule, /width:\s*100%\s*;/);
+  assert.match(openRule, /overflow:\s*hidden\s*;/);
+  assert.match(openRule, /text-overflow:\s*ellipsis\s*;/);
+  assert.match(openRule, /white-space:\s*nowrap\s*;/);
+
+  const actionRule = css.match(/\.user-mail-resource-row\s*>\s*button:not\(:first-child\)\s*\{[^}]*\}/)?.[0] ?? "";
+  assert.ok(actionRule, "mail resource compact action-button CSS rule is missing");
+  assert.match(actionRule, /min-width:\s*0\s*;/);
+  assert.match(actionRule, /width:\s*28px\s*;/);
+  assert.match(actionRule, /padding-inline:\s*2px\s*;/);
+  assert.match(actionRule, /justify-content:\s*center\s*;/);
+  assert.match(actionRule, /font-size:\s*9px\s*;/);
+
+  assert.equal((css.match(/\.user-mail-resource-row\s*\{/g) ?? []).length, 1, "later resource-row rules must not override the fixed columns");
+  assert.equal((css.match(/\.user-mail-resource-row\s*>\s*button:first-child\s*\{/g) ?? []).length, 1, "later open-button rules must not override clipping");
+  assert.equal((css.match(/\.user-mail-resource-row\s*>\s*button:not\(:first-child\)\s*\{/g) ?? []).length, 1, "later action-button rules must not override compact sizing");
 }
 
 function verifyReceiptMask() {
@@ -60,7 +86,10 @@ function verifyDeliveryStatusClient() {
   assert.doesNotMatch(requestSource, /https?:\/\/|localhost|127\.0\.0\.1|NEXT_PUBLIC_API_BASE_URL/);
 }
 
-if (target === "folder" || target === "all") verifyFolderBoundary();
+if (target === "folder" || target === "all") {
+  verifyFolderBoundary();
+  verifyFolderHitArea();
+}
 if (target === "mask" || target === "all") verifyReceiptMask();
 if (target === "delivery" || target === "all") verifyDeliveryStatusClient();
 if (!["folder", "mask", "delivery", "all"].includes(target)) throw new Error(`unknown target: ${target}`);
