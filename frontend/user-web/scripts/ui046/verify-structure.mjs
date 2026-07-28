@@ -13,6 +13,8 @@ const [manifestText, inventoryText, orchestrator] = await Promise.all([
 ]);
 const manifest = JSON.parse(manifestText);
 const inventory = JSON.parse(inventoryText);
+const readyArea = manifest.areas.find((area) => area.id === "home-search-notification");
+const expectedGapAreaIds = ["mail", "approval", "calendar", "messenger", "address-organization", "files", "personal-help"];
 
 const frontendFiles = await readdir(scripts);
 const sourceOnly = new Set(inventory.groups.find((group) => group.scope === "frontend-source-verifiers").sourceOnlyAllowlist);
@@ -31,7 +33,8 @@ async function backendTestCount(directory) {
 const checks = [
   ["8개 핵심 영역", manifest.areas.length === 8],
   ["영역 계약 필드", manifest.areas.every((area) => area.screenActions.length && area.apiPaths.length && area.dbTables.length && area.auditEvents.length && area.cleanupOwnership)],
-  ["핵심 GAP 명시", manifest.areas.every((area) => area.status === "GAP" && area.adapter === null)],
+  ["홈 검색 알림 READY", readyArea?.status === "READY" && readyArea?.adapter === "home-search-notification" && readyArea.liveInputContract?.missingInputStatus === "LIVE_INPUT_REQUIRED"],
+  ["나머지 7개 GAP 유지", JSON.stringify(manifest.areas.filter((area) => area.status === "GAP").map((area) => area.id)) === JSON.stringify(expectedGapAreaIds) && manifest.areas.filter((area) => area.status === "GAP").every((area) => area.adapter === null)],
   ["보호 계정 고정", JSON.stringify(manifest.protectedAccounts) === JSON.stringify(["admin", "cyhuh", "ysla"])],
   ["sinsan HTTPS origin", manifest.environment.userOrigin === "https://user.moaworks.sinsan.kr" && manifest.environment.adminOrigin === "https://admin.moaworks.sinsan.kr"],
   ["same-origin 상대 API", manifest.areas.flatMap((area) => area.apiPaths).every((path) => path.startsWith("/api/v1/"))],
@@ -39,7 +42,8 @@ const checks = [
   ["frontend STATIC 전수 수 일치", staticFiles.length === inventory.groups.find((group) => group.scope === "frontend-source-verifiers").discovery.expectedCount],
   ["STALE 파일 존재", inventory.groups.find((group) => group.classification === "STALE").paths.every((path) => frontendFiles.includes(path.split("/").at(-1)))],
   ["오케스트레이터 shell 실행 금지", !/shell:\s*true/.test(orchestrator)],
-  ["LIVE GAP 실행 차단", orchestrator.includes("핵심 GAP") && orchestrator.includes("!area.adapter")],
+  ["LIVE GAP 실행 차단", orchestrator.includes("CORE_GAP_BLOCKED") && orchestrator.includes("!area.adapter")],
+  ["LIVE 입력 fail closed", orchestrator.includes("LIVE_INPUT_REQUIRED") && orchestrator.includes("runtime-drivers") && orchestrator.includes("execute-area")],
   ["비밀값 마스킹", orchestrator.includes("sensitiveKey") && orchestrator.includes("[REDACTED]")],
   ["run id 경계", manifest.runIdPattern.startsWith("^UI046_")],
 ];

@@ -24,13 +24,19 @@
       "id": "home-search-notification",
       "label": "홈·통합검색·알림",
       "screenActions": ["홈 요약 조회", "7개 유형 검색과 원본 이동", "알림 읽음·전체 읽음·보관·환경설정 저장과 재조회"],
-      "apiPaths": ["/api/v1/workspace/home", "/api/v1/workspace/search", "/api/v1/notifications", "/api/v1/notifications/preferences"],
+      "apiPaths": ["/api/v1/workspace/schedules", "/api/v1/workspace/notices", "/api/v1/workspace/contacts", "/api/v1/workspace/directory", "/api/v1/workspace/files", "/api/v1/mail", "/api/v1/approvals", "/api/v1/messenger", "/api/v1/notifications"],
       "dbTables": ["user_notices", "user_notice_reads", "user_schedule_events", "notifications", "notification_user_states", "notification_preferences", "notification_action_audit", "audit_logs"],
       "auditEvents": ["workspace.notice.read", "notification.read", "notification.archived", "notification.preferences.updated"],
       "cleanupOwnership": "UI046 run id로 생성한 notice, schedule, notification state와 preferences 원복만 허용",
       "existingCoverage": ["STALE:ui006-ui012 live verifiers", "STATIC:ui012-ui013 source verifiers"],
-      "adapter": null,
-      "status": "GAP"
+      "liveInputContract": {
+        "browserDriverMethods": ["runHomeSearchNotification", "close"],
+        "dbDriverMethods": ["prepareOwnedData", "collectOwnedEvidence", "cleanupOwnedData"],
+        "secretSource": "runtime-driver-only",
+        "missingInputStatus": "LIVE_INPUT_REQUIRED"
+      },
+      "adapter": "home-search-notification",
+      "status": "READY"
     },
     {
       "id": "mail",

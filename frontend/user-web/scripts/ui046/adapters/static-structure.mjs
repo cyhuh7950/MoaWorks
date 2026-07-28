@@ -18,12 +18,16 @@ export async function runStaticStructure({ root }) {
   const scripts = resolve(userWeb, "scripts");
   const inventory = JSON.parse(await readFile(resolve(scripts, "ui046/verifier-inventory.json"), "utf8"));
   const allowlist = new Set(inventory.groups.find((group) => group.scope === "frontend-source-verifiers").sourceOnlyAllowlist);
-  const files = (await readdir(scripts)).filter((name) => name.endsWith("static-verify.mjs") || allowlist.has(name)).sort();
+  const legacyFiles = (await readdir(scripts)).filter((name) => name.endsWith("static-verify.mjs") || allowlist.has(name)).sort().map((name) => resolve(scripts, name));
+  const harnessFiles = [resolve(scripts, "ui046/home-search-notification-adapter-contract-verify.mjs")];
+  const files = [...legacyFiles, ...harnessFiles];
   const results = [];
-  for (const file of files) results.push(await runNode(resolve(scripts, file), userWeb));
+  for (const file of files) results.push(await runNode(file, userWeb));
   return {
     status: results.every((item) => item.code === 0) ? "PASS" : "FAIL",
     count: results.length,
+    legacyCount: legacyFiles.length,
+    harnessCount: harnessFiles.length,
     results: results.map(({ file, code }) => ({ file: relative(root, file).replaceAll("\\", "/"), code })),
   };
 }

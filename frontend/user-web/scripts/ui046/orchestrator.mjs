@@ -1,8 +1,8 @@
-import { randomBytes } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { runHomeSearchNotification } from "./adapters/home-search-notification.mjs";
 import { runPreflight } from "./adapters/preflight.mjs";
 import { runStaticStructure } from "./adapters/static-structure.mjs";
 
@@ -13,6 +13,10 @@ const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const command = process.argv[2] || "plan";
 const runIdArg = process.argv.find((value) => value.startsWith("--run-id="));
 const runId = runIdArg?.slice("--run-id=".length) || "";
+const areaArg = process.argv.find((value) => value.startsWith("--area="));
+const areaId = areaArg?.slice("--area=".length) || "";
+const driverArg = process.argv.find((value) => value.startsWith("--driver-module="));
+const driverModuleName = driverArg?.slice("--driver-module=".length) || "";
 const runIdRegex = new RegExp(manifest.runIdPattern);
 
 const sensitiveKey = /password|token|cookie|authorization|secret|set-cookie/i;
@@ -44,6 +48,25 @@ async function writeJson(path, value) {
   await writeFile(path, `${JSON.stringify(cleaned, null, 2)}\n`, "utf8");
 }
 
+function errorWithCode(code) {
+  const error = new Error(code);
+  error.code = code;
+  return error;
+}
+
+async function loadRuntimeDrivers() {
+  if (!driverModuleName) throw errorWithCode("LIVE_INPUT_REQUIRED");
+  if (!/^[A-Za-z0-9._-]+\.mjs$/.test(driverModuleName)) throw errorWithCode("DRIVER_MODULE_PATH_REJECTED");
+  const runtimeRoot = resolve(here, "runtime-drivers");
+  const driverPath = resolve(runtimeRoot, driverModuleName);
+  const pathFromRoot = relative(runtimeRoot, driverPath);
+  if (!pathFromRoot || pathFromRoot.startsWith("..") || pathFromRoot.includes(":")) throw errorWithCode("DRIVER_MODULE_PATH_REJECTED");
+  await access(driverPath).catch(() => { throw errorWithCode("LIVE_INPUT_REQUIRED"); });
+  const runtime = await import(pathToFileURL(driverPath).href);
+  if (typeof runtime.createDrivers !== "function") throw errorWithCode("LIVE_INPUT_REQUIRED");
+  return runtime.createDrivers({ runId, userOrigin: manifest.environment.userOrigin });
+}
+
 function plan() {
   const areas = manifest.areas.map((area) => ({ id: area.id, status: area.status, adapter: area.adapter }));
   const gapCount = areas.filter((area) => area.status === "GAP").length;
@@ -69,10 +92,35 @@ async function staticStructure() {
 function execute() {
   assertRunId();
   const gaps = manifest.areas.filter((area) => area.status === "GAP" || !area.adapter);
-  if (gaps.length) throw new Error(`핵심 GAP ${gaps.length}개가 남아 LIVE 실행을 차단했습니다: ${gaps.map((area) => area.id).join(", ")}`);
-  throw new Error("영역 adapter 등록 후에만 LIVE 실행할 수 있습니다.");
+  if (gaps.length) throw errorWithCode("CORE_GAP_BLOCKED");
+  throw errorWithCode("AREA_ADAPTER_REQUIRED");
 }
 
-const commands = { plan, preflight, static: staticStructure, execute };
-if (!commands[command]) throw new Error("사용법: node orchestrator.mjs <plan|preflight|static|execute> [--run-id=UI046_...]");
-await commands[command]();
+async function executeArea() {
+  assertRunId();
+  if (areaId !== "home-search-notification") throw errorWithCode("AREA_NOT_READY");
+  const directory = safeEvidenceDir();
+  const drivers = await loadRuntimeDrivers();
+  const result = await runHomeSearchNotification({ manifest, runId, browserDriver: drivers?.browserDriver, dbDriver: drivers?.dbDriver, evidenceDir: directory });
+  for (const screenshot of result.screenshots) {
+    if (!/^screenshots\/[A-Za-z0-9._-]+\.png$/.test(screenshot)) throw errorWithCode("SCREENSHOT_PATH_REJECTED");
+    await access(resolve(directory, screenshot)).catch(() => { throw errorWithCode("SCREENSHOT_EVIDENCE_MISSING"); });
+  }
+  await writeJson(resolve(directory, "manifest.json"), manifest);
+  await writeJson(resolve(directory, "result.json"), { runId, status: result.status, areaId: result.areaId, actions: result.actions, screenshots: result.screenshots });
+  await writeJson(resolve(directory, "network.json"), result.network);
+  await writeJson(resolve(directory, "db-audit.json"), result.dbAudit);
+  await writeJson(resolve(directory, "cleanup.json"), result.cleanup);
+  await writeFile(resolve(directory, "report.md"), `판정 -> ${result.status}\n\n판단 이유 -> home-search-notification LIVE adapter가 화면, same-origin API, DB, audit, 재조회와 cleanup 계약을 통과했습니다.\n\n조치 -> 나머지 7개 GAP은 유지하고 어울1이 증적을 독립 검수합니다.\n`, "utf8");
+  process.stdout.write(`${JSON.stringify({ runId, areaId, status: result.status, evidence: relative(root, directory).replaceAll("\\", "/") })}\n`);
+}
+
+const commands = { plan, preflight, static: staticStructure, execute, "execute-area": executeArea };
+try {
+  if (!commands[command]) throw errorWithCode("USAGE_ERROR");
+  await commands[command]();
+} catch (error) {
+  const errorCode = String(error?.code || "EXECUTION_FAILED").split(":", 1)[0];
+  process.stderr.write(`${JSON.stringify({ status: errorCode === "LIVE_INPUT_REQUIRED" ? "LIVE_INPUT_REQUIRED" : "FAIL", errorCode })}\n`);
+  process.exitCode = errorCode === "LIVE_INPUT_REQUIRED" ? 2 : 1;
+}
