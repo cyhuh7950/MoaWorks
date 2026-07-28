@@ -34,6 +34,7 @@ const checks = [
   ["8개 핵심 영역", manifest.areas.length === 8],
   ["영역 계약 필드", manifest.areas.every((area) => area.screenActions.length && area.apiPaths.length && area.dbTables.length && area.auditEvents.length && area.cleanupOwnership)],
   ["홈 검색 알림 READY", readyArea?.status === "READY" && readyArea?.adapter === "home-search-notification" && readyArea.liveInputContract?.missingInputStatus === "LIVE_INPUT_REQUIRED"],
+  ["disposable user 안전 계약", JSON.stringify(readyArea?.liveInputContract?.requiredOwnershipKinds) === JSON.stringify(["test_user", "test_role", "notice", "schedule", "notification", "notification_state"]) && readyArea?.liveInputContract?.sessionPolicy === "run-id-disposable-user-only" && readyArea?.liveInputContract?.readAllPolicy === "run-id-owned-notification-state-only" && readyArea?.liveInputContract?.existingStateSnapshotRestore === "forbidden"],
   ["나머지 7개 GAP 유지", JSON.stringify(manifest.areas.filter((area) => area.status === "GAP").map((area) => area.id)) === JSON.stringify(expectedGapAreaIds) && manifest.areas.filter((area) => area.status === "GAP").every((area) => area.adapter === null)],
   ["보호 계정 고정", JSON.stringify(manifest.protectedAccounts) === JSON.stringify(["admin", "cyhuh", "ysla"])],
   ["sinsan HTTPS origin", manifest.environment.userOrigin === "https://user.moaworks.sinsan.kr" && manifest.environment.adminOrigin === "https://admin.moaworks.sinsan.kr"],
@@ -44,7 +45,7 @@ const checks = [
   ["오케스트레이터 shell 실행 금지", !/shell:\s*true/.test(orchestrator)],
   ["LIVE GAP 실행 차단", orchestrator.includes("CORE_GAP_BLOCKED") && orchestrator.includes("!area.adapter")],
   ["LIVE 입력 fail closed", orchestrator.includes("LIVE_INPUT_REQUIRED") && orchestrator.includes("runtime-drivers") && orchestrator.includes("execute-area")],
-  ["비밀값 마스킹", orchestrator.includes("sensitiveKey") && orchestrator.includes("[REDACTED]")],
+  ["비밀값 마스킹", orchestrator.includes("sensitiveKey") && orchestrator.includes("[REDACTED]") && manifest.evidence.forbiddenRawFields.includes("hash")],
   ["run id 경계", manifest.runIdPattern.startsWith("^UI046_")],
 ];
 

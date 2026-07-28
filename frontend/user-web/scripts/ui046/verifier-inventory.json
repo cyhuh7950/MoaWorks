@@ -25,7 +25,7 @@
       "classification": "LIVE",
       "scope": "ui046-ready-adapter",
       "paths": ["frontend/user-web/scripts/ui046/adapters/home-search-notification.mjs"],
-      "limitations": ["runtime browser와 DB driver 주입 전에는 LIVE_INPUT_REQUIRED", "실제 sinsan 증거 전에는 영역 완료가 아닌 READY"]
+      "limitations": ["runtime browser와 DB driver 주입 전에는 LIVE_INPUT_REQUIRED", "run-id 소유 disposable user와 최소 권한 role만 세션·전체 읽음 대상으로 허용", "실제 sinsan 증거 전에는 영역 완료가 아닌 READY"]
     },
     {
       "classification": "STALE",

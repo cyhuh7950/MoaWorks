@@ -19,7 +19,7 @@ const driverArg = process.argv.find((value) => value.startsWith("--driver-module
 const driverModuleName = driverArg?.slice("--driver-module=".length) || "";
 const runIdRegex = new RegExp(manifest.runIdPattern);
 
-const sensitiveKey = /password|token|cookie|authorization|secret|set-cookie/i;
+const sensitiveKey = /password|hash|token|cookie|authorization|secret|set-cookie/i;
 const sensitiveValue = /Bearer\s+[A-Za-z0-9._=-]+|([?&](?:token|access_token|authorization|password|secret)=)[^&\s]+/gi;
 
 function sanitize(value, key = "") {
@@ -111,7 +111,7 @@ async function executeArea() {
   await writeJson(resolve(directory, "network.json"), result.network);
   await writeJson(resolve(directory, "db-audit.json"), result.dbAudit);
   await writeJson(resolve(directory, "cleanup.json"), result.cleanup);
-  await writeFile(resolve(directory, "report.md"), `판정 -> ${result.status}\n\n판단 이유 -> home-search-notification LIVE adapter가 화면, same-origin API, DB, audit, 재조회와 cleanup 계약을 통과했습니다.\n\n조치 -> 나머지 7개 GAP은 유지하고 어울1이 증적을 독립 검수합니다.\n`, "utf8");
+  await writeFile(resolve(directory, "report.md"), `판정 -> ${result.status}\n\n판단 이유 -> home-search-notification LIVE adapter가 run-id disposable user 세션, same-origin API, DB, audit, 재조회와 cleanup 계약을 통과했습니다.\n\n조치 -> 나머지 7개 GAP은 유지하고 어울1이 증적을 독립 검수합니다.\n`, "utf8");
   process.stdout.write(`${JSON.stringify({ runId, areaId, status: result.status, evidence: relative(root, directory).replaceAll("\\", "/") })}\n`);
 }
 

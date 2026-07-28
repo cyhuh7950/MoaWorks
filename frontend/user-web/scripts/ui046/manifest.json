@@ -12,7 +12,7 @@
   "evidence": {
     "root": "docs/evidence/user-web-redesign/UI-046/verify.ui046.sinsan.20260728",
     "requiredFiles": ["manifest.json", "result.json", "network.json", "db-audit.json", "cleanup.json", "report.md"],
-    "forbiddenRawFields": ["password", "token", "cookie", "authorization", "secret", "set-cookie"],
+    "forbiddenRawFields": ["password", "hash", "token", "cookie", "authorization", "secret", "set-cookie"],
     "networkFields": ["method", "path", "status"]
   },
   "globalAdapters": [
@@ -27,11 +27,15 @@
       "apiPaths": ["/api/v1/workspace/schedules", "/api/v1/workspace/notices", "/api/v1/workspace/contacts", "/api/v1/workspace/directory", "/api/v1/workspace/files", "/api/v1/mail", "/api/v1/approvals", "/api/v1/messenger", "/api/v1/notifications"],
       "dbTables": ["user_notices", "user_notice_reads", "user_schedule_events", "notifications", "notification_user_states", "notification_preferences", "notification_action_audit", "audit_logs"],
       "auditEvents": ["workspace.notice.read", "notification.read", "notification.archived", "notification.preferences.updated"],
-      "cleanupOwnership": "UI046 run id로 생성한 notice, schedule, notification state와 preferences 원복만 허용",
+      "cleanupOwnership": "UI046 run id 전용 임시 사용자·최소 권한 역할과 해당 notice, schedule, notification state, preferences만 제거 또는 soft-delete; 기존 사용자 snapshot 원복 금지",
       "existingCoverage": ["STALE:ui006-ui012 live verifiers", "STATIC:ui012-ui013 source verifiers"],
       "liveInputContract": {
         "browserDriverMethods": ["runHomeSearchNotification", "close"],
         "dbDriverMethods": ["prepareOwnedData", "collectOwnedEvidence", "cleanupOwnedData"],
+        "requiredOwnershipKinds": ["test_user", "test_role", "notice", "schedule", "notification", "notification_state"],
+        "sessionPolicy": "run-id-disposable-user-only",
+        "readAllPolicy": "run-id-owned-notification-state-only",
+        "existingStateSnapshotRestore": "forbidden",
         "secretSource": "runtime-driver-only",
         "missingInputStatus": "LIVE_INPUT_REQUIRED"
       },
