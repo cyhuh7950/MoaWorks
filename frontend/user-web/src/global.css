@@ -2498,9 +2498,10 @@ textarea {
 }
 
 .user-mail-resource-group > div:first-child,
-.user-mail-resource-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px; align-items: center; }
+.user-mail-resource-row { display: grid; grid-template-columns: minmax(0, 1fr) 28px 28px; gap: 4px; align-items: center; }
 .user-mail-resource-group > div:first-child { grid-template-columns: minmax(0, 1fr) auto; }
-.user-mail-resource-row > button:first-child { justify-content: flex-start; min-width: 0; }
+.user-mail-resource-row > button:first-child { justify-content: flex-start; min-width: 0; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-mail-resource-row > button:not(:first-child) { min-width: 0; width: 28px; padding-inline: 2px; justify-content: center; font-size: 9px; }
 .user-mail-resource-row i { width: 8px; height: 8px; border-radius: 999px; background: #64748b; display: inline-block; }
 .user-mail-resource-row i[data-color="red"] { background: #dc2626; }
 .user-mail-resource-row i[data-color="orange"] { background: #ea580c; }
