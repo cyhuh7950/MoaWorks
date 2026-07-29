@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
@@ -8,7 +9,10 @@ import { runCalendar } from "./adapters/calendar.mjs";
 import { persistAreaEvidence } from "./orchestrator.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
+const root = resolve(here, "../../../..");
 const manifest = JSON.parse(await readFile(resolve(here, "manifest.json"), "utf8"));
+const productApi = await readFile(resolve(root, "frontend/user-web/src/api.ts"), "utf8");
+const backendRoutes = await readFile(resolve(root, "backend/app/api/routes/workspace.py"), "utf8");
 const runId = "UI046_20260729T140000_cal1";
 const companyId = `${runId}_company`;
 const ids = { role: `${runId}_role`, owner: `${runId}_owner`, collaborator: `${runId}_collaborator`, ownerDefault: `${runId}_owner_default`, collaboratorDefault: `${runId}_collaborator_default`, calendar: `${runId}_calendar`, schedule: `${runId}_schedule`, attendee: `${runId}_attendee`, subscription: `${runId}_subscription`, ownerDelivery: `${runId}_delivery_owner`, collaboratorDelivery: `${runId}_delivery_collaborator`, notification: `${runId}_notification`, notificationState: `${runId}_notification_state`, monitoring: `${runId}_monitoring` };
@@ -58,25 +62,37 @@ function drivers(overrides = {}) { const base = overrides.ownership ?? ownership
 async function expectCode(code, setup) { await assert.rejects(runCalendar({ manifest, runId, evidenceDir: "contract-evidence", ...setup }), (error) => String(error?.code ?? "").split(":", 1)[0] === code); }
 
 const checks = [];
+for (const path of ["/workspace/calendars", "/workspace/calendars/discover", "/workspace/calendars/order", "/workspace/schedules", "/workspace/calendar-subscriptions"]) assert.ok(productApi.includes(path));
+for (const path of ["'/calendars'", "'/calendars/discover'", "'/calendars/order'", "'/schedules'", "'/calendar-subscriptions'"]) assert.ok(backendRoutes.includes(path)); checks.push("frontend backend route alignment");
 assert.equal(manifest.areas.find((x) => x.id === "calendar")?.status, "READY");
 assert.equal(manifest.areas.find((x) => x.id === "calendar")?.adapter, "calendar"); checks.push("calendar READY");
 await expectCode("LIVE_INPUT_REQUIRED", {}); checks.push("missing drivers");
 const missing = drivers(); delete missing.browserDriver.runScheduleViews; await expectCode("LIVE_INPUT_REQUIRED", missing); checks.push("missing method");
 const valid = drivers(); const result = await runCalendar({ manifest, runId, evidenceDir: "contract-evidence", browserDriver: valid.browserDriver, dbDriver: valid.dbDriver }); assert.equal(result.status, "PASS"); assert.equal(valid.closeCalled(), true); assert.equal(valid.cleanupCalled(), true); checks.push("valid composite");
 const badPermission = ownershipFixture(); badPermission.records[0].permissions.push("calendar:write"); await expectCode("IDENTITY_TOPOLOGY_INVALID", drivers({ ownership: badPermission })); checks.push("minimal permission");
+const missingUser = ownershipFixture(); missingUser.records = missingUser.records.filter((x) => x.id !== ids.collaborator); await expectCode("IDENTITY_TOPOLOGY_INVALID", drivers({ ownership: missingUser })); checks.push("two user topology");
 const precreated = ownershipFixture(); precreated.records.push({ kind: "user_schedule_event", id: ids.schedule, ownerRunId: runId }); await expectCode("PRECREATED_PRODUCT_ROW_REJECTED", drivers({ ownership: precreated })); checks.push("no precreated product row");
 const protectedSession = settingsFixture(); protectedSession.session.activeLoginId = "admin"; await expectCode("PROTECTED_ACCOUNT_SESSION_REJECTED", drivers({ settings: protectedSession })); checks.push("protected session");
 const query = settingsFixture(); query.network[0].path += "?x=1"; await expectCode("NETWORK_NOT_SAME_ORIGIN_RELATIVE", drivers({ settings: query })); checks.push("query rejected");
 const absolute = schedulesFixture(); absolute.network[0].path = "https://outside.invalid/api"; await expectCode("NETWORK_NOT_SAME_ORIGIN_RELATIVE", drivers({ schedules: absolute })); checks.push("absolute rejected");
 const foreign = schedulesFixture(); foreign.network[2].path = "/api/v1/workspace/schedules/foreign"; foreign.mutationOwnership[1].path = foreign.network[2].path; await expectCode("NETWORK_DYNAMIC_OWNERSHIP_MISMATCH", drivers({ schedules: foreign })); checks.push("foreign dynamic route");
+const foreignSubscription = sharingFixture(); foreignSubscription.network[2].path = "/api/v1/workspace/calendar-subscriptions/foreign/accept"; foreignSubscription.mutationOwnership[1].path = foreignSubscription.network[2].path; await expectCode("NETWORK_DYNAMIC_OWNERSHIP_MISMATCH", drivers({ sharing: foreignSubscription })); checks.push("foreign subscription route");
+const badMutation = schedulesFixture(); badMutation.mutationOwnership[1].id = "foreign"; await expectCode("MUTATION_OWNERSHIP_MISMATCH", drivers({ schedules: badMutation })); checks.push("mutation ownership");
 const missingAction = sharingFixture(); missingAction.actions.pop(); await expectCode("ACTION_EVIDENCE_INCOMPLETE", drivers({ sharing: missingAction })); checks.push("actions required");
+const missingScreenshot = schedulesFixture(); missingScreenshot.screenshots.pop(); await expectCode("SCREENSHOT_EVIDENCE_INCOMPLETE", drivers({ schedules: missingScreenshot })); checks.push("screenshots required");
 const badVersion = settingsFixture(); badVersion.transitions.updated.afterVersion = 2; await expectCode("CALENDAR_VERSION_INVALID", drivers({ settings: badVersion })); checks.push("calendar versions");
 const badSubscription = sharingFixture(); badSubscription.subscription.transitions[2].version = 3; await expectCode("SUBSCRIPTION_TRANSITION_INVALID", drivers({ sharing: badSubscription })); checks.push("subscription transitions");
 const badDelivery = deliveryFixture(); badDelivery.deliveries.pop(); await expectCode("DELIVERY_EVIDENCE_INCOMPLETE", drivers({ delivery: badDelivery })); checks.push("two deliveries");
+const foreignDelivery = deliveryFixture({ foreignRecipientCount: 1 }); await expectCode("DELIVERY_EVIDENCE_INCOMPLETE", drivers({ delivery: foreignDelivery })); checks.push("foreign delivery rejected");
 const lateDelivery = deliveryFixture({ boundedWaitSeconds: 121 }); await expectCode("DELIVERY_WAIT_INVALID", drivers({ delivery: lateDelivery })); checks.push("bounded delivery wait");
 const partial = schedulesFixture({ status: "PARTIAL" }); await expectCode("CALENDAR_COMPOSITE_INCOMPLETE", drivers({ schedules: partial })); checks.push("partial rejected");
 const missingAuditRecords = [...ownershipFixture().records, ...settingsFixture().createdRecords, ...schedulesFixture().createdRecords, ...sharingFixture().createdRecords, ...deliveryFixture().createdRecords]; const missingAudit = dbFixture(missingAuditRecords); missingAudit.audits.pop(); await expectCode("AUDIT_EVIDENCE_INCOMPLETE", drivers({ db: missingAudit })); checks.push("audits required");
+const missingDbRow = dbFixture(missingAuditRecords); missingDbRow.rows.pop(); await expectCode("DB_EVIDENCE_NOT_RUN_OWNED", drivers({ db: missingDbRow })); checks.push("DB rows required");
+const sensitive = settingsFixture(); sensitive[["to", "ken"].join("")] = "fixture-marker"; await expectCode("SENSITIVE_FIELD_REJECTED", drivers({ settings: sensitive })); checks.push("sensitive fields rejected");
 await expectCode("CLEANUP_INCOMPLETE", drivers({ cleanup: cleanupFixture(missingAuditRecords, { residualDeliveries: 1 }) })); checks.push("cleanup residuals");
+const activeCleanup = cleanupFixture(missingAuditRecords); activeCleanup.disposableIdentities[0].active = true; await expectCode("CLEANUP_INCOMPLETE", drivers({ cleanup: activeCleanup })); checks.push("identities inactive");
+await expectCode("PROTECTED_ACCOUNT_CHANGED", drivers({ cleanup: cleanupFixture(missingAuditRecords, { existingCalendarFingerprint: { before: "a", after: "b" } }) })); checks.push("protected fingerprints");
 const primary = drivers({ primaryError: true }); await expectCode("LIVE_EXECUTION_FAILED", primary); assert.equal(primary.closeCalled(), true); assert.equal(primary.cleanupCalled(), true); checks.push("finally close cleanup");
 const temp = await mkdtemp(resolve(tmpdir(), "ui046-calendar-")); try { await mkdir(resolve(temp, "screenshots")); for (const shot of SHOTS) await writeFile(resolve(temp, shot), "png"); await persistAreaEvidence({ result, directory: temp, selectedAreaId: "calendar", selectedRunId: runId }); checks.push("seven screenshots and six evidence files"); } finally { await rm(temp, { recursive: true, force: true }); }
+const guard = spawnSync(process.execPath, [resolve(here, "orchestrator.mjs"), "execute-area", "--area=calendar", `--run-id=${runId}`], { encoding: "utf8" }); assert.equal(guard.status, 2); assert.match(guard.stderr, /LIVE_INPUT_REQUIRED/); checks.push("orchestrator live input guard");
 console.log(JSON.stringify({ status: "PASS", passed: checks.length, total: checks.length, checks }));

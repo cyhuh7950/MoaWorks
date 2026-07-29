@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { runHomeSearchNotification } from "./adapters/home-search-notification.mjs";
 import { runMail } from "./adapters/mail.mjs";
 import { runApproval } from "./adapters/approval.mjs";
+import { runCalendar } from "./adapters/calendar.mjs";
 import { runPreflight } from "./adapters/preflight.mjs";
 import { runStaticStructure } from "./adapters/static-structure.mjs";
 
@@ -101,10 +102,10 @@ function execute() {
 
 async function executeArea() {
   assertRunId();
-  if (!["home-search-notification", "mail", "approval"].includes(areaId)) throw errorWithCode("AREA_NOT_READY");
+  if (!["home-search-notification", "mail", "approval", "calendar"].includes(areaId)) throw errorWithCode("AREA_NOT_READY");
   const directory = safeEvidenceDir();
   const drivers = await loadRuntimeDrivers();
-  const runners = { "home-search-notification": runHomeSearchNotification, mail: runMail, approval: runApproval };
+  const runners = { "home-search-notification": runHomeSearchNotification, mail: runMail, approval: runApproval, calendar: runCalendar };
   const result = await runners[areaId]({ manifest, runId, browserDriver: drivers?.browserDriver, dbDriver: drivers?.dbDriver, evidenceDir: directory });
   await persistAreaEvidence({ result, directory, selectedAreaId: areaId, selectedRunId: runId });
   process.stdout.write(`${JSON.stringify({ runId, areaId, status: result.status, evidence: relative(root, directory).replaceAll("\\", "/") })}\n`);
@@ -124,6 +125,7 @@ export async function persistAreaEvidence({ result, directory, selectedAreaId, s
   const reportReasons = {
     mail: "메일 core/settings 화면, 실제 route family, same-origin API, DB/audit, 재조회와 cleanup 계약을 통과했습니다.",
     approval: "전자결재 문서·기본설정·위임 화면, same-origin API, DB/audit/version, 재조회와 cleanup composite 계약을 통과했습니다.",
+    calendar: "캘린더 설정·일정·공유 화면, same-origin API, DB/audit/delivery, 재조회와 cleanup composite 계약을 통과했습니다.",
     "home-search-notification": "home-search-notification LIVE adapter가 run-id disposable user 세션, same-origin API, DB, audit, 재조회와 cleanup 계약을 통과했습니다.",
   };
   const reportReason = reportReasons[selectedAreaId] ?? "선택 영역의 LIVE adapter 계약을 통과했습니다.";

@@ -16,7 +16,8 @@ const inventory = JSON.parse(inventoryText);
 const readyArea = manifest.areas.find((area) => area.id === "home-search-notification");
 const mailArea = manifest.areas.find((area) => area.id === "mail");
 const approvalArea = manifest.areas.find((area) => area.id === "approval");
-const expectedGapAreaIds = ["calendar", "messenger", "address-organization", "files", "personal-help"];
+const calendarArea = manifest.areas.find((area) => area.id === "calendar");
+const expectedGapAreaIds = ["messenger", "address-organization", "files", "personal-help"];
 
 const frontendFiles = await readdir(scripts);
 const sourceOnly = new Set(inventory.groups.find((group) => group.scope === "frontend-source-verifiers").sourceOnlyAllowlist);
@@ -42,7 +43,9 @@ const checks = [
   ["메일 execute-area 지원", orchestrator.includes("runMail") && orchestrator.includes("mail: runMail") && orchestrator.includes("SCREENSHOT_EVIDENCE_DUPLICATE")],
   ["전자결재 composite READY", approvalArea?.status === "READY" && approvalArea?.adapter === "approval" && approvalArea.liveInputContract?.identityTopology === "one-run-role-three-run-users-author-approver-delegate" && approvalArea.liveInputContract?.compositePolicy === "documents-and-basic-settings-and-delegations-and-cleanup"],
   ["전자결재 execute-area 지원", orchestrator.includes("runApproval") && orchestrator.includes("approval: runApproval")],
-  ["나머지 5개 GAP 유지", JSON.stringify(manifest.areas.filter((area) => area.status === "GAP").map((area) => area.id)) === JSON.stringify(expectedGapAreaIds) && manifest.areas.filter((area) => area.status === "GAP").every((area) => area.adapter === null)],
+  ["캘린더 composite READY", calendarArea?.status === "READY" && calendarArea?.adapter === "calendar" && calendarArea.liveInputContract?.identityTopology === "one-run-role-two-run-users-owner-collaborator" && calendarArea.liveInputContract?.ownershipPolicy === "browser-created-ids-added-sequentially"],
+  ["캘린더 execute-area 지원", orchestrator.includes("runCalendar") && orchestrator.includes("calendar: runCalendar")],
+  ["나머지 4개 GAP 유지", JSON.stringify(manifest.areas.filter((area) => area.status === "GAP").map((area) => area.id)) === JSON.stringify(expectedGapAreaIds) && manifest.areas.filter((area) => area.status === "GAP").every((area) => area.adapter === null)],
   ["보호 계정 고정", JSON.stringify(manifest.protectedAccounts) === JSON.stringify(["admin", "cyhuh", "ysla"])],
   ["sinsan HTTPS origin", manifest.environment.userOrigin === "https://user.moaworks.sinsan.kr" && manifest.environment.adminOrigin === "https://admin.moaworks.sinsan.kr"],
   ["same-origin 상대 API", manifest.areas.flatMap((area) => area.apiPaths).every((path) => path.startsWith("/api/v1/"))],
