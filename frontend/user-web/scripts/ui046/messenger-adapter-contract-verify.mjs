@@ -14,10 +14,11 @@ const runId = "UI046_20260729T180000_msg1", companyId = `${runId}_company`;
 const ids = Object.fromEntries(["role", "creator", "reader", "inactive", "creatorCalendar", "readerCalendar", "inactiveCalendar", "room", "creatorMember", "readerMember", "inactiveMember", "upload", "storage", "textMessage", "fileMessage", "attachment", "creatorTextRead", "creatorFileRead", "readerTextRead", "readerFileRead"].map((key) => [key, `${runId}_${key}`]));
 const SHOTS = ["messenger-room-list.png", "messenger-room-create.png", "messenger-timeline.png", "messenger-attachment.png", "messenger-participants.png", "messenger-shared-files.png"].map((name) => `screenshots/${name}`);
 const AUDITS = ["messenger.room.created", "messenger.room.favorite_changed", "messenger.room.participants_changed", "messenger.message.sent", "messenger.message.sent", "messenger.room.read"];
+const REQUIRED_PERMISSIONS = ["profile:read", "messenger:read", "messenger:write"];
 const clone = (value) => structuredClone(value);
 
 function ownershipFixture(overrides = {}) { return { runId, companyId, records: [
-  { kind: "test_role", id: ids.role, name: `${runId}_messenger_role`, permissions: ["messenger:read", "messenger:write"], companyId, ownerRunId: runId },
+  { kind: "test_role", id: ids.role, name: `${runId}_messenger_role`, permissions: [...REQUIRED_PERMISSIONS], companyId, ownerRunId: runId },
   ...[["creator", ids.creator], ["reader", ids.reader], ["inactive-candidate", ids.inactive]].map(([purpose, id]) => ({ kind: "test_user", id, purpose, name: `${runId}_${purpose}`, loginId: `${runId.toLowerCase()}_${purpose}`, email: `${runId.toLowerCase()}_${purpose}@moaworks.sinsan.kr`, roleId: ids.role, companyId, active: true, ownerRunId: runId })),
   ...[[ids.creatorCalendar, ids.creator], [ids.readerCalendar, ids.reader], [ids.inactiveCalendar, ids.inactive]].map(([id, userId]) => ({ kind: "user_calendar", id, userId, companyId, isAutoDefault: true, ownerRunId: runId })),
 ], ...overrides }; }
@@ -58,6 +59,8 @@ await expectCode("LIVE_INPUT_REQUIRED", {}); checks.push("missing drivers");
 const missing = drivers(); delete missing.browserDriver.runMessengerReadFlow; await expectCode("LIVE_INPUT_REQUIRED", missing); checks.push("missing browser method");
 const missingStorage = drivers(); delete missingStorage.storageDriver.cleanupOwnedStorage; await expectCode("LIVE_INPUT_REQUIRED", missingStorage); checks.push("missing storage method");
 const valid = drivers(); const result = await runMessenger({ manifest, runId, evidenceDir: "contract-evidence", browserDriver: valid.browserDriver, dbDriver: valid.dbDriver, storageDriver: valid.storageDriver }); assert.equal(result.status, "PASS"); assert.equal(valid.closeCalled(), true); assert.equal(valid.dbCleanupCalled(), true); assert.equal(valid.storageCleanupCalled(), true); checks.push("valid composite");
+assert.deepEqual(manifest.areas.find((x) => x.id === "messenger")?.liveInputContract?.rolePermissions, REQUIRED_PERMISSIONS); checks.push("manifest exact screen permissions");
+const missingProfilePermission = ownershipFixture(); missingProfilePermission.records[0].permissions.shift(); await expectCode("IDENTITY_TOPOLOGY_INVALID", drivers({ ownership: missingProfilePermission })); checks.push("profile read required");
 const badPermission = ownershipFixture(); badPermission.records[0].permissions.push("admin:write"); await expectCode("IDENTITY_TOPOLOGY_INVALID", drivers({ ownership: badPermission })); checks.push("minimal permissions");
 const precreated = ownershipFixture(); precreated.records.push({ kind: "messenger_room", id: ids.room, ownerRunId: runId }); await expectCode("PRECREATED_PRODUCT_ROW_REJECTED", drivers({ ownership: precreated })); checks.push("no precreated product row");
 const protectedSession = roomFixture(); protectedSession.session.activeLoginId = "admin"; await expectCode("PROTECTED_ACCOUNT_SESSION_REJECTED", drivers({ room: protectedSession })); checks.push("protected session");
