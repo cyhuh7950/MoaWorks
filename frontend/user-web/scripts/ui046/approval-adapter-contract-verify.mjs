@@ -310,7 +310,7 @@ try {
 assert.equal(manifest.areas.find((area) => area.id === "approval")?.adapter, "approval");
 assert.equal(manifest.areas.find((area) => area.id === "approval")?.status, "READY");
 checks.push("manifest ready");
-assert.equal(manifest.areas.filter((area) => area.status === "GAP").length, 3);
+assert.equal(manifest.areas.filter((area) => area.status === "GAP").length, 2);
 const orchestrator = spawnSync(process.execPath, [resolve(here, "orchestrator.mjs"), "execute-area", "--area=approval", `--run-id=${runId}`], { encoding: "utf8" });
 assert.equal(orchestrator.status, 2);
 assert.match(orchestrator.stderr, /LIVE_INPUT_REQUIRED/);
