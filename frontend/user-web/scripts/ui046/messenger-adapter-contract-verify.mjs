@@ -53,7 +53,7 @@ function drivers(overrides = {}) { const base = overrides.ownership ?? ownership
 async function expectCode(code, setup) { await assert.rejects(runMessenger({ manifest, runId, evidenceDir: "contract-evidence", ...setup }), (error) => String(error?.code ?? "").split(":", 1)[0] === code); }
 
 const checks = [];
-assert.equal(manifest.areas.find((x) => x.id === "messenger")?.status, "GAP"); checks.push("messenger GAP RED baseline");
+assert.equal(manifest.areas.find((x) => x.id === "messenger")?.status, "READY"); assert.equal(manifest.areas.find((x) => x.id === "messenger")?.adapter, "messenger"); checks.push("messenger READY contract");
 await expectCode("LIVE_INPUT_REQUIRED", {}); checks.push("missing drivers");
 const missing = drivers(); delete missing.browserDriver.runMessengerReadFlow; await expectCode("LIVE_INPUT_REQUIRED", missing); checks.push("missing browser method");
 const missingStorage = drivers(); delete missingStorage.storageDriver.cleanupOwnedStorage; await expectCode("LIVE_INPUT_REQUIRED", missingStorage); checks.push("missing storage method");
