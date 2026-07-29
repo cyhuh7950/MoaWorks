@@ -1,6 +1,6 @@
 {
   "taskId": "ui046-messenger-functional-regression-20260729",
-  "issueId": "UI046_MESSENGER_FUNCTIONAL_REGRESSION_ADAPTER",
+  "issueId": "UI046_MESSENGER_FUNCTIONAL_REGRESSION",
   "agentId": "/root/ui045_mail_compose_focus",
   "outcome": "SUCCESS",
   "judgement": "MESSENGER_ADAPTER_READY_LOCAL_ONLY_LIVE_NOT_RUN_UI046_WAIT",
