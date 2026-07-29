@@ -79,7 +79,19 @@ function validateDb(value, context) {
   if (!Array.isArray(value.audits) || value.audits.length !== 22 || !sameCounts(count(value.audits, (x) => `${x.event}\0${x.actorId}\0${x.targetId}`), count(expected, (x) => `${x[0]}\0${x[1]}\0${x[2]}`)) || value.audits.some((x) => x.ownerRunId !== context.ownership.runId || !x.reasonSafe)) throw fail("AUDIT_EVIDENCE_INCOMPLETE"); return value;
 }
 function validateStorage(value, context) { scan(value); const versions = [...context.owned.values()].filter((x) => x.kind === "file_version"), expected = new Map(versions.map((x) => [x.id, x.versionNo === 1 ? 31 : 43])); if (value?.blobCount !== 2 || !Array.isArray(value.blobs) || value.blobs.length !== 2 || new Set(value.blobs.map((x) => x.versionId)).size !== 2 || value.blobs.some((x) => !expected.has(x.versionId) || !x.exists || x.byteSize !== expected.get(x.versionId) || !x.expectedBytesMatch) || !value.withinRoot) throw fail("STORAGE_EVIDENCE_INCOMPLETE"); return value; }
-function validateDbCleanup(value, context) { scan(value); const identities = [...context.owned.values()].filter((x) => ["test_role", "test_user"].includes(x.kind)); if (value?.runId !== context.ownership.runId || value.approved !== true || value.residualOwnedRows !== 0 || value.residualOwnedAudit !== 0 || !value.sessionsClosed || value.disposableIdentities?.length !== identities.length || value.disposableIdentities.some((x) => x.active !== false || x.ownerRunId !== context.ownership.runId || !identities.some((owned) => owned.id === x.id && owned.kind === x.kind)) || value.protectedAccounts?.length !== 3 || value.protectedAccounts.some((x) => !stable(x)) || value.existingFilesFingerprint?.before !== value.existingFilesFingerprint?.after) throw fail("DB_CLEANUP_INCOMPLETE"); return value; }
+function validateDbCleanup(value, context) {
+  scan(value);
+  const identities = [...context.owned.values()].filter((x) => ["test_role", "test_user"].includes(x.kind));
+  const users = identities.filter((x) => x.kind === "test_user");
+  const mailAccounts = value?.disposableMailAccounts;
+  const mailAccountsValid = Array.isArray(mailAccounts)
+    && mailAccounts.length === users.length
+    && new Set(mailAccounts.map((x) => x.id)).size === users.length
+    && new Set(mailAccounts.map((x) => x.userId)).size === users.length
+    && mailAccounts.every((x) => x.active === false && x.ownerRunId === context.ownership.runId && users.some((user) => user.id === x.userId));
+  if (value?.runId !== context.ownership.runId || value.approved !== true || value.residualOwnedRows !== 0 || value.residualOwnedAudit !== 0 || !value.sessionsClosed || value.disposableIdentities?.length !== identities.length || value.disposableIdentities.some((x) => x.active !== false || x.ownerRunId !== context.ownership.runId || !identities.some((owned) => owned.id === x.id && owned.kind === x.kind)) || !mailAccountsValid || value.protectedAccounts?.length !== 3 || value.protectedAccounts.some((x) => !stable(x)) || value.existingFilesFingerprint?.before !== value.existingFilesFingerprint?.after) throw fail("DB_CLEANUP_INCOMPLETE");
+  return value;
+}
 function validateStorageCleanup(value, context) { scan(value); const versions = [...context.owned.values()].filter((x) => x.kind === "file_version"); if (value?.runId !== context.ownership.runId || value.approved !== true || value.residualBlobs !== 0 || value.deletedBlobCount !== 2 || !value.withinRoot || value.broadDeleteUsed || value.deletedVersionIds?.length !== 2 || new Set(value.deletedVersionIds).size !== 2 || versions.some((x) => !value.deletedVersionIds.includes(x.id)) || value.existingStorageFingerprint?.before !== value.existingStorageFingerprint?.after) throw fail("STORAGE_CLEANUP_INCOMPLETE"); return value; }
 
 export async function runFiles({ manifest, runId, browserDriver, dbDriver, storageDriver, cleanupApproved = false }) {
