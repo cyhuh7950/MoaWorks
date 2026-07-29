@@ -45,8 +45,16 @@ function organizationFixture(overrides = {}) { return { status: "PASS", session:
   { method: "GET", path: "/api/v1/workspace/organization/departments", status: 200 }, { method: "GET", path: "/api/v1/workspace/organization/members", status: 200 }, { method: "GET", path: `/api/v1/workspace/organization/members/${ids.target}`, status: 200 },
 ], mutationOwnership: [], screenshots: SHOTS.slice(4), ...overrides }; }
 
+function repeatedOrganizationFixture() { const fixture = organizationFixture(); fixture.network.push(
+  { method: "GET", path: "/api/v1/workspace/organization/departments", status: 200 },
+  { method: "GET", path: "/api/v1/workspace/organization/members", status: 200 },
+  { method: "GET", path: "/api/v1/workspace/organization/members", status: 200 },
+  { method: "GET", path: `/api/v1/workspace/organization/members/${ids.target}`, status: 200 },
+); return fixture; }
+
 function auditRows() { const targets = [ids.group, ids.group, ids.group, ids.manualContact, ids.manualContact, ids.manualContact, ids.importedContact, ids.importedContact, ids.target]; return AUDITS.map((event, index) => ({ event, actorId: ids.owner, targetId: targets[index], reasonSafe: true, ownerRunId: runId })); }
 function dbFixture(records, overrides = {}) { return { rows: records.filter((x) => ["contact_group", "personal_contact"].includes(x.kind)).map((x) => ({ kind: x.kind, id: x.id, ownerRunId: runId })), group: { id: ids.group, ownerUserId: ids.owner, companyId, deleted: true }, contacts: [{ id: ids.manualContact, source: "manual", groupId: ids.group, ownerUserId: ids.owner, companyId, deleted: true }, { id: ids.importedContact, source: "csv", groupId: ids.group, ownerUserId: ids.owner, companyId, deleted: true }], directory: { publicUserId: ids.target, organizationUserId: ids.target, companyId, departmentId: ids.department, roleId: ids.role, active: true }, audits: auditRows(), existingRowChanges: 0, ...overrides }; }
+function ownerImportedAuditFixture(records) { const fixture = dbFixture(records); fixture.audits[7].targetId = ids.owner; return fixture; }
 function fp(id, exists = true) { return exists ? { id, before: { exists: true, fingerprint: `${id}_fp` }, after: { exists: true, fingerprint: `${id}_fp` } } : { id, before: { exists: false }, after: { exists: false } }; }
 function cleanupFixture(records, overrides = {}) { return { runId, residualOwnedRows: 0, residualOwnedAudit: 0, sessionsClosed: true, existingRowChanges: 0, disposableIdentities: records.filter((x) => ["test_role", "test_user"].includes(x.kind)).map((x) => ({ kind: x.kind, id: x.id, ownerRunId: runId, active: false })), protectedAccounts: [fp("admin"), fp("cyhuh"), fp("ysla", false)], referenceDepartment: fp(ids.department), existingAddressOrganizationFingerprint: { before: "addr_org_fp", after: "addr_org_fp" }, ...overrides }; }
 
@@ -54,6 +62,13 @@ function drivers(overrides = {}) { const base = overrides.ownership ?? ownership
 async function expectCode(code, setup) { await assert.rejects(runAddressOrganization({ manifest, runId, evidenceDir: "contract-evidence", ...setup }), (error) => String(error?.code ?? "").split(":", 1)[0] === code); }
 
 const checks = [];
+const remediationRecords = [...ownershipFixture().records, ...addressFixture().createdRecords];
+const remediationResults = await Promise.allSettled([
+  runAddressOrganization({ manifest, runId, evidenceDir: "contract-evidence", ...drivers({ organization: repeatedOrganizationFixture() }) }),
+  runAddressOrganization({ manifest, runId, evidenceDir: "contract-evidence", ...drivers({ db: ownerImportedAuditFixture(remediationRecords) }) }),
+]);
+assert.deepEqual(remediationResults.map((item) => item.status === "fulfilled" ? "PASS" : item.reason?.code), ["PASS", "PASS"]);
+checks.push("organization GET repetitions preserved", "imported audit targets owner");
 assert.equal(manifest.areas.find((x) => x.id === "address-organization")?.status, "READY"); assert.equal(manifest.areas.find((x) => x.id === "address-organization")?.adapter, "address-organization"); checks.push("address organization READY contract");
 await expectCode("LIVE_INPUT_REQUIRED", {}); checks.push("missing drivers");
 const missing = drivers(); delete missing.browserDriver.runOrganizationFlow; await expectCode("LIVE_INPUT_REQUIRED", missing); checks.push("missing browser method");
