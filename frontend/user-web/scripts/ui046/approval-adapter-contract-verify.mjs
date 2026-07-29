@@ -9,7 +9,10 @@ import { runApproval } from "./adapters/approval.mjs";
 import { persistAreaEvidence } from "./orchestrator.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
+const root = resolve(here, "../../../..");
 const manifest = JSON.parse(await readFile(resolve(here, "manifest.json"), "utf8"));
+const productApi = await readFile(resolve(root, "frontend/user-web/src/api.ts"), "utf8");
+const backendRoutes = await readFile(resolve(root, "backend/app/api/routes/approvals.py"), "utf8");
 const runId = "UI046_20260729T120000_appr1";
 const companyId = `${runId}_company`;
 const roleId = `${runId}_role`;
@@ -171,6 +174,18 @@ async function expectCode(code, setup) {
 }
 
 const checks = [];
+for (const contract of [
+  [productApi, "/approvals/audit-logs"],
+  [productApi, "/approvals/${documentId}/attachments/${attachmentId}"],
+  [productApi, "/approvals/settings/delegations"],
+  [backendRoutes, '@router.get("/audit-logs"'],
+  [backendRoutes, '@router.get("/{document_id}/attachments/{attachment_id}"'],
+  [backendRoutes, '@router.get("/settings/delegations"'],
+  [backendRoutes, '@router.post("/settings/delegations"'],
+  [backendRoutes, '@router.patch("/settings/delegations/{delegation_id}"'],
+  [backendRoutes, '@router.delete("/settings/delegations/{delegation_id}"'],
+]) assert.ok(contract[0].includes(contract[1]), `missing product route contract: ${contract[1]}`);
+checks.push("frontend and backend product route alignment");
 await expectCode("LIVE_INPUT_REQUIRED", {}); checks.push("missing drivers");
 const missingMethod = drivers(); delete missingMethod.browserDriver.runApprovalDelegations;
 await expectCode("LIVE_INPUT_REQUIRED", missingMethod); checks.push("missing driver method");

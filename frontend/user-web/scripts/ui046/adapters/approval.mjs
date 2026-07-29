@@ -91,6 +91,63 @@ function assertNetwork(network, requiredFamilies) {
   if (!requiredFamilies.every((matches) => network.some(matches))) throw approvalContractError("NETWORK_ROUTE_FAMILY_INCOMPLETE");
 }
 
+function assertDocumentNetwork(network, context) {
+  const required = new Set();
+  for (const record of network) {
+    const { method, path } = record;
+    if (/^\/api\/v1\/approvals\/[^/]+\/audit$/.test(path) || (method === "GET" && /^\/api\/v1\/approvals\/attachments\/[^/]+$/.test(path))) throw approvalContractError("NETWORK_LEGACY_ROUTE_REJECTED");
+    if (method === "GET" && path === "/api/v1/approvals") { required.add("list"); continue; }
+    if (method === "POST" && path === "/api/v1/approvals") { required.add("create"); continue; }
+    if (method === "GET" && path === "/api/v1/approvals/audit-logs") { required.add("audit"); continue; }
+    if (method === "GET" && path === "/api/v1/approvals/approvers") { required.add("approvers"); continue; }
+    if (method === "POST" && path === "/api/v1/approvals/attachments") { required.add("attachment-upload"); continue; }
+    const attachment = path.match(/^\/api\/v1\/approvals\/([^/]+)\/attachments\/([^/]+)$/);
+    if (method === "GET" && attachment) {
+      const [, documentId, attachmentId] = attachment;
+      const document = context.owned.get(documentId);
+      const ownedAttachment = context.owned.get(attachmentId);
+      if (document?.kind !== "approval_document" || ownedAttachment?.kind !== "approval_attachment" || ownedAttachment.documentId !== documentId) throw approvalContractError("NETWORK_DYNAMIC_OWNERSHIP_MISMATCH");
+      required.add("attachment-download");
+      continue;
+    }
+    const action = path.match(/^\/api\/v1\/approvals\/([^/]+)\/(submit|approve|reject|withdraw|redraft)$/);
+    if (method === "POST" && action) {
+      if (context.owned.get(action[1])?.kind !== "approval_document") throw approvalContractError("NETWORK_DYNAMIC_OWNERSHIP_MISMATCH");
+      required.add(action[2]);
+      continue;
+    }
+    const document = path.match(/^\/api\/v1\/approvals\/([^/]+)$/);
+    if (document && ["GET", "PATCH"].includes(method)) {
+      if (context.owned.get(document[1])?.kind !== "approval_document") throw approvalContractError("NETWORK_DYNAMIC_OWNERSHIP_MISMATCH");
+      required.add(method === "GET" ? "detail" : "update");
+      continue;
+    }
+    throw approvalContractError("NETWORK_ROUTE_FAMILY_INCOMPLETE");
+  }
+  const expected = ["list", "detail", "audit", "approvers", "attachment-upload", "attachment-download", "create", "update", "submit", "approve", "reject", "withdraw", "redraft"];
+  if (!expected.every((name) => required.has(name))) throw approvalContractError("NETWORK_ROUTE_FAMILY_INCOMPLETE");
+}
+
+function assertDelegationNetwork(network, context) {
+  const required = new Set();
+  for (const record of network) {
+    const { method, path } = record;
+    if (path === "/api/v1/approvals/delegations" || path.startsWith("/api/v1/approvals/delegations/")) throw approvalContractError("NETWORK_LEGACY_ROUTE_REJECTED");
+    if (path === "/api/v1/approvals/settings/delegations" && ["GET", "POST"].includes(method)) {
+      required.add(method === "GET" ? "list" : "create");
+      continue;
+    }
+    const dynamic = path.match(/^\/api\/v1\/approvals\/settings\/delegations\/([^/]+)$/);
+    if (dynamic && ["PATCH", "DELETE"].includes(method)) {
+      if (dynamic[1] !== context.delegation.id || context.owned.get(dynamic[1])?.kind !== "approval_delegation") throw approvalContractError("NETWORK_DYNAMIC_OWNERSHIP_MISMATCH");
+      required.add(method === "PATCH" ? "update" : "delete");
+      continue;
+    }
+    throw approvalContractError("NETWORK_ROUTE_FAMILY_INCOMPLETE");
+  }
+  if (!["list", "create", "update", "delete"].every((name) => required.has(name))) throw approvalContractError("NETWORK_ROUTE_FAMILY_INCOMPLETE");
+}
+
 function assertMutations(mutations, network, context) {
   if (!Array.isArray(mutations) || !mutations.length) throw approvalContractError("MUTATION_OWNERSHIP_MISMATCH");
   const successful = new Set(network.map((item) => `${item.method} ${item.path}`));
@@ -132,13 +189,8 @@ function validateDocuments(result, context, runId) {
   }
   const attachment = result.attachment;
   if (!attachment || context.owned.get(attachment.id)?.kind !== "approval_attachment" || context.owned.get(attachment.uploadId)?.kind !== "approval_upload" || attachment.documentId !== documents.find((item) => item.purpose === "approve")?.id || attachment.ownerRunId !== runId || attachment.mimeType !== "text/plain" || !Number.isInteger(attachment.sizeBytes) || attachment.sizeBytes < 1 || attachment.sizeBytes > 1024 || attachment.downloadConfirmed !== true || !includesRunId(attachment.fileName, runId)) throw approvalContractError("ATTACHMENT_CONTRACT_INVALID");
-  assertNetwork(result.network, [
-    (r) => r.method === "GET" && r.path === "/api/v1/approvals", (r) => r.method === "GET" && /^\/api\/v1\/approvals\/[^/]+$/.test(r.path),
-    (r) => r.method === "GET" && /\/audit$/.test(r.path), (r) => r.method === "GET" && r.path === "/api/v1/approvals/approvers",
-    (r) => r.method === "POST" && r.path === "/api/v1/approvals/attachments", (r) => r.method === "GET" && r.path.startsWith("/api/v1/approvals/attachments/"),
-    (r) => r.method === "POST" && r.path === "/api/v1/approvals", (r) => r.method === "PATCH" && /^\/api\/v1\/approvals\/[^/]+$/.test(r.path),
-    ...["submit", "approve", "reject", "withdraw", "redraft"].map((action) => (r) => r.method === "POST" && r.path.endsWith(`/${action}`)),
-  ]);
+  assertNetwork(result.network, []);
+  assertDocumentNetwork(result.network, context);
   assertMutations(result.mutationOwnership, result.network, context);
   assertScreenshots(result.screenshots, EXPECTED_SCREENSHOTS.slice(0, 3));
   return result;
@@ -168,10 +220,8 @@ function validateDelegations(result, context) {
   if (!value || value.id !== context.delegation.id || value.ownerId !== context.approver.id || value.delegateId !== context.delegate.id || value.companyId !== context.ownership.companyId || value.includesCurrentSeoulDate !== true || value.reasonIncludesRunId !== true) throw approvalContractError("DELEGATION_TARGET_MISMATCH");
   if (value.versionAfterUpdate !== value.versionBeforeUpdate + 1 || value.rereadVersion !== value.versionAfterUpdate || value.deleteExpectedVersion !== value.versionAfterUpdate) throw approvalContractError("DELEGATION_VERSION_INVALID");
   if (value.softDeleted !== true || value.absentAfterDelete !== true) throw approvalContractError("DELEGATION_REREAD_MISMATCH");
-  assertNetwork(result.network, [
-    (r) => r.method === "GET" && r.path === "/api/v1/approvals/delegations", (r) => r.method === "POST" && r.path === "/api/v1/approvals/delegations",
-    (r) => r.method === "PATCH" && r.path.startsWith("/api/v1/approvals/delegations/"), (r) => r.method === "DELETE" && r.path.startsWith("/api/v1/approvals/delegations/"),
-  ]);
+  assertNetwork(result.network, []);
+  assertDelegationNetwork(result.network, context);
   assertMutations(result.mutationOwnership, result.network, context);
   assertScreenshots(result.screenshots, [EXPECTED_SCREENSHOTS[4]]);
   return result;
