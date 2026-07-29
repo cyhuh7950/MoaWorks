@@ -71,12 +71,22 @@
       "label": "전자결재",
       "screenActions": ["목록·상세", "기안·상신·승인·반려·회수·재기안", "기본설정", "부재·위임 CRUD"],
       "apiPaths": ["/api/v1/approvals", "/api/v1/approvals/settings", "/api/v1/approvals/delegations"],
-      "dbTables": ["approval_documents", "approval_lines", "approval_attachments", "approval_basic_preferences", "approval_delegations", "audit_logs"],
-      "auditEvents": ["approval.created", "approval.submitted", "approval.approved", "approval.rejected", "approval.withdrawn", "approval.settings.updated", "approval.delegation.created"],
-      "cleanupOwnership": "UI046 제목 문서, 첨부, delegation 및 settings snapshot만 삭제·원복",
+      "dbTables": ["roles", "users", "approval_documents", "approval_lines", "approval_attachments", "approval_basic_preferences", "approval_delegations", "notifications", "notification_user_states", "monitoring_events", "audit_logs"],
+      "auditEvents": ["approval.created", "approval.submitted", "approval.approved", "approval.rejected", "approval.withdrawn", "approval.redrafted", "approval.settings.updated", "approval.delegation.created", "approval.delegation.updated", "approval.delegation.deleted"],
+      "cleanupOwnership": "UI046 run-id 역할 1개와 author·approver·delegate 사용자, 문서·결재선·첨부·기본설정·위임·audit·notification·monitoring·storage만 정리하고 임시 신원은 inactive; 보호 계정과 기존 결재 fingerprint 변경 금지",
       "existingCoverage": ["STATIC:ui031-ui036 frontend and backend tests"],
-      "adapter": null,
-      "status": "GAP"
+      "liveInputContract": {
+        "browserDriverMethods": ["runApprovalDocuments", "runApprovalBasicSettings", "runApprovalDelegations", "close"],
+        "dbDriverMethods": ["prepareOwnedData", "collectApprovalEvidence", "cleanupOwnedData"],
+        "identityTopology": "one-run-role-three-run-users-author-approver-delegate",
+        "rolePermissions": ["approval:read", "approval:create", "approval:submit", "approval:act", "approval:withdraw", "approval:rework"],
+        "documentPolicy": "three-distinct-run-documents-approve-reject-withdraw-with-redraft",
+        "compositePolicy": "documents-and-basic-settings-and-delegations-and-cleanup",
+        "secretSource": "runtime-memory-only",
+        "missingInputStatus": "LIVE_INPUT_REQUIRED"
+      },
+      "adapter": "approval",
+      "status": "READY"
     },
     {
       "id": "calendar",

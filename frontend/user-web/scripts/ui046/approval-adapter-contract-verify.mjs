@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
@@ -91,7 +92,7 @@ function documentsFixture(overrides = {}) {
 function settingsFixture(overrides = {}) {
   return {
     status: "PASS", session: { activeLoginId: `${runId.toLowerCase()}_author` }, actions: [...SETTING_ACTIONS],
-    preference: { id: ids.preference, userId: ids.author, companyId, beforeVersion: 2, afterVersion: 3, rereadVersion: 3, beforeAttachmentImageDisplay: "inline", afterAttachmentImageDisplay: "attachment", rereadAttachmentImageDisplay: "attachment", hasSignature: false },
+    preference: { id: ids.preference, userId: ids.author, companyId, beforeVersion: 2, afterVersion: 3, rereadVersion: 3, beforeAttachmentImageDisplay: "thumbnail", afterAttachmentImageDisplay: "filename", rereadAttachmentImageDisplay: "filename", hasSignature: false },
     network: [{ method: "GET", path: "/api/v1/approvals/settings/basic", status: 200 }, { method: "PUT", path: "/api/v1/approvals/settings/basic", status: 200 }, { method: "GET", path: "/api/v1/approvals/settings/basic", status: 200 }],
     mutationOwnership: [{ kind: "approval_basic_preference", id: ids.preference, method: "PUT", path: "/api/v1/approvals/settings/basic" }],
     screenshots: [SCREENSHOTS[3]], ...overrides,
@@ -173,6 +174,8 @@ const checks = [];
 await expectCode("LIVE_INPUT_REQUIRED", {}); checks.push("missing drivers");
 const missingMethod = drivers(); delete missingMethod.browserDriver.runApprovalDelegations;
 await expectCode("LIVE_INPUT_REQUIRED", missingMethod); checks.push("missing driver method");
+const missingDbMethod = drivers(); delete missingDbMethod.dbDriver.collectApprovalEvidence;
+await expectCode("LIVE_INPUT_REQUIRED", missingDbMethod); checks.push("missing DB driver method");
 
 const valid = drivers();
 const validResult = await runApproval({ manifest, runId, evidenceDir: "contract-evidence", browserDriver: valid.browserDriver, dbDriver: valid.dbDriver });
@@ -204,10 +207,12 @@ const missingFamily = documentsFixture(); missingFamily.network = missingFamily.
 await expectCode("NETWORK_ROUTE_FAMILY_INCOMPLETE", drivers({ documents: missingFamily })); checks.push("route families");
 const foreignMutation = documentsFixture(); foreignMutation.mutationOwnership[0].id = "foreign";
 await expectCode("MUTATION_OWNERSHIP_MISMATCH", drivers({ documents: foreignMutation })); checks.push("mutation ownership");
+const missingMutation = documentsFixture(); missingMutation.mutationOwnership.pop();
+await expectCode("MUTATION_OWNERSHIP_MISMATCH", drivers({ documents: missingMutation })); checks.push("mutation completeness");
 
 const badSettingVersion = settingsFixture(); badSettingVersion.preference.afterVersion = 4;
 await expectCode("BASIC_SETTING_VERSION_INVALID", drivers({ settings: badSettingVersion })); checks.push("basic setting version");
-const badSettingReread = settingsFixture(); badSettingReread.preference.rereadAttachmentImageDisplay = "inline";
+const badSettingReread = settingsFixture(); badSettingReread.preference.rereadAttachmentImageDisplay = "thumbnail";
 await expectCode("BASIC_SETTING_REREAD_MISMATCH", drivers({ settings: badSettingReread })); checks.push("basic setting reread");
 const badDelegationTarget = delegationsFixture(); badDelegationTarget.delegation.delegateId = ids.author;
 await expectCode("DELEGATION_TARGET_MISMATCH", drivers({ delegations: badDelegationTarget })); checks.push("delegation target");
@@ -227,10 +232,15 @@ await expectCode("EXISTING_ROW_CHANGED", drivers({ ownership, db: dbFixture(owne
 
 const sensitiveDocuments = documentsFixture(); sensitiveDocuments[["to", "ken"].join("")] = "fixture-marker";
 await expectCode("SENSITIVE_FIELD_REJECTED", drivers({ documents: sensitiveDocuments })); checks.push("sensitive fields");
+const storageSensitiveDocuments = documentsFixture(); storageSensitiveDocuments.attachment[["storage", "Path"].join("")] = "fixture-marker";
+await expectCode("SENSITIVE_FIELD_REJECTED", drivers({ documents: storageSensitiveDocuments })); checks.push("storage location fields");
 const partial = settingsFixture({ status: "PARTIAL" });
 await expectCode("APPROVAL_COMPOSITE_INCOMPLETE", drivers({ settings: partial })); checks.push("partial pass rejected");
 
-await expectCode("CLEANUP_INCOMPLETE", drivers({ cleanup: cleanupFixture(ownership, { residualOwnedAudit: 1 }) })); checks.push("cleanup residuals");
+for (const field of ["residualOwnedRows", "residualOwnedAudit", "residualNotifications", "residualMonitoringEvents", "residualStorageObjects"]) {
+  await expectCode("CLEANUP_INCOMPLETE", drivers({ cleanup: cleanupFixture(ownership, { [field]: 1 }) }));
+}
+checks.push("cleanup residuals");
 const activeCleanup = cleanupFixture(ownership); activeCleanup.disposableIdentities[0].active = true;
 await expectCode("CLEANUP_INCOMPLETE", drivers({ cleanup: activeCleanup })); checks.push("identities inactive");
 await expectCode("PROTECTED_ACCOUNT_CHANGED", drivers({ cleanup: cleanupFixture(ownership, { existingApprovalFingerprint: { before: "a", after: "b" } }) })); checks.push("protected fingerprints");
@@ -250,10 +260,21 @@ try {
   const duplicate = clone(validResult); duplicate.screenshots[1] = duplicate.screenshots[0];
   await assert.rejects(persistAreaEvidence({ result: duplicate, directory: evidenceDir, selectedAreaId: "approval", selectedRunId: runId }), (error) => error.code === "SCREENSHOT_EVIDENCE_DUPLICATE");
   checks.push("screenshot duplicate rejected");
+  const escaped = clone(validResult); escaped.screenshots[0] = "../approval.png";
+  await assert.rejects(persistAreaEvidence({ result: escaped, directory: evidenceDir, selectedAreaId: "approval", selectedRunId: runId }), (error) => error.code === "SCREENSHOT_PATH_REJECTED");
+  checks.push("screenshot path rejected");
+  await rm(resolve(evidenceDir, SCREENSHOTS[0]), { force: true });
+  await assert.rejects(persistAreaEvidence({ result: validResult, directory: evidenceDir, selectedAreaId: "approval", selectedRunId: runId }), (error) => error.code === "SCREENSHOT_EVIDENCE_MISSING");
+  checks.push("screenshot file required");
 } finally { await rm(evidenceDir, { recursive: true, force: true }); }
 
 assert.equal(manifest.areas.find((area) => area.id === "approval")?.adapter, "approval");
 assert.equal(manifest.areas.find((area) => area.id === "approval")?.status, "READY");
 checks.push("manifest ready");
+assert.equal(manifest.areas.filter((area) => area.status === "GAP").length, 5);
+const orchestrator = spawnSync(process.execPath, [resolve(here, "orchestrator.mjs"), "execute-area", "--area=approval", `--run-id=${runId}`], { encoding: "utf8" });
+assert.equal(orchestrator.status, 2);
+assert.match(orchestrator.stderr, /LIVE_INPUT_REQUIRED/);
+checks.push("orchestrator approval live-input guard");
 
 console.log(JSON.stringify({ status: "PASS", passed: checks.length, total: checks.length, checks }));

@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { runHomeSearchNotification } from "./adapters/home-search-notification.mjs";
 import { runMail } from "./adapters/mail.mjs";
+import { runApproval } from "./adapters/approval.mjs";
 import { runPreflight } from "./adapters/preflight.mjs";
 import { runStaticStructure } from "./adapters/static-structure.mjs";
 
@@ -100,12 +101,11 @@ function execute() {
 
 async function executeArea() {
   assertRunId();
-  if (!["home-search-notification", "mail"].includes(areaId)) throw errorWithCode("AREA_NOT_READY");
+  if (!["home-search-notification", "mail", "approval"].includes(areaId)) throw errorWithCode("AREA_NOT_READY");
   const directory = safeEvidenceDir();
   const drivers = await loadRuntimeDrivers();
-  const result = areaId === "mail"
-    ? await runMail({ manifest, runId, browserDriver: drivers?.browserDriver, dbDriver: drivers?.dbDriver, evidenceDir: directory })
-    : await runHomeSearchNotification({ manifest, runId, browserDriver: drivers?.browserDriver, dbDriver: drivers?.dbDriver, evidenceDir: directory });
+  const runners = { "home-search-notification": runHomeSearchNotification, mail: runMail, approval: runApproval };
+  const result = await runners[areaId]({ manifest, runId, browserDriver: drivers?.browserDriver, dbDriver: drivers?.dbDriver, evidenceDir: directory });
   await persistAreaEvidence({ result, directory, selectedAreaId: areaId, selectedRunId: runId });
   process.stdout.write(`${JSON.stringify({ runId, areaId, status: result.status, evidence: relative(root, directory).replaceAll("\\", "/") })}\n`);
 }
@@ -121,9 +121,12 @@ export async function persistAreaEvidence({ result, directory, selectedAreaId, s
   await writeJson(resolve(directory, "network.json"), result.network);
   await writeJson(resolve(directory, "db-audit.json"), result.dbAudit);
   await writeJson(resolve(directory, "cleanup.json"), result.cleanup);
-  const reportReason = selectedAreaId === "mail"
-    ? "메일 core/settings 화면, 실제 route family, same-origin API, DB/audit, 재조회와 cleanup 계약을 통과했습니다."
-    : "home-search-notification LIVE adapter가 run-id disposable user 세션, same-origin API, DB, audit, 재조회와 cleanup 계약을 통과했습니다.";
+  const reportReasons = {
+    mail: "메일 core/settings 화면, 실제 route family, same-origin API, DB/audit, 재조회와 cleanup 계약을 통과했습니다.",
+    approval: "전자결재 문서·기본설정·위임 화면, same-origin API, DB/audit/version, 재조회와 cleanup composite 계약을 통과했습니다.",
+    "home-search-notification": "home-search-notification LIVE adapter가 run-id disposable user 세션, same-origin API, DB, audit, 재조회와 cleanup 계약을 통과했습니다.",
+  };
+  const reportReason = reportReasons[selectedAreaId] ?? "선택 영역의 LIVE adapter 계약을 통과했습니다.";
   const remainingGapCount = manifest.areas.filter((area) => area.status === "GAP").length;
   await writeFile(resolve(directory, "report.md"), `판정 -> ${result.status}\n\n판단 이유 -> ${reportReason}\n\n조치 -> 이 영역만 PASS이며 나머지 ${remainingGapCount}개 GAP과 UI-046 전체 WAIT를 유지하고 어울1이 증적을 독립 검수합니다.\n`, "utf8");
 }
