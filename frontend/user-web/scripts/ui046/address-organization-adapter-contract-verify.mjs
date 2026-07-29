@@ -55,6 +55,7 @@ function repeatedOrganizationFixture() { const fixture = organizationFixture(); 
 function auditRows() { const targets = [ids.group, ids.group, ids.group, ids.manualContact, ids.manualContact, ids.manualContact, ids.importedContact, ids.owner, ids.target, ids.target]; return AUDITS.map((event, index) => ({ event, actorId: ids.owner, targetId: targets[index], reasonSafe: true, ownerRunId: runId })); }
 function dbFixture(records, overrides = {}) { return { rows: records.filter((x) => ["contact_group", "personal_contact"].includes(x.kind)).map((x) => ({ kind: x.kind, id: x.id, ownerRunId: runId })), group: { id: ids.group, ownerUserId: ids.owner, companyId, deleted: true }, contacts: [{ id: ids.manualContact, source: "manual", groupId: ids.group, ownerUserId: ids.owner, companyId, deleted: true }, { id: ids.importedContact, source: "csv", groupId: ids.group, ownerUserId: ids.owner, companyId, deleted: true }], directory: { publicUserId: ids.target, organizationUserId: ids.target, companyId, departmentId: ids.department, roleId: ids.role, active: true }, audits: auditRows(), existingRowChanges: 0, ...overrides }; }
 function ownerImportedAuditFixture(records) { const fixture = dbFixture(records); fixture.audits[7].targetId = ids.owner; return fixture; }
+function operationalAuditOrderFixture(records) { const fixture = dbFixture(records); fixture.audits = [0, 1, 3, 4, 7, 8, 9, 5, 6, 2].map((index) => fixture.audits[index]); return fixture; }
 function fp(id, exists = true) { return exists ? { id, before: { exists: true, fingerprint: `${id}_fp` }, after: { exists: true, fingerprint: `${id}_fp` } } : { id, before: { exists: false }, after: { exists: false } }; }
 function cleanupFixture(records, overrides = {}) { return { runId, residualOwnedRows: 0, residualOwnedAudit: 0, sessionsClosed: true, existingRowChanges: 0, disposableIdentities: records.filter((x) => ["test_role", "test_user"].includes(x.kind)).map((x) => ({ kind: x.kind, id: x.id, ownerRunId: runId, active: false })), protectedAccounts: [fp("admin"), fp("cyhuh", false), fp("ysla", false)], referenceDepartment: fp(ids.department), existingAddressOrganizationFingerprint: { before: "addr_org_fp", after: "addr_org_fp" }, ...overrides }; }
 
@@ -66,9 +67,10 @@ const remediationRecords = [...ownershipFixture().records, ...addressFixture().c
 const remediationResults = await Promise.allSettled([
   runAddressOrganization({ manifest, runId, evidenceDir: "contract-evidence", ...drivers({ organization: repeatedOrganizationFixture() }) }),
   runAddressOrganization({ manifest, runId, evidenceDir: "contract-evidence", ...drivers({ db: ownerImportedAuditFixture(remediationRecords) }) }),
+  runAddressOrganization({ manifest, runId, evidenceDir: "contract-evidence", ...drivers({ db: operationalAuditOrderFixture(remediationRecords) }) }),
 ]);
-assert.deepEqual(remediationResults.map((item) => item.status === "fulfilled" ? "PASS" : item.reason?.code), ["PASS", "PASS"]);
-checks.push("organization GET repetitions preserved", "imported audit targets owner");
+assert.deepEqual(remediationResults.map((item) => item.status === "fulfilled" ? "PASS" : item.reason?.code), ["PASS", "PASS", "PASS"]);
+checks.push("organization GET repetitions preserved", "imported audit targets owner", "audit array order independent");
 assert.equal(manifest.areas.find((x) => x.id === "address-organization")?.status, "READY"); assert.equal(manifest.areas.find((x) => x.id === "address-organization")?.adapter, "address-organization"); checks.push("address organization READY contract");
 await expectCode("LIVE_INPUT_REQUIRED", {}); checks.push("missing drivers");
 const missing = drivers(); delete missing.browserDriver.runOrganizationFlow; await expectCode("LIVE_INPUT_REQUIRED", missing); checks.push("missing browser method");
@@ -97,7 +99,6 @@ const wrongRelation = dbFixture([...ownershipFixture().records, ...addressFixtur
 const records = [...ownershipFixture().records, ...addressFixture().createdRecords];
 const missingAudit = dbFixture(records); missingAudit.audits.pop(); await expectCode("AUDIT_EVIDENCE_INCOMPLETE", drivers({ db: missingAudit })); checks.push("audit cardinality");
 const extraMemberViewed = dbFixture(records); extraMemberViewed.audits.push(clone(extraMemberViewed.audits.at(-1))); await expectCode("AUDIT_EVIDENCE_INCOMPLETE", drivers({ db: extraMemberViewed })); checks.push("member viewed exact two");
-const reorderedAudit = dbFixture(records); [reorderedAudit.audits[0], reorderedAudit.audits[1]] = [reorderedAudit.audits[1], reorderedAudit.audits[0]]; await expectCode("AUDIT_EVIDENCE_INCOMPLETE", drivers({ db: reorderedAudit })); checks.push("audit ordering");
 const badActor = dbFixture(records); badActor.audits[0].actorId = ids.target; await expectCode("AUDIT_EVIDENCE_INCOMPLETE", drivers({ db: badActor })); checks.push("audit actor");
 const badTarget = dbFixture(records); badTarget.audits[8].targetId = ids.group; await expectCode("AUDIT_EVIDENCE_INCOMPLETE", drivers({ db: badTarget })); checks.push("audit target");
 const piiAudit = dbFixture(records); piiAudit.audits[0].contactName = "forbidden"; await expectCode("PII_EVIDENCE_REJECTED", drivers({ db: piiAudit })); checks.push("audit PII rejected");
