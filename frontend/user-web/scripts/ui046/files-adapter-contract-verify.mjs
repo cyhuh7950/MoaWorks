@@ -56,7 +56,7 @@ function finalizeFixture(overrides = {}) { return { status: "PASS", session: { a
 
 const AUDITS = [
   ["workspace.folder.created", ids.owner, ids.folder], ["workspace.folder.renamed", ids.owner, ids.folder], ["workspace.folder.deleted", ids.owner, ids.folder], ["workspace.file.uploaded", ids.owner, ids.file],
-  ["workspace.file.downloaded", ids.owner, ids.file], ["workspace.file.downloaded", ids.collaborator, ids.file], ["workspace.file.downloaded", ids.owner, ids.file],
+  ["workspace.file.downloaded", ids.owner, ids.file], ["workspace.file.downloaded", ids.collaborator, ids.file], ["workspace.file.downloaded", ids.owner, ids.file], ["workspace.file.downloaded", ids.owner, ids.file],
   ["workspace.file.renamed", ids.owner, ids.file], ["workspace.file.renamed", ids.collaborator, ids.file], ["workspace.file.version_created", ids.collaborator, ids.file],
   ["workspace.file.favorite_set", ids.owner, ids.file], ["workspace.file.favorite_set", ids.collaborator, ids.file], ["workspace.file.favorite_cleared", ids.owner, ids.file], ["workspace.file.favorite_cleared", ids.collaborator, ids.file],
   ["workspace.file.shared", ids.owner, ids.file], ["workspace.file.shared", ids.owner, ids.file], ["workspace.file.shared", ids.owner, ids.file], ["workspace.file.moved", ids.owner, ids.file],
@@ -101,6 +101,7 @@ const wrongVersion = editorFixture(); wrongVersion.createdRecords[0].versionNo =
 const foreignMutation = finalizeFixture(); foreignMutation.network[3].path = "/api/v1/workspace/files/foreign"; await expectCode("NETWORK_DYNAMIC_OWNERSHIP_MISMATCH", drivers({ finalize: foreignMutation })); checks.push("foreign mutation");
 const dbRecords = allRecords(); const wrongDb = dbFixture(dbRecords); wrongDb.versions[1].creatorId = ids.owner; await expectCode("DB_RELATION_INVALID", drivers({ db: wrongDb })); checks.push("DB relation");
 const missingAudit = dbFixture(dbRecords); missingAudit.audits.pop(); await expectCode("AUDIT_EVIDENCE_INCOMPLETE", drivers({ db: missingAudit })); checks.push("audit cardinality");
+const threeDownloads = dbFixture(dbRecords); threeDownloads.audits.splice(6, 1); await expectCode("AUDIT_EVIDENCE_INCOMPLETE", drivers({ db: threeDownloads })); checks.push("four downloads required");
 const badActor = dbFixture(dbRecords); badActor.audits.find((x) => x.event === "workspace.file.version_created").actorId = ids.owner; await expectCode("AUDIT_EVIDENCE_INCOMPLETE", drivers({ db: badActor })); checks.push("audit actor");
 const badTarget = dbFixture(dbRecords); badTarget.audits[0].targetId = ids.file; await expectCode("AUDIT_EVIDENCE_INCOMPLETE", drivers({ db: badTarget })); checks.push("audit target");
 const storageSecret = storageFixture(); storageSecret.storageKey = "forbidden"; await expectCode("SENSITIVE_FIELD_REJECTED", drivers({ storage: storageSecret })); checks.push("storage key rejected");
