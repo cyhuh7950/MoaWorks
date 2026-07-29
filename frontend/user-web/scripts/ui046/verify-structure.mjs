@@ -17,7 +17,8 @@ const readyArea = manifest.areas.find((area) => area.id === "home-search-notific
 const mailArea = manifest.areas.find((area) => area.id === "mail");
 const approvalArea = manifest.areas.find((area) => area.id === "approval");
 const calendarArea = manifest.areas.find((area) => area.id === "calendar");
-const expectedGapAreaIds = ["messenger", "address-organization", "files", "personal-help"];
+const messengerArea = manifest.areas.find((area) => area.id === "messenger");
+const expectedGapAreaIds = ["address-organization", "files", "personal-help"];
 
 const frontendFiles = await readdir(scripts);
 const sourceOnly = new Set(inventory.groups.find((group) => group.scope === "frontend-source-verifiers").sourceOnlyAllowlist);
@@ -45,7 +46,10 @@ const checks = [
   ["전자결재 execute-area 지원", orchestrator.includes("runApproval") && orchestrator.includes("approval: runApproval")],
   ["캘린더 composite READY", calendarArea?.status === "READY" && calendarArea?.adapter === "calendar" && calendarArea.liveInputContract?.identityTopology === "one-run-role-two-run-users-owner-collaborator" && calendarArea.liveInputContract?.ownershipPolicy === "browser-created-ids-added-sequentially"],
   ["캘린더 execute-area 지원", orchestrator.includes("runCalendar") && orchestrator.includes("calendar: runCalendar")],
-  ["나머지 4개 GAP 유지", JSON.stringify(manifest.areas.filter((area) => area.status === "GAP").map((area) => area.id)) === JSON.stringify(expectedGapAreaIds) && manifest.areas.filter((area) => area.status === "GAP").every((area) => area.adapter === null)],
+  ["메신저 composite READY", messengerArea?.status === "READY" && messengerArea?.adapter === "messenger" && messengerArea.liveInputContract?.identityTopology === "one-run-role-three-run-users-creator-reader-inactive-candidate" && messengerArea.liveInputContract?.storagePolicy === "owned-upload-id-two-files-no-key-or-path-evidence"],
+  ["메신저 execute-area 지원", orchestrator.includes("runMessenger") && orchestrator.includes("messenger: runMessenger") && orchestrator.includes("storageDriver")],
+  ["나머지 3개 GAP 유지", JSON.stringify(manifest.areas.filter((area) => area.status === "GAP").map((area) => area.id)) === JSON.stringify(expectedGapAreaIds) && manifest.areas.filter((area) => area.status === "GAP").every((area) => area.adapter === null)],
+  ["inventory READY/GAP 정합", inventory.summary.readyAdapters === 5 && inventory.summary.coreGapAreas === 3 && inventory.summary.liveFiles === 8 && JSON.stringify(inventory.groups.find((group) => group.scope === "core-live-areas").areaIds) === JSON.stringify(expectedGapAreaIds)],
   ["보호 계정 고정", JSON.stringify(manifest.protectedAccounts) === JSON.stringify(["admin", "cyhuh", "ysla"])],
   ["sinsan HTTPS origin", manifest.environment.userOrigin === "https://user.moaworks.sinsan.kr" && manifest.environment.adminOrigin === "https://admin.moaworks.sinsan.kr"],
   ["same-origin 상대 API", manifest.areas.flatMap((area) => area.apiPaths).every((path) => path.startsWith("/api/v1/"))],

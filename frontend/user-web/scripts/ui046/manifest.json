@@ -104,14 +104,25 @@
     {
       "id": "messenger",
       "label": "메신저",
-      "screenActions": ["방 조회·생성", "메시지·첨부 전송", "읽음", "참여자 변경"],
-      "apiPaths": ["/api/v1/messenger/rooms", "/api/v1/messenger/messages", "/api/v1/messenger/attachments"],
+      "screenActions": ["방 생성·검색·즐겨찾기", "참여자 변경과 생성자 권한", "text·file 메시지와 첨부 다운로드", "읽음 멱등성", "비활성 참여자 집계 재조회"],
+      "apiPaths": ["/api/v1/messenger/rooms", "/api/v1/messenger/attachments", "/api/v1/admin/users"],
       "dbTables": ["messenger_rooms", "messenger_room_members", "messenger_messages", "messenger_message_reads", "messenger_attachments", "audit_logs"],
-      "auditEvents": ["messenger.room.created", "messenger.message.sent", "messenger.room.read", "messenger.room.participants_changed"],
-      "cleanupOwnership": "UI046 room과 message, attachment storage key만 삭제",
-      "existingCoverage": ["STATIC:ui040 frontend and backend tests"],
-      "adapter": null,
-      "status": "GAP"
+      "auditEvents": ["messenger.room.created", "messenger.room.favorite_changed", "messenger.room.participants_changed", "messenger.message.sent", "messenger.room.read"],
+      "cleanupOwnership": "UI046 run-id 역할·creator·reader·inactive-candidate·자동 기본 캘린더와 브라우저 생성 room/member/upload/message/attachment/read/audit/storage만 정리하고 임시 신원 inactive; 보호 계정과 기존 messenger DB·storage fingerprint 변경 금지",
+      "existingCoverage": ["STATIC:ui040 frontend and backend tests", "STATIC:ui019a read receipt regression"],
+      "liveInputContract": {
+        "browserDriverMethods": ["runMessengerRoomFlow", "runMessengerMessageFlow", "runMessengerReadFlow", "runInactiveParticipantFlow", "close"],
+        "dbDriverMethods": ["prepareOwnedData", "collectMessengerEvidence", "cleanupOwnedData"],
+        "storageDriverMethods": ["collectMessengerStorageEvidence", "cleanupOwnedStorage"],
+        "identityTopology": "one-run-role-three-run-users-creator-reader-inactive-candidate",
+        "rolePermissions": ["messenger:read", "messenger:write"],
+        "ownershipPolicy": "browser-created-ids-added-sequentially",
+        "storagePolicy": "owned-upload-id-two-files-no-key-or-path-evidence",
+        "compositePolicy": "room-message-attachment-read-inactive-aggregate-db-audit-storage-cleanup",
+        "missingInputStatus": "LIVE_INPUT_REQUIRED"
+      },
+      "adapter": "messenger",
+      "status": "READY"
     },
     {
       "id": "address-organization",
