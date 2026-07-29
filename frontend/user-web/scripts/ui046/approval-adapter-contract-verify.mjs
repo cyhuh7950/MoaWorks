@@ -61,10 +61,10 @@ function documentsFixture(overrides = {}) {
     network: [
       { method: "GET", path: "/api/v1/approvals", status: 200 },
       { method: "GET", path: `/api/v1/approvals/${ids.approveDocument}`, status: 200 },
-      { method: "GET", path: `/api/v1/approvals/${ids.approveDocument}/audit`, status: 200 },
+      { method: "GET", path: "/api/v1/approvals/audit-logs", status: 200 },
       { method: "GET", path: "/api/v1/approvals/approvers", status: 200 },
       { method: "POST", path: "/api/v1/approvals/attachments", status: 201 },
-      { method: "GET", path: `/api/v1/approvals/attachments/${ids.attachment}`, status: 200 },
+      { method: "GET", path: `/api/v1/approvals/${ids.approveDocument}/attachments/${ids.attachment}`, status: 200 },
       ...[ids.approveDocument, ids.rejectDocument, ids.withdrawDocument].flatMap((id) => [{ method: "POST", path: "/api/v1/approvals", status: 201 }, { method: "PATCH", path: `/api/v1/approvals/${id}`, status: 200 }, { method: "POST", path: `/api/v1/approvals/${id}/submit`, status: 200 }]),
       { method: "POST", path: `/api/v1/approvals/${ids.approveDocument}/approve`, status: 200 },
       { method: "POST", path: `/api/v1/approvals/${ids.rejectDocument}/reject`, status: 200 },
@@ -103,8 +103,8 @@ function delegationsFixture(overrides = {}) {
   return {
     status: "PASS", session: { activeLoginId: `${runId.toLowerCase()}_approver` }, actions: [...DELEGATION_ACTIONS],
     delegation: { id: ids.delegation, ownerId: ids.approver, delegateId: ids.delegate, companyId, includesCurrentSeoulDate: true, reasonIncludesRunId: true, versionBeforeUpdate: 1, versionAfterUpdate: 2, rereadVersion: 2, deleteExpectedVersion: 2, softDeleted: true, absentAfterDelete: true },
-    network: [{ method: "GET", path: "/api/v1/approvals/delegations", status: 200 }, { method: "POST", path: "/api/v1/approvals/delegations", status: 201 }, { method: "GET", path: "/api/v1/approvals/delegations", status: 200 }, { method: "PATCH", path: `/api/v1/approvals/delegations/${ids.delegation}`, status: 200 }, { method: "GET", path: "/api/v1/approvals/delegations", status: 200 }, { method: "DELETE", path: `/api/v1/approvals/delegations/${ids.delegation}`, status: 204 }, { method: "GET", path: "/api/v1/approvals/delegations", status: 200 }],
-    mutationOwnership: [{ kind: "approval_delegation", id: ids.delegation, method: "POST", path: "/api/v1/approvals/delegations" }, { kind: "approval_delegation", id: ids.delegation, method: "PATCH", path: `/api/v1/approvals/delegations/${ids.delegation}` }, { kind: "approval_delegation", id: ids.delegation, method: "DELETE", path: `/api/v1/approvals/delegations/${ids.delegation}` }],
+    network: [{ method: "GET", path: "/api/v1/approvals/settings/delegations", status: 200 }, { method: "POST", path: "/api/v1/approvals/settings/delegations", status: 201 }, { method: "GET", path: "/api/v1/approvals/settings/delegations", status: 200 }, { method: "PATCH", path: `/api/v1/approvals/settings/delegations/${ids.delegation}`, status: 200 }, { method: "GET", path: "/api/v1/approvals/settings/delegations", status: 200 }, { method: "DELETE", path: `/api/v1/approvals/settings/delegations/${ids.delegation}`, status: 204 }, { method: "GET", path: "/api/v1/approvals/settings/delegations", status: 200 }],
+    mutationOwnership: [{ kind: "approval_delegation", id: ids.delegation, method: "POST", path: "/api/v1/approvals/settings/delegations" }, { kind: "approval_delegation", id: ids.delegation, method: "PATCH", path: `/api/v1/approvals/settings/delegations/${ids.delegation}` }, { kind: "approval_delegation", id: ids.delegation, method: "DELETE", path: `/api/v1/approvals/settings/delegations/${ids.delegation}` }],
     screenshots: [SCREENSHOTS[4]], ...overrides,
   };
 }
@@ -203,12 +203,36 @@ const extraNetworkField = documentsFixture(); extraNetworkField.network[0].durat
 await expectCode("NETWORK_FIELDS_INVALID", drivers({ documents: extraNetworkField })); checks.push("network exact fields");
 const queryNetwork = documentsFixture(); queryNetwork.network[0].path += "?page=1";
 await expectCode("NETWORK_NOT_SAME_ORIGIN_RELATIVE", drivers({ documents: queryNetwork })); checks.push("same-origin queryless network");
-const missingFamily = documentsFixture(); missingFamily.network = missingFamily.network.filter((x) => !x.path.endsWith("/audit"));
+const missingFamily = documentsFixture(); missingFamily.network = missingFamily.network.filter((x) => x.path !== "/api/v1/approvals/audit-logs");
 await expectCode("NETWORK_ROUTE_FAMILY_INCOMPLETE", drivers({ documents: missingFamily })); checks.push("route families");
 const foreignMutation = documentsFixture(); foreignMutation.mutationOwnership[0].id = "foreign";
 await expectCode("MUTATION_OWNERSHIP_MISMATCH", drivers({ documents: foreignMutation })); checks.push("mutation ownership");
 const missingMutation = documentsFixture(); missingMutation.mutationOwnership.pop();
 await expectCode("MUTATION_OWNERSHIP_MISMATCH", drivers({ documents: missingMutation })); checks.push("mutation completeness");
+
+const legacyAudit = documentsFixture(); legacyAudit.network = legacyAudit.network.map((item) => item.path === "/api/v1/approvals/audit-logs" ? { ...item, path: `/api/v1/approvals/${ids.approveDocument}/audit` } : item);
+await expectCode("NETWORK_LEGACY_ROUTE_REJECTED", drivers({ documents: legacyAudit })); checks.push("legacy audit route rejected");
+const legacyAttachment = documentsFixture(); legacyAttachment.network = legacyAttachment.network.map((item) => item.path.includes(`/attachments/${ids.attachment}`) ? { ...item, path: `/api/v1/approvals/attachments/${ids.attachment}` } : item);
+await expectCode("NETWORK_LEGACY_ROUTE_REJECTED", drivers({ documents: legacyAttachment })); checks.push("legacy attachment route rejected");
+const legacyDelegations = delegationsFixture();
+legacyDelegations.network = legacyDelegations.network.map((item) => ({ ...item, path: item.path.replace("/approvals/settings/delegations", "/approvals/delegations") }));
+legacyDelegations.mutationOwnership = legacyDelegations.mutationOwnership.map((item) => ({ ...item, path: item.path.replace("/approvals/settings/delegations", "/approvals/delegations") }));
+await expectCode("NETWORK_LEGACY_ROUTE_REJECTED", drivers({ delegations: legacyDelegations })); checks.push("legacy delegation route rejected");
+
+for (const [label, nextPath] of [
+  ["foreign attachment document", `/api/v1/approvals/foreign_document/attachments/${ids.attachment}`],
+  ["foreign attachment id", `/api/v1/approvals/${ids.approveDocument}/attachments/foreign_attachment`],
+]) {
+  const foreign = documentsFixture();
+  foreign.network = foreign.network.map((item) => item.path.includes(`/attachments/${ids.attachment}`) ? { ...item, path: nextPath } : item);
+  await expectCode("NETWORK_DYNAMIC_OWNERSHIP_MISMATCH", drivers({ documents: foreign })); checks.push(label);
+}
+for (const method of ["PATCH", "DELETE"]) {
+  const foreign = delegationsFixture();
+  foreign.network = foreign.network.map((item) => item.method === method ? { ...item, path: "/api/v1/approvals/settings/delegations/foreign_delegation" } : item);
+  foreign.mutationOwnership = foreign.mutationOwnership.map((item) => item.method === method ? { ...item, path: "/api/v1/approvals/settings/delegations/foreign_delegation" } : item);
+  await expectCode("NETWORK_DYNAMIC_OWNERSHIP_MISMATCH", drivers({ delegations: foreign })); checks.push(`foreign delegation ${method.toLowerCase()}`);
+}
 
 const badSettingVersion = settingsFixture(); badSettingVersion.preference.afterVersion = 4;
 await expectCode("BASIC_SETTING_VERSION_INVALID", drivers({ settings: badSettingVersion })); checks.push("basic setting version");
