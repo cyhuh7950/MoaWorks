@@ -115,7 +115,7 @@
         "dbDriverMethods": ["prepareOwnedData", "collectMessengerEvidence", "cleanupOwnedData"],
         "storageDriverMethods": ["collectMessengerStorageEvidence", "cleanupOwnedStorage"],
         "identityTopology": "one-run-role-three-run-users-creator-reader-inactive-candidate",
-        "rolePermissions": ["messenger:read", "messenger:write"],
+        "rolePermissions": ["profile:read", "messenger:read", "messenger:write"],
         "ownershipPolicy": "browser-created-ids-added-sequentially",
         "storagePolicy": "owned-upload-id-two-files-no-key-or-path-evidence",
         "compositePolicy": "room-message-attachment-read-inactive-aggregate-db-audit-storage-cleanup",
