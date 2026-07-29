@@ -8,11 +8,11 @@
     "GAP": "화면, same-origin API, DB, audit, 재조회, cleanup을 동일 run id로 잇는 안전 LIVE 검증기가 없는 핵심 흐름"
   },
   "summary": {
-    "liveFiles": 9,
+    "liveFiles": 10,
     "staticFiles": 79,
     "staleFiles": 11,
-    "coreGapAreas": 2,
-    "readyAdapters": 6
+    "coreGapAreas": 1,
+    "readyAdapters": 7
   },
   "groups": [
     {
@@ -36,8 +36,8 @@
     {
       "classification": "LIVE",
       "scope": "ui046-additional-ready-adapters",
-      "paths": ["frontend/user-web/scripts/ui046/adapters/approval.mjs", "frontend/user-web/scripts/ui046/adapters/calendar.mjs", "frontend/user-web/scripts/ui046/adapters/messenger.mjs", "frontend/user-web/scripts/ui046/adapters/address-organization.mjs"],
-      "limitations": ["runtime driver 주입 전에는 LIVE_INPUT_REQUIRED", "메신저 storage 증거는 owned upload id와 존재·삭제 상태만 허용", "주소록 변경과 조직도 조회는 독립 흐름으로 검증", "실제 sinsan 증거 전에는 영역 완료가 아닌 READY"]
+      "paths": ["frontend/user-web/scripts/ui046/adapters/approval.mjs", "frontend/user-web/scripts/ui046/adapters/calendar.mjs", "frontend/user-web/scripts/ui046/adapters/messenger.mjs", "frontend/user-web/scripts/ui046/adapters/address-organization.mjs", "frontend/user-web/scripts/ui046/adapters/files.mjs"],
+      "limitations": ["runtime driver 주입 전에는 LIVE_INPUT_REQUIRED", "메신저 storage 증거는 owned upload id와 존재·삭제 상태만 허용", "주소록 변경과 조직도 조회는 독립 흐름으로 검증", "파일 물리 cleanup은 명시 승인과 확인된 ID/blob만 허용", "실제 sinsan 증거 전에는 영역 완료가 아닌 READY"]
     },
     {
       "classification": "STALE",
@@ -97,7 +97,7 @@
     {
       "classification": "GAP",
       "scope": "core-live-areas",
-      "areaIds": ["files", "personal-help"],
+      "areaIds": ["personal-help"],
       "reason": "영역별 정상 흐름 전체를 화면 클릭부터 cleanup까지 동일 UI046 run id로 연결하는 안전 adapter가 없음"
     }
   ]

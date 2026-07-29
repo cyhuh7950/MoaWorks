@@ -150,14 +150,26 @@
     {
       "id": "files",
       "label": "파일",
-      "screenActions": ["업로드·다운로드", "이름 변경", "공유", "휴지통·복구·영구삭제"],
-      "apiPaths": ["/api/v1/workspace/files", "/api/v1/workspace/folders", "/api/v1/workspace/file-shares"],
+      "screenActions": ["6개 범위·폴더 생성/변경", "v1/v2 업로드·현재/과거 다운로드", "owner/viewer/editor 권한", "공유·즐겨찾기", "휴지통·복원"],
+      "apiPaths": ["/api/v1/workspace/files", "/api/v1/workspace/file-folders", "/api/v1/workspace/files/{id}/versions", "/api/v1/workspace/files/{id}/restore", "/api/v1/workspace/files/{id}/favorite", "/api/v1/workspace/files/{id}/shares", "/api/v1/workspace/files/{id}/download"],
       "dbTables": ["workspace_folders", "workspace_files", "workspace_file_versions", "workspace_file_shares", "workspace_file_favorites", "audit_logs"],
-      "auditEvents": ["workspace.file.uploaded", "workspace.file.renamed", "workspace.file.shared", "workspace.file.trashed", "workspace.file.restored", "workspace.file.downloaded"],
-      "cleanupOwnership": "UI046 file, version, share, folder row와 해당 storage key만 삭제",
+      "auditEvents": ["workspace.folder.created", "workspace.folder.renamed", "workspace.folder.deleted", "workspace.file.uploaded", "workspace.file.downloaded", "workspace.file.renamed", "workspace.file.version_created", "workspace.file.favorite_set", "workspace.file.favorite_cleared", "workspace.file.shared", "workspace.file.moved", "workspace.file.trashed", "workspace.file.restored"],
+      "cleanupOwnership": "승인 전 recoverable trash 유지; 승인 후 확인된 UI046 folder/file/version/share/favorite/audit/calendar/user/role ID와 2개 blob만 삭제하고 기존 file/storage fingerprint 유지",
       "existingCoverage": ["STATIC:ui043 frontend and backend tests"],
-      "adapter": null,
-      "status": "GAP"
+      "liveInputContract": {
+        "browserDriverMethods": ["runOwnerSetupFlow", "runViewerFlow", "runOwnerShareUpgradeFlow", "runEditorFlow", "runOwnerFinalizeFlow", "close"],
+        "dbDriverMethods": ["prepareOwnedData", "collectFilesEvidence", "cleanupOwnedData"],
+        "storageDriverMethods": ["collectFilesStorageEvidence", "cleanupOwnedStorage"],
+        "identityTopology": "one-run-role-two-run-users-owner-collaborator-two-auto-calendars-one-existing-department",
+        "rolePermissions": ["profile:read"],
+        "ownershipPolicy": "browser-created-folder-file-two-versions-share-favorites-added-sequentially",
+        "fixturePolicy": "run-id-utf8-txt-two-versions-max-1024-bytes",
+        "cleanupPolicy": "explicit-approval-required-confirmed-ids-and-two-blobs-only",
+        "compositePolicy": "owner-viewer-editor-finalize-db-audit-storage-approved-cleanup",
+        "missingInputStatus": "LIVE_INPUT_REQUIRED"
+      },
+      "adapter": "files",
+      "status": "READY"
     },
     {
       "id": "personal-help",
