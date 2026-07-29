@@ -127,14 +127,25 @@
     {
       "id": "address-organization",
       "label": "주소록·조직도",
-      "screenActions": ["개인·공용 연락처 CRUD", "그룹 CRUD", "검색", "조직 계층·사용자 상세 조회"],
-      "apiPaths": ["/api/v1/workspace/contacts", "/api/v1/workspace/contact-groups", "/api/v1/workspace/organization"],
-      "dbTables": ["personal_contacts", "contact_groups", "departments", "users", "audit_logs"],
-      "auditEvents": ["workspace.contact.created", "workspace.contact.updated", "workspace.contact.deleted", "workspace.contact_group.created", "workspace.organization.member_viewed"],
-      "cleanupOwnership": "UI046 contact와 group만 삭제; departments와 users는 조회만 허용",
+      "screenActions": ["개인 그룹·연락처 CRUD", "공용 주소록 조회", "CSV preview·apply", "조직 계층·사용자 상세·단일 선택"],
+      "apiPaths": ["/api/v1/workspace/contact-groups", "/api/v1/workspace/contacts", "/api/v1/workspace/public-contacts", "/api/v1/workspace/contacts/import", "/api/v1/workspace/organization/departments", "/api/v1/workspace/organization/members"],
+      "dbTables": ["roles", "users", "user_calendars", "personal_contacts", "contact_groups", "departments", "audit_logs"],
+      "auditEvents": ["workspace.contact_group.created", "workspace.contact_group.updated", "workspace.contact_group.deleted", "workspace.contact.created", "workspace.contact.updated", "workspace.contact.deleted", "workspace.contact.imported", "workspace.organization.member_viewed"],
+      "cleanupOwnership": "UI046 run-id 역할·owner·directory-target·자동 기본 캘린더와 브라우저 생성 group/contact/audit만 정리하고 임시 신원 inactive; 기존 department·user·contact fingerprint 변경 금지",
       "existingCoverage": ["STATIC:ui041-ui042 frontend and backend tests"],
-      "adapter": null,
-      "status": "GAP"
+      "liveInputContract": {
+        "browserDriverMethods": ["runAddressBookFlow", "runOrganizationFlow", "close"],
+        "dbDriverMethods": ["prepareOwnedData", "collectAddressOrganizationEvidence", "cleanupOwnedData"],
+        "identityTopology": "one-run-role-two-run-users-owner-directory-target-two-auto-calendars-one-existing-department",
+        "rolePermissions": ["profile:read"],
+        "ownershipPolicy": "browser-created-group-and-two-contacts-added-sequentially",
+        "csvPolicy": "same-digest-preview-apply-existing-group-new-one-errors-zero",
+        "organizationPolicy": "read-only-single-select-no-mutation",
+        "compositePolicy": "address-and-organization-and-db-audit-and-cleanup",
+        "missingInputStatus": "LIVE_INPUT_REQUIRED"
+      },
+      "adapter": "address-organization",
+      "status": "READY"
     },
     {
       "id": "files",
