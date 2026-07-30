@@ -29,9 +29,6 @@ services:
     build:
       context: ..
       dockerfile: deploy/admin-web.Dockerfile
-    environment:
-      VITE_API_BASE_URL: /api/v1
-      VITE_PROXY_TARGET: http://server:8000
     expose:
       - "3510"
     depends_on:
