@@ -24,6 +24,8 @@ assert.match(css, /\.ui043-files__screen-title[^}]*font-size:\s*16px/);
 assert.match(css, /\.ui043-files__section-title[^}]*font-size:\s*14px/);
 assert.match(css, /\.ui043-files :where\(button,input,select,label\)[^}]*font-size:\s*12px/);
 assert.match(css, /\.ui043-files__helper[^}]*font-size:\s*10px/);
+assert.ok(!css.includes(".ui043-files>*"), "files pane selector must not override the CommonPopup backdrop");
+assert.match(css, /\.ui043-files>nav,\.ui043-files>main,\.ui043-files>aside\{[^}]*background:#fff/, "files pane styling must target only the three grid panes");
 assert.ok(panel.includes('aria-label="파일 화면 설명"') && panel.includes('title='), "i tooltip is required");
 assert.ok(panel.includes('fetchWorkspaceFileDetail(token,itemId,scope==="trash")'), "trash selection must request owner deleted detail context");
 assert.ok(panel.includes('scope==="mine"?{scope,folderId,query:debouncedQuery,sort}:{scope,query:debouncedQuery,sort}'), "only mine may send folderId");
