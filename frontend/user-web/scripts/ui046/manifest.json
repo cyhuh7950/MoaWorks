@@ -10,7 +10,7 @@
   },
   "protectedAccounts": ["admin", "cyhuh", "ysla"],
   "evidence": {
-    "root": "docs/evidence/user-web-redesign/UI-046/verify.ui046.sinsan.20260728",
+    "root": "docs/evidence/user-web-redesign/UI-046/verify.ui046.sinsan.20260729",
     "requiredFiles": ["manifest.json", "result.json", "network.json", "db-audit.json", "cleanup.json", "report.md"],
     "forbiddenRawFields": ["password", "hash", "token", "cookie", "authorization", "secret", "set-cookie"],
     "networkFields": ["method", "path", "status"]
