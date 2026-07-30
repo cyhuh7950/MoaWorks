@@ -22,7 +22,7 @@ assert.match(nginxConfig, /location\s+\/api\//, "브라우저 API는 same-origin
 assert.match(nginxConfig, /proxy_pass\s+http:\/\/server:8000\s*;/, "API 요청은 Docker 내부 server:8000으로만 프록시해야 합니다.");
 assert.match(nginxConfig, /try_files\s+\$uri\s+\$uri\/\s+\/index\.html\s*;/, "SPA 새로고침을 위한 index.html fallback이 필요합니다.");
 assert.match(nginxConfig, /client_max_body_size\s+64m\s*;/, "기존 50 MB 파일 업로드와 multipart 오버헤드를 수용해야 합니다.");
-assert.doesNotMatch(nginxConfig, /Access-Control-Allow-Origin|\*/i, "운영 프록시에 광범위한 CORS 허용을 추가하면 안 됩니다.");
+assert.doesNotMatch(nginxConfig, /add_header\s+Access-Control-Allow-Origin\s+["']?\*/i, "운영 프록시에 광범위한 CORS 허용을 추가하면 안 됩니다.");
 
 for (const [name, compose] of [["oracle", oracleCompose], ["local", localCompose]]) {
   const userWebService = compose.match(/^  user-web:\r?\n([\s\S]*?)(?=^  [a-z][a-z0-9-]*:\r?$)/m)?.[0];
