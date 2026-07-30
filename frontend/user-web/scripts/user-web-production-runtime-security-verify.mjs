@@ -21,6 +21,7 @@ assert.match(nginxConfig, /listen\s+3520\s*;/, "기존 user-web 내부 포트 35
 assert.match(nginxConfig, /location\s+\/api\//, "브라우저 API는 same-origin /api 경로를 사용해야 합니다.");
 assert.match(nginxConfig, /proxy_pass\s+http:\/\/server:8000\s*;/, "API 요청은 Docker 내부 server:8000으로만 프록시해야 합니다.");
 assert.match(nginxConfig, /try_files\s+\$uri\s+\$uri\/\s+\/index\.html\s*;/, "SPA 새로고침을 위한 index.html fallback이 필요합니다.");
+assert.match(nginxConfig, /client_max_body_size\s+64m\s*;/, "기존 50 MB 파일 업로드와 multipart 오버헤드를 수용해야 합니다.");
 assert.doesNotMatch(nginxConfig, /Access-Control-Allow-Origin|\*/i, "운영 프록시에 광범위한 CORS 허용을 추가하면 안 됩니다.");
 
 for (const [name, compose] of [["oracle", oracleCompose], ["local", localCompose]]) {
@@ -28,4 +29,4 @@ for (const [name, compose] of [["oracle", oracleCompose], ["local", localCompose
   assert.doesNotMatch(compose, /VITE_API_BASE_URL/, `${name} compose에서 브라우저 API 절대 설정 의존성을 제거해야 합니다.`);
 }
 
-console.log("PASS user-web production runtime security contract (14 assertions)");
+console.log("PASS user-web production runtime security contract (15 assertions)");
