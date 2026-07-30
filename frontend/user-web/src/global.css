@@ -3034,7 +3034,7 @@ textarea {
 .ui044-settings-help__detail dd{margin:0;word-break:break-word}
 .ui044-settings-help__detail .is-primary,.ui044-settings-help__form .is-primary{border:0;border-radius:9px;background:#0f766e;color:#fff;font-weight:700;padding:9px 14px}
 .ui044-settings-help__info{width:24px;height:24px;border:1px solid #cbd5e1;border-radius:50%;background:#fff;color:#0f766e;font-weight:800}
-.ui044-settings-help__helper{font-size:10px;color:#64748b}
+#root .ui044-settings-help__helper{font-size:10px!important;color:#64748b}
 .ui044-settings-help__state{display:grid;place-items:center;gap:10px;min-height:160px;color:#64748b;text-align:center}
 .ui044-settings-help__state.is-error{color:#b91c1c}
 .ui044-settings-help__state button{border:1px solid #cbd5e1;border-radius:9px;background:#fff;padding:8px 12px}
