@@ -5,7 +5,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
-from app.api.dependencies import get_current_user, get_current_user_with_query_token
+from app.api.dependencies import get_current_user
 from app.schemas.directory import AuthUserSummary
 from app.schemas.notification_center import (
     NotificationBulkActionRequest,
@@ -118,7 +118,7 @@ def bulk_archive(
 
 @router.get("/stream")
 def stream_notifications(
-    user: AuthUserSummary = Depends(get_current_user_with_query_token),
+    user: AuthUserSummary = Depends(get_current_user),
     cursor: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
 ) -> StreamingResponse:

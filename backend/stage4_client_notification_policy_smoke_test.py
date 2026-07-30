@@ -29,6 +29,7 @@ def _find_int(text: str, pattern: str, name: str, *, required: bool = True) -> i
 def _check_user_web() -> tuple[dict[str, int], dict[str, str]]:
     path = PROJECT_ROOT / "frontend" / "user-web" / "src" / "App.tsx"
     text = _load(path)
+    api_text = _load(PROJECT_ROOT / "frontend" / "user-web" / "src" / "api.ts")
 
     retry_max = _find_int(text, r"retryMaxAttempts\s*:\s*(\d+)", "user-web.retryMaxAttempts")
     retry_delay = _find_int(text, r"retryDelayMs\s*:\s*(\d+)", "user-web.retryDelayMs")
@@ -42,9 +43,13 @@ def _check_user_web() -> tuple[dict[str, int], dict[str, str]]:
     _assert("setNotificationMode(\"fallback\")" in text, "user-web: fallback 모드 표시가 없습니다.")
     _assert("polling" in text, "user-web: polling 모드 문자열이 없습니다.")
     _assert("streammeta" in text, "user-web: stream 메타 이벤트 처리(재요청 기준)가 없습니다.")
-    _assert("source.addEventListener(\"heartbeat\"" in text, "user-web: SSE heartbeat 수신 분기 코드가 없습니다.")
+    _assert("fetchNotificationStream" in text and "fetchNotificationStream" in api_text, "user-web: fetch streaming 소비자가 없습니다.")
+    _assert("Authorization" in api_text and "authHeaders(token)" in api_text, "user-web: Bearer 헤더 스트림 계약이 없습니다.")
+    _assert("AbortController" in text and "signal: controller.signal" in text, "user-web: 스트림 중단 계약이 없습니다.")
+    _assert("streammeta" in text and "heartbeat" in text, "user-web: SSE event 파싱 계약이 없습니다.")
     _assert("stream fallback" in text, "user-web: stream fallback 시그널 처리 문구가 없습니다.")
-    _assert("source.onerror" in text, "user-web: 스트림 에러 재접속 분기가 없습니다.")
+    _assert(".catch(() =>" in text and "scheduleReconnect" in text, "user-web: 스트림 에러 재접속 분기가 없습니다.")
+    _assert("EventSource" not in text and "/notifications/stream?token=" not in api_text, "user-web: query-token EventSource 소비자가 남아 있습니다.")
 
     policy = {
         "retryMaxAttempts": retry_max,
@@ -75,8 +80,14 @@ def _check_desktop_client() -> tuple[dict[str, int], dict[str, str]]:
     _assert(stream_retry_delay == 600, "desktop-client: SSE 재접속 딜레이가 600ms가 아닙니다.")
     _assert("setNotificationMode(\"fallback\")" in text, "desktop-client: fallback 모드 표시가 없습니다.")
     _assert("SSE 오류 감지로 폴링 폴백 동작 중" in text, "desktop-client: 폴백 안내 문구가 없습니다.")
-    _assert("EventSource" in text and "/notifications/stream?token=" in text, "desktop-client: SSE 스트림 URL 정책이 없습니다.")
-    _assert("source.onerror" in text, "desktop-client: 스트림 에러 재접속 분기가 없습니다.")
+    _assert("EventSource" not in text, "desktop-client: EventSource 소비자가 남아 있습니다.")
+    _assert("/notifications/stream?token=" not in text, "desktop-client: query-token 스트림 URL이 남아 있습니다.")
+    _assert("fetch(streamUrl" in text and "headers: authHeaders()" in text and "Authorization" in text, "desktop-client: Bearer fetch streaming 계약이 없습니다.")
+    _assert("AbortController" in text and "streamAbortController" in text, "desktop-client: 스트림 중단 계약이 없습니다.")
+    _assert("response.body.getReader()" in text and "TextDecoder" in text, "desktop-client: 스트림 chunk 소비 계약이 없습니다.")
+    _assert("streammeta" in text and "streamCursor" in text, "desktop-client: cursor 연속성 계약이 없습니다.")
+    _assert("beforeunload" in text and "stopNotificationStream" in text, "desktop-client: 창 종료 abort 계약이 없습니다.")
+    _assert("scheduleNotificationStreamReconnect" in text, "desktop-client: 스트림 에러 재접속 분기가 없습니다.")
     _assert("streamRetryMax" in text, "desktop-client: streamRetryMax 재사용 지점이 없습니다.")
 
     policy = {
@@ -102,8 +113,8 @@ def _check_mobile() -> tuple[dict[str, int], dict[str, str]]:
     _assert("notificationPolicy = {" in text, "mobile-app: 정책 상수 객체가 없습니다.")
     _assert(retry_max == 3, "mobile-app: 재시도 상한이 3이 아닙니다.")
     _assert(retry_delay == 400, "mobile-app: 재시도 지연이 400ms가 아닙니다.")
-    _assert("수동 재조회" in text, "mobile-app: 네트워크 재시도 실패시 수동재조회 유도 텍스트가 없습니다.")
-    _assert("알림 조회" in text and "알림 조회" in text, "mobile-app: 알림 조회 액션이 없습니다.")
+    _assert("알림 조회 실패" in text, "mobile-app: 네트워크 재시도 실패 안내가 없습니다.")
+    _assert("알림 새로고침" in text and "refreshNotifications" in text, "mobile-app: 수동 알림 재조회 액션이 없습니다.")
     _assert("EventSource" not in text, "mobile-app: SSE 구현은 없어야 합니다.")
     _assert(r"retryWithBackOff\(" not in text, "mobile-app: 재시도 핸들러명이 변경되어 분석 규칙과 충돌합니다.")
 

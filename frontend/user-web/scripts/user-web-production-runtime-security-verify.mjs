@@ -23,6 +23,12 @@ assert.match(nginxConfig, /proxy_pass\s+http:\/\/server:8000\s*;/, "API 요청�
 assert.match(nginxConfig, /try_files\s+\$uri\s+\$uri\/\s+\/index\.html\s*;/, "SPA 새로고침을 위한 index.html fallback이 필요합니다.");
 assert.match(nginxConfig, /client_max_body_size\s+64m\s*;/, "기존 50 MB 파일 업로드와 multipart 오버헤드를 수용해야 합니다.");
 assert.doesNotMatch(nginxConfig, /add_header\s+Access-Control-Allow-Origin\s+["']?\*/i, "운영 프록시에 광범위한 CORS 허용을 추가하면 안 됩니다.");
+assert.match(nginxConfig, /add_header\s+Content-Security-Policy\s+"[^"]*default-src 'self'[^"]*"\s+always\s*;/i, "운영 HTML에는 CSP가 필요합니다.");
+assert.match(nginxConfig, /add_header\s+Strict-Transport-Security\s+"max-age=31536000; includeSubDomains"\s+always\s*;/i, "운영 HTTPS에는 HSTS가 필요합니다.");
+assert.match(nginxConfig, /add_header\s+Permissions-Policy\s+"[^"]+"\s+always\s*;/i, "사용하지 않는 브라우저 기능을 제한해야 합니다.");
+assert.doesNotMatch(nginxConfig, /script-src[^;"']*'unsafe-(?:inline|eval)'/i, "CSP script-src에서 unsafe-inline/unsafe-eval을 허용하면 안 됩니다.");
+assert.equal((nginxConfig.match(/add_header\s+Content-Security-Policy/g) ?? []).length, 3, "location의 add_header가 상위 보안 헤더를 가리지 않도록 HTML과 asset에도 CSP를 명시해야 합니다.");
+assert.equal((nginxConfig.match(/add_header\s+Strict-Transport-Security/g) ?? []).length, 3, "HTML과 asset 응답에도 HSTS가 유지되어야 합니다.");
 
 for (const [name, compose] of [["oracle", oracleCompose], ["local", localCompose]]) {
   const userWebService = compose.match(/^  user-web:\r?\n([\s\S]*?)(?=^  [a-z][a-z0-9-]*:\r?$)/m)?.[0];
@@ -31,4 +37,4 @@ for (const [name, compose] of [["oracle", oracleCompose], ["local", localCompose
   assert.doesNotMatch(userWebService, /VITE_API_BASE_URL/, `${name} user-web에서 브라우저 API 절대 설정 의존성을 제거해야 합니다.`);
 }
 
-console.log("PASS user-web production runtime security contract (17 assertions)");
+console.log("PASS user-web production runtime security contract (23 assertions)");

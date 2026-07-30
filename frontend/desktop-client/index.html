@@ -924,7 +924,7 @@
         streamRetryCount: 0,
         streamCursor: "",
         streamRetryTimer: null,
-        streamSource: null,
+        streamAbortController: null,
       };
       const notificationRetryMax = 3;
       const notificationRetryDelayMs = 400;
@@ -1416,84 +1416,147 @@
       }
 
       function stopNotificationStream() {
-        if (notificationStatus.streamSource) {
-          notificationStatus.streamSource.close();
-          notificationStatus.streamSource = null;
+        if (notificationStatus.streamAbortController) {
+          notificationStatus.streamAbortController.abort();
+          notificationStatus.streamAbortController = null;
+        }
+        if (notificationStatus.streamRetryTimer) {
+          clearTimeout(notificationStatus.streamRetryTimer);
+          notificationStatus.streamRetryTimer = null;
         }
         notificationStatus.streamRetryCount = 0;
       }
 
-      function connectNotificationStream() {
-        const streamBase = getApiBase();
-        if (typeof EventSource === "undefined") {
-          setNotificationMode("polling");
-          return;
-        }
-        if (!token) {
-          setNotificationMode("polling");
-          return;
-        }
-        stopNotificationStream();
-        const cursorQuery = notificationStatus.streamCursor ? `&cursor=${encodeURIComponent(notificationStatus.streamCursor)}` : "";
-        const streamUrl = `${streamBase}/notifications/stream?token=${encodeURIComponent(token)}${cursorQuery}`;
-        const source = new EventSource(streamUrl);
-        notificationStatus.streamSource = source;
-        setNotificationMode("streaming");
+      function processNotificationStreamBlock(block) {
+        const lines = block.split(/\r?\n/);
+        const eventName = lines.find((line) => line.startsWith("event:"))?.slice(6).trim();
+        const data = lines
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart())
+          .join("\n");
+        if (!eventName || !data) return false;
 
-        source.addEventListener("notification", (event) => {
-          try {
-            const payload = JSON.parse(event.data || "{}");
+        try {
+          if (eventName === "notification") {
+            const payload = JSON.parse(data);
             if (payload && payload.notificationId) {
               notificationStatus.streamCursor = payload.notificationId;
-              loadNotifications().catch(() => {});
+              void loadNotifications().catch(() => {});
             }
-          } catch {}
-        });
-
-        source.addEventListener("streammeta", (event) => {
-          try {
-            const payload = JSON.parse(event.data || "{}");
+            return false;
+          }
+          if (eventName === "streammeta") {
+            const payload = JSON.parse(data);
             if (payload && payload.value) {
               notificationStatus.streamCursor = payload.value;
             }
-          } catch {}
-        });
+            return false;
+          }
+          if (eventName === "heartbeat") {
+            const payload = JSON.parse(data);
+            return Boolean(payload && payload.type === "fallback");
+          }
+        } catch {}
+        return false;
+      }
 
-        source.addEventListener("heartbeat", (event) => {
-          try {
-            const payload = JSON.parse(event.data || "{}");
-            if (payload && payload.type === "fallback") {
-              throw new Error("stream fallback");
+      async function consumeNotificationStream(controller) {
+        const streamBase = getApiBase();
+        const cursorQuery = notificationStatus.streamCursor
+          ? `?cursor=${encodeURIComponent(notificationStatus.streamCursor)}`
+          : "";
+        const streamUrl = `${streamBase}/notifications/stream${cursorQuery}`;
+        const response = await fetch(streamUrl, {
+          headers: authHeaders(),
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error("알림 스트림 연결에 실패했습니다.");
+        }
+        if (!response.body) {
+          throw new Error("알림 스트림을 읽을 수 없습니다.");
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            buffer += decoder.decode(value, { stream: !done });
+            const blocks = buffer.split(/\r?\n\r?\n/);
+            buffer = blocks.pop() || "";
+            for (const block of blocks) {
+              if (processNotificationStreamBlock(block)) return true;
             }
-          } catch (error) {
-            if (error instanceof Error && error.message === "stream fallback") {
-              if (source) {
-                source.close();
-                notificationStatus.streamSource = null;
-              }
+            if (done) {
+              if (buffer && processNotificationStreamBlock(buffer)) return true;
+              return false;
+            }
+          }
+        } finally {
+          reader.releaseLock();
+        }
+      }
+
+      function scheduleNotificationStreamReconnect(controller) {
+        if (notificationStatus.streamAbortController !== controller) return;
+        notificationStatus.streamAbortController = null;
+        if (notificationStatus.streamRetryCount < notificationPolicy.streamRetryMax) {
+          notificationStatus.streamRetryCount += 1;
+          clearTimeout(notificationStatus.streamRetryTimer);
+          notificationStatus.streamRetryTimer = setTimeout(() => {
+            notificationStatus.streamRetryTimer = null;
+            connectNotificationStream(false);
+          }, notificationPolicy.streamRetryDelayMs * notificationStatus.streamRetryCount);
+          return;
+        }
+        setNotificationMode("fallback");
+        void loadNotificationsWithRetry().catch((error) => {
+          setNotificationError(String(error?.message || error));
+        });
+      }
+
+      function connectNotificationStream(resetRetryCount = true) {
+        if (!token) {
+          stopNotificationStream();
+          setNotificationMode("polling");
+          return;
+        }
+        if (notificationStatus.streamAbortController) {
+          notificationStatus.streamAbortController.abort();
+        }
+        if (notificationStatus.streamRetryTimer) {
+          clearTimeout(notificationStatus.streamRetryTimer);
+          notificationStatus.streamRetryTimer = null;
+        }
+        if (resetRetryCount) {
+          notificationStatus.streamRetryCount = 0;
+        }
+
+        const controller = new AbortController();
+        notificationStatus.streamAbortController = controller;
+        setNotificationMode("streaming");
+
+        void consumeNotificationStream(controller)
+          .then((fallbackRequested) => {
+            if (notificationStatus.streamAbortController !== controller || controller.signal.aborted) return;
+            if (fallbackRequested) {
+              controller.abort();
+              notificationStatus.streamAbortController = null;
+              notificationStatus.streamRetryCount = 0;
               setNotificationMode("fallback");
-              void loadNotificationsWithRetry().catch((reason) => {
-                setNotificationError(String(reason?.message || reason));
+              void loadNotificationsWithRetry().catch((error) => {
+                setNotificationError(String(error?.message || error));
               });
               return;
             }
-          }
-        });
-
-        source.onerror = () => {
-          source.close();
-          notificationStatus.streamSource = null;
-          if (notificationStatus.streamRetryCount < notificationPolicy.streamRetryMax) {
-            notificationStatus.streamRetryCount += 1;
-            clearTimeout(notificationStatus.streamRetryTimer);
-            notificationStatus.streamRetryTimer = setTimeout(() => {
-              connectNotificationStream();
-            }, notificationPolicy.streamRetryDelayMs * notificationStatus.streamRetryCount);
-            return;
-          }
-          setNotificationMode("fallback");
-          loadNotificationsWithRetry().catch((error) => setNotificationError(String(error.message || error)));
-        };
+            scheduleNotificationStreamReconnect(controller);
+          })
+          .catch(() => {
+            if (controller.signal.aborted) return;
+            scheduleNotificationStreamReconnect(controller);
+          });
       }
 
       function setNotificationSummary(text) {
@@ -1831,6 +1894,7 @@
           connectNotificationStream();
         }
       });
+      window.addEventListener("beforeunload", stopNotificationStream);
     </script>
   </body>
 </html>
