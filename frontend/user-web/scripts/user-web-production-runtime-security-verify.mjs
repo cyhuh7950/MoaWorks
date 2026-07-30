@@ -6,6 +6,7 @@ const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const readRepositoryFile = (path) => readFileSync(`${repositoryRoot}${path}`, "utf8");
 
 const dockerfile = readRepositoryFile("deploy/user-web.Dockerfile");
+const serverDockerfile = readRepositoryFile("deploy/server.Dockerfile");
 const nginxConfig = readRepositoryFile("deploy/user-web.nginx.conf");
 const oracleCompose = readRepositoryFile("deploy/docker-compose.oracle.yml");
 const localCompose = readRepositoryFile("deploy/docker-compose.yml");
@@ -30,6 +31,9 @@ assert.doesNotMatch(nginxConfig, /script-src[^;"']*'unsafe-(?:inline|eval)'/i, "
 assert.equal((nginxConfig.match(/add_header\s+Content-Security-Policy/g) ?? []).length, 3, "location의 add_header가 상위 보안 헤더를 가리지 않도록 HTML과 asset에도 CSP를 명시해야 합니다.");
 assert.equal((nginxConfig.match(/add_header\s+Strict-Transport-Security/g) ?? []).length, 3, "HTML과 asset 응답에도 HSTS가 유지되어야 합니다.");
 
+assert.match(serverDockerfile, /CMD\s*\[\s*"uvicorn"[\s\S]*"app\.main:app"/i, "운영 server는 Uvicorn으로 API를 실행해야 합니다.");
+assert.match(serverDockerfile, /CMD\s*\[[^\]]*"--no-access-log"[^\]]*\]/i, "운영 server는 원문 URL query를 남기는 Uvicorn access log를 비활성화해야 합니다.");
+
 for (const [name, compose] of [["oracle", oracleCompose], ["local", localCompose]]) {
   const userWebService = compose.match(/^  user-web:\r?\n([\s\S]*?)(?=^  [a-z][a-z0-9-]*:\r?$)/m)?.[0];
   assert.ok(userWebService, `${name} compose에 user-web 서비스가 있어야 합니다.`);
@@ -37,4 +41,4 @@ for (const [name, compose] of [["oracle", oracleCompose], ["local", localCompose
   assert.doesNotMatch(userWebService, /VITE_API_BASE_URL/, `${name} user-web에서 브라우저 API 절대 설정 의존성을 제거해야 합니다.`);
 }
 
-console.log("PASS user-web production runtime security contract (23 assertions)");
+console.log("PASS user-web and server production runtime security contract (25 assertions)");

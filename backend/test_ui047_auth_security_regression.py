@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import unittest
+from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -8,6 +10,7 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.testclient import TestClient
 
 from app.api.dependencies import get_current_user, require_admin, require_permission
+from app.api.errors import logger as error_logger
 from app.api.errors import register_error_handlers
 from app.main import app
 from app.services.token_service import TokenService
@@ -108,21 +111,29 @@ class Ui047AuthSecurityRegressionTest(unittest.TestCase):
                 },
             )
 
-        with patch("app.api.errors.logger.warning") as diagnostic_log:
+        rendered_log = StringIO()
+        handler = logging.StreamHandler(rendered_log)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        previous_level = error_logger.level
+        previous_propagate = error_logger.propagate
+        error_logger.addHandler(handler)
+        error_logger.setLevel(logging.WARNING)
+        error_logger.propagate = False
+        try:
             response = TestClient(test_app).get("/failure/INTERNAL_SENTINEL")
+        finally:
+            error_logger.removeHandler(handler)
+            error_logger.setLevel(previous_level)
+            error_logger.propagate = previous_propagate
 
         self.assertEqual(403, response.status_code)
         self.assertEqual("FORBIDDEN", response.json()["code"])
         self.assertNotIn("INTERNAL_SENTINEL", response.text)
-        diagnostic_log.assert_called_once_with(
-            "API request rejected",
-            extra={
-                "http_status": 403,
-                "error_code": "FORBIDDEN",
-                "route_path": "/failure/{item_id}",
-            },
+        self.assertEqual(
+            "API request rejected status=403 code=FORBIDDEN route=/failure/{item_id}",
+            rendered_log.getvalue().strip(),
         )
-        self.assertNotIn("INTERNAL_SENTINEL", repr(diagnostic_log.call_args))
+        self.assertNotIn("INTERNAL_SENTINEL", rendered_log.getvalue())
 
     def test_unhandled_value_error_does_not_expose_exception_text(self) -> None:
         test_app = FastAPI()
@@ -132,20 +143,28 @@ class Ui047AuthSecurityRegressionTest(unittest.TestCase):
         def failure() -> None:
             raise ValueError("internal database identifier")
 
-        with patch("app.api.errors.logger.warning") as diagnostic_log:
+        rendered_log = StringIO()
+        handler = logging.StreamHandler(rendered_log)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        previous_level = error_logger.level
+        previous_propagate = error_logger.propagate
+        error_logger.addHandler(handler)
+        error_logger.setLevel(logging.WARNING)
+        error_logger.propagate = False
+        try:
             response = TestClient(test_app).get("/failure")
+        finally:
+            error_logger.removeHandler(handler)
+            error_logger.setLevel(previous_level)
+            error_logger.propagate = previous_propagate
 
         self.assertEqual(422, response.status_code)
         self.assertNotIn("internal database identifier", response.text)
-        diagnostic_log.assert_called_once_with(
-            "API request rejected",
-            extra={
-                "http_status": 422,
-                "error_code": "VALIDATION_ERROR",
-                "route_path": "/failure",
-            },
+        self.assertEqual(
+            "API request rejected status=422 code=VALIDATION_ERROR route=/failure",
+            rendered_log.getvalue().strip(),
         )
-        self.assertNotIn("internal database identifier", repr(diagnostic_log.call_args))
+        self.assertNotIn("internal database identifier", rendered_log.getvalue())
 
 
 if __name__ == "__main__":

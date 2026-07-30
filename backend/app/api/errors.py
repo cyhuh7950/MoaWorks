@@ -26,12 +26,10 @@ def _log_rejection(request: Request, status_code: int, code: str) -> None:
     if not isinstance(route_path, str) or not route_path.startswith("/"):
         route_path = "<unmatched>"
     logger.warning(
-        "API request rejected",
-        extra={
-            "http_status": status_code,
-            "error_code": safe_code,
-            "route_path": route_path,
-        },
+        "API request rejected status=%s code=%s route=%s",
+        status_code,
+        safe_code,
+        route_path,
     )
 
 
