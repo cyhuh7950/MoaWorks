@@ -20,7 +20,8 @@ const calendarArea = manifest.areas.find((area) => area.id === "calendar");
 const messengerArea = manifest.areas.find((area) => area.id === "messenger");
 const addressOrganizationArea = manifest.areas.find((area) => area.id === "address-organization");
 const filesArea = manifest.areas.find((area) => area.id === "files");
-const expectedGapAreaIds = ["personal-help"];
+const personalHelpArea = manifest.areas.find((area) => area.id === "personal-help");
+const expectedGapAreaIds = [];
 
 const frontendFiles = await readdir(scripts);
 const sourceOnly = new Set(inventory.groups.find((group) => group.scope === "frontend-source-verifiers").sourceOnlyAllowlist);
@@ -28,7 +29,10 @@ const staticFiles = frontendFiles.filter((name) => name.endsWith("static-verify.
 
 async function backendTestCount(directory) {
   let count = 0;
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
+  let entries;
+  try { entries = await readdir(directory, { withFileTypes: true }); }
+  catch (error) { if (["EACCES", "EPERM"].includes(error?.code)) return 0; throw error; }
+  for (const entry of entries) {
     const path = resolve(directory, entry.name);
     if (entry.isDirectory()) count += await backendTestCount(path);
     else if (/^test_.*\.py$|_smoke_test\.py$/.test(entry.name)) count += 1;
@@ -54,8 +58,10 @@ const checks = [
   ["주소록 조직도 execute-area 지원", orchestrator.includes("runAddressOrganization") && orchestrator.includes('"address-organization": runAddressOrganization')],
   ["파일 composite READY", filesArea?.status === "READY" && filesArea?.adapter === "files" && filesArea.liveInputContract?.identityTopology === "one-run-role-two-run-users-owner-collaborator-two-auto-calendars-two-auto-mail-accounts-one-existing-department" && filesArea.liveInputContract?.cleanupPolicy === "explicit-approval-required-confirmed-ids-two-blobs-identities-and-mail-inactive"],
   ["파일 execute-area 지원", orchestrator.includes("runFiles") && orchestrator.includes("files: runFiles") && orchestrator.includes("cleanupApproved")],
-  ["personal-help 1개 GAP 유지", JSON.stringify(manifest.areas.filter((area) => area.status === "GAP").map((area) => area.id)) === JSON.stringify(expectedGapAreaIds) && manifest.areas.filter((area) => area.status === "GAP").every((area) => area.adapter === null)],
-  ["inventory READY/GAP 정합", inventory.summary.readyAdapters === 7 && inventory.summary.coreGapAreas === 1 && inventory.summary.liveFiles === 10 && JSON.stringify(inventory.groups.find((group) => group.scope === "core-live-areas").areaIds) === JSON.stringify(expectedGapAreaIds)],
+  ["personal-help composite READY", personalHelpArea?.status === "READY" && personalHelpArea?.adapter === "personal-help" && personalHelpArea.liveInputContract?.identityTopology === "one-run-role-one-run-user-one-auto-calendar-one-auto-mail-account-one-existing-department" && personalHelpArea.liveInputContract?.passwordPolicy === "client-mismatch-zero-network-one-change-new-password-relogin-no-secret-evidence"],
+  ["personal-help execute-area 지원", orchestrator.includes("runPersonalHelp") && orchestrator.includes('"personal-help": runPersonalHelp')],
+  ["핵심 GAP 0", JSON.stringify(manifest.areas.filter((area) => area.status === "GAP").map((area) => area.id)) === JSON.stringify(expectedGapAreaIds)],
+  ["inventory READY/GAP 정합", inventory.summary.readyAdapters === 8 && inventory.summary.coreGapAreas === 0 && inventory.summary.liveFiles === 11 && !inventory.groups.some((group) => group.scope === "core-live-areas")],
   ["보호 계정 고정", JSON.stringify(manifest.protectedAccounts) === JSON.stringify(["admin", "cyhuh", "ysla"])],
   ["sinsan HTTPS origin", manifest.environment.userOrigin === "https://user.moaworks.sinsan.kr" && manifest.environment.adminOrigin === "https://admin.moaworks.sinsan.kr"],
   ["same-origin 상대 API", manifest.areas.flatMap((area) => area.apiPaths).every((path) => path.startsWith("/api/v1/"))],

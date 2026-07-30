@@ -174,14 +174,27 @@
     {
       "id": "personal-help",
       "label": "개인 설정·Help",
-      "screenActions": ["프로필 조회", "언어·시간대·알림 이외 환경설정 저장·재조회", "Help 정책 경로 조회"],
-      "apiPaths": ["/api/v1/workspace/profile", "/api/v1/workspace/preferences", "/api/v1/workspace/help-policies"],
-      "dbTables": ["user_workspace_preferences", "help_policy_documents", "audit_logs"],
-      "auditEvents": ["workspace.profile.viewed", "workspace.preferences.updated", "workspace.help.viewed"],
-      "cleanupOwnership": "preferences before snapshot 원복만 허용; help policy는 조회 전용",
+      "screenActions": ["프로필 읽기 전용 조회", "일반·알림 설정 저장·재조회", "비밀번호 변경·새 비밀번호 재로그인", "업무별 설정 링크 확인", "Help 전체·검색·분류·빈 결과 조회"],
+      "apiPaths": ["/api/v1/auth/login", "/api/v1/workspace/profile", "/api/v1/workspace/preferences", "/api/v1/notifications/preferences", "/api/v1/auth/change-password", "/api/v1/workspace/help-policies"],
+      "dbTables": ["users", "roles", "user_calendars", "mail_accounts", "user_workspace_preferences", "notification_preferences", "notification_action_audit", "help_policy_documents", "audit_logs"],
+      "auditEvents": ["workspace.profile.viewed", "workspace.preferences.viewed", "workspace.preferences.updated", "notification.preferences.updated", "workspace.help.viewed", "auth.password.changed"],
+      "cleanupOwnership": "승인 전 물리 삭제 금지; 승인 후 UI046 역할·사용자·자동 캘린더·mail account·화면 생성 개인/알림 설정과 exact audit만 정리하고 임시 신원/mail inactive; 기존 설정·Help·보호 계정 fingerprint 변경 금지",
       "existingCoverage": ["STATIC:ui044 frontend and backend tests"],
-      "adapter": null,
-      "status": "GAP"
+      "liveInputContract": {
+        "browserDriverMethods": ["runPersonalHelpFlow", "close"],
+        "dbDriverMethods": ["prepareOwnedData", "collectPersonalHelpEvidence", "cleanupOwnedData"],
+        "identityTopology": "one-run-role-one-run-user-one-auto-calendar-one-auto-mail-account-one-existing-department",
+        "rolePermissions": ["profile:read"],
+        "ownershipPolicy": "browser-created-preference-and-notification-preference-added-sequentially",
+        "precreatedProductRows": "forbidden",
+        "passwordPolicy": "client-mismatch-zero-network-one-change-new-password-relogin-no-secret-evidence",
+        "helpPolicy": "read-only-before-after-fingerprint-no-search-text-evidence",
+        "cleanupPolicy": "explicit-approval-required-confirmed-ids-identities-and-mail-inactive",
+        "compositePolicy": "profile-general-notifications-password-modules-help-db-audit-cleanup",
+        "missingInputStatus": "LIVE_INPUT_REQUIRED"
+      },
+      "adapter": "personal-help",
+      "status": "READY"
     }
   ]
 }
