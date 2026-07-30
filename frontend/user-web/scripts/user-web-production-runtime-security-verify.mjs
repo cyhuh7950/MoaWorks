@@ -25,8 +25,10 @@ assert.match(nginxConfig, /client_max_body_size\s+64m\s*;/, "기존 50 MB 파일
 assert.doesNotMatch(nginxConfig, /Access-Control-Allow-Origin|\*/i, "운영 프록시에 광범위한 CORS 허용을 추가하면 안 됩니다.");
 
 for (const [name, compose] of [["oracle", oracleCompose], ["local", localCompose]]) {
-  assert.doesNotMatch(compose, /VITE_PROXY_TARGET/, `${name} compose에서 개발 서버 프록시 환경변수를 제거해야 합니다.`);
-  assert.doesNotMatch(compose, /VITE_API_BASE_URL/, `${name} compose에서 브라우저 API 절대 설정 의존성을 제거해야 합니다.`);
+  const userWebService = compose.match(/^  user-web:\r?\n([\s\S]*?)(?=^  [a-z][a-z0-9-]*:\r?$)/m)?.[0];
+  assert.ok(userWebService, `${name} compose에 user-web 서비스가 있어야 합니다.`);
+  assert.doesNotMatch(userWebService, /VITE_PROXY_TARGET/, `${name} user-web에서 개발 서버 프록시 환경변수를 제거해야 합니다.`);
+  assert.doesNotMatch(userWebService, /VITE_API_BASE_URL/, `${name} user-web에서 브라우저 API 절대 설정 의존성을 제거해야 합니다.`);
 }
 
-console.log("PASS user-web production runtime security contract (15 assertions)");
+console.log("PASS user-web production runtime security contract (17 assertions)");
