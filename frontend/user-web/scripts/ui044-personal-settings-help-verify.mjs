@@ -27,7 +27,7 @@ assert.ok(calendar.includes("settingsRequestKey"));
 assert.match(css, /\.ui044-settings-help[^}]*font-size:\s*12px/s);
 assert.match(css, /grid-template-columns:\s*220px\s+minmax\(0,\s*1fr\)/);
 assert.match(css, /\.ui044-settings-help__title[^}]*font-size:\s*16px/);
-assert.match(css, /\.ui044-settings-help__section-title[^}]*font-size:\s*14px/);
+assert.match(css, /#root\s+\.ui044-settings-help__section-title[^}]*font-size:\s*14px\s*!important/);
 assert.match(css, /\.ui044-settings-help__helper[^}]*font-size:\s*10px/);
 assert.ok(panel.includes('label="개인 설정 설명"') && panel.includes("aria-label={label}") && panel.includes("title={title}"));
 assert.ok(!`${panel}\n${api}`.match(/https?:\/\/|localhost|127\.0\.0\.1|NEXT_PUBLIC_|VITE_API_BASE_URL\s*=/));
