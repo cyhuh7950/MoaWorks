@@ -3018,7 +3018,7 @@ textarea {
 .ui044-settings-help__nav,.ui044-settings-help__detail{min-height:0;overflow:auto;border:1px solid #dbe4ec;border-radius:18px;background:#fff;padding:16px}
 .ui044-settings-help__nav>header,.ui044-settings-help__detail article>header{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
 .ui044-settings-help__title{margin:0 0 14px;font-size:16px;line-height:1.35}
-.ui044-settings-help__section-title{margin:0;font-size:14px;line-height:1.45}
+#root .ui044-settings-help__section-title{margin:0;font-size:14px!important;line-height:1.45}
 .ui044-settings-help__nav nav,.ui044-settings-help__list{display:grid;gap:6px}
 .ui044-settings-help__nav nav button,.ui044-settings-help__list button,.ui044-settings-help__module-links button{min-height:38px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;padding:8px 10px;text-align:left}
 .ui044-settings-help__nav nav button[aria-current="page"],.ui044-settings-help__list button.is-selected{border-color:#0f766e;background:#ecfdf5;color:#115e59}
