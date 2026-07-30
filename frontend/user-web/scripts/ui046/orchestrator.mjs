@@ -122,7 +122,7 @@ export async function persistAreaEvidence({ result, directory, selectedAreaId, s
     await access(resolve(directory, screenshot)).catch(() => { throw errorWithCode("SCREENSHOT_EVIDENCE_MISSING"); });
   }
   await writeJson(resolve(directory, "manifest.json"), manifest);
-  await writeJson(resolve(directory, "result.json"), { runId: selectedRunId, status: result.status, areaId: result.areaId, actions: result.actions, screenshots: result.screenshots, ...(result.mutationOwnership ? { mutationOwnership: result.mutationOwnership } : {}) });
+  await writeJson(resolve(directory, "result.json"), { runId: selectedRunId, status: result.status, areaId: result.areaId, actions: result.actions, screenshots: result.screenshots, ...(result.mutationOwnership ? { mutationOwnership: result.mutationOwnership } : {}), ...(result.visual ? { visual: result.visual } : {}) });
   await writeJson(resolve(directory, "network.json"), result.network);
   await writeJson(resolve(directory, "db-audit.json"), result.dbAudit);
   await writeJson(resolve(directory, "cleanup.json"), result.cleanup);
@@ -138,7 +138,13 @@ export async function persistAreaEvidence({ result, directory, selectedAreaId, s
   };
   const reportReason = reportReasons[selectedAreaId] ?? "선택 영역의 LIVE adapter 계약을 통과했습니다.";
   const remainingGapCount = manifest.areas.filter((area) => area.status === "GAP").length;
-  await writeFile(resolve(directory, "report.md"), `판정 -> ${result.status}\n\n판단 이유 -> ${reportReason}\n\n조치 -> 이 영역만 PASS이며 나머지 ${remainingGapCount}개 GAP과 UI-046 전체 WAIT를 유지하고 어울1이 증적을 독립 검수합니다.\n`, "utf8");
+  const visualGap = result.visual?.status === "GAP";
+  const reportStatus = visualGap ? `${result.status} / VISUAL GAP` : result.status;
+  const visualReason = visualGap ? ` 기능 계약은 PASS이나 화면 표준 불일치(${result.visual.mismatches.join(", ")})는 별도 visual GAP입니다.` : "";
+  const reportAction = visualGap
+    ? `기능 영역은 PASS이나 visual GAP으로 UI-046 전체 WAIT를 유지하고 화면 보완을 별도 진행합니다.`
+    : `이 영역만 PASS이며 나머지 ${remainingGapCount}개 GAP과 UI-046 전체 WAIT를 유지하고 어울1이 증적을 독립 검수합니다.`;
+  await writeFile(resolve(directory, "report.md"), `판정 -> ${reportStatus}\n\n판단 이유 -> ${reportReason}${visualReason}\n\n조치 -> ${reportAction}\n`, "utf8");
 }
 
 const commands = { plan, preflight, static: staticStructure, execute, "execute-area": executeArea };

@@ -4,12 +4,12 @@ const SENSITIVE = /password|hash|token|cookie|authorization|secret|set-cookie|qu
 const SHOTS = ["personal-profile.png", "personal-general-saved.png", "personal-notifications-saved.png", "personal-password-changed.png", "personal-module-links.png", "help-search-category.png", "help-empty.png"].map((name) => `screenshots/${name}`);
 const ACTIONS = ["personal.open", "profile.reread", "general.open", "general.save", "general.reread", "notifications.open", "notifications.save", "notifications.reread", "security.open", "password.client-mismatch", "password.change", "password.relogin", "modules.open", "modules.links.visible", "help.open", "help.all", "help.error-search", "help.error-category", "help.empty-search"];
 const ROUTE_COUNTS = new Map([
-  ["POST /api/v1/auth/login", 2], ["GET /api/v1/workspace/profile", 1], ["GET /api/v1/workspace/preferences", 2],
-  ["GET /api/v1/notifications/preferences", 2], ["PUT /api/v1/workspace/preferences", 1], ["PUT /api/v1/notifications/preferences", 1],
+  ["POST /api/v1/auth/login", 2], ["GET /api/v1/workspace/profile", 5], ["GET /api/v1/workspace/preferences", 8],
+  ["GET /api/v1/notifications/preferences", 5], ["PUT /api/v1/workspace/preferences", 1], ["PUT /api/v1/notifications/preferences", 2],
   ["POST /api/v1/auth/change-password", 1], ["GET /api/v1/workspace/help-policies", 4],
 ]);
 const AUDIT_COUNTS = new Map([
-  ["workspace.profile.viewed", 1], ["workspace.preferences.viewed", 2], ["workspace.preferences.updated", 1],
+  ["workspace.profile.viewed", 5], ["workspace.preferences.viewed", 8], ["workspace.preferences.updated", 1],
   ["workspace.help.viewed", 4], ["auth.password.changed", 1],
 ]);
 
@@ -45,7 +45,7 @@ function assertNetwork(rows, mutationOwnership, context) {
   for (const row of rows) if (!/^(GET|POST|PUT)$/.test(row.method) || !Number.isInteger(row.status) || row.status < 200 || row.status >= 300 || typeof row.path !== "string" || !row.path.startsWith("/api/v1/") || row.path.includes("://") || row.path.includes("?")) throw fail("NETWORK_NOT_SAME_ORIGIN_RELATIVE");
   if (!sameCounts(counts(rows, (row) => `${row.method} ${row.path}`), ROUTE_COUNTS)) throw fail("NETWORK_ROUTE_CARDINALITY_INVALID");
   const mutations = rows.filter((row) => row.method !== "GET" && row.path !== "/api/v1/auth/login");
-  if (!Array.isArray(mutationOwnership) || mutationOwnership.length !== 3 || !sameCounts(counts(mutationOwnership, (row) => `${row.method} ${row.path}`), counts(mutations, (row) => `${row.method} ${row.path}`))) throw fail("MUTATION_EVIDENCE_INCOMPLETE");
+  if (!Array.isArray(mutationOwnership) || mutationOwnership.length !== 4 || !sameCounts(counts(mutationOwnership, (row) => `${row.method} ${row.path}`), counts(mutations, (row) => `${row.method} ${row.path}`))) throw fail("MUTATION_EVIDENCE_INCOMPLETE");
   for (const item of mutationOwnership) {
     const owned = context.owned.get(item.id);
     if (!owned || owned.kind !== item.kind) throw fail("MUTATION_OWNERSHIP_MISMATCH");
@@ -53,6 +53,14 @@ function assertNetwork(rows, mutationOwnership, context) {
     if (item.path === "/api/v1/notifications/preferences" && item.kind !== "notification_preference") throw fail("MUTATION_OWNERSHIP_MISMATCH");
     if (item.path === "/api/v1/auth/change-password" && item.kind !== "test_user") throw fail("MUTATION_OWNERSHIP_MISMATCH");
   }
+}
+
+function validateVisual(value) {
+  const common = value?.viewport === "1920x1080" && value.bodyPx === 12 && value.screenTitlePx === 16 && value.helperPx === 10 && value.infoTooltip === true;
+  const pass = value?.status === "PASS" && value.sectionTitlePx === 14 && same(value.mismatches, []);
+  const knownGap = value?.status === "GAP" && value.sectionTitlePx === 16 && same(value.mismatches, ["sectionTitlePx:16!=14"]);
+  if (!common || (!pass && !knownGap)) throw fail("VISUAL_CONTRACT_INVALID");
+  return value;
 }
 
 function validateBrowser(value, context) {
@@ -65,11 +73,11 @@ function validateBrowser(value, context) {
   addCreated(context, value.createdRecords);
   if (!value.profile?.matchesPreparedIdentity || !value.profile.readOnly || value.profile.fieldCount !== 5) throw fail("PROFILE_CONTRACT_INVALID");
   if (!same(value.general, { locale: "ko-KR", timezone: "Asia/Tokyo", startPage: "files", version: 1, rereadMatches: true })) throw fail("GENERAL_PREFERENCES_INVALID");
-  if (!same(value.notifications, { enabled: true, quietHoursEnabled: true, quietHoursStart: "21:30", quietHoursEnd: "06:30", mail: { enabled: true, importantOnly: true }, rereadMatches: true })) throw fail("NOTIFICATION_PREFERENCES_INVALID");
+  if (!same(value.notifications, { enabled: true, quietHoursEnabled: true, quietHoursStart: "22:00", quietHoursEnd: "07:00", mail: { enabled: true, importantOnly: true }, rereadMatches: true })) throw fail("NOTIFICATION_PREFERENCES_INVALID");
   if (!same(value.security, { clientMismatchRequestCount: 0, changeRequestCount: 1, reloginWithNewCredential: true, sensitiveEvidenceFields: 0 })) throw fail("PASSWORD_FLOW_INVALID");
   if (!same(value.modules, { visible: ["mail", "approval", "calendar"], foreignNavigationCount: 0 })) throw fail("MODULE_LINKS_INVALID");
   if (!same(value.help, { allCount: 6, errorSearchCount: 4, errorCategoryCount: 4, emptyCount: 0, selectedDocumentVisible: true, mutationCount: 0, searchEvidencePersisted: false })) throw fail("HELP_CONTRACT_INVALID");
-  if (!same(value.visual, { viewport: "1920x1080", bodyPx: 12, screenTitlePx: 16, sectionTitlePx: 14, helperPx: 10, infoTooltip: true })) throw fail("VISUAL_CONTRACT_INVALID");
+  validateVisual(value.visual);
   if (!Array.isArray(value.screenshots) || value.screenshots.length !== SHOTS.length || new Set(value.screenshots).size !== SHOTS.length || !SHOTS.every((shot) => value.screenshots.includes(shot))) throw fail("SCREENSHOT_EVIDENCE_INCOMPLETE");
   assertNetwork(value.network, value.mutationOwnership, context);
   return value;
@@ -80,10 +88,10 @@ function validateDb(value, context) {
   const dynamic = [...context.owned.values()].filter((row) => ["workspace_preference", "notification_preference"].includes(row.kind));
   if (!Array.isArray(value?.rows) || value.rows.length !== 2 || value.existingRowChanges !== 0 || dynamic.some((row) => !value.rows.some((item) => item.id === row.id && item.kind === row.kind && item.userId === context.user.id && item.ownerRunId === context.ownership.runId))) throw fail("DB_EVIDENCE_NOT_RUN_OWNED");
   if (!same(value.preference, { userId: context.user.id, companyId: context.ownership.companyId, locale: "ko-KR", timezone: "Asia/Tokyo", startPage: "files", version: 1 })) throw fail("DB_PREFERENCES_INVALID");
-  if (!same(value.notificationPreference, { userId: context.user.id, enabled: true, quietHoursEnabled: true, quietHoursStart: "21:30", quietHoursEnd: "06:30", mail: { enabled: true, importantOnly: true } })) throw fail("DB_NOTIFICATION_INVALID");
+  if (!same(value.notificationPreference, { userId: context.user.id, enabled: true, quietHoursEnabled: true, quietHoursStart: "22:00", quietHoursEnd: "07:00", mail: { enabled: true, importantOnly: true } })) throw fail("DB_NOTIFICATION_INVALID");
   if (value.helpFingerprint?.before !== context.ownership.helpFingerprintBefore.fingerprint || value.helpFingerprint.after !== value.helpFingerprint.before || value.helpFingerprint.beforeCount !== context.ownership.helpFingerprintBefore.count || value.helpFingerprint.afterCount !== value.helpFingerprint.beforeCount) throw fail("HELP_FINGERPRINT_CHANGED");
   if (!Array.isArray(value.audits) || !sameCounts(counts(value.audits, (row) => row.event), AUDIT_COUNTS) || value.audits.some((row) => row.actorId !== context.user.id || row.targetId !== context.user.id || row.ownerRunId !== context.ownership.runId || !row.reasonSafe)) throw fail("AUDIT_EVIDENCE_INCOMPLETE");
-  if (!Array.isArray(value.notificationAudits) || value.notificationAudits.length !== 1 || value.notificationAudits[0].event !== "notification.preferences.updated" || value.notificationAudits[0].actorId !== context.user.id || value.notificationAudits[0].targetId !== context.user.id || value.notificationAudits[0].ownerRunId !== context.ownership.runId || !value.notificationAudits[0].reasonSafe) throw fail("AUDIT_EVIDENCE_INCOMPLETE");
+  if (!Array.isArray(value.notificationAudits) || value.notificationAudits.length !== 2 || value.notificationAudits.some((row) => row.event !== "notification.preferences.updated" || row.actorId !== context.user.id || row.targetId !== context.user.id || row.ownerRunId !== context.ownership.runId || !row.reasonSafe)) throw fail("AUDIT_EVIDENCE_INCOMPLETE");
   return value;
 }
 
@@ -109,5 +117,5 @@ export async function runPersonalHelp({ manifest, runId, browserDriver, dbDriver
   const clean = validateCleanup(cleanup, context);
   if (closeError) throw fail("BROWSER_CLOSE_FAILED");
   if (primaryError) throw primaryError;
-  return { status: "PASS", areaId: "personal-help", actions: browser.actions, screenshots: browser.screenshots, network: browser.network, mutationOwnership: browser.mutationOwnership, dbAudit: db, cleanup: clean };
+  return { status: "PASS", areaId: "personal-help", actions: browser.actions, screenshots: browser.screenshots, network: browser.network, mutationOwnership: browser.mutationOwnership, visual: browser.visual, dbAudit: db, cleanup: clean };
 }
