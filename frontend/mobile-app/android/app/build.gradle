@@ -72,6 +72,14 @@ def enableProguardInReleaseBuilds = true
  */
 def jscFlavor = 'org.webkit:android-jsc:+'
 
+def uploadStorePath = System.getenv("MOAWORKS_UPLOAD_KEYSTORE_PATH")
+def uploadStorePassword = System.getenv("MOAWORKS_UPLOAD_KEYSTORE_PASSWORD")
+def uploadKeyAlias = System.getenv("MOAWORKS_UPLOAD_KEY_ALIAS")
+def uploadKeyPassword = System.getenv("MOAWORKS_UPLOAD_KEY_PASSWORD")
+def publicUploadReady = [uploadStorePath, uploadStorePassword, uploadKeyAlias, uploadKeyPassword].every { value ->
+    value != null && !value.trim().isEmpty()
+}
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
@@ -92,18 +100,40 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        if (publicUploadReady) {
+            publicUpload {
+                storeFile file(uploadStorePath)
+                storePassword uploadStorePassword
+                keyAlias uploadKeyAlias
+                keyPassword uploadKeyPassword
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
+            // Internal verification only. Public distribution uses publicRelease.
             signingConfig signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
+        publicRelease {
+            matchingFallbacks = ['release']
+            minifyEnabled enableProguardInReleaseBuilds
+            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+            if (publicUploadReady) {
+                signingConfig signingConfigs.publicUpload
+            }
+        }
+    }
+}
+
+gradle.taskGraph.whenReady { graph ->
+    def publicTaskRequested = graph.allTasks.any { task -> task.name.toLowerCase().contains("publicrelease") }
+    if (publicTaskRequested && !publicUploadReady) {
+        throw new GradleException("UPLOAD_KEY_NOT_CONFIGURED")
     }
 }
 

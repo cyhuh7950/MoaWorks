@@ -88,7 +88,7 @@ function applicationSourceFiles(projectRoot) {
   }).filter((file) => /\.(?:js|jsx|ts|tsx|kt|java|xml)$/.test(file));
 }
 
-function verifyApk(apkPath, androidSdk, javaHome, projectRoot, reactNativeVersion) {
+function verifyApk(apkPath, androidSdk, javaHome, projectRoot, reactNativeVersion, variant = "release") {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "moaworks-apk-verify-"));
   try {
     const asciiApk = path.join(tempDir, "app-release.apk");
@@ -110,7 +110,7 @@ function verifyApk(apkPath, androidSdk, javaHome, projectRoot, reactNativeVersio
     const embeddedBundle = files.some((file) => path.relative(expandedDir, file).replaceAll("\\", "/") === "assets/index.android.bundle");
     if (!embeddedBundle) return { status: "blocked", code: "APK_EMBEDDED_BUNDLE_MISSING" };
     const bundlePath = path.join(expandedDir, "assets", "index.android.bundle");
-    const mappingPath = path.join(projectRoot, "android", "app", "build", "outputs", "mapping", "release", "mapping.txt");
+    const mappingPath = path.join(projectRoot, "android", "app", "build", "outputs", "mapping", variant, "mapping.txt");
     if (!fs.existsSync(mappingPath)) return { status: "blocked", code: "RELEASE_MAPPING_MISSING" };
     const aarInspection = inspectReactNativeReleaseAar(
       findReactNativeReleaseAar(reactNativeVersion),

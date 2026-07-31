@@ -14,8 +14,8 @@
   "minified": true,
   "artifact": {
     "fileName": "MoaWorks-Mobile-0.1.0-android-internal-release.apk",
-    "size": 59155638,
-    "sha256": "20b101f0521c652d39b4577c6e026e90c06aa8417f6da735ee1957807fd4b8ee"
+    "size": 59155673,
+    "sha256": "a9dee98f34921a8bd37e4557ee4649b255529975e89d39a97a17ffd4c4b445ce"
   },
   "bundle": {
     "fileName": "MoaWorks-Mobile-0.1.0-android-production.bundle",
@@ -51,5 +51,5 @@
     "devices": 0
   },
   "status": "success",
-  "generatedAt": "2026-07-31T05:34:23.414Z"
+  "generatedAt": "2026-07-31T07:42:22.201Z"
 }

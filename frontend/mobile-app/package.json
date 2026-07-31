@@ -10,6 +10,7 @@
     "build": "node ./scripts/mobile-package-android.js",
     "package:android": "node ./scripts/mobile-package-android.js",
     "build:android": "node ./scripts/mobile-android-command.js release",
+    "build:public:android": "node ./scripts/mobile-package-public-android.js",
     "android": "node ./scripts/mobile-android-command.js run"
   },
   "dependencies": {

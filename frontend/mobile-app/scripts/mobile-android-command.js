@@ -32,9 +32,12 @@ const commandEnv = {
     process.env.PATH,
   ].filter(Boolean).join(path.delimiter),
 };
+const publicReleaseMode = mode === "public";
 const releaseMode = mode === "release" || mode === "run";
-const gradleTask = releaseMode ? "assembleRelease" : "assembleDebug";
-const build = spawnSync(process.platform === "win32" ? gradleName : `./${gradleName}`, [gradleTask], {
+const gradleTasks = publicReleaseMode
+  ? ["assemblePublicRelease", "bundlePublicRelease"]
+  : [releaseMode ? "assembleRelease" : "assembleDebug"];
+const build = spawnSync(process.platform === "win32" ? gradleName : `./${gradleName}`, gradleTasks, {
   cwd: androidDir,
   env: commandEnv,
   stdio: "inherit",
