@@ -61,10 +61,10 @@ const checks = [
   ["final evidence 상태", manifest.environment === "sinsan" && manifest.status === "FINAL_EVIDENCE_WAIT"],
   ["live deployment PASS", deployment.status === "PASS" && deployment.liveDeployment.status === "PASS"],
   ["전체 WAIT", result.status === "WAIT" && result.releaseCandidate === false && result.deployReady === false],
-  ["최종 GAP 3개", JSON.stringify(result.gaps) === JSON.stringify(["RUN1_NETWORK_STATUS_COLUMN_WAIT", "RUN2_NETWORK_STATUS_COLUMN_WAIT", "RUN2_ADMIN_SCREENSHOT_1920_WAIT"])],
+  ["최종 GAP 2개", JSON.stringify(result.gaps) === JSON.stringify(["RUN1_NETWORK_STATUS_COLUMN_WAIT", "RUN2_NETWORK_STATUS_COLUMN_WAIT"])],
   ["run 판정 fail closed", runs.every((run) => run.result.status === "WAIT_NETWORK_STATUS_EVIDENCE" && run.result.evidenceComplete === false)],
   ["실행 계약과 책임자", contract.browserRuns.every((run) => run.executionOwner === "OWOUL1" && run.status === "WAIT_NETWORK_STATUS_EVIDENCE") && runs.every((run) => run.result.executionOwner === "OWOUL1")],
-  ["screen 증거 fail closed", runs[0].screen.status === "PASS" && runs[0].result.screenEvidenceComplete === true && runs[1].screen.status === "WAIT_ADMIN_SCREENSHOT_1920_EVIDENCE" && runs[1].result.screenEvidenceComplete === false && runs.every((run) => run.result.screenMetricsConsoleSameOriginComplete === true)],
+  ["screen 증거 PASS", runs.every((run) => run.screen.status === "PASS" && run.result.screenEvidenceComplete === true && run.result.screenMetricsConsoleSameOriginComplete === true)],
   ["유효 viewport 1920x1080", runs.every((run) => run.result.viewport.width === 1920 && run.result.viewport.height === 1080 && run.screen.viewport.width === 1920 && run.screen.viewport.height === 1080)],
   ["사용자 전체 매트릭스", runs.every((run) => JSON.stringify(run.screen.user?.areas) === JSON.stringify(requiredUserAreas))],
   ["관리자 dashboard와 10개 메뉴", runs.every((run) => run.screen.admin?.dashboard === true && JSON.stringify(run.screen.admin?.menus) === JSON.stringify(requiredAdminMenus))],
@@ -88,6 +88,7 @@ const validScreenshotPaths = [
   "run1/user-mail-1920x1080.jpg",
   "run1/admin-help-1920x1080.jpg",
   "run2/user-mail-1920x1080.jpg",
+  "run2/admin-help-1920x1080.jpg",
 ];
 const rejectedScreenshotPaths = [
   "run2/admin-help-rejected-1559x762.jpg",
@@ -100,7 +101,7 @@ for (const path of [...validScreenshotPaths, ...rejectedScreenshotPaths]) {
 }
 const validScreenshotDimensions = await Promise.all(validScreenshotPaths.map(readImageDimensions));
 const rejectedScreenshotDimensions = await Promise.all(rejectedScreenshotPaths.map(readImageDimensions));
-checks.push(["스크린샷 파일 5개", screenshotFilesPresent]);
+checks.push(["스크린샷 파일 6개", screenshotFilesPresent]);
 checks.push(["유효 JPEG 1920x1080", validScreenshotDimensions.every((size) => size.format === "jpeg" && size.width === 1920 && size.height === 1080)]);
 checks.push(["거부 스크린샷 치수 분리", rejectedScreenshotDimensions[0].format === "jpeg" && rejectedScreenshotDimensions[0].width === 1559 && rejectedScreenshotDimensions[0].height === 762 && rejectedScreenshotDimensions[1].format === "png" && runs[1].screen.rejectedDiagnostics?.[0]?.path === rejectedScreenshotPaths[0]]);
 
