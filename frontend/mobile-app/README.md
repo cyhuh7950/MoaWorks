@@ -1,44 +1,31 @@
-# Mobile App
+# MoaWorks Mobile
 
-일반 사용자용 모바일 앱입니다.
+일반 사용자가 알림, 결재, 메일, 메신저를 사용하는 React Native Android 앱입니다.
 
-## 역할
+## 내부 검증 APK 설치
 
-- 승인/반려/조회
-- 알림 확인
-- 이동 중 업무 접근
+1. 운영자가 모든 패키징 게이트를 통과해 전달한 `MoaWorks-Mobile-<version>-android-internal-release.apk` 또는 사내 배포 링크를 받습니다.
+2. Android 기기에서 APK를 탭합니다.
+3. Android가 요청하면 해당 파일 제공 앱에 대해서만 `알 수 없는 앱 설치`를 일시 허용합니다.
+4. 설치 화면에서 제품명 `MoaWorks Mobile`과 설치를 확인합니다.
+5. 앱을 열어 운영 계정으로 로그인합니다.
 
-## 구조 원칙
+일반 사용자는 Python, Node, Gradle, adb 명령을 실행하지 않습니다. 이 APK는 저장소의 debug keystore로 서명된 내부 검증 전용이며 Play Store·외부 공개 배포용이 아닙니다.
 
-- 서버 API만 호출한다.
-- 내부 인프라를 직접 접근하지 않는다.
+앱을 제거하거나 새 내부 검증 버전으로 교체해도 서버의 운영 데이터는 제거되지 않습니다. 단, 기기에 저장된 앱 설정과 로그인 상태는 앱 제거 시 삭제될 수 있습니다.
 
-## 7단계 빌드/실행 준비 기준
+## 개발자 재현 검증
 
-- 기준 API: `http://127.0.0.1:8510/api/v1`
-- 앱 엔트리: `index.js`
-- 앱 메타: `app.json`
-- 화면 루트: `App.tsx`
-- 서버 UI 계약 조회: `GET /api/v1/ui-contract`
-
-## 현재 최소 실행 체인
-
-```bash
-npm install
-npm run build
+```text
+npm ci
+npm test
+npm run test:coverage
+npm run bundle
+npm run package:android
+npm audit --omit=dev
 ```
 
-`npm run build`는 Android 번들 생성 전 선결 조건을 점검하고, 결과를 `build-evidence/mobile-app-build-*.json`에 남긴다.
-
-## 현재 차단 조건
-
-- `node_modules`가 없으면 React Native 번들링을 실행할 수 없다.
-- `react-native` 실행 파일이 없으면 번들링을 실행할 수 없다.
-- `android/` 네이티브 프로젝트가 없으면 설치 가능한 Android 산출물을 만들 수 없다.
-
-## 다음 선결 작업
-
-1. React Native 의존성 설치 또는 lockfile 확정
-2. Android 네이티브 프로젝트 생성
-3. Android SDK/Gradle/JDK 기준 버전 고정
-4. `npm run build:android`를 실제 APK/AAB 생성 명령으로 승격
+- Windows와 WSL에서는 환경변수 또는 표준 설치 위치에서 JDK와 Android SDK를 탐지합니다.
+- `npm run package:android`는 production JavaScript bundle과 `assembleRelease` APK를 만들고, audit 도달성·debuggable·임베디드 bundle·개발 서버 상수를 검사합니다. 모든 게이트를 통과해야 SHA-256 성공 manifest를 생성합니다.
+- 연결된 Android 기기/에뮬레이터가 없으면 manifest에 `NO_CONNECTED_ANDROID_DEVICE` GAP을 기록합니다.
+- 공개 배포에는 production signing과 승인된 배포 채널이 별도로 필요합니다.

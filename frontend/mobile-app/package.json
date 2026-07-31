@@ -4,8 +4,12 @@
   "version": "0.1.0",
   "scripts": {
     "start": "react-native start",
-    "build": "node ./scripts/mobile-app-build-smoke.js",
-    "build:android": "node ./scripts/mobile-android-command.js build",
+    "test": "node --test test\\*.test.js",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 test\\*.test.js",
+    "bundle": "node ./scripts/mobile-app-build-smoke.js",
+    "build": "node ./scripts/mobile-package-android.js",
+    "package:android": "node ./scripts/mobile-package-android.js",
+    "build:android": "node ./scripts/mobile-android-command.js release",
     "android": "node ./scripts/mobile-android-command.js run"
   },
   "dependencies": {
