@@ -622,11 +622,12 @@
         <section class="surface-card desktop-panel" id="desktopSettingsPanel" style="margin-top: 22px">
           <div class="field-grid" style="grid-template-columns: 1fr; margin-top: 0">
             <label>
-              API Base
+              운영 연결
               <input
                 id="apiBase"
-                placeholder="https://api.moaworks.sinsan.kr/api/v1"
-                onchange="saveApiBase(event.target.value)"
+                value="main process에서 안전하게 관리"
+                readonly
+                aria-readonly="true"
               />
             </label>
             <label>
@@ -891,7 +892,7 @@
     </div>
 
     <script>
-      const FALLBACK_API_BASE = localStorage.getItem("moaworks.apiBase") || "https://api.moaworks.sinsan.kr/api/v1";
+      const desktopApi = window.moaworksDesktop;
       const DEFAULT_UI_CONTRACT = {
         brand: {
           primary: "#0f766e",
@@ -906,7 +907,7 @@
           blocked: "권한이 없거나 세션이 만료되었습니다.",
         },
       };
-      let token = localStorage.getItem("moaworks.userToken") || "";
+      let authenticated = false;
       let me = null;
       let permissions = [];
       const localeState = {
@@ -942,19 +943,6 @@
         return new Date().toISOString().replace(/[:.]/g, "-");
       }
 
-      function downloadLocalFile(fileName, mimeType, content) {
-        const blob = new Blob([content], { type: mimeType });
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        anchor.download = fileName;
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-        URL.revokeObjectURL(url);
-        return fileName;
-      }
-
       function showLocalArchiveResult(message) {
         const resultBox = document.getElementById("localArchiveResult");
         if (resultBox) {
@@ -962,7 +950,7 @@
         }
       }
 
-      function saveMailArchive() {
+      async function saveMailArchive() {
         const sourceMails = desktopMailBox === "sent" ? desktopSentMails : desktopInboxMails;
         if (!sourceMails.length) {
           showLocalArchiveResult("저장할 서버 원본 메일이 없습니다. 먼저 메일 동기화를 실행하세요.");
@@ -973,7 +961,6 @@
           archiveType: "mail.local-archive",
           exportedAt: new Date().toISOString(),
           user: me ? { userId: me.userId, userName: me.userName, userEmail: me.userEmail } : null,
-          apiBase: getApiBase(),
           retentionPolicy: {
             server: "1개월",
             desktopLocal: "무기한",
@@ -988,11 +975,15 @@
           })),
         };
         const fileName = `moaworks-mail-archive-${safeFileTimestamp()}.json`;
-        downloadLocalFile(fileName, "application/json;charset=utf-8", JSON.stringify(payload, null, 2));
-        showLocalArchiveResult(`메일 로컬 아카이브 파일 생성 요청 완료: ${fileName}`);
+        try {
+          const result = await desktopApi.saveArchive({ kind: "mail", format: "json", suggestedFileName: fileName, payload });
+          showLocalArchiveResult(result.saved ? `메일 로컬 아카이브 저장 완료: ${fileName}` : "메일 아카이브 저장을 취소했습니다.");
+        } catch (error) {
+          showLocalArchiveResult(String(error.message || error));
+        }
       }
 
-      function saveConversationArchive(format) {
+      async function saveConversationArchive(format) {
         if (!desktopSelectedRoomId || !desktopSelectedRoomMessages.length) {
           showLocalArchiveResult("저장할 서버 원본 대화가 없습니다. 먼저 대화방을 선택하세요.");
           return;
@@ -1013,19 +1004,13 @@
             text: item.body,
           })),
         };
-        if (format === "html") {
-          const fileName = `moaworks-conversation-${safeFileTimestamp()}.html`;
-          const rows = conversation.messages
-            .map((item) => `<li><strong>${item.sender}</strong> <span>${item.sentAt}</span><p>${item.text}</p></li>`)
-            .join("");
-          const html = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${conversation.channelName}</title></head><body><h1>${conversation.channelName}</h1><p>보관 정책: 서버 ${conversation.retentionPolicy.server}, 설치형 ${conversation.retentionPolicy.desktopLocal}</p><ul>${rows}</ul></body></html>`;
-          downloadLocalFile(fileName, "text/html;charset=utf-8", html);
-          showLocalArchiveResult(`메신저 대화 HTML 파일 생성 요청 완료: ${fileName}`);
-          return;
+        const fileName = `moaworks-conversation-${safeFileTimestamp()}.${format}`;
+        try {
+          const result = await desktopApi.saveArchive({ kind: "messenger", format, suggestedFileName: fileName, payload: conversation });
+          showLocalArchiveResult(result.saved ? `메신저 대화 ${format.toUpperCase()} 저장 완료: ${fileName}` : "대화 아카이브 저장을 취소했습니다.");
+        } catch (error) {
+          showLocalArchiveResult(String(error.message || error));
         }
-        const fileName = `moaworks-conversation-${safeFileTimestamp()}.json`;
-        downloadLocalFile(fileName, "application/json;charset=utf-8", JSON.stringify(conversation, null, 2));
-        showLocalArchiveResult(`메신저 대화 JSON 파일 생성 요청 완료: ${fileName}`);
       }
 
       function formatStamp(value) {
@@ -1072,7 +1057,7 @@
       }
 
       async function loadMailWorkspace(preferredMailId) {
-        if (!token) return;
+        if (!authenticated) return;
         try {
           const [inboxBody, sentBody] = await Promise.all([request("/mail/inbox"), request("/mail/sent")]);
           desktopInboxMails = Array.isArray(inboxBody.mails) ? inboxBody.mails : [];
@@ -1104,10 +1089,10 @@
       }
 
       async function selectDesktopMail(mailId, markRead = true) {
-        if (!token || !mailId) return;
+        if (!authenticated || !mailId) return;
         try {
           if (desktopMailBox === "inbox" && markRead) {
-            await request(`/mail/${mailId}/read`, { method: "POST", headers: authHeaders() });
+            await request(`/mail/${mailId}/read`, { method: "POST" });
             desktopInboxMails = desktopInboxMails.map((item) => (item.mailId === mailId ? { ...item, isRead: true } : item));
           }
           desktopSelectedMailDetail = await request(`/mail/${mailId}`);
@@ -1127,7 +1112,7 @@
       async function toggleSelectedMailStar() {
         if (!desktopSelectedMailId) return;
         try {
-          await request(`/mail/${desktopSelectedMailId}/star`, { method: "POST", headers: authHeaders() });
+          await request(`/mail/${desktopSelectedMailId}/star`, { method: "POST" });
           await loadMailWorkspace(desktopSelectedMailId);
         } catch (error) {
           showLocalArchiveResult(String(error.message || error));
@@ -1176,7 +1161,7 @@
       }
 
       async function loadMessengerWorkspace(preferredRoomId) {
-        if (!token) return;
+        if (!authenticated) return;
         try {
           const body = await request("/messenger/rooms");
           desktopRooms = Array.isArray(body.rooms) ? body.rooms : [];
@@ -1195,10 +1180,10 @@
       }
 
       async function selectDesktopRoom(roomId, markRead = true) {
-        if (!token || !roomId) return;
+        if (!authenticated || !roomId) return;
         try {
           if (markRead) {
-            await request(`/messenger/rooms/${roomId}/read`, { method: "POST", headers: authHeaders() });
+            await request(`/messenger/rooms/${roomId}/read`, { method: "POST" });
             desktopRooms = desktopRooms.map((item) => (item.roomId === roomId ? { ...item, unreadCount: 0 } : item));
           }
           const body = await request(`/messenger/rooms/${roomId}/messages`);
@@ -1212,13 +1197,12 @@
       }
 
       async function sendDesktopMessage() {
-        if (!token || !desktopSelectedRoomId) return;
+        if (!authenticated || !desktopSelectedRoomId) return;
         const draft = document.getElementById("desktopMessageDraft").value.trim();
         if (!draft) return;
         try {
           await request(`/messenger/rooms/${desktopSelectedRoomId}/messages`, {
             method: "POST",
-            headers: authHeaders(),
             body: JSON.stringify({ body: draft, messageType: "text", attachmentMeta: [] }),
           });
           document.getElementById("desktopMessageDraft").value = "";
@@ -1239,9 +1223,7 @@
 
       async function loadUiContract() {
         try {
-          const response = await fetch(`${getApiBase()}/ui-contract`);
-          if (!response.ok) return DEFAULT_UI_CONTRACT;
-          return { ...DEFAULT_UI_CONTRACT, ...(await response.json()) };
+          return { ...DEFAULT_UI_CONTRACT, ...(await request("/ui-contract")) };
         } catch {
           return DEFAULT_UI_CONTRACT;
         }
@@ -1277,12 +1259,6 @@
         localStorage.setItem("moaworks.timezone", value);
       }
 
-      function saveApiBase(value) {
-        const nextValue = value.trim() || FALLBACK_API_BASE;
-        localStorage.setItem("moaworks.apiBase", nextValue);
-        document.getElementById("apiBase").value = nextValue;
-      }
-
       function syncAuthHeroState() {
         const heroEmail = document.getElementById("heroEmail");
         const heroPassword = document.getElementById("heroPassword");
@@ -1295,7 +1271,7 @@
         if (!heroEmail || !heroPassword || !heroLoginBtn || !heroLogoutBtn || !heroLoginFields || !heroProfileSummary || !heroProfileName || !heroProfileMeta) {
           return;
         }
-        const loggedIn = Boolean(token && me);
+        const loggedIn = Boolean(authenticated && me);
         heroLoginFields.style.display = loggedIn ? "none" : "flex";
         heroLogoutBtn.style.display = loggedIn ? "inline-block" : "none";
         heroProfileSummary.style.display = loggedIn ? "block" : "none";
@@ -1344,7 +1320,7 @@
       }
 
       function setDesktopPanel(panelId) {
-        const loggedIn = Boolean(token && me);
+        const loggedIn = Boolean(authenticated && me);
         if (!loggedIn && !["desktopOverviewPanel", "desktopSettingsPanel"].includes(panelId)) {
           panelId = "desktopOverviewPanel";
         }
@@ -1361,25 +1337,9 @@
         localStorage.setItem(desktopPanelStorageKey, panelId);
       }
 
-      function getApiBase() {
-        return document.getElementById("apiBase").value.trim() || FALLBACK_API_BASE;
-      }
-
-      function authHeaders() {
-        return token ? { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } : { "Content-Type": "application/json" };
-      }
-
       async function request(path, init = {}) {
-        const response = await fetch(`${getApiBase()}${path}`, {
-          headers: authHeaders(),
-          ...init,
-        });
-        const text = await response.text();
-        const body = text ? JSON.parse(text) : {};
-        if (!response.ok) {
-          throw new Error((body && body.detail && body.detail.userMessage) || (body && body.userMessage) || "요청 실패");
-        }
-        return body;
+        if (!desktopApi) throw new Error("데스크톱 보안 브리지를 사용할 수 없습니다.");
+        return desktopApi.request({ path, method: init.method || "GET", body: init.body });
       }
 
       async function sleep(ms) {
@@ -1460,103 +1420,16 @@
         return false;
       }
 
-      async function consumeNotificationStream(controller) {
-        const streamBase = getApiBase();
-        const cursorQuery = notificationStatus.streamCursor
-          ? `?cursor=${encodeURIComponent(notificationStatus.streamCursor)}`
-          : "";
-        const streamUrl = `${streamBase}/notifications/stream${cursorQuery}`;
-        const response = await fetch(streamUrl, {
-          headers: authHeaders(),
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          throw new Error("알림 스트림 연결에 실패했습니다.");
-        }
-        if (!response.body) {
-          throw new Error("알림 스트림을 읽을 수 없습니다.");
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            buffer += decoder.decode(value, { stream: !done });
-            const blocks = buffer.split(/\r?\n\r?\n/);
-            buffer = blocks.pop() || "";
-            for (const block of blocks) {
-              if (processNotificationStreamBlock(block)) return true;
-            }
-            if (done) {
-              if (buffer && processNotificationStreamBlock(buffer)) return true;
-              return false;
-            }
-          }
-        } finally {
-          reader.releaseLock();
-        }
-      }
-
-      function scheduleNotificationStreamReconnect(controller) {
-        if (notificationStatus.streamAbortController !== controller) return;
-        notificationStatus.streamAbortController = null;
-        if (notificationStatus.streamRetryCount < notificationPolicy.streamRetryMax) {
-          notificationStatus.streamRetryCount += 1;
-          clearTimeout(notificationStatus.streamRetryTimer);
-          notificationStatus.streamRetryTimer = setTimeout(() => {
-            notificationStatus.streamRetryTimer = null;
-            connectNotificationStream(false);
-          }, notificationPolicy.streamRetryDelayMs * notificationStatus.streamRetryCount);
-          return;
-        }
-        setNotificationMode("fallback");
-        void loadNotificationsWithRetry().catch((error) => {
-          setNotificationError(String(error?.message || error));
-        });
-      }
-
-      function connectNotificationStream(resetRetryCount = true) {
-        if (!token) {
-          stopNotificationStream();
-          setNotificationMode("polling");
-          return;
-        }
-        if (notificationStatus.streamAbortController) {
-          notificationStatus.streamAbortController.abort();
-        }
-        if (notificationStatus.streamRetryTimer) {
-          clearTimeout(notificationStatus.streamRetryTimer);
-          notificationStatus.streamRetryTimer = null;
-        }
-        if (resetRetryCount) {
-          notificationStatus.streamRetryCount = 0;
-        }
-
-        const controller = new AbortController();
-        notificationStatus.streamAbortController = controller;
-        setNotificationMode("streaming");
-
-        void consumeNotificationStream(controller)
-          .then((fallbackRequested) => {
-            if (notificationStatus.streamAbortController !== controller || controller.signal.aborted) return;
-            if (fallbackRequested) {
-              controller.abort();
-              notificationStatus.streamAbortController = null;
-              notificationStatus.streamRetryCount = 0;
-              setNotificationMode("fallback");
-              void loadNotificationsWithRetry().catch((error) => {
-                setNotificationError(String(error?.message || error));
-              });
-              return;
-            }
-            scheduleNotificationStreamReconnect(controller);
-          })
-          .catch(() => {
-            if (controller.signal.aborted) return;
-            scheduleNotificationStreamReconnect(controller);
-          });
+      function connectNotificationStream() {
+        stopNotificationStream();
+        setNotificationMode("polling");
+        if (!authenticated) return;
+        const poll = async () => {
+          if (!authenticated) return;
+          await loadNotificationsWithRetry().catch((error) => setNotificationError(String(error?.message || error)));
+          notificationStatus.streamRetryTimer = setTimeout(poll, 30000);
+        };
+        notificationStatus.streamRetryTimer = setTimeout(poll, 30000);
       }
 
       function setNotificationSummary(text) {
@@ -1581,7 +1454,7 @@
       }
 
       async function loadNotifications() {
-        if (!token) {
+        if (!authenticated) {
           document.getElementById("notificationRows").innerHTML = "";
           setNotificationSummary("미읽음 0");
           setNotificationMode("polling");
@@ -1635,9 +1508,9 @@
       }
 
       async function ackNotification(notificationId) {
-        if (!token || !notificationId) return;
+        if (!authenticated || !notificationId) return;
         try {
-          await withRetry(() => request(`/notifications/${notificationId}/ack`, { method: "POST", headers: authHeaders() }));
+          await withRetry(() => request(`/notifications/${notificationId}/ack`, { method: "POST" }));
           await loadNotificationsWithRetry();
         } catch (error) {
           setNotificationError(String(error.message));
@@ -1667,12 +1540,8 @@
         const authState = document.getElementById("authState");
         authState.textContent = "로그인 시도 중...";
         try {
-          const loginBody = await request("/auth/login", {
-            method: "POST",
-            body: JSON.stringify({ email, password }),
-          });
-          token = loginBody.accessToken;
-          localStorage.setItem("moaworks.userToken", token);
+          await desktopApi.login({ email, password });
+          authenticated = true;
           const meBody = await request("/auth/me");
           me = meBody.user;
           permissions = me.permissions || [];
@@ -1690,19 +1559,18 @@
           connectNotificationStream();
         } catch (error) {
           authState.textContent = String(error.message);
-          token = "";
-          localStorage.removeItem("moaworks.userToken");
+          authenticated = false;
           stopNotificationStream();
           setNotificationMode("polling");
           syncAuthHeroState();
         }
       }
 
-      function logoutDesktop() {
-        token = "";
+      async function logoutDesktop() {
+        await desktopApi.logout();
+        authenticated = false;
         me = null;
         permissions = [];
-        localStorage.removeItem("moaworks.userToken");
         stopNotificationStream();
         renderCurrentUser();
         document.getElementById("authState").textContent = "로그인 대기";
@@ -1766,7 +1634,7 @@
 
       async function loadApprovals() {
         const container = document.getElementById("documentRows");
-        if (!token) {
+        if (!authenticated) {
           container.innerHTML = "";
           return;
         }
@@ -1800,7 +1668,7 @@
       }
 
       async function createApprovalDocument() {
-        if (!token) {
+        if (!authenticated) {
           document.getElementById("authState").textContent = "로그인이 필요합니다.";
           return;
         }
@@ -1828,7 +1696,6 @@
         try {
           await request(`/approvals/${documentId}/${type}`, {
             method: "POST",
-            headers: authHeaders(),
           });
           await loadApprovals();
         } catch (error) {
@@ -1842,7 +1709,6 @@
           const reason = reasonInput ? reasonInput.value.trim() || "확인" : "확인";
           await request(`/approvals/${documentId}/${type}`, {
             method: "POST",
-            headers: authHeaders(),
             body: JSON.stringify({ reason }),
           });
           await loadApprovals();
@@ -1853,7 +1719,7 @@
 
       async function loadLogs() {
         const logBox = document.getElementById("logBox");
-        if (!token) {
+        if (!authenticated) {
           logBox.textContent = "로그인이 필요합니다.";
           return;
         }
@@ -1867,32 +1733,14 @@
 
       window.addEventListener("DOMContentLoaded", async () => {
         await applyUiContract();
-        document.getElementById("apiBase").value = localStorage.getItem("moaworks.apiBase") || FALLBACK_API_BASE;
+        if (desktopApi) {
+          const appInfo = await desktopApi.getAppInfo();
+          document.getElementById("apiBase").value = `${appInfo.productName} ${appInfo.version} / 운영 서버`;
+        }
         setDesktopPanel(localStorage.getItem(desktopPanelStorageKey) || "desktopOverviewPanel");
         syncLocaleControls();
         renderCurrentUser();
         syncAuthHeroState();
-        if (token) {
-          try {
-            const meBody = await request("/auth/me");
-            me = meBody.user;
-            permissions = me.permissions || [];
-            document.getElementById("authState").textContent = `${me.userName} / ${me.roleName}`;
-            renderCurrentUser();
-            syncAuthHeroState();
-          } catch {
-            token = "";
-            localStorage.removeItem("moaworks.userToken");
-            syncAuthHeroState();
-          }
-        }
-        if (token) {
-          await loadApprovals();
-          await loadNotificationsWithRetry().catch(() => {});
-          await loadMailWorkspace();
-          await loadMessengerWorkspace();
-          connectNotificationStream();
-        }
       });
       window.addEventListener("beforeunload", stopNotificationStream);
     </script>
