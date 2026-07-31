@@ -13,6 +13,7 @@ const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8"
 
 const manifest = await readJson(resolve(here, "manifest.json"));
 const evidenceManifest = await readJson(resolve(evidenceRoot, "manifest.json"));
+assert.equal(evidenceManifest.status, "PREFLIGHT", "preflight verifier is superseded; run final-evidence-verify.mjs");
 const result = await readJson(resolve(evidenceRoot, "result.json"));
 const deployment = await readJson(resolve(evidenceRoot, "deployment-precheck.json"));
 const staticVerification = await readJson(resolve(evidenceRoot, "static-verification.json"));

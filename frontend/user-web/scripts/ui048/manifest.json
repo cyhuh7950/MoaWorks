@@ -32,8 +32,8 @@
     }
   },
   "browserRuns": [
-    { "id": "run1", "executionOwner": "OWOUL1", "status": "NOT_RUN" },
-    { "id": "run2", "executionOwner": "OWOUL1", "status": "NOT_RUN" }
+    { "id": "run1", "executionOwner": "OWOUL1", "status": "WAIT_NETWORK_STATUS_EVIDENCE" },
+    { "id": "run2", "executionOwner": "OWOUL1", "status": "WAIT_NETWORK_STATUS_EVIDENCE" }
   ],
   "dataPolicy": {
     "defaultMode": "READ_ONLY",
