@@ -713,7 +713,7 @@
               <div class="action-tile">
                 <strong>오프라인 업무 확인</strong>
                 <div class="muted">최근 메일, 대화, 결재 기록을 네트워크 없이 다시 확인</div>
-                <button class="button-primary" type="button">오프라인 보기</button>
+                <button class="button-primary" type="button" onclick="showLatestArchive()">오프라인 보기</button>
               </div>
             </div>
             <div class="module-grid" style="margin-top: 16px">
@@ -1008,6 +1008,19 @@
         try {
           const result = await desktopApi.saveArchive({ kind: "messenger", format, suggestedFileName: fileName, payload: conversation });
           showLocalArchiveResult(result.saved ? `메신저 대화 ${format.toUpperCase()} 저장 완료: ${fileName}` : "대화 아카이브 저장을 취소했습니다.");
+        } catch (error) {
+          showLocalArchiveResult(String(error.message || error));
+        }
+      }
+
+      async function showLatestArchive() {
+        try {
+          const result = await desktopApi.showArchive();
+          showLocalArchiveResult(
+            result.shown
+              ? `최근 보관 파일 위치 열기 완료: ${result.fileName}`
+              : "먼저 메일 또는 대화 보관 파일을 저장하세요.",
+          );
         } catch (error) {
           showLocalArchiveResult(String(error.message || error));
         }
