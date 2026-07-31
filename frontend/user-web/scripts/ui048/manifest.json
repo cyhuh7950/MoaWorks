@@ -7,7 +7,8 @@
     "branch": "feature/ui-048-final-browser-deployment-candidate",
     "candidateBaselineRevision": "712c7033b12adca6886bdeca00911df5c9e00c9c",
     "ui047ClosureRevision": "6750b5383eec85aef367f22c80aa577baec61f85",
-    "productRevision": "6cb3c994922646b5ac2f5b10a193cc8ab43bb979"
+    "productRevision": "6cb3c994922646b5ac2f5b10a193cc8ab43bb979",
+    "productPathExclusions": ["frontend/user-web/scripts/ui048/**"]
   },
   "environment": {
     "name": "sinsan",

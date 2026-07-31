@@ -56,8 +56,10 @@ const forbiddenBrowserTarget = /https?:\/\/(?:localhost|127\.0\.0\.1|server|[a-z
 
 const currentHead = git("rev-parse", "HEAD");
 const currentBranch = git("branch", "--show-current");
-const productRevision = git("log", "-1", "--format=%H", "--", "frontend/user-web", "frontend/admin-web", "backend", "deploy");
-const productDiff = git("diff", "--name-only", `${manifest.git.ui047ClosureRevision}..HEAD`, "--", "frontend/user-web", "frontend/admin-web", "backend", "deploy");
+const ui048HarnessExclusion = ":(exclude,glob)frontend/user-web/scripts/ui048/**";
+const productPathspec = ["frontend/user-web", "frontend/admin-web", "backend", "deploy", ui048HarnessExclusion];
+const productRevision = git("log", "-1", "--format=%H", "--", ...productPathspec);
+const productDiff = git("diff", "--name-only", `${manifest.git.ui047ClosureRevision}..HEAD`, "--", ...productPathspec);
 let baselineIsAncestor = false;
 try {
   execFileSync("git", ["merge-base", "--is-ancestor", manifest.git.candidateBaselineRevision, "HEAD"], { cwd: root, stdio: "ignore" });
@@ -69,7 +71,7 @@ const checks = [
   ["candidate branch", currentBranch === manifest.git.branch],
   ["candidate baseline ancestor", baselineIsAncestor],
   ["current HEAD available", /^[0-9a-f]{40}$/.test(currentHead)],
-  ["product revision", productRevision === manifest.git.productRevision],
+  ["product revision", JSON.stringify(manifest.git.productPathExclusions) === JSON.stringify(["frontend/user-web/scripts/ui048/**"]) && productRevision === manifest.git.productRevision],
   ["UI-047 closure 이후 제품 diff 0", productDiff === ""],
   ["sinsan origins", manifest.environment.userOrigin === "https://user.moaworks.sinsan.kr" && manifest.environment.adminOrigin === "https://admin.moaworks.sinsan.kr"],
   ["1920x1080 viewport", manifest.environment.viewport.width === 1920 && manifest.environment.viewport.height === 1080],
