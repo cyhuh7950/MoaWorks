@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "taskId": "ui048-final-browser-deployment-candidate-20260731",
+  "runId": "UI048_20260731T084647_preflight",
+  "runIdPattern": "^UI048_[0-9]{8}T[0-9]{6}_run[12]$",
+  "git": {
+    "branch": "feature/ui-048-final-browser-deployment-candidate",
+    "candidateBaselineRevision": "712c7033b12adca6886bdeca00911df5c9e00c9c",
+    "ui047ClosureRevision": "6750b5383eec85aef367f22c80aa577baec61f85",
+    "productRevision": "6cb3c994922646b5ac2f5b10a193cc8ab43bb979"
+  },
+  "environment": {
+    "name": "sinsan",
+    "userOrigin": "https://user.moaworks.sinsan.kr",
+    "adminOrigin": "https://admin.moaworks.sinsan.kr",
+    "viewport": { "width": 1920, "height": 1080 }
+  },
+  "protectedAccounts": ["admin", "cyhuh", "ysla"],
+  "prerequisites": {
+    "ui045": {
+      "expected": "PASS_DEPLOY_READY",
+      "path": "docs/evidence/user-web-redesign/UI-045/verify.ui045.sinsan.20260728/report.md"
+    },
+    "ui046": {
+      "expected": "PASS",
+      "path": "docs/evidence/user-web-redesign/UI-046/verify.ui046.sinsan.20260730/UI046_20260730T215045_visual2/result.json"
+    },
+    "ui047": {
+      "expected": "LIVE_PASS_DEPLOY_READY",
+      "path": "docs/evidence/user-web-redesign/UI-047/UI047_20260731032100_admin_security_v25_live/result.json"
+    }
+  },
+  "browserRuns": [
+    { "id": "run1", "executionOwner": "OWOUL1", "status": "NOT_RUN" },
+    { "id": "run2", "executionOwner": "OWOUL1", "status": "NOT_RUN" }
+  ],
+  "dataPolicy": {
+    "defaultMode": "READ_ONLY",
+    "mutationRequiresSeparateApproval": true,
+    "cleanupPolicy": "run-id-owned-data-only",
+    "protectedAccountMutation": "FORBIDDEN"
+  },
+  "userWeb": {
+    "areas": [
+      "home",
+      "search",
+      "notifications",
+      "mail",
+      "approval",
+      "calendar",
+      "messenger",
+      "address-book",
+      "organization",
+      "files",
+      "personal-settings",
+      "help"
+    ],
+    "requiredChecks": ["full-page-overflow", "internal-scroll", "popup-focus-close-backdrop", "console", "network"]
+  },
+  "adminWeb": {
+    "menus": [
+      "사용자",
+      "부서",
+      "권한",
+      "서비스",
+      "메일",
+      "저장소/DB",
+      "결재/감사",
+      "브랜드/화면",
+      "다국어/메시지",
+      "도움말/정책"
+    ],
+    "requiredChecks": ["dashboard", "menu-read", "console", "network", "security-headers"]
+  },
+  "network": {
+    "requiredKinds": ["document", "script", "stylesheet", "api"],
+    "requiredFields": ["name", "status", "domain"],
+    "forbiddenTargets": ["localhost", "127.0.0.1", "Docker internal host", "container port"]
+  },
+  "evidence": {
+    "root": "docs/evidence/user-web-redesign/UI-048/UI048_20260731T084647_preflight",
+    "requiredRunFiles": ["result.json", "screen-state.json", "network.json", "console.json", "deployment.json", "cleanup.json"],
+    "forbiddenRawFields": ["password", "hash", "token", "cookie", "authorization", "secret", "set-cookie", "raw-query"]
+  }
+}
