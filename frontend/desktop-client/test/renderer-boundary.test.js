@@ -29,3 +29,10 @@ test("preload exposes only named desktop operations", () => {
   }
   assert.doesNotMatch(preload, /invoke\s*:\s*\([^)]*channel/);
 });
+
+test("offline archive button delegates reopening to the approved desktop API", () => {
+  assert.match(renderer, /onclick="showLatestArchive\(\)"[^>]*>오프라인 보기<\/button>/);
+  assert.match(renderer, /async function showLatestArchive\(\)/);
+  assert.match(renderer, /await desktopApi\.showArchive\(\)/);
+  assert.match(renderer, /result\.shown/);
+});
