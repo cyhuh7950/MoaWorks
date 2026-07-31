@@ -42,10 +42,20 @@ test("public release has a dedicated upload signing configuration", () => {
 test("public AAB packager is separate from the internal APK packager", () => {
   assert.equal(packageJson.scripts["build:public:android"], "node ./scripts/mobile-package-public-android.js");
   assert.match(publicPackager, /mobile-android-command\.js"\), "public"/);
+  assert.match(androidCommand, /assemblePublicRelease/);
   assert.match(androidCommand, /bundlePublicRelease/);
   assert.match(publicPackager, /android-public-release\.aab/);
   assert.match(publicPackager, /publicReleaseEligible:\s*true/);
   assert.match(publicPackager, /play-app-signing-upload-key/);
+});
+
+test("public release reuses runtime audit and APK security verification", () => {
+  assert.match(publicPackager, /mobile-audit-reachability/);
+  assert.match(publicPackager, /mobile-verify-apk/);
+  assert.match(publicPackager, /verifyApk/);
+  assert.match(publicPackager, /RUNTIME_AUDIT_REACHABILITY/);
+  assert.match(publicPackager, /APK_DEBUGGABLE/);
+  assert.match(publicPackager, /APK_DEV_SERVER_CONSTANTS_PRESENT/);
 });
 
 test("public packager fails closed without secrets and never logs them", () => {
