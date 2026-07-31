@@ -45,7 +45,8 @@ test("public AAB packager is separate from the internal APK packager", () => {
   assert.match(androidCommand, /assemblePublicRelease/);
   assert.match(androidCommand, /bundlePublicRelease/);
   assert.match(publicPackager, /android-public-release\.aab/);
-  assert.match(publicPackager, /publicReleaseEligible:\s*true/);
+  assert.match(publicPackager, /playInternalUploadEligible:\s*true/);
+  assert.match(publicPackager, /publicReleaseEligible:\s*false/);
   assert.match(publicPackager, /play-app-signing-upload-key/);
 });
 
