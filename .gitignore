@@ -10,6 +10,9 @@ build/
 frontend/mobile-app/android/.gradle/
 frontend/mobile-app/build-evidence/*.apk
 frontend/mobile-app/build-evidence/*.bundle
+frontend/desktop-client/build-evidence/*.zip
+frontend/desktop-client/build-evidence/runtime-verify-*/
+frontend/desktop-client/build-evidence/archive-verification/
 .next/
 .turbo/
 
