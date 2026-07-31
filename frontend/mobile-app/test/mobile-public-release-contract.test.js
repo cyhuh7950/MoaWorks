@@ -11,13 +11,20 @@ const read = (relativePath) => {
 
 const rootGradle = read("android/build.gradle");
 const appGradle = read("android/app/build.gradle");
+const gradleWrapper = read("android/gradle/wrapper/gradle-wrapper.properties");
 const packageJson = JSON.parse(read("package.json"));
 const publicPackager = read("scripts/mobile-package-public-android.js");
+const androidCommand = read("scripts/mobile-android-command.js");
 const gitignore = fs.readFileSync(path.resolve(root, "..", "..", ".gitignore"), "utf8");
 
 test("Google Play build targets API 36", () => {
   assert.match(rootGradle, /compileSdkVersion\s*=\s*36/);
   assert.match(rootGradle, /targetSdkVersion\s*=\s*36/);
+});
+
+test("API 36 uses an officially compatible Android Gradle toolchain", () => {
+  assert.match(rootGradle, /com\.android\.tools\.build:gradle:8\.10\.1/);
+  assert.match(gradleWrapper, /gradle-8\.11\.1-all\.zip/);
 });
 
 test("public release has a dedicated upload signing configuration", () => {
@@ -27,12 +34,15 @@ test("public release has a dedicated upload signing configuration", () => {
   assert.match(appGradle, /MOAWORKS_UPLOAD_KEY_ALIAS/);
   assert.match(appGradle, /MOAWORKS_UPLOAD_KEY_PASSWORD/);
   assert.match(appGradle, /signingConfig\s+signingConfigs\.publicUpload/);
-  assert.doesNotMatch(appGradle, /storePassword\s+['"][^'"]+['"]\s*\n\s*keyAlias/);
+  const publicUploadBlock = appGradle.match(/publicUpload\s*\{([\s\S]*?)\n\s*\}/)?.[1] || "";
+  assert.doesNotMatch(publicUploadBlock, /storePassword\s+['"][^'"]+['"]/);
+  assert.doesNotMatch(publicUploadBlock, /keyPassword\s+['"][^'"]+['"]/);
 });
 
 test("public AAB packager is separate from the internal APK packager", () => {
   assert.equal(packageJson.scripts["build:public:android"], "node ./scripts/mobile-package-public-android.js");
-  assert.match(publicPackager, /bundlePublicRelease/);
+  assert.match(publicPackager, /mobile-android-command\.js"\), "public"/);
+  assert.match(androidCommand, /bundlePublicRelease/);
   assert.match(publicPackager, /android-public-release\.aab/);
   assert.match(publicPackager, /publicReleaseEligible:\s*true/);
   assert.match(publicPackager, /play-app-signing-upload-key/);
