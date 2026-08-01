@@ -14,6 +14,10 @@ test("package scripts expose test, coverage, build and portable packaging", () =
   assert.match(packageJson.scripts.package, /package-desktop-client/);
 });
 
+test("desktop runtime uses the approved Electron security baseline", () => {
+  assert.equal(packageJson.devDependencies.electron, "43.2.0");
+});
+
 test("portable packaging contract includes versioned directory, EXE, ZIP and SHA-256 manifest", () => {
   assert.match(packageScript, /MoaWorks-Desktop-\$\{version\}-win-x64-portable/);
   assert.match(packageScript, /MoaWorks Desktop Client\.exe/);
