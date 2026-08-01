@@ -19,5 +19,8 @@
     "typescript": "^5.6.2",
     "vite": "7.3.6",
     "postcss": "8.5.18"
+  },
+  "overrides": {
+    "esbuild": "0.28.1"
   }
 }
