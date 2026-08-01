@@ -8,7 +8,7 @@
   "zip": {
     "fileName": "MoaWorks-Desktop-0.1.0-win-x64-portable.zip",
     "size": 144177242,
-    "sha256": "33dacd5489452c48ac56a96c7f26def2706ee2936c8d96ed661d7e1eee981366"
+    "sha256": "96ee3ae04d55ca2d34e71f5f2c29081a4e441d6efcea4b0803d1d3f7aa77e0ba"
   },
   "executable": {
     "fileName": "MoaWorks Desktop Client.exe",
@@ -21,5 +21,5 @@
     "sha256": "b3164e33571f6423fab069c859191bdf1c6b6873aa5788d8f2131be9e888c4de"
   },
   "status": "success",
-  "generatedAt": "2026-08-01T01:15:23.018Z"
+  "generatedAt": "2026-08-01T01:22:18.527Z"
 }
