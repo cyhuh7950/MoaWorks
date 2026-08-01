@@ -14,6 +14,10 @@ test("package scripts expose test, coverage, build and portable packaging", () =
   assert.match(packageJson.scripts.package, /package-desktop-client/);
 });
 
+test("clean install downloads the Electron runtime required by portable packaging", () => {
+  assert.equal(packageJson.scripts.postinstall, "install-electron");
+});
+
 test("desktop runtime uses the approved Electron security baseline", () => {
   assert.equal(packageJson.devDependencies.electron, "43.2.0");
 });
