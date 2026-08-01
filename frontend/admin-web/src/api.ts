@@ -20,6 +20,7 @@ export type AuthUser = {
   userType: string;
   status: string;
   permissions: string[];
+  mustChangePassword: boolean;
 };
 
 export type LoginResponse = {
@@ -32,6 +33,8 @@ export type LoginResponse = {
 export type Department = {
   id: string;
   companyId: string;
+  systemDepartmentCode?: string | null;
+  departmentCode?: string | null;
   name: string;
   parentId: string | null;
   status: string;
@@ -68,6 +71,7 @@ export type UserView = {
   mailAccountStatus: string;
   permissions: string[];
   consistencyIssues: UserIssue[];
+  mustChangePassword: boolean;
 };
 
 export type MailProvider = {
@@ -95,6 +99,70 @@ export type DirectoryOverview = {
   roles: Role[];
   users: UserView[];
   mailProvider: MailProvider;
+};
+
+export type OrgImportIssue = {
+  level: string;
+  rowNumber: number | null;
+  sheet: string | null;
+  message: string;
+};
+
+export type OrgImportDepartmentPreview = {
+  rowNumber: number;
+  systemDepartmentCode: string;
+  departmentCode: string;
+  departmentName: string;
+  parentDepartmentCode: string | null;
+  parentDepartmentName: string | null;
+  sortOrder: number;
+  status: string;
+};
+
+export type OrgImportUserPreview = {
+  rowNumber: number;
+  loginId: string;
+  name: string;
+  departmentCode: string;
+  departmentName: string;
+  roleCode: string;
+  roleName: string;
+  status: string;
+  action: string;
+};
+
+export type OrgImportDeactivationPreview = {
+  userId: string;
+  loginId: string;
+  name: string;
+  email: string;
+  currentDepartmentName: string;
+  currentRoleName: string;
+  currentStatus: string;
+  reason: string;
+};
+
+export type OrgImportBatch = {
+  batchId: string;
+  fileName: string;
+  uploadedByUserId: string | null;
+  uploadedByUserName: string;
+  validationStatus: string;
+  applyStatus: string;
+  createdDepartmentCount: number;
+  movedUserCount: number;
+  createdUserCount: number;
+  deactivatedUserCount: number;
+  inactiveDepartmentCount: number;
+  errors: OrgImportIssue[];
+  warnings: OrgImportIssue[];
+  departments: OrgImportDepartmentPreview[];
+  users: OrgImportUserPreview[];
+  deactivationScope: "none" | "uploaded_departments_only" | "company_all";
+  usersToDeactivate: OrgImportDeactivationPreview[];
+  protectedUsers: OrgImportDeactivationPreview[];
+  uploadedAt: string;
+  appliedAt: string | null;
 };
 
 export type DomainVerifyResponse = {
@@ -192,12 +260,105 @@ export type TranslationPolicy = {
   supportedTargetLocales: string[];
 };
 
+export type MailDeliveryProviderStatus = {
+  providerId: string;
+  companyId: string;
+  providerKey: string;
+  enabled: boolean;
+  senderDomain: string;
+  heloName: string;
+  senderAddress: string;
+  useTls: boolean;
+  timeoutSec: number;
+  maxRetryCount: number;
+  retryIntervalSec: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MailDeliveryQueueSummary = {
+  queuedCount: number;
+  sendingCount: number;
+  sentCount: number;
+  failedCount: number;
+  retryPendingCount: number;
+  cancelledCount: number;
+};
+
+export type MailDeliveryStatusResponse = {
+  provider: MailDeliveryProviderStatus;
+  summary: MailDeliveryQueueSummary;
+};
+
+export type MailDeliveryQueueItem = {
+  queueId: string;
+  mailId: string;
+  sender: string;
+  recipient: string;
+  subject: string;
+  provider: string;
+  status: string;
+  attemptCount: number;
+  lastError: string | null;
+  nextRetryAt: string | null;
+  sentAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MailDeliveryAttemptItem = {
+  attemptId: string;
+  queueId: string;
+  status: string;
+  errorMessage: string | null;
+  responseDetail: string | null;
+  attemptedAt: string;
+};
+
+export type MailDeliveryEventItem = {
+  eventId: string;
+  queueId: string;
+  eventType: string;
+  message: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type MailDeliveryQueueResponse = {
+  provider: MailDeliveryProviderStatus;
+  summary: MailDeliveryQueueSummary;
+  queue: MailDeliveryQueueItem[];
+  attempts: MailDeliveryAttemptItem[];
+  events: MailDeliveryEventItem[];
+};
+
+export type MailSendResponse = {
+  mailId: string;
+  status: string;
+  sentAt: string | null;
+  deliverySummary?: {
+    provider: string;
+    engineEnabled: boolean;
+    internalRecipientCount: number;
+    externalRecipientCount: number;
+    queuedCount: number;
+    sentCount: number;
+    failedCount: number;
+    retryPendingCount: number;
+  } | null;
+};
+
 export type UiContract = {
   brand: {
     primary: string;
     secondary: string;
     accent: string;
     blocked: string;
+  };
+  company: {
+    name: string;
+    domain: string;
+    logoDataUrl: string;
   };
   menuOrder: string[];
   homeCardOrder: string[];
@@ -237,13 +398,79 @@ export type ApprovalAuditLogListResponse = {
   logs: ApprovalAuditLog[];
 };
 
+export type ContentMessage = {
+  id: string;
+  key: string;
+  default_locale: string;
+  category: string;
+  status: string;
+  is_system: boolean;
+  translations: Array<{ locale: string; content: string }>;
+  updated_at: string;
+  canDelete: boolean;
+  canChangeStatus: boolean;
+};
+
+export type HelpPolicyDocument = {
+  id: string;
+  code: string;
+  title: string;
+  category: string;
+  audience: string;
+  content: string;
+  status: string;
+  version: number;
+  published_at: string | null;
+  is_system: boolean;
+  updated_at: string;
+  canDelete: boolean;
+  canChangeStatus: boolean;
+};
+
+export type ContentListResponse<T> = {
+  items: T[];
+  total: number;
+};
+
 const defaultApiBase = "/api/v1";
+
 function normalizeBrowserApiBase(value: string | null | undefined) {
-  const normalized = value?.trim();
-  return normalized?.startsWith("/") ? normalized.replace(/\/$/, "") : defaultApiBase;
+  if (!value) {
+    return defaultApiBase;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return defaultApiBase;
+  }
+  return trimmed.startsWith("/") ? trimmed.replace(/\/$/, "") : defaultApiBase;
 }
+
+function safeStorageGet(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeStorageSet(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // localStorage가 차단된 환경에서는 메모리 상태만 사용합니다.
+  }
+}
+
+function safeStorageRemove(key: string) {
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // localStorage가 차단된 환경에서는 메모리 상태만 사용합니다.
+  }
+}
+
 export const apiBase = normalizeBrowserApiBase(
-  (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? window.localStorage.getItem("moaworks.apiBase"),
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? safeStorageGet("moaworks.apiBase"),
 );
 
 const tokenStorageKey = "moaworks.adminToken";
@@ -252,7 +479,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBase}${path}`, init);
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.userMessage ?? data.adminMessage ?? data.detail ?? "요청 처리에 실패했습니다.");
+    throw new Error(data.adminMessage ?? data.userMessage ?? data.detail ?? "요청 처리에 실패했습니다.");
   }
   return data as T;
 }
@@ -278,15 +505,15 @@ export async function initializeSetup(payload: unknown) {
 }
 
 export function getStoredToken() {
-  return window.localStorage.getItem(tokenStorageKey) ?? "";
+  return safeStorageGet(tokenStorageKey) ?? "";
 }
 
 export function storeToken(token: string) {
-  window.localStorage.setItem(tokenStorageKey, token);
+  safeStorageSet(tokenStorageKey, token);
 }
 
 export function clearToken() {
-  window.localStorage.removeItem(tokenStorageKey);
+  safeStorageRemove(tokenStorageKey);
 }
 
 function authHeaders(token: string) {
@@ -318,6 +545,25 @@ export async function createDepartment(token: string, payload: { name: string; p
   });
 }
 
+export async function updateDepartment(
+  token: string,
+  departmentId: string,
+  payload: { name?: string; parentId?: string | null; sortOrder?: number; status?: string },
+) {
+  return request<Department>(`/admin/departments/${departmentId}`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteDepartment(token: string, departmentId: string) {
+  return request<Department>(`/admin/departments/${departmentId}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+}
+
 export async function createRole(token: string, payload: { name: string; permissions: string[] }) {
   return request<Role>("/admin/roles", {
     method: "POST",
@@ -338,9 +584,16 @@ export async function updateRole(
   });
 }
 
+export async function deleteRole(token: string, roleId: string) {
+  return request<Role>(`/admin/roles/${roleId}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+}
+
 export async function createUser(
   token: string,
-  payload: { name: string; email: string; password: string; departmentId: string; roleId: string; status: string; userType: string },
+  payload: { name: string; loginId: string; password: string; departmentId: string; roleId: string; status: string; userType?: string },
 ) {
   return request<UserView>("/admin/users", {
     method: "POST",
@@ -361,6 +614,13 @@ export async function updateUser(
   });
 }
 
+export async function deleteUser(token: string, userId: string) {
+  return request<UserView>(`/admin/users/${userId}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+}
+
 export async function verifyDomain(token: string, domain: string) {
   return request<DomainVerifyResponse>("/admin/domains/verify", {
     method: "POST",
@@ -375,6 +635,66 @@ export async function testRelay(token: string, payload: { providerConfigId?: str
     headers: authHeaders(token),
     body: JSON.stringify(payload),
   });
+}
+
+
+export async function fetchMailDeliveryStatus(token: string): Promise<MailDeliveryStatusResponse> {
+  const response = await request<{
+    provider: { providerId: string; providerType: string; relayHost: string; relayPort: number; tlsMode: string; fromAddress: string | null; deliveryEnabled: boolean; lastTestStatus: string };
+    summary: Record<string, number>;
+  }>("/admin/mail-delivery/status", {
+    headers: authHeaders(token),
+  });
+  return {
+    provider: {
+      providerId: response.provider.providerId, companyId: "", providerKey: response.provider.providerType,
+      enabled: response.provider.deliveryEnabled, senderDomain: "", heloName: response.provider.relayHost,
+      senderAddress: response.provider.fromAddress ?? "", useTls: response.provider.tlsMode !== "none",
+      timeoutSec: 10, maxRetryCount: 0, retryIntervalSec: 0, createdAt: "", updatedAt: "",
+    },
+    summary: {
+      queuedCount: response.summary.queued ?? 0, sendingCount: response.summary.sending ?? 0,
+      sentCount: response.summary.sent ?? 0, failedCount: response.summary.failed ?? 0,
+      retryPendingCount: response.summary.retry_pending ?? 0, cancelledCount: response.summary.cancelled ?? 0,
+    },
+  };
+}
+
+export async function fetchMailDeliveryQueue(token: string): Promise<MailDeliveryQueueResponse> {
+  const response = await request<{ items: Array<{ queueId: string; mailId: string; recipientEmail: string; subject: string; status: string; attemptCount: number; nextAttemptAt: string | null; createdAt: string }>; total: number }>("/admin/mail-delivery/queue", {
+    headers: authHeaders(token),
+  });
+  const status = await fetchMailDeliveryStatus(token);
+  return {
+    provider: status.provider, summary: status.summary,
+    queue: response.items.map((item) => ({
+      queueId: item.queueId, mailId: item.mailId, sender: "", recipient: item.recipientEmail,
+      subject: item.subject, provider: status.provider.providerKey, status: item.status,
+      attemptCount: item.attemptCount, lastError: null, nextRetryAt: item.nextAttemptAt,
+      sentAt: null, createdAt: item.createdAt, updatedAt: item.createdAt,
+    })),
+    attempts: [], events: [],
+  };
+}
+
+export async function testMailDelivery(
+  token: string,
+  _payload: { recipient?: string; subject?: string; bodyText?: string },
+): Promise<MailSendResponse> {
+  const provider = await request<{ lastTestStatus: string }>("/admin/mail-delivery/provider/test", {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ timeoutSeconds: 10 }),
+  });
+  return { mailId: "provider-connection-test", status: provider.lastTestStatus, sentAt: null };
+}
+
+export async function retryMailDelivery(token: string, queueId: string) {
+  await request<{ item: MailDeliveryQueueItem }>(`/admin/mail-delivery/queue/${queueId}/retry`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+  return { message: "메일 전달 큐 재시도를 요청했습니다." };
 }
 
 export async function fetchMonitoringOverview(token: string): Promise<MonitoringOverview> {
@@ -400,6 +720,55 @@ export async function fetchApprovalAuditLogs(token: string, documentId?: string)
   return request<ApprovalAuditLogListResponse>(`/approvals/audit-logs${suffix}`, {
     headers: authHeaders(token),
   });
+}
+
+
+export async function fetchContentMessages(token: string, options: { search?: string; status?: string } = {}) {
+  const query = new URLSearchParams();
+  if (options.search) query.set("search", options.search);
+  if (options.status) query.set("status", options.status);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<ContentListResponse<ContentMessage>>(`/admin/content/messages${suffix}`, { headers: authHeaders(token) });
+}
+
+export async function createContentMessage(token: string, payload: { key: string; defaultLocale: string; category: string; translation: { locale: string; content: string } }) {
+  return request<ContentMessage>("/admin/content/messages", { method: "POST", headers: authHeaders(token), body: JSON.stringify(payload) });
+}
+
+export async function updateContentMessage(token: string, id: string, payload: { key?: string; defaultLocale?: string; category?: string; translations?: Array<{ locale: string; content: string }> }) {
+  return request<ContentMessage>(`/admin/content/messages/${id}`, { method: "PATCH", headers: authHeaders(token), body: JSON.stringify(payload) });
+}
+
+export async function bulkContentMessageStatus(token: string, ids: string[], status: string) {
+  return request<ContentListResponse<ContentMessage>>("/admin/content/messages/bulk-status", { method: "POST", headers: authHeaders(token), body: JSON.stringify({ ids, status }) });
+}
+
+export async function bulkDeleteContentMessages(token: string, ids: string[]) {
+  return request<ContentListResponse<ContentMessage>>("/admin/content/messages/bulk-delete", { method: "POST", headers: authHeaders(token), body: JSON.stringify({ ids }) });
+}
+
+export async function fetchHelpPolicies(token: string, options: { search?: string; status?: string } = {}) {
+  const query = new URLSearchParams();
+  if (options.search) query.set("search", options.search);
+  if (options.status) query.set("status", options.status);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<ContentListResponse<HelpPolicyDocument>>(`/admin/content/help-policies${suffix}`, { headers: authHeaders(token) });
+}
+
+export async function createHelpPolicy(token: string, payload: { code: string; title: string; category: string; audience: string; content: string }) {
+  return request<HelpPolicyDocument>("/admin/content/help-policies", { method: "POST", headers: authHeaders(token), body: JSON.stringify(payload) });
+}
+
+export async function updateHelpPolicy(token: string, id: string, payload: Partial<{ title: string; category: string; audience: string; content: string; status: string }>) {
+  return request<HelpPolicyDocument>(`/admin/content/help-policies/${id}`, { method: "PATCH", headers: authHeaders(token), body: JSON.stringify(payload) });
+}
+
+export async function bulkHelpPolicyStatus(token: string, ids: string[], status: string) {
+  return request<ContentListResponse<HelpPolicyDocument>>("/admin/content/help-policies/bulk-status", { method: "POST", headers: authHeaders(token), body: JSON.stringify({ ids, status }) });
+}
+
+export async function bulkDeleteHelpPolicies(token: string, ids: string[]) {
+  return request<ContentListResponse<HelpPolicyDocument>>("/admin/content/help-policies/bulk-delete", { method: "POST", headers: authHeaders(token), body: JSON.stringify({ ids }) });
 }
 
 export async function fetchTranslationStatus(): Promise<TranslationStatus> {
@@ -437,6 +806,54 @@ export async function updateTranslationPolicy(
   });
 }
 
+export async function downloadOrgImportTemplate(token: string): Promise<Blob> {
+  const response = await fetch(`${apiBase}/admin/org-import/template`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.adminMessage ?? data.userMessage ?? data.detail ?? "템플릿 다운로드에 실패했습니다.");
+  }
+  return response.blob();
+}
+
+export async function validateOrgImport(
+  token: string,
+  file: File,
+  deactivationScope: "none" | "uploaded_departments_only" | "company_all",
+): Promise<OrgImportBatch> {
+  const body = new FormData();
+  body.append("file", file);
+  body.append("deactivation_scope", deactivationScope);
+  const response = await fetch(`${apiBase}/admin/org-import/validate`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.adminMessage ?? data.userMessage ?? data.detail ?? "업로드 검증에 실패했습니다.");
+  }
+  return data as OrgImportBatch;
+}
+
+export async function applyOrgImport(
+  token: string,
+  payload: { batchId: string; confirmDeactivateMissingUsers?: boolean; confirmationText?: string },
+): Promise<OrgImportBatch> {
+  return request<OrgImportBatch>("/admin/org-import/apply", {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchOrgImportBatch(token: string, batchId: string): Promise<OrgImportBatch> {
+  return request<OrgImportBatch>(`/admin/org-import/${batchId}`, {
+    headers: authHeaders(token),
+  });
+}
+
 export async function fetchUiContract(token: string): Promise<UiContract> {
   return request<UiContract>("/ui-contract/admin", {
     headers: authHeaders(token),
@@ -449,27 +866,4 @@ export async function updateUiContract(token: string, payload: UiContract): Prom
     headers: authHeaders(token),
     body: JSON.stringify(payload),
   });
-}
-
-
-export type MailDeliveryProviderView = { providerId:string; providerType:string; relayHost:string; relayPort:number; tlsMode:string; fromAddress:string|null; deliveryEnabled:boolean; lastTestStatus:string; lastConnectionAt:string|null; lastConnectionError:string|null };
-export type MailDeliveryQueueItem = { queueId:string; mailId:string; recipientEmail:string; subject:string; status:string; attemptCount:number; nextAttemptAt:string|null; leaseExpiresAt:string|null; createdAt:string };
-export type MailDeliveryStatusResponse = { provider:MailDeliveryProviderView; worker:Record<string,unknown>; summary:Record<string,number> };
-export type MailDeliveryQueueListResponse = { items:MailDeliveryQueueItem[]; total:number };
-
-export async function fetchMailDeliveryStatus(token:string):Promise<MailDeliveryStatusResponse>{
-  return request<MailDeliveryStatusResponse>("/admin/mail-delivery/status",{headers:authHeaders(token)});
-}
-export async function fetchMailDeliveryQueue(token:string,status?:string):Promise<MailDeliveryQueueListResponse>{
-  const query=status?"?status="+encodeURIComponent(status):"";
-  return request<MailDeliveryQueueListResponse>("/admin/mail-delivery/queue"+query,{headers:authHeaders(token)});
-}
-export async function updateMailDeliveryProvider(token:string,payload:Partial<{deliveryEnabled:boolean;providerType:string;relayHost:string;relayPort:number;tlsMode:string;fromAddress:string;username:string;password:string}>):Promise<MailDeliveryProviderView>{
-  return request<MailDeliveryProviderView>("/admin/mail-delivery/provider",{method:"PATCH",headers:authHeaders(token),body:JSON.stringify(payload)});
-}
-export async function testMailDeliveryProvider(token:string):Promise<MailDeliveryProviderView>{
-  return request<MailDeliveryProviderView>("/admin/mail-delivery/provider/test",{method:"POST",headers:authHeaders(token),body:JSON.stringify({timeoutSeconds:10})});
-}
-export async function retryMailDelivery(token:string,queueId:string){
-  return request("/admin/mail-delivery/queue/"+encodeURIComponent(queueId)+"/retry",{method:"POST",headers:authHeaders(token)});
 }

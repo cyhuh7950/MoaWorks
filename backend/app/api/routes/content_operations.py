@@ -1,0 +1,30 @@
+from fastapi import APIRouter, Depends
+from app.api.dependencies import require_admin
+from app.schemas.directory import AuthUserSummary
+from app.schemas.content_operations import MessageCreate, MessagePatch, HelpCreate, HelpPatch, ContentBulkStatus, ContentBulkDelete, ContentList
+from app.services.content_operations_service import ContentOperationsService
+router = APIRouter(prefix='/content', dependencies=[Depends(require_admin)])
+@router.get('/messages', response_model=ContentList)
+def messages(search:str='',locale:str|None=None,category:str|None=None,status:str='visible',user:AuthUserSummary=Depends(require_admin)): return ContentOperationsService().messages(user.userId,search,locale,category,status)
+@router.post('/messages')
+def create_message(payload:MessageCreate,user:AuthUserSummary=Depends(require_admin)): return ContentOperationsService().create_message(user.userId,payload)
+@router.post('/messages/bulk-status',response_model=ContentList)
+def bulk_status(payload:ContentBulkStatus,user:AuthUserSummary=Depends(require_admin)): return ContentOperationsService().bulk_message(user.userId,payload.ids,payload.status)
+@router.post('/messages/bulk-delete',response_model=ContentList)
+def bulk_delete(payload:ContentBulkDelete,user:AuthUserSummary=Depends(require_admin)): return ContentOperationsService().bulk_message(user.userId,payload.ids)
+@router.get('/messages/{message_id}')
+def get_message(message_id:str,user:AuthUserSummary=Depends(require_admin)): return ContentOperationsService().message(message_id)
+@router.patch('/messages/{message_id}')
+def patch_message(message_id:str,payload:MessagePatch,user:AuthUserSummary=Depends(require_admin)): return ContentOperationsService().patch_message(user.userId,message_id,payload)
+@router.get('/help-policies',response_model=ContentList)
+def help_list(search:str='',category:str|None=None,audience:str|None=None,status:str='visible',user:AuthUserSummary=Depends(require_admin)): return ContentOperationsService().help_list(user.userId,search,category,audience,status)
+@router.post('/help-policies')
+def create_help(payload:HelpCreate,user:AuthUserSummary=Depends(require_admin)): return ContentOperationsService().create_help(user.userId,payload)
+@router.post('/help-policies/bulk-status',response_model=ContentList)
+def help_status(payload:ContentBulkStatus,user:AuthUserSummary=Depends(require_admin)): return ContentOperationsService().bulk_help(user.userId,payload.ids,payload.status)
+@router.post('/help-policies/bulk-delete',response_model=ContentList)
+def help_delete(payload:ContentBulkDelete,user:AuthUserSummary=Depends(require_admin)): return ContentOperationsService().bulk_help(user.userId,payload.ids)
+@router.get('/help-policies/{document_id}')
+def get_help(document_id:str,user:AuthUserSummary=Depends(require_admin)): return ContentOperationsService().help(document_id)
+@router.patch('/help-policies/{document_id}')
+def patch_help(document_id:str,payload:HelpPatch,user:AuthUserSummary=Depends(require_admin)): return ContentOperationsService().patch_help(user.userId,document_id,payload)

@@ -30,12 +30,15 @@ class Ui021RemediationTests(unittest.TestCase):
     def test_oracle_compose_runs_worker_with_same_origin_and_operational_networks(self):
         local=(self.root.parent/"deploy/docker-compose.yml").read_text(encoding="utf-8")
         self.assertIn('command: ["python", "-m", "app.workers.mail_delivery_worker"]',local)
-        self.assertEqual(local.count("VITE_API_BASE_URL: /api/v1"),2)
-        self.assertEqual(local.count("VITE_PROXY_TARGET: http://server:8000"),2)
+        self.assertNotIn("VITE_API_BASE_URL", local)
+        self.assertNotIn("VITE_PROXY_TARGET", local)
         text=(self.root.parent/"deploy/docker-compose.oracle.yml").read_text(encoding="utf-8")
         self.assertIn('command: ["python", "-m", "app.workers.mail_delivery_worker"]',text)
-        self.assertIn("VITE_API_BASE_URL: /api/v1",text)
+        self.assertNotIn("VITE_API_BASE_URL", text)
+        self.assertNotIn("VITE_PROXY_TARGET", text)
         self.assertNotIn("https://api.moaworks.sinsan.kr/api/v1",text)
+        api_source=(self.root.parent/"frontend/admin-web/src/api.ts").read_text(encoding="utf-8")
+        self.assertIn('const defaultApiBase = "/api/v1";', api_source)
         worker=text[text.index("  mail-layer:"):text.index("  storage:")]
         for marker in ("dockerfile: deploy/server.Dockerfile","../data:/app/data","- app_net","- pg_net","restart: unless-stopped"): self.assertIn(marker,worker)
         self.assertNotIn("../backend:/app",worker)

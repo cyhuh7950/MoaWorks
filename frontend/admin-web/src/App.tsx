@@ -1,23 +1,43 @@
-import { FormEvent, useEffect, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 
 import {
   apiBase,
+  applyOrgImport,
+  bulkContentMessageStatus,
+  bulkDeleteContentMessages,
+  bulkDeleteHelpPolicies,
+  bulkHelpPolicyStatus,
+  createContentMessage,
+  createHelpPolicy,
+  fetchContentMessages,
+  fetchHelpPolicies,
+  updateContentMessage,
+  updateHelpPolicy,
+  type ContentMessage,
+  type HelpPolicyDocument,
   clearToken,
   createDepartment,
   createRole,
   createUser,
+  deleteDepartment,
+  deleteRole,
+  deleteUser,
+  downloadOrgImportTemplate,
   fetchDirectory,
-  fetchMailDeliveryStatus, fetchMailDeliveryQueue, updateMailDeliveryProvider, testMailDeliveryProvider, retryMailDelivery,
-  type MailDeliveryStatusResponse, type MailDeliveryQueueItem,
   fetchHealth,
+  fetchMailDeliveryQueue,
+  fetchMailDeliveryStatus,
   fetchMonitoringEvents,
   fetchMonitoringOverview,
   fetchApprovalAuditLogs,
-  getStoredToken,
+  fetchOrgImportBatch,
   fetchUiContract,
+  getStoredToken,
   initializeSetup,
   login,
+  retryMailDelivery,
   storeToken,
+  testMailDelivery,
   testRelay,
   fetchTranslationPolicy,
   fetchTranslationStatus,
@@ -28,17 +48,24 @@ import {
   type TranslationResponse,
   type TranslationStatus,
   type UiContract as ServerUiContract,
-  updateTranslationPolicy,
-  updateUiContract,
   type DirectoryOverview,
+  type MailDeliveryQueueResponse,
+  type MailDeliveryStatusResponse,
+  type MailSendResponse,
+  type Role,
   type DomainVerifyResponse,
   type HealthResponse,
   type MonitoringEvent,
   type MonitoringOverview,
   type ApprovalAuditLog,
+  type OrgImportBatch,
   type RelayTestResponse,
+  updateDepartment,
   updateRole,
+  updateUiContract,
+  updateTranslationPolicy,
   updateUser,
+  validateOrgImport,
   validateSetup,
   verifyDomain,
 } from "./api";
@@ -83,14 +110,14 @@ const initialForm: SetupForm = {
 };
 
 type LoginForm = {
-  email: string;
+  loginId: string;
   password: string;
 };
 
 type UserForm = {
   userId: string;
   name: string;
-  email: string;
+  loginId: string;
   password: string;
   departmentId: string;
   roleId: string;
@@ -98,10 +125,26 @@ type UserForm = {
   userType: string;
 };
 
+type ManagementDialog = "user" | "department" | "role" | "orgImport" | null;
+type BulkTarget = "users" | "departments" | "roles";
+type BulkAction = "active" | "inactive" | "delete";
+type ContentResource = "message" | "help";
+type ContentBulkAction = "active" | "inactive" | "published" | "delete";
+type ContentDialog =
+  | { resource: "message"; mode: "create" | "detail"; item?: ContentMessage }
+  | { resource: "help"; mode: "create" | "detail"; item?: HelpPolicyDocument };
+type ContentBulkDialog = { resource: ContentResource; action: ContentBulkAction; ids: string[] };
+type ContentMessageDraft = { key: string; defaultLocale: string; category: string; locale: string; content: string };
+type HelpPolicyDraft = { code: string; title: string; category: string; audience: string; content: string };
+
+const initialContentMessageDraft: ContentMessageDraft = { key: "", defaultLocale: "ko-KR", category: "general", locale: "ko-KR", content: "" };
+const initialHelpPolicyDraft: HelpPolicyDraft = { code: "", title: "", category: "general", audience: "all", content: "" };
+
+
 const initialUserForm: UserForm = {
   userId: "",
   name: "",
-  email: "",
+  loginId: "",
   password: "",
   departmentId: "",
   roleId: "",
@@ -109,12 +152,20 @@ const initialUserForm: UserForm = {
   userType: "user",
 };
 
+const ORG_IMPORT_DEACTIVATION_CONFIRMATION_TEXT = "누락 사용자 비활성화에 동의합니다.";
+const ORG_IMPORT_COMPANY_ALL_CONFIRMATION_TEXT = "회사 전체 누락 사용자 비활성화에 동의합니다.";
+
 type UiContract = {
   brand: {
     primary: string;
     secondary: string;
     accent: string;
     blocked: string;
+  };
+  company: {
+    name: string;
+    domain: string;
+    logoDataUrl: string;
   };
   menuOrder: string[];
   homeCardOrder: string[];
@@ -154,6 +205,11 @@ const defaultUiContract: UiContract = {
     accent: "#9a6b2f",
     blocked: "#9f1239",
   },
+  company: {
+    name: "MoaWorks",
+    domain: "moaworks.local",
+    logoDataUrl: "",
+  },
   menuOrder: ["메일", "결재", "메신저", "일정", "주소록", "조직도", "파일", "설정"],
   homeCardOrder: ["alerts", "approval", "chat", "mail"],
   quickComposeVisible: true,
@@ -169,11 +225,23 @@ const defaultUiContract: UiContract = {
   },
 };
 
-function mergeUiContract(raw: Partial<UiContract> | null | undefined): UiContract {
+function mergeUiContract(raw: Partial<UiContract> | null | undefined, companySeed?: Partial<UiContract["company"]> | null): UiContract {
+  const brand = {
+    ...defaultUiContract.brand,
+    ...(raw?.brand ?? {}),
+  };
+  const company = {
+    ...defaultUiContract.company,
+    ...(raw?.company ?? {}),
+    ...(companySeed ?? {}),
+  };
+  const logoDataUrl = company.logoDataUrl?.trim() || buildDefaultCompanyLogo(company.name, brand.primary, brand.secondary);
   return {
-    brand: {
-      ...defaultUiContract.brand,
-      ...(raw?.brand ?? {}),
+    brand,
+    company: {
+      name: company.name?.trim() || defaultUiContract.company.name,
+      domain: company.domain?.trim() || defaultUiContract.company.domain,
+      logoDataUrl,
     },
     menuOrder: raw?.menuOrder?.length ? raw.menuOrder : defaultUiContract.menuOrder,
     homeCardOrder: raw?.homeCardOrder?.length ? raw.homeCardOrder : defaultUiContract.homeCardOrder,
@@ -203,9 +271,110 @@ function normalizeWarnings(nextWarnings: string[] | undefined | null): string[] 
   return Array.from(normalized.values());
 }
 
+type DepartmentItem = DirectoryOverview["departments"][number];
+
+type DepartmentTreeRow = {
+  item: DepartmentItem;
+  level: number;
+  path: string;
+  parentName: string;
+};
+
+function normalizeHexColor(value: string, fallback: string): string {
+  const trimmed = value.trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(trimmed)) {
+    return trimmed;
+  }
+  if (/^#[0-9a-f]{3}$/.test(trimmed)) {
+    return `#${trimmed[1]}${trimmed[1]}${trimmed[2]}${trimmed[2]}${trimmed[3]}${trimmed[3]}`;
+  }
+  return fallback;
+}
+
+function buildCompanyInitials(name: string): string {
+  const cleaned = name.replace(/[^0-9A-Za-z가-힣]/g, "").trim();
+  if (!cleaned) {
+    return "MW";
+  }
+  const glyphs = Array.from(cleaned);
+  return glyphs.slice(0, 2).join("").toUpperCase();
+}
+
+function buildDefaultCompanyLogo(name: string, primary: string, secondary: string): string {
+  const initials = buildCompanyInitials(name);
+  const safePrimary = normalizeHexColor(primary, defaultUiContract.brand.primary);
+  const safeSecondary = normalizeHexColor(secondary, defaultUiContract.brand.secondary);
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192" role="img" aria-label="${name} logo">
+      <defs>
+        <linearGradient id="mwLogoBg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="${safePrimary}" />
+          <stop offset="100%" stop-color="${safeSecondary}" />
+        </linearGradient>
+      </defs>
+      <rect width="192" height="192" rx="44" fill="url(#mwLogoBg)" />
+      <circle cx="148" cy="48" r="20" fill="rgba(255,255,255,0.14)" />
+      <text x="96" y="108" text-anchor="middle" font-family="Segoe UI, Noto Sans KR, sans-serif" font-size="64" font-weight="800" fill="#ffffff">${initials}</text>
+    </svg>
+  `;
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+function buildDepartmentHierarchy(departments: DepartmentItem[]): { rows: DepartmentTreeRow[]; pathMap: Map<string, string> } {
+  const byParent = new Map<string, DepartmentItem[]>();
+  const pathMap = new Map<string, string>();
+  const roots: DepartmentItem[] = [];
+
+  const sorted = [...departments].sort((left, right) => {
+    const sortGap = (left.sortOrder ?? 0) - (right.sortOrder ?? 0);
+    if (sortGap !== 0) {
+      return sortGap;
+    }
+    return left.name.localeCompare(right.name, "ko-KR");
+  });
+
+  for (const item of sorted) {
+    if (item.parentId && departments.some((candidate) => candidate.id === item.parentId)) {
+      const bucket = byParent.get(item.parentId) ?? [];
+      bucket.push(item);
+      byParent.set(item.parentId, bucket);
+    } else {
+      roots.push(item);
+    }
+  }
+
+  const rows: DepartmentTreeRow[] = [];
+  const visited = new Set<string>();
+
+  const visit = (item: DepartmentItem, level: number, parentPath: string, parentName: string) => {
+    if (visited.has(item.id)) {
+      return;
+    }
+    visited.add(item.id);
+    const path = parentPath ? `${parentPath} > ${item.name}` : item.name;
+    pathMap.set(item.id, path);
+    rows.push({ item, level, path, parentName });
+    for (const child of byParent.get(item.id) ?? []) {
+      visit(child, level + 1, path, item.name);
+    }
+  };
+
+  for (const root of roots) {
+    visit(root, 0, "", "최상위");
+  }
+
+  for (const item of sorted) {
+    if (!visited.has(item.id)) {
+      visit(item, 0, "", "최상위");
+    }
+  }
+
+  return { rows, pathMap };
+}
+
 const adminCopy: Record<AppLocale, Record<string, string>> = {
   "ko-KR": {
-    adminEmail: "관리자 이메일",
+    adminEmail: "관리자 아이디",
     adminPassword: "비밀번호",
     overviewTitle: "운영 개요",
     approvalAuditTitle: "결재 감사 로그",
@@ -230,7 +399,7 @@ const adminCopy: Record<AppLocale, Record<string, string>> = {
     activate: "활성화",
   },
   "en-US": {
-    adminEmail: "Admin email",
+    adminEmail: "Admin ID",
     adminPassword: "Password",
     overviewTitle: "Operations Overview",
     approvalAuditTitle: "Approval Audit Logs",
@@ -255,7 +424,7 @@ const adminCopy: Record<AppLocale, Record<string, string>> = {
     activate: "Activate",
   },
   "ja-JP": {
-    adminEmail: "管理者メール",
+    adminEmail: "管理者ID",
     adminPassword: "パスワード",
     overviewTitle: "運用概要",
     approvalAuditTitle: "承認監査ログ",
@@ -280,7 +449,7 @@ const adminCopy: Record<AppLocale, Record<string, string>> = {
     activate: "有効化",
   },
   "zh-CN": {
-    adminEmail: "管理员邮箱",
+    adminEmail: "管理员ID",
     adminPassword: "密码",
     overviewTitle: "运维概览",
     approvalAuditTitle: "审批审计日志",
@@ -305,7 +474,7 @@ const adminCopy: Record<AppLocale, Record<string, string>> = {
     activate: "启用",
   },
   "es-ES": {
-    adminEmail: "Correo admin",
+    adminEmail: "ID admin",
     adminPassword: "Contraseña",
     overviewTitle: "Resumen operativo",
     approvalAuditTitle: "Auditoría de aprobaciones",
@@ -330,7 +499,7 @@ const adminCopy: Record<AppLocale, Record<string, string>> = {
     activate: "Activar",
   },
   "fr-FR": {
-    adminEmail: "Email admin",
+    adminEmail: "Identifiant admin",
     adminPassword: "Mot de passe",
     overviewTitle: "Vue d'exploitation",
     approvalAuditTitle: "Journaux d'audit",
@@ -355,7 +524,7 @@ const adminCopy: Record<AppLocale, Record<string, string>> = {
     activate: "Activer",
   },
   "de-DE": {
-    adminEmail: "Admin-E-Mail",
+    adminEmail: "Admin-ID",
     adminPassword: "Passwort",
     overviewTitle: "Betriebsübersicht",
     approvalAuditTitle: "Freigabe-Audit-Logs",
@@ -381,10 +550,129 @@ const adminCopy: Record<AppLocale, Record<string, string>> = {
   },
 };
 
+type PermissionOption = {
+  code: string;
+  label: string;
+};
+
+type PermissionGroup = {
+  key: string;
+  label: string;
+  options: PermissionOption[];
+};
+
+const defaultRolePermissions = ["mail:read", "approval:read", "profile:read"];
+
+const permissionGroups: PermissionGroup[] = [
+  {
+    key: "mail",
+    label: "메일",
+    options: [
+      { code: "mail:read", label: "메일 조회" },
+      { code: "mail:send", label: "메일 발송/임시저장" },
+    ],
+  },
+  {
+    key: "approval",
+    label: "결재",
+    options: [
+      { code: "approval:read", label: "결재 조회" },
+      { code: "approval:create", label: "문서 작성" },
+      { code: "approval:submit", label: "상신" },
+      { code: "approval:act", label: "승인/반려 처리" },
+      { code: "approval:withdraw", label: "회수" },
+      { code: "approval:rework", label: "재기안" },
+      { code: "approval:force", label: "관리자 직권 처리" },
+    ],
+  },
+  {
+    key: "messenger",
+    label: "메신저",
+    options: [
+      { code: "messenger:read", label: "대화 조회" },
+      { code: "messenger:write", label: "메시지 전송/방 생성" },
+    ],
+  },
+  {
+    key: "profile",
+    label: "프로필",
+    options: [{ code: "profile:read", label: "프로필 조회" }],
+  },
+  {
+    key: "directory",
+    label: "조직/사용자",
+    options: [{ code: "directory:write", label: "조직/사용자 관리" }],
+  },
+  {
+    key: "ops",
+    label: "운영 점검",
+    options: [
+      { code: "relay:test", label: "Relay 테스트" },
+      { code: "domain:verify", label: "도메인 검증" },
+    ],
+  },
+  {
+    key: "admin",
+    label: "관리자",
+    options: [{ code: "admin:*", label: "관리자 전체 권한" }],
+  },
+];
+
+const permissionOptionMap = new Map(
+  permissionGroups.flatMap((group) => group.options.map((option) => [option.code, option] as const)),
+);
+const knownPermissionCodeSet = new Set(permissionOptionMap.keys());
+
+function normalizePermissionCodes(values: string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const rawValue of values) {
+    const trimmed = rawValue.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+  return normalized;
+}
+
+function safeLocalStorageGet(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeLocalStorageSet(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // localStorage가 차단된 환경에서는 현재 세션 상태만 유지합니다.
+  }
+}
+
+function InlineHint({ label }: { label: string }) {
+  return (
+    <span className="inline-hint" tabIndex={0} role="note" title={label} aria-label={label}>
+      i
+    </span>
+  );
+}
+
+function normalizeLoginIdInput(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function buildCompanyLoginEmail(loginId: string, companyDomain: string): string {
+  return `${normalizeLoginIdInput(loginId)}@${companyDomain.trim().toLowerCase()}`;
+}
+
 export default function App() {
-  const [locale, setLocale] = useState<AppLocale>(resolveLocale(window.localStorage.getItem("moaworks.locale")));
+  const [locale, setLocale] = useState<AppLocale>(resolveLocale(safeLocalStorageGet("moaworks.locale")));
   const copy = adminCopy[locale];
-  const [timezone, setTimezone] = useState(window.localStorage.getItem("moaworks.timezone") || "Asia/Seoul");
+  const [timezone, setTimezone] = useState(safeLocalStorageGet("moaworks.timezone") || "Asia/Seoul");
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [overview, setOverview] = useState<DirectoryOverview | null>(null);
   const [monitoringOverview, setMonitoringOverview] = useState<MonitoringOverview | null>(null);
@@ -393,7 +681,8 @@ export default function App() {
   const [domainResult, setDomainResult] = useState<DomainVerifyResponse | null>(null);
   const [relayResult, setRelayResult] = useState<RelayTestResponse | null>(null);
   const [mailDeliveryStatus, setMailDeliveryStatus] = useState<MailDeliveryStatusResponse | null>(null);
-  const [mailDeliveryQueue, setMailDeliveryQueue] = useState<MailDeliveryQueueItem[]>([]);
+  const [mailDeliveryQueue, setMailDeliveryQueue] = useState<MailDeliveryQueueResponse | null>(null);
+  const [mailDeliveryTestResult, setMailDeliveryTestResult] = useState<MailSendResponse | null>(null);
   const [translationStatus, setTranslationStatus] = useState<TranslationStatus | null>(null);
   const [translationPolicy, setTranslationPolicy] = useState<TranslationPolicy | null>(null);
   const [translationSource, setTranslationSource] = useState("");
@@ -402,12 +691,36 @@ export default function App() {
   const [translationError, setTranslationError] = useState("");
   const [translationLoading, setTranslationLoading] = useState(false);
   const [form, setForm] = useState<SetupForm>(initialForm);
-  const [loginForm, setLoginForm] = useState<LoginForm>({ email: "", password: "" });
+  const [loginForm, setLoginForm] = useState<LoginForm>({ loginId: "", password: "" });
   const [userForm, setUserForm] = useState<UserForm>(initialUserForm);
   const [userSearch, setUserSearch] = useState("");
+  const [userStatusFilter, setUserStatusFilter] = useState("visible");
+  const [orgImportFile, setOrgImportFile] = useState<File | null>(null);
+  const [orgImportBatch, setOrgImportBatch] = useState<OrgImportBatch | null>(null);
+  const [orgImportHistory, setOrgImportHistory] = useState<OrgImportBatch[]>([]);
+  const [orgImportDialogOpen, setOrgImportDialogOpen] = useState(false);
+  const [orgImportDeactivationScope, setOrgImportDeactivationScope] = useState<"none" | "uploaded_departments_only" | "company_all">("uploaded_departments_only");
+  const [orgImportConfirmChecked, setOrgImportConfirmChecked] = useState(false);
+  const [orgImportConfirmationText, setOrgImportConfirmationText] = useState("");
   const [departmentName, setDepartmentName] = useState("");
+  const [departmentParentId, setDepartmentParentId] = useState("");
+  const [departmentEditingId, setDepartmentEditingId] = useState("");
+  const [departmentStatusFilter, setDepartmentStatusFilter] = useState("visible");
+  const [departmentSearch, setDepartmentSearch] = useState("");
   const [roleName, setRoleName] = useState("");
-  const [rolePermissions, setRolePermissions] = useState("mail:read,approval:read,profile:read");
+  const [roleSearch, setRoleSearch] = useState("");
+  const [roleStatusFilter, setRoleStatusFilter] = useState("visible");
+  const [selectedRoleLookupId, setSelectedRoleLookupId] = useState("");
+  const [roleEditorOpen, setRoleEditorOpen] = useState(false);
+  const [roleEditingId, setRoleEditingId] = useState("");
+  const [roleSelectedPermissions, setRoleSelectedPermissions] = useState<string[]>(defaultRolePermissions);
+  const [managementDialog, setManagementDialog] = useState<ManagementDialog>(null);
+  const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
+  const [selectedDepartmentIds, setSelectedDepartmentIds] = useState<string[]>([]);
+  const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
+  const [bulkConfirmation, setBulkConfirmation] = useState<{ target: BulkTarget; action: BulkAction; ids: string[] } | null>(null);
+  const [bulkActionError, setBulkActionError] = useState("");
+  const [approvalSearch, setApprovalSearch] = useState("");
   const [domainInput, setDomainInput] = useState("");
   const [relayRecipient, setRelayRecipient] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
@@ -416,7 +729,23 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [token, setToken] = useState(getStoredToken());
   const [activeAdminMenu, setActiveAdminMenu] = useState<AdminMenuKey>("dashboard");
+  const [alertPanelOpen, setAlertPanelOpen] = useState(false);
+  const [operationsDialog, setOperationsDialog] = useState<"domain" | "relay" | "mailTest" | "provider" | "storage" | "audit" | "brand" | "language" | "help" | null>(null);
+  const [operationDetail, setOperationDetail] = useState<{ title: string; lines: string[] } | null>(null);
   const [uiContractDraft, setUiContractDraft] = useState<UiContract>(() => defaultUiContract);
+  const [contentMessages, setContentMessages] = useState<ContentMessage[]>([]);
+  const [helpPolicies, setHelpPolicies] = useState<HelpPolicyDocument[]>([]);
+  const [messageSearch, setMessageSearch] = useState("");
+  const [messageStatusFilter, setMessageStatusFilter] = useState("visible");
+  const [helpSearch, setHelpSearch] = useState("");
+  const [helpStatusFilter, setHelpStatusFilter] = useState("visible");
+  const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
+  const [selectedHelpIds, setSelectedHelpIds] = useState<string[]>([]);
+  const [contentDialog, setContentDialog] = useState<ContentDialog | null>(null);
+  const [contentBulkDialog, setContentBulkDialog] = useState<ContentBulkDialog | null>(null);
+  const [contentDialogError, setContentDialogError] = useState("");
+  const [contentMessageDraft, setContentMessageDraft] = useState<ContentMessageDraft>(initialContentMessageDraft);
+  const [helpPolicyDraft, setHelpPolicyDraft] = useState<HelpPolicyDraft>(initialHelpPolicyDraft);
   const brandGuide = [
     { title: "대표 색상", value: "#0f766e", target: "주요 버튼, 활성 탭, 핵심 승인/저장 액션" },
     { title: "보조 색상", value: "#111827", target: "헤더, 운영 개요, 기본 제품 톤" },
@@ -460,10 +789,24 @@ export default function App() {
     setMonitoringEvents([]);
     setApprovalAuditLogs([]);
     setTranslationPolicy(null);
+    setAlertPanelOpen(false);
     setActiveAdminMenu("dashboard");
     if (nextMessage) {
       setErrors([nextMessage]);
     }
+  }
+
+  function clearTransientFeedback() {
+    setMessage("");
+    setErrors([]);
+    setWarnings([]);
+    setTranslationError("");
+  }
+
+  function navigateAdminMenu(nextMenu: AdminMenuKey) {
+    setAlertPanelOpen(false);
+    clearTransientFeedback();
+    setActiveAdminMenu(nextMenu);
   }
 
   async function refreshHealth() {
@@ -481,13 +824,20 @@ export default function App() {
     setDomainInput((current) => current || data.company.domain);
     setRelayRecipient((current) => current || `relay-check@${data.company.domain}`);
     setLoginForm((current) => ({
-      email: current.email || data.users.find((item) => item.userType === "admin")?.userEmail || "",
+      loginId:
+        current.loginId ||
+        normalizeLoginIdInput((data.users.find((item) => item.userType === "admin")?.userEmail || "").split("@")[0] || ""),
       password: current.password,
     }));
+    const defaultActiveDepartmentId = data.departments.find((item) => item.status === "active")?.id || data.departments[0]?.id || "";
     setUserForm((current) => ({
       ...current,
-      departmentId: current.departmentId || data.departments[0]?.id || "",
+      departmentId: current.departmentId || defaultActiveDepartmentId,
       roleId: current.roleId || data.roles.find((item) => item.name === "일반사용자")?.id || data.roles[0]?.id || "",
+    }));
+    setUiContractDraft((current) => mergeUiContract(current, {
+      name: data.company.name,
+      domain: data.company.domain,
     }));
   }
 
@@ -499,10 +849,128 @@ export default function App() {
     setMonitoringEvents(events.events ?? []);
   }
 
+  async function refreshMailDelivery(nextToken = token) {
+    if (!nextToken) return;
+    const [status, queue] = await Promise.all([
+      fetchMailDeliveryStatus(nextToken),
+      fetchMailDeliveryQueue(nextToken),
+    ]);
+    setMailDeliveryStatus(status);
+    setMailDeliveryQueue(queue);
+  }
+
   async function refreshApprovalAuditLogs(nextToken = token) {
     if (!nextToken) return;
     const response = await fetchApprovalAuditLogs(nextToken);
     setApprovalAuditLogs(response.logs ?? []);
+  }
+
+
+  async function refreshContentOperations(nextToken = token) {
+    if (!nextToken) return;
+    const [messages, policies] = await Promise.all([
+      fetchContentMessages(nextToken, { status: "all" }),
+      fetchHelpPolicies(nextToken, { status: "all" }),
+    ]);
+    setContentMessages(messages.items ?? []);
+    setHelpPolicies(policies.items ?? []);
+  }
+
+  function openContentMessageDialog(item?: ContentMessage) {
+    setContentDialogError("");
+    setContentMessageDraft(item ? {
+      key: item.key,
+      defaultLocale: item.default_locale,
+      category: item.category,
+      locale: item.translations[0]?.locale ?? item.default_locale,
+      content: item.translations[0]?.content ?? "",
+    } : initialContentMessageDraft);
+    setContentDialog({ resource: "message", mode: item ? "detail" : "create", item });
+  }
+
+  function openHelpPolicyDialog(item?: HelpPolicyDocument) {
+    setContentDialogError("");
+    setHelpPolicyDraft(item ? {
+      code: item.code,
+      title: item.title,
+      category: item.category,
+      audience: item.audience,
+      content: item.content,
+    } : initialHelpPolicyDraft);
+    setContentDialog({ resource: "help", mode: item ? "detail" : "create", item });
+  }
+
+  async function saveContentMessage(event: FormEvent) {
+    event.preventDefault();
+    if (!token || !contentDialog || contentDialog.resource !== "message") return;
+    setLoading(true);
+    setContentDialogError("");
+    try {
+      const saved = contentDialog.mode === "create"
+        ? await createContentMessage(token, { key: contentMessageDraft.key, defaultLocale: contentMessageDraft.defaultLocale, category: contentMessageDraft.category, translation: { locale: contentMessageDraft.locale, content: contentMessageDraft.content } })
+        : await updateContentMessage(token, contentDialog.item!.id, {
+            key: contentMessageDraft.key,
+            defaultLocale: contentMessageDraft.defaultLocale,
+            category: contentMessageDraft.category,
+            translations: [{ locale: contentMessageDraft.locale, content: contentMessageDraft.content }],
+          });
+      await refreshContentOperations(token);
+      setContentDialog({ resource: "message", mode: "detail", item: saved });
+      setMessage(contentDialog.mode === "create" ? "메시지를 등록했습니다." : "메시지를 저장했습니다.");
+    } catch (error) {
+      setContentDialogError(error instanceof Error ? error.message : "메시지 저장에 실패했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveHelpPolicy(event: FormEvent) {
+    event.preventDefault();
+    if (!token || !contentDialog || contentDialog.resource !== "help") return;
+    setLoading(true);
+    setContentDialogError("");
+    try {
+      const saved = contentDialog.mode === "create"
+        ? await createHelpPolicy(token, helpPolicyDraft)
+        : await updateHelpPolicy(token, contentDialog.item!.id, helpPolicyDraft);
+      await refreshContentOperations(token);
+      setContentDialog({ resource: "help", mode: "detail", item: saved });
+      setMessage(contentDialog.mode === "create" ? "정책을 등록했습니다." : "정책을 저장했습니다.");
+    } catch (error) {
+      setContentDialogError(error instanceof Error ? error.message : "정책 저장에 실패했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function toggleContentSelection(resource: ContentResource, id: string) {
+    const setter = resource === "message" ? setSelectedMessageIds : setSelectedHelpIds;
+    setter((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
+  }
+
+  async function executeContentBulkAction() {
+    if (!token || !contentBulkDialog) return;
+    setLoading(true);
+    setContentDialogError("");
+    try {
+      const { resource, action, ids } = contentBulkDialog;
+      if (resource === "message") {
+        if (action === "delete") await bulkDeleteContentMessages(token, ids);
+        else await bulkContentMessageStatus(token, ids, action);
+        setSelectedMessageIds([]);
+      } else {
+        if (action === "delete") await bulkDeleteHelpPolicies(token, ids);
+        else await bulkHelpPolicyStatus(token, ids, action === "active" ? "published" : action);
+        setSelectedHelpIds([]);
+      }
+      await refreshContentOperations(token);
+      setMessage(action === "delete" ? "선택 항목을 deleted 상태로 전환했습니다." : "선택 항목의 상태를 변경했습니다.");
+      setContentBulkDialog(null);
+    } catch (error) {
+      setContentDialogError(error instanceof Error ? error.message : "일괄 작업에 실패했습니다.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   function normalizeTranslationLocale(value: string) {
@@ -532,12 +1000,12 @@ export default function App() {
 
   function saveLocale(nextLocale: AppLocale) {
     setLocale(nextLocale);
-    window.localStorage.setItem("moaworks.locale", nextLocale);
+    safeLocalStorageSet("moaworks.locale", nextLocale);
   }
 
   function saveTimezone(nextTimezone: string) {
     setTimezone(nextTimezone);
-    window.localStorage.setItem("moaworks.timezone", nextTimezone);
+    safeLocalStorageSet("moaworks.timezone", nextTimezone);
   }
 
   async function handleUiContractSave() {
@@ -546,8 +1014,15 @@ export default function App() {
       return;
     }
     try {
-      const saved = await updateUiContract(token, uiContractDraft as ServerUiContract);
-      setUiContractDraft(mergeUiContract(saved));
+      const payload = mergeUiContract(uiContractDraft, overview ? {
+        name: overview.company.name,
+        domain: overview.company.domain,
+      } : undefined);
+      const saved = await updateUiContract(token, payload as ServerUiContract);
+      setUiContractDraft(mergeUiContract(saved, overview ? {
+        name: overview.company.name,
+        domain: overview.company.domain,
+      } : undefined));
       setMessage(saved.messages.success);
       setErrors([]);
     } catch (error) {
@@ -558,7 +1033,55 @@ export default function App() {
   async function reloadUiContract(nextToken = token) {
     if (!nextToken) return;
     const contract = await fetchUiContract(nextToken);
-    setUiContractDraft(mergeUiContract(contract));
+    setUiContractDraft(mergeUiContract(contract, overview ? {
+      name: overview.company.name,
+      domain: overview.company.domain,
+    } : undefined));
+  }
+
+  async function handleCompanyLogoUpload(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      setErrors(["로고는 이미지 파일만 업로드할 수 있습니다."]);
+      return;
+    }
+    const logoDataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+      reader.onerror = () => reject(new Error("로고 파일을 읽지 못했습니다."));
+      reader.readAsDataURL(file);
+    }).catch((error: unknown) => {
+      setErrors([error instanceof Error ? error.message : "로고 파일 처리 실패"]);
+      return "";
+    });
+    if (!logoDataUrl) {
+      return;
+    }
+    setUiContractDraft((current) => ({
+      ...current,
+      company: {
+        ...current.company,
+        logoDataUrl,
+      },
+    }));
+    setMessage("로고 미리보기를 갱신했습니다. 저장 후 사용자 화면에 반영됩니다.");
+    setErrors([]);
+  }
+
+  function restoreDefaultCompanyLogo() {
+    setUiContractDraft((current) => ({
+      ...current,
+      company: {
+        ...current.company,
+        logoDataUrl: buildDefaultCompanyLogo(current.company.name, current.brand.primary, current.brand.secondary),
+      },
+    }));
+    setMessage("기본 로고로 복구했습니다. 저장 후 운영 화면에 반영됩니다.");
+    setErrors([]);
   }
 
   function toTranslationLocale(code: string): string {
@@ -623,6 +1146,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!message) return;
+    const timer = window.setTimeout(() => {
+      setMessage("");
+    }, 3200);
+    return () => window.clearTimeout(timer);
+  }, [message]);
+
+  useEffect(() => {
     if (token && health?.initialized) {
       void refreshDirectory(token).catch((error) => {
         resetAdminSession(error instanceof Error ? error.message : "관리 데이터 조회 실패");
@@ -630,8 +1161,14 @@ export default function App() {
       void refreshMonitoring(token).catch((error) => {
         setErrors((current) => [...current, error instanceof Error ? error.message : "운영 모니터링 조회 실패"]);
       });
+      void refreshMailDelivery(token).catch((error) => {
+        setErrors((current) => [...current, error instanceof Error ? error.message : "자체 SMTP 상태 조회 실패"]);
+      });
       void refreshApprovalAuditLogs(token).catch((error) => {
         setErrors((current) => [...current, error instanceof Error ? error.message : "결재 감사 로그 조회 실패"]);
+      });
+      void refreshContentOperations(token).catch((error) => {
+        setErrors((current) => [...current, error instanceof Error ? error.message : "콘텐츠 운영 목록 조회 실패"]);
       });
       void refreshTranslationState(token).catch((error) => {
         setTranslationError(error instanceof Error ? error.message : "번역 상태 조회 실패");
@@ -729,11 +1266,18 @@ export default function App() {
     setErrors([]);
     setMessage("");
     try {
-      const response = await login(loginForm);
+      if (loginForm.loginId.includes("@")) {
+        setErrors(["아이디만 입력하세요. 회사 도메인은 자동으로 적용됩니다."]);
+        return;
+      }
+      const response = await login({
+        email: buildCompanyLoginEmail(loginForm.loginId, uiContractDraft.company.domain),
+        password: loginForm.password,
+      });
       storeToken(response.accessToken);
       setToken(response.accessToken);
-      setMessage(`관리자 로그인 완료: ${response.user.userName}`);
       await refreshDirectory(response.accessToken);
+      await refreshMailDelivery(response.accessToken);
       await refreshTranslationState(response.accessToken);
       await reloadUiContract(response.accessToken);
     } catch (error) {
@@ -743,21 +1287,116 @@ export default function App() {
     }
   }
 
-  async function handleDepartmentCreate(event: FormEvent) {
+  function resetDepartmentEditor() {
+    setDepartmentEditingId("");
+    setDepartmentName("");
+    setDepartmentParentId("");
+  }
+
+  async function handleDepartmentSubmit(event: FormEvent) {
     event.preventDefault();
     if (!token) return;
     setLoading(true);
     setErrors([]);
     try {
-      await createDepartment(token, { name: departmentName, sortOrder: 100 });
-      setDepartmentName("");
-      setMessage("부서가 생성되었습니다.");
+      if (departmentEditingId) {
+        await updateDepartment(token, departmentEditingId, {
+          name: departmentName,
+          parentId: departmentParentId || null,
+          sortOrder: 100,
+        });
+        setMessage("부서 정보가 수정되었습니다.");
+      } else {
+        await createDepartment(token, {
+          name: departmentName,
+          parentId: departmentParentId || null,
+          sortOrder: 100,
+        });
+        setMessage("부서가 생성되었습니다.");
+      }
+      resetDepartmentEditor();
+      setManagementDialog(null);
       await refreshDirectory();
     } catch (error) {
-      setErrors([error instanceof Error ? error.message : "부서 생성 실패"]);
+      setErrors([error instanceof Error ? error.message : departmentEditingId ? "부서 수정 실패" : "부서 생성 실패"]);
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleDepartmentStatus(departmentId: string, nextStatus: "active" | "inactive") {
+    if (!token) return;
+    setLoading(true);
+    setErrors([]);
+    try {
+      await updateDepartment(token, departmentId, { status: nextStatus });
+      setMessage(`부서 상태를 ${nextStatus}로 변경했습니다.`);
+      await refreshDirectory();
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "부서 상태 변경 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleDepartmentDelete(departmentId: string, departmentNameValue: string) {
+    if (!token) return;
+    if (!window.confirm(`부서 '${departmentNameValue}'를 삭제 상태로 전환하시겠습니까?`)) {
+      return;
+    }
+    setLoading(true);
+    setErrors([]);
+    try {
+      await deleteDepartment(token, departmentId);
+      if (departmentEditingId === departmentId) {
+        resetDepartmentEditor();
+      }
+      setMessage("부서를 삭제 상태로 전환했습니다.");
+      await refreshDirectory();
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "부서 삭제 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function handleRolePermissionToggle(code: string, checked: boolean) {
+    setRoleSelectedPermissions((current) => {
+      const next = checked ? [...current, code] : current.filter((item) => item !== code);
+      return normalizePermissionCodes(next);
+    });
+  }
+
+  function handleRoleGroupSelection(codes: string[], checked: boolean) {
+    setRoleSelectedPermissions((current) => {
+      const next = checked
+        ? [...current, ...codes]
+        : current.filter((item) => !codes.includes(item));
+      return normalizePermissionCodes(next);
+    });
+  }
+
+  function resetRoleEditor() {
+    setRoleEditingId("");
+    setRoleName("");
+    setRoleSelectedPermissions(defaultRolePermissions);
+    setRoleEditorOpen(false);
+  }
+
+  function applyRoleToOverview(nextRole: Role) {
+    setOverview((current) => {
+      if (!current) {
+        return current;
+      }
+      const exists = current.roles.some((item) => item.id === nextRole.id);
+      const nextRoles = exists
+        ? current.roles.map((item) => (item.id === nextRole.id ? nextRole : item))
+        : [...current.roles, nextRole];
+      return {
+        ...current,
+        roles: nextRoles,
+      };
+    });
   }
 
   async function handleRoleCreate(event: FormEvent) {
@@ -766,15 +1405,27 @@ export default function App() {
     setLoading(true);
     setErrors([]);
     try {
-      await createRole(token, {
-        name: roleName,
-        permissions: rolePermissions.split(",").map((item) => item.trim()).filter(Boolean),
+      const savedRole = roleEditingId
+        ? await updateRole(token, roleEditingId, {
+            name: roleName,
+            permissions: normalizedRoleSelectedPermissions,
+          })
+        : await createRole(token, {
+            name: roleName,
+            permissions: normalizedRoleSelectedPermissions,
+          });
+      applyRoleToOverview({
+        ...savedRole,
+        name: roleName.trim(),
+        permissions: normalizedRoleSelectedPermissions,
       });
-      setRoleName("");
-      setMessage("권한 역할이 생성되었습니다.");
+      setSelectedRoleLookupId(savedRole.id);
+      setMessage(roleEditingId ? "권한 역할이 수정되었습니다." : "권한 역할이 생성되었습니다.");
+      resetRoleEditor();
+      setManagementDialog(null);
       await refreshDirectory();
     } catch (error) {
-      setErrors([error instanceof Error ? error.message : "권한 생성 실패"]);
+      setErrors([error instanceof Error ? error.message : roleEditingId ? "권한 수정 실패" : "권한 생성 실패"]);
     } finally {
       setLoading(false);
     }
@@ -789,7 +1440,7 @@ export default function App() {
       if (userForm.userId) {
         await updateUser(token, userForm.userId, {
           name: userForm.name,
-          password: userForm.password || undefined,
+          ...(userForm.password ? { password: userForm.password } : {}),
           departmentId: userForm.departmentId,
           roleId: userForm.roleId,
           status: userForm.status,
@@ -798,20 +1449,21 @@ export default function App() {
       } else {
         await createUser(token, {
           name: userForm.name,
-          email: userForm.email,
+          loginId: userForm.loginId,
           password: userForm.password,
           departmentId: userForm.departmentId,
           roleId: userForm.roleId,
           status: userForm.status,
-          userType: userForm.userType,
+          userType: "user",
         });
-        setMessage("사용자와 메일 계정이 함께 생성되었습니다.");
+        setMessage("사용자가 생성되었습니다. 입력한 초기 비밀번호를 사용자에게 안전하게 전달하세요.");
       }
       setUserForm((current) => ({
         ...initialUserForm,
         departmentId: current.departmentId,
         roleId: current.roleId,
       }));
+      setManagementDialog(null);
       await refreshDirectory();
     } catch (error) {
       setErrors([error instanceof Error ? error.message : "사용자 저장 실패"]);
@@ -820,16 +1472,124 @@ export default function App() {
     }
   }
 
-  async function handleDeactivateUser(userId: string) {
+  async function handleUserStatus(userId: string, nextStatus: "active" | "inactive") {
     if (!token) return;
     setLoading(true);
     setErrors([]);
     try {
-      await updateUser(token, userId, { status: "inactive" });
-      setMessage("사용자와 메일 계정을 비활성화했습니다.");
+      await updateUser(token, userId, { status: nextStatus });
+      setMessage(nextStatus === "active" ? "사용자와 메일 계정을 활성화했습니다." : "사용자와 메일 계정을 비활성화했습니다.");
       await refreshDirectory();
     } catch (error) {
-      setErrors([error instanceof Error ? error.message : "사용자 비활성화 실패"]);
+      setErrors([error instanceof Error ? error.message : "사용자 상태 변경 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleUserDelete(userId: string, userName: string) {
+    if (!token) return;
+    if (!window.confirm(`사용자 '${userName}'를 삭제 상태로 전환하시겠습니까?`)) {
+      return;
+    }
+    setLoading(true);
+    setErrors([]);
+    try {
+      await deleteUser(token, userId);
+      if (userForm.userId === userId) {
+        setUserForm((current) => ({
+          ...initialUserForm,
+          departmentId: current.departmentId,
+          roleId: current.roleId,
+        }));
+      }
+      setMessage("사용자를 삭제 상태로 전환했습니다.");
+      await refreshDirectory();
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "사용자 삭제 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleOrgImportTemplateDownload() {
+    if (!token) return;
+    setErrors([]);
+    try {
+      const blob = await downloadOrgImportTemplate(token);
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "moaworks-org-import-template.xlsx";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      setMessage("조직/사용자 업로드 템플릿을 다운로드했습니다.");
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "템플릿 다운로드 실패"]);
+    }
+  }
+
+  function handleOrgImportFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const nextFile = event.target.files?.[0] ?? null;
+    setOrgImportFile(nextFile);
+    setOrgImportBatch(null);
+    setOrgImportConfirmChecked(false);
+    setOrgImportConfirmationText("");
+    if (nextFile) {
+      setMessage(`업로드 파일 선택: ${nextFile.name}`);
+      setErrors([]);
+    }
+  }
+
+  async function handleOrgImportValidate() {
+    if (!token || !orgImportFile) {
+      setErrors(["검증할 엑셀 파일을 먼저 선택하세요."]);
+      return;
+    }
+    setLoading(true);
+    setErrors([]);
+    try {
+      const batch = await validateOrgImport(token, orgImportFile, orgImportDeactivationScope);
+      setOrgImportBatch(batch);
+      setOrgImportConfirmChecked(false);
+      setOrgImportConfirmationText("");
+      setOrgImportHistory((current) => [batch, ...current.filter((item) => item.batchId !== batch.batchId)].slice(0, 5));
+      setMessage(batch.errors.length === 0 ? "업로드 검증이 완료되었습니다." : "업로드 검증 결과에 오류가 있습니다.");
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "업로드 검증 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleOrgImportApply() {
+    if (!token || !orgImportBatch) {
+      setErrors(["적용할 검증 배치가 없습니다."]);
+      return;
+    }
+    if (orgImportBatch.errors.length > 0) {
+      setErrors(["검증 오류가 남아 있어 적용할 수 없습니다."]);
+      return;
+    }
+    setLoading(true);
+    setErrors([]);
+    try {
+      const applied = await applyOrgImport(token, {
+        batchId: orgImportBatch.batchId,
+        confirmDeactivateMissingUsers: orgImportConfirmChecked,
+        confirmationText: orgImportConfirmationText.trim(),
+      });
+      setOrgImportBatch(applied);
+      setOrgImportHistory((current) => [applied, ...current.filter((item) => item.batchId !== applied.batchId)].slice(0, 5));
+      await refreshDirectory();
+      const latest = await fetchOrgImportBatch(token, applied.batchId);
+      setOrgImportBatch(latest);
+      setOrgImportHistory((current) => [latest, ...current.filter((item) => item.batchId !== latest.batchId)].slice(0, 5));
+      setMessage("조직/사용자 일괄 업로드가 반영되었습니다.");
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "업로드 적용 실패"]);
     } finally {
       setLoading(false);
     }
@@ -845,6 +1605,118 @@ export default function App() {
       await refreshDirectory();
     } catch (error) {
       setErrors([error instanceof Error ? error.message : "권한 상태 변경 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleRoleDelete(roleId: string, roleNameValue: string) {
+    if (!token) return;
+    if (!window.confirm(`권한 역할 '${roleNameValue}'를 삭제 상태로 전환하시겠습니까?`)) {
+      return;
+    }
+    setLoading(true);
+    setErrors([]);
+    try {
+      await deleteRole(token, roleId);
+      if (roleEditingId === roleId) {
+        resetRoleEditor();
+      }
+      if (selectedRoleLookupId === roleId) {
+        setSelectedRoleLookupId("");
+      }
+      setMessage("권한 역할을 삭제 상태로 전환했습니다.");
+      await refreshDirectory();
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "권한 역할 삭제 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function toggleSelection(ids: string[], id: string, checked: boolean, update: (next: string[]) => void) {
+    update(checked ? Array.from(new Set([...ids, id])) : ids.filter((item) => item !== id));
+  }
+
+  function openUserDialog(user?: DirectoryOverview["users"][number]) {
+    setBulkActionError("");
+    setUserForm(user ? {
+      userId: user.userId,
+      name: user.userName,
+      loginId: user.userEmail.split("@")[0] || "",
+      password: "",
+      departmentId: user.departmentId,
+      roleId: user.roleId,
+      status: user.status === "deleted" ? "inactive" : user.status,
+      userType: user.userType,
+    } : {
+      ...initialUserForm,
+      departmentId: activeDepartments.find((item) => item.status === "active")?.id || activeDepartments[0]?.id || "",
+      roleId: activeRoles.find((item) => item.name === "일반사용자")?.id || activeRoles[0]?.id || "",
+    });
+    setManagementDialog("user");
+  }
+
+  function openDepartmentDialog(department?: DepartmentItem) {
+    setBulkActionError("");
+    setDepartmentEditingId(department?.id ?? "");
+    setDepartmentName(department?.name ?? "");
+    setDepartmentParentId(department?.parentId ?? "");
+    setManagementDialog("department");
+  }
+
+  function openRoleDialog(role?: Role) {
+    setBulkActionError("");
+    setRoleEditingId(role?.id ?? "");
+    setRoleName(role?.name ?? "");
+    setRoleSelectedPermissions(role ? normalizePermissionCodes(role.permissions) : defaultRolePermissions);
+    setSelectedRoleLookupId(role?.id ?? "");
+    setRoleEditorOpen(true);
+    setManagementDialog("role");
+  }
+
+  function closeManagementDialog() {
+    if (loading) return;
+    setManagementDialog(null);
+    setRoleEditorOpen(false);
+    setBulkActionError("");
+  }
+
+  function requestBulkAction(target: BulkTarget, action: BulkAction, ids: string[]) {
+    if (ids.length === 0) return;
+    setBulkActionError("");
+    setBulkConfirmation({ target, action, ids });
+  }
+
+  async function executeBulkAction() {
+    if (!token || !bulkConfirmation) return;
+    const { target, action, ids } = bulkConfirmation;
+    setLoading(true);
+    setBulkActionError("");
+    setErrors([]);
+    try {
+      for (const id of ids) {
+        if (target === "users") {
+          if (action === "delete") await deleteUser(token, id);
+          else await updateUser(token, id, { status: action });
+        }
+        if (target === "departments") {
+          if (action === "delete") await deleteDepartment(token, id);
+          else await updateDepartment(token, id, { status: action });
+        }
+        if (target === "roles") {
+          if (action === "delete") await deleteRole(token, id);
+          else await updateRole(token, id, { status: action });
+        }
+      }
+      setMessage(`${ids.length}개 항목을 ${action === "delete" ? "삭제 상태" : action === "active" ? "활성" : "비활성"}으로 변경했습니다.`);
+      setBulkConfirmation(null);
+      if (target === "users") setSelectedUserIds([]);
+      if (target === "departments") setSelectedDepartmentIds([]);
+      if (target === "roles") setSelectedRoleIds([]);
+      await refreshDirectory();
+    } catch (error) {
+      setBulkActionError(error instanceof Error ? error.message : "일괄 작업에 실패했습니다.");
     } finally {
       setLoading(false);
     }
@@ -886,6 +1758,40 @@ export default function App() {
     }
   }
 
+  async function handleMailDeliveryTest(event: FormEvent) {
+    event.preventDefault();
+    if (!token) return;
+    setLoading(true);
+    setErrors([]);
+    try {
+      const response = await testMailDelivery(token, {
+        subject: "MoaWorks 메일 제공자 연결 테스트",
+      });
+      setMailDeliveryTestResult(response);
+      setMessage(`메일 제공자 연결 테스트 결과: ${response.status}`);
+      await refreshMailDelivery();
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "메일 제공자 연결 테스트 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleMailDeliveryRetry(queueId: string) {
+    if (!token) return;
+    setLoading(true);
+    setErrors([]);
+    try {
+      const response = await retryMailDelivery(token, queueId);
+      setMessage(response.message);
+      await refreshMailDelivery();
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "외부 발송 재시도 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   const isHealthPending = health === null;
   const initialized = health?.initialized === true;
   const showSetupWizard = health?.initialized === false;
@@ -896,7 +1802,49 @@ export default function App() {
   const showAdminConsole = initialized && Boolean(token) && Boolean(overview);
   const uniqueErrors = normalizeWarnings(errors);
   const visibleWarnings = normalizeWarnings(warnings).filter((item) => !uniqueErrors.includes(item));
+  const alertItems = [
+    ...uniqueErrors.map((item) => ({ level: "error" as const, text: item })),
+    ...visibleWarnings.map((item) => ({ level: "warning" as const, text: item })),
+    ...(translationError ? [{ level: "warning" as const, text: translationError }] : []),
+    ...(message ? [{ level: "success" as const, text: message }] : []),
+  ];
+  const alertSummaryCount = alertItems.length + (monitoringOverview?.alertOpenCount ?? 0);
+  const normalizedRoleSelectedPermissions = normalizePermissionCodes(roleSelectedPermissions);
+  const selectedPermissionCount = normalizedRoleSelectedPermissions.length;
+  const roleUnknownPermissions = normalizedRoleSelectedPermissions.filter((code) => !knownPermissionCodeSet.has(code));
+  const orgImportNeedsDeactivationConfirmation = Boolean(orgImportBatch && orgImportBatch.deactivatedUserCount > 0);
+  const orgImportHasProtectedUsers = Boolean(orgImportBatch && orgImportBatch.protectedUsers.length > 0);
+  const orgImportExpectedConfirmationText = orgImportBatch?.deactivationScope === "company_all"
+    ? ORG_IMPORT_COMPANY_ALL_CONFIRMATION_TEXT
+    : ORG_IMPORT_DEACTIVATION_CONFIRMATION_TEXT;
+  const orgImportConfirmationSatisfied = !orgImportNeedsDeactivationConfirmation || orgImportConfirmChecked || orgImportConfirmationText.trim() === orgImportExpectedConfirmationText;
+  const orgImportReadyToApply = Boolean(
+    orgImportBatch
+    && orgImportBatch.errors.length === 0
+    && orgImportBatch.validationStatus === "passed"
+    && !orgImportHasProtectedUsers
+    && orgImportConfirmationSatisfied,
+  );
+  const selectedPermissionPreviewItems = normalizedRoleSelectedPermissions.map((code) => {
+    const option = permissionOptionMap.get(code);
+    return {
+      code,
+      label: option?.label ?? code,
+    };
+  });
+  const visibleStatusMatcher = (status: string, filter: string) => {
+    if (filter === "all") {
+      return true;
+    }
+    if (filter === "visible") {
+      return status !== "deleted";
+    }
+    return status === filter;
+  };
   const filteredUsers = overview?.users.filter((item) => {
+    if (!visibleStatusMatcher(item.status, userStatusFilter)) {
+      return false;
+    }
     if (!userSearch.trim()) {
       return true;
     }
@@ -908,20 +1856,104 @@ export default function App() {
       item.roleName.toLowerCase().includes(keyword)
     );
   }) ?? [];
+  const departmentHierarchy = overview ? buildDepartmentHierarchy(overview.departments) : { rows: [], pathMap: new Map<string, string>() };
+  const filteredDepartmentRows = departmentHierarchy.rows.filter((row) => {
+    if (!visibleStatusMatcher(row.item.status, departmentStatusFilter)) return false;
+    const keyword = departmentSearch.trim().toLowerCase();
+    return !keyword || [row.item.name, row.item.systemDepartmentCode ?? "", row.item.departmentCode ?? "", row.path].some((value) => value.toLowerCase().includes(keyword));
+  });
+  const selectableDepartmentRows = departmentHierarchy.rows.filter((row) => row.item.status !== "deleted" && row.item.id !== departmentEditingId);
+  const selectedDepartmentParent = overview?.departments.find((item) => item.id === departmentParentId) ?? null;
+  const departmentPathPreview = departmentName.trim()
+    ? [selectedDepartmentParent ? departmentHierarchy.pathMap.get(selectedDepartmentParent.id) ?? selectedDepartmentParent.name : "최상위", departmentName.trim()]
+        .filter(Boolean)
+        .join(" > ")
+    : "부서명을 입력하면 생성 경로를 미리 보여줍니다.";
+  const activeDepartments = overview?.departments.filter((item) => item.status !== "deleted") ?? [];
+  const activeRoles = overview?.roles.filter((item) => item.status !== "deleted") ?? [];
+  const normalizedUserLoginId = userForm.loginId.trim().toLowerCase();
+  const userEmailPreview = overview
+    ? normalizedUserLoginId
+      ? `${normalizedUserLoginId}@${overview.company.domain}`
+      : `아이디@${overview.company.domain}`
+    : "";
+  const userTypeSummary = userForm.userId
+    ? userForm.userType === "admin"
+      ? "관리자(admin)"
+      : "일반 사용자(user)"
+    : "일반 사용자(user) 자동 생성";
+  const filteredApprovalAuditLogs = approvalAuditLogs.filter((item) => {
+    if (!approvalSearch.trim()) {
+      return true;
+    }
+    const keyword = approvalSearch.trim().toLowerCase();
+    return [item.event, item.targetId, item.actorUserName, item.reason ?? "", item.statusBefore ?? "", item.statusAfter ?? ""]
+      .some((value) => value.toLowerCase().includes(keyword));
+  });
+  const filteredRoles = overview?.roles.filter((item) => {
+    if (!visibleStatusMatcher(item.status, roleStatusFilter)) {
+      return false;
+    }
+    if (!roleSearch.trim()) {
+      return true;
+    }
+    const keyword = roleSearch.trim().toLowerCase();
+    return item.name.toLowerCase().includes(keyword) || item.permissions.some((permission) => permission.toLowerCase().includes(keyword));
+  }) ?? [];
+  const selectedRoleLookup = overview?.roles.find((item) => item.id === selectedRoleLookupId) ?? null;
+  const roleUserCounts = new Map<string, number>();
+  for (const user of overview?.users ?? []) {
+    if (user.status !== "deleted") {
+      roleUserCounts.set(user.roleId, (roleUserCounts.get(user.roleId) ?? 0) + 1);
+    }
+  }
+  const selectedRoleConnectedUserCount = selectedRoleLookup ? roleUserCounts.get(selectedRoleLookup.id) ?? 0 : 0;
+  const selectedRoleLookupPermissions = (selectedRoleLookup?.permissions ?? []).map((code) => ({
+    code,
+    label: permissionOptionMap.get(code)?.label ?? code,
+  }));
 
-  async function refreshMailDelivery() {
-    if (!token) return;
-    try {
-      const [statusResult, queueResult] = await Promise.all([fetchMailDeliveryStatus(token), fetchMailDeliveryQueue(token)]);
-      setMailDeliveryStatus(statusResult); setMailDeliveryQueue(queueResult.items);
-    } catch (error) { setErrors([error instanceof Error ? error.message : "메일 운영 상태를 불러오지 못했습니다."]); }
-  }
-  async function toggleMailDeliveryLock() {
-    if (!token || !mailDeliveryStatus) return;
-    await updateMailDeliveryProvider(token,{deliveryEnabled:!mailDeliveryStatus.provider.deliveryEnabled}); await refreshMailDelivery();
-  }
-  async function runMailProviderTest() { if (!token) return; await testMailDeliveryProvider(token); await refreshMailDelivery(); }
-  async function retryDelivery(queueId:string) { if (!token) return; await retryMailDelivery(token,queueId); await refreshMailDelivery(); }
+  const filteredContentMessages = contentMessages.filter((item) => {
+    const matchesSearch = !messageSearch.trim() || [item.key, item.category].join(" ").toLowerCase().includes(messageSearch.trim().toLowerCase());
+    const matchesStatus = messageStatusFilter === "all" || (messageStatusFilter === "visible" ? item.status !== "deleted" : item.status === messageStatusFilter);
+    return matchesSearch && matchesStatus;
+  });
+  const filteredHelpPolicies = helpPolicies.filter((item) => {
+    const matchesSearch = !helpSearch.trim() || [item.code, item.title, item.category].join(" ").toLowerCase().includes(helpSearch.trim().toLowerCase());
+    const matchesStatus = helpStatusFilter === "all" || (helpStatusFilter === "visible" ? item.status !== "deleted" : item.status === helpStatusFilter);
+    return matchesSearch && matchesStatus;
+  });
+  const contentDate = (value: string | null | undefined) => value ? new Date(value).toLocaleString("ko-KR") : "-";
+
+  const renderContentMessagesPanel = () => (
+    <section className="panel ops-panel content-ops-panel">
+      <div className="ops-shell content-ops-shell">
+        <div className="panel-head ops-head"><div><h2>다국어/메시지</h2></div><div className="ops-head-actions"><span className="mini-stat">전체 {contentMessages.length}건</span><span className="mini-stat">조회 {filteredContentMessages.length}건</span></div></div>
+        <div className="management-list-toolbar" role="toolbar" aria-label="메시지 목록 작업">
+          <label className="compact-field"><span>검색</span><input value={messageSearch} onChange={(event) => setMessageSearch(event.target.value)} placeholder="키 또는 분류" /></label>
+          <label className="compact-field"><span>상태</span><select value={messageStatusFilter} onChange={(event) => setMessageStatusFilter(event.target.value)}><option value="visible">활성/비활성</option><option value="active">active</option><option value="inactive">inactive</option><option value="deleted">deleted</option><option value="all">전체</option></select></label>
+          <span className="mini-stat">선택 {selectedMessageIds.length}건</span>
+          <div className="actions compact-actions"><button type="button" onClick={() => openContentMessageDialog()} disabled={loading}>새 메시지</button><button type="button" className="secondary" onClick={() => setContentBulkDialog({ resource: "message", action: "active", ids: selectedMessageIds })} disabled={loading || selectedMessageIds.length === 0}>활성화</button><button type="button" className="secondary" onClick={() => setContentBulkDialog({ resource: "message", action: "inactive", ids: selectedMessageIds })} disabled={loading || selectedMessageIds.length === 0}>비활성화</button><button type="button" className="danger-action" onClick={() => setContentBulkDialog({ resource: "message", action: "delete", ids: selectedMessageIds })} disabled={loading || selectedMessageIds.length === 0}>삭제</button><button type="button" className="secondary" onClick={() => void refreshContentOperations()} disabled={loading}>새로고침</button></div>
+        </div>
+        <div className="ops-list-panel content-list-panel"><div className="table-wrap ops-scroll content-list-scroll"><table className="data-table"><thead><tr><th aria-label="선택" /><th>키</th><th>기본 언어</th><th>분류</th><th>상태</th><th>시스템</th><th>수정일</th><th>상세</th></tr></thead><tbody>{filteredContentMessages.map((item) => <tr key={item.id} className="management-list-row" onDoubleClick={() => openContentMessageDialog(item)}><td><input type="checkbox" aria-label={item.key + " 선택"} checked={selectedMessageIds.includes(item.id)} disabled={!item.canChangeStatus} onChange={() => toggleContentSelection("message", item.id)} /></td><td>{item.key}</td><td>{item.default_locale}</td><td>{item.category}</td><td><span className="badge">{item.status}</span></td><td>{item.is_system ? <span className="badge badge-warning">system</span> : "-"}</td><td>{contentDate(item.updated_at)}</td><td><button type="button" className="secondary" onClick={() => openContentMessageDialog(item)}>상세</button></td></tr>)}{filteredContentMessages.length === 0 ? <tr><td colSpan={8}>표시할 메시지가 없습니다.</td></tr> : null}</tbody></table></div></div>
+      </div>
+    </section>
+  );
+
+  const renderHelpPoliciesPanel = () => (
+    <section className="panel ops-panel content-ops-panel">
+      <div className="ops-shell content-ops-shell">
+        <div className="panel-head ops-head"><div><h2>도움말/정책</h2></div><div className="ops-head-actions"><span className="mini-stat">전체 {helpPolicies.length}건</span><span className="mini-stat">조회 {filteredHelpPolicies.length}건</span></div></div>
+        <div className="management-list-toolbar" role="toolbar" aria-label="정책 목록 작업">
+          <label className="compact-field"><span>검색</span><input value={helpSearch} onChange={(event) => setHelpSearch(event.target.value)} placeholder="코드, 제목 또는 분류" /></label>
+          <label className="compact-field"><span>상태</span><select value={helpStatusFilter} onChange={(event) => setHelpStatusFilter(event.target.value)}><option value="visible">초안/발행/비활성</option><option value="draft">draft</option><option value="published">published</option><option value="inactive">inactive</option><option value="deleted">deleted</option><option value="all">전체</option></select></label>
+          <span className="mini-stat">선택 {selectedHelpIds.length}건</span>
+          <div className="actions compact-actions"><button type="button" onClick={() => openHelpPolicyDialog()} disabled={loading}>새 정책</button><button type="button" className="secondary" onClick={() => setContentBulkDialog({ resource: "help", action: "published", ids: selectedHelpIds })} disabled={loading || selectedHelpIds.length === 0}>발행</button><button type="button" className="secondary" onClick={() => setContentBulkDialog({ resource: "help", action: "inactive", ids: selectedHelpIds })} disabled={loading || selectedHelpIds.length === 0}>비활성화</button><button type="button" className="danger-action" onClick={() => setContentBulkDialog({ resource: "help", action: "delete", ids: selectedHelpIds })} disabled={loading || selectedHelpIds.length === 0}>삭제</button><button type="button" className="secondary" onClick={() => void refreshContentOperations()} disabled={loading}>새로고침</button></div>
+        </div>
+        <div className="ops-list-panel content-list-panel"><div className="table-wrap ops-scroll content-list-scroll"><table className="data-table"><thead><tr><th aria-label="선택" /><th>코드</th><th>제목</th><th>분류</th><th>대상</th><th>상태</th><th>버전</th><th>발행일</th><th>수정일</th><th>상세</th></tr></thead><tbody>{filteredHelpPolicies.map((item) => <tr key={item.id} className="management-list-row" onDoubleClick={() => openHelpPolicyDialog(item)}><td><input type="checkbox" aria-label={item.code + " 선택"} checked={selectedHelpIds.includes(item.id)} disabled={!item.canChangeStatus} onChange={() => toggleContentSelection("help", item.id)} /></td><td>{item.code}</td><td>{item.title}</td><td>{item.category}</td><td>{item.audience}</td><td><span className="badge">{item.status}</span></td><td>{item.version}</td><td>{contentDate(item.published_at)}</td><td>{contentDate(item.updated_at)}</td><td><button type="button" className="secondary" onClick={() => openHelpPolicyDialog(item)}>상세</button></td></tr>)}{filteredHelpPolicies.length === 0 ? <tr><td colSpan={10}>표시할 정책이 없습니다.</td></tr> : null}</tbody></table></div></div>
+      </div>
+    </section>
+  );
 
   const renderAdminPanel = () => {
     if (!overview) {
@@ -962,7 +1994,6 @@ export default function App() {
             <div className="panel-head">
               <div>
                 <h2>{copy.overviewTitle}</h2>
-                <p className="muted">운영 개요, 경고/알림, 최근 이벤트, 빠른 작업만 표시합니다.</p>
               </div>
               <div className="actions">
                 <button type="button" className="secondary" onClick={() => void refreshDirectory()}>
@@ -1002,7 +2033,6 @@ export default function App() {
                 <article key={item.title} className="status-card">
                   <strong>{item.title}</strong>
                   <p>{item.value}</p>
-                  <p className="muted">{item.description}</p>
                 </article>
               ))}
             </div>
@@ -1021,25 +2051,26 @@ export default function App() {
               <article className="status-card">
                 <strong>회사</strong>
                 <p>{overview.company.name}</p>
-                <p className="muted">{overview.company.domain}</p>
+
               </article>
               <article className="status-card">
                 <strong>사용자</strong>
-                <p>{overview.users.length}명</p>
-                <p className="muted">활성 {overview.users.filter((item) => item.status === "active").length}명</p>
+                <div className="ops-head-actions">
+                  <span className="mini-stat">전체 {overview.users.length}</span>
+                  <span className="mini-stat">active {overview.users.filter((item) => item.status === "active").length}</span>
+                </div>
               </article>
               <article className="status-card">
                 <strong>부서 / 권한</strong>
                 <p>{overview.departments.length}개 / {overview.roles.length}개</p>
-                <p className="muted">서버에서만 권한 판단</p>
+
               </article>
               <article className="status-card">
                 <strong>빠른 작업</strong>
-                <p>사용자 관리, 서비스 운영, 저장소/DB 상태 점검으로 바로 이동합니다.</p>
-                <div className="row-actions">
-                  <button type="button" className="secondary" onClick={() => setActiveAdminMenu("users")}>사용자 관리</button>
-                  <button type="button" className="secondary" onClick={() => setActiveAdminMenu("service")}>서비스 운영</button>
-                  <button type="button" className="secondary" onClick={() => setActiveAdminMenu("storage")}>저장소/DB 상태</button>
+                                <div className="row-actions">
+                  <button type="button" className="secondary" onClick={() => navigateAdminMenu("users")}>사용자 관리</button>
+                  <button type="button" className="secondary" onClick={() => navigateAdminMenu("service")}>서비스 운영</button>
+                  <button type="button" className="secondary" onClick={() => navigateAdminMenu("storage")}>저장소/DB 상태</button>
                 </div>
               </article>
             </div>
@@ -1047,424 +2078,358 @@ export default function App() {
         );
       case "users":
         return (
-          <section className="panel">
-            <div className="panel-head">
-              <div>
-                <h2>{t(locale, "userManagement")}</h2>
-                <p className="muted">사용자 검색, 목록, 생성/수정, 상태 관리, 파일 업로드 경로를 관리합니다.</p>
-              </div>
-            </div>
-            <div className="overview-grid">
-              <article className="status-card">
-                <strong>파일 업로드</strong>
-                <p>사용자 일괄 등록 파일 업로드 경로는 이 메뉴 안에서만 유지합니다.</p>
-                <p className="muted">현재 단계: 목록/정합성 검토 후 업로드 절차 연결</p>
-              </article>
-              <article className="status-card">
-                <strong>상태 관리</strong>
-                <p>비활성 사용자 차단과 메일 계정 상태 정합성을 함께 확인합니다.</p>
-              </article>
-            </div>
-            <label className="field-label">
-              사용자 검색
-              <input value={userSearch} onChange={(event) => setUserSearch(event.target.value)} placeholder="이름, 이메일, 부서, 권한" />
-            </label>
-            <form className="wizard" onSubmit={handleUserSubmit}>
-              <div className="field-grid">
-                <label>
-                  사용자 이름
-                  <input value={userForm.name} onChange={(e) => setUserForm({ ...userForm, name: e.target.value })} />
-                </label>
-                <label>
-                  이메일
-                  <input type="email" value={userForm.email} disabled={Boolean(userForm.userId)} onChange={(e) => setUserForm({ ...userForm, email: e.target.value })} />
-                </label>
-                <label>
-                  초기/변경 비밀번호
-                  <input type="password" value={userForm.password} onChange={(e) => setUserForm({ ...userForm, password: e.target.value })} />
-                </label>
-                <label>
-                  부서
-                  <select value={userForm.departmentId} onChange={(e) => setUserForm({ ...userForm, departmentId: e.target.value })}>
-                    {overview.departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                  </select>
-                </label>
-                <label>
-                  권한 역할
-                  <select value={userForm.roleId} onChange={(e) => setUserForm({ ...userForm, roleId: e.target.value })}>
-                    {overview.roles.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                  </select>
-                </label>
-                <label>
-                  상태
-                  <select value={userForm.status} onChange={(e) => setUserForm({ ...userForm, status: e.target.value })}>
-                    <option value="active">active</option>
-                    <option value="inactive">inactive</option>
-                  </select>
-                </label>
-                <label>
-                  사용자 유형
-                  <select value={userForm.userType} disabled={Boolean(userForm.userId)} onChange={(e) => setUserForm({ ...userForm, userType: e.target.value })}>
-                    <option value="user">user</option>
-                    <option value="admin">admin</option>
-                  </select>
-                </label>
-              </div>
-              <div className="actions">
-                <button type="submit" disabled={loading}>{userForm.userId ? copy.editUser : copy.createUser}</button>
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => setUserForm({
-                    ...initialUserForm,
-                    departmentId: overview.departments[0]?.id || "",
-                    roleId: overview.roles[0]?.id || "",
-                  })}
-                >
-                  {copy.newUser}
-                </button>
-              </div>
-            </form>
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>이름</th>
-                    <th>이메일</th>
-                    <th>부서</th>
-                    <th>권한</th>
-                    <th>사용자 상태</th>
-                    <th>메일 상태</th>
-                    <th>정합성</th>
-                    <th>작업</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredUsers.map((item) => (
-                    <tr key={item.userId}>
-                      <td>{item.userName}</td>
-                      <td>{item.userEmail}</td>
-                      <td>{item.departmentName}</td>
-                      <td>{item.roleName}</td>
-                      <td>{item.status}</td>
-                      <td>{item.mailAccountStatus}</td>
-                      <td>{item.consistencyIssues.length === 0 ? "정상" : item.consistencyIssues.map((issue) => issue.code).join(", ")}</td>
-                      <td>
-                        <div className="row-actions">
-                          <button
-                            type="button"
-                            className="secondary"
-                            onClick={() => setUserForm({
-                              userId: item.userId,
-                              name: item.userName,
-                              email: item.userEmail,
-                              password: "",
-                              departmentId: item.departmentId,
-                              roleId: item.roleId,
-                              status: item.status,
-                              userType: item.userType,
-                            })}
-                          >
-                            {copy.edit}
-                          </button>
-                          {item.userType !== "admin" && item.status === "active" ? (
-                            <button type="button" className="secondary" onClick={() => void handleDeactivateUser(item.userId)}>
-                              {copy.deactivate}
-                            </button>
-                          ) : null}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  {filteredUsers.length === 0 ? (
-                    <tr>
-                      <td colSpan={8}>{userSearch ? "조건에 맞는 사용자가 없습니다." : "등록된 사용자가 없습니다."}</td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        );
-      case "departments":
-        return (
-          <section className="panel">
-            <div className="panel-head">
-              <div>
-                <h2>부서 관리</h2>
-                <p className="muted">부서 목록, 구조, 생성/수정 업무만 표시합니다.</p>
-              </div>
-            </div>
-            <div className="overview-grid">
-              <article className="status-card">
-                <strong>부서 구조</strong>
-                <p>{overview.departments.map((item) => item.name).join(" / ") || "등록된 부서가 없습니다."}</p>
-              </article>
-            </div>
-            <form className="compact-form" onSubmit={handleDepartmentCreate}>
-              <label>
-                부서명
-                <input value={departmentName} onChange={(e) => setDepartmentName(e.target.value)} />
-              </label>
-              <button type="submit" disabled={loading}>{copy.createDepartment}</button>
-            </form>
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>부서명</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {overview.departments.map((item) => (
-                    <tr key={item.id}>
-                      <td>{item.name}</td>
-                    </tr>
-                  ))}
-                  {overview.departments.length === 0 ? <tr><td>등록된 부서가 없습니다.</td></tr> : null}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        );
-      case "roles":
-        return (
-          <section className="panel">
-            <div className="panel-head">
-              <div>
-                <h2>권한 관리</h2>
-                <p className="muted">권한 역할 현황, 역할 생성, 권한 편집, 활성/비활성 전환만 표시합니다.</p>
-              </div>
-            </div>
-            <form className="compact-form" onSubmit={handleRoleCreate}>
-              <label>
-                역할명
-                <input value={roleName} onChange={(e) => setRoleName(e.target.value)} />
-              </label>
-              <label>
-                권한 목록
-                <input value={rolePermissions} onChange={(e) => setRolePermissions(e.target.value)} />
-              </label>
-              <button type="submit" disabled={loading}>{copy.createRole}</button>
-            </form>
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>역할명</th>
-                    <th>상태</th>
-                    <th>권한 수</th>
-                    <th>권한 편집/전환</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {overview.roles.map((item) => (
-                    <tr key={item.id}>
-                      <td>{item.name}</td>
-                      <td>{item.status}</td>
-                      <td>{item.permissions.length}</td>
-                      <td>
-                        <div className="row-actions">
-                          <button
-                            type="button"
-                            className="secondary"
-                            disabled={loading}
-                            onClick={() => {
-                              setRoleName(item.name);
-                              setRolePermissions(item.permissions.join(", "));
-                            }}
-                          >
-                            권한 편집
-                          </button>
-                          {item.status === "active" ? (
-                            <button
-                              type="button"
-                              className="secondary"
-                              disabled={loading || item.name === "관리자"}
-                              onClick={() => void handleRoleStatus(item.id, "inactive")}
-                            >
-                              {copy.deactivate}
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              className="secondary"
-                              disabled={loading}
-                              onClick={() => void handleRoleStatus(item.id, "active")}
-                            >
-                              {copy.activate}
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        );
-      case "service":
-        return (
-          <section className="panel split-panel">
-            <article>
-              <div className="panel-head">
+          <section className="panel ops-panel users-ops-panel">
+            <div className="ops-shell users-ops-shell">
+              <div className="panel-head ops-head">
                 <div>
-                  <h2>{copy.verifyDomain}</h2>
-                  <p className="muted">회사 도메인 기준 MX/SPF/DKIM/DMARC 검증만 이 메뉴에서 수행합니다.</p>
+                  <h2>{t(locale, "userManagement")}</h2>
+                </div>
+                <div className="ops-head-actions">
+                  <span className="mini-stat">전체 {overview.users.length}명</span>
+                  <span className="mini-stat">조회 {filteredUsers.length}명</span>
+                  <span className="mini-stat">삭제 {overview.users.filter((item) => item.status === "deleted").length}명</span>
                 </div>
               </div>
-              <form className="compact-form" onSubmit={handleDomainVerify}>
-                <label>
-                  검증 도메인
-                  <input value={domainInput} onChange={(e) => setDomainInput(e.target.value)} />
+              <div className="management-list-toolbar" role="toolbar" aria-label="사용자 목록 작업">
+                <label className="compact-field">
+                  <span>사용자 검색</span>
+                  <input value={userSearch} onChange={(event) => setUserSearch(event.target.value)} placeholder="이름, 아이디, 이메일, 부서, 역할" />
                 </label>
-                <button type="submit" disabled={loading}>{copy.verifyDomainAction}</button>
-              </form>
-              {domainResult ? (
-                <div className="stack-list">
-                  <p className="result">전체 상태: {domainResult.overallStatus}</p>
-                  {domainResult.checks.map((item) => (
-                    <article key={`${item.recordType}-${item.host}`} className="status-card">
-                      <div className="status-title">
-                        <strong>{item.recordType}</strong>
-                        <span className={`badge badge-${item.status}`}>{item.status}</span>
+                <label className="compact-field">
+                  <span>상태</span>
+                  <select value={userStatusFilter} onChange={(event) => setUserStatusFilter(event.target.value)}>
+                    <option value="visible">활성/비활성</option><option value="active">active</option><option value="inactive">inactive</option><option value="deleted">deleted</option><option value="all">전체</option>
+                  </select>
+                </label>
+                <span className="mini-stat">선택 {selectedUserIds.length}명</span>
+                <div className="actions compact-actions">
+                  <button type="button" onClick={() => openUserDialog()} disabled={loading}>사용자 등록</button>
+                  <button type="button" className="secondary" onClick={() => setManagementDialog("orgImport")} disabled={loading}>조직/사용자 일괄 업로드</button>
+                  <button type="button" className="secondary" onClick={() => requestBulkAction("users", "active", selectedUserIds)} disabled={loading || selectedUserIds.length === 0}>활성화</button>
+                  <button type="button" className="secondary" onClick={() => requestBulkAction("users", "inactive", selectedUserIds)} disabled={loading || selectedUserIds.length === 0}>비활성화</button>
+                  <button type="button" className="danger-action" onClick={() => requestBulkAction("users", "delete", selectedUserIds)} disabled={loading || selectedUserIds.length === 0}>삭제</button>
+                </div>
+              </div>
+              {managementDialog === "user" ? (
+                <div className="management-modal-backdrop" role="presentation" onClick={closeManagementDialog}>
+                  <form className="management-modal management-editor-modal" onSubmit={handleUserSubmit} onClick={(event) => event.stopPropagation()}>
+                    <div className="management-modal-head"><strong>{userForm.userId ? copy.editUser : copy.createUser}</strong><button type="button" className="secondary" onClick={closeManagementDialog}>닫기</button></div>
+                <div className="ops-toolbar-grid user-toolbar-grid">
+                  <label className="compact-field">
+                    <span>사용자 검색</span>
+                    <input value={userSearch} onChange={(event) => setUserSearch(event.target.value)} placeholder="이름, 이메일, 부서, 권한" />
+                  </label>
+                  <label className="compact-field">
+                    <span>목록 상태</span>
+                    <select value={userStatusFilter} onChange={(event) => setUserStatusFilter(event.target.value)}>
+                      <option value="visible">활성/비활성</option>
+                      <option value="active">active</option>
+                      <option value="inactive">inactive</option>
+                      <option value="deleted">deleted</option>
+                      <option value="all">전체</option>
+                    </select>
+                  </label>
+                  <label className="compact-field">
+                    <span>사용자 이름</span>
+                    <input value={userForm.name} onChange={(e) => setUserForm({ ...userForm, name: e.target.value })} />
+                  </label>
+                  <label className="compact-field">
+                    <span>아이디 <InlineHint label="회사 도메인과 결합해 이메일 주소를 자동 구성합니다." /></span>
+                    <input value={userForm.loginId} disabled={Boolean(userForm.userId)} onChange={(e) => setUserForm({ ...userForm, loginId: e.target.value.toLowerCase() })} placeholder="hong.gildong" />
+                  </label>
+                  <label className="compact-field">
+                    <span>{userForm.userId ? "새 비밀번호(선택)" : "초기 비밀번호"} <InlineHint label="8자 이상으로 설정하고 사용자에게 별도 보안 채널로 전달하세요." /></span>
+                    <input type="password" minLength={8} required={!userForm.userId} value={userForm.password} onChange={(e) => setUserForm({ ...userForm, password: e.target.value })} autoComplete="new-password" />
+                  </label>
+                  <label className="compact-field">
+                    <span>자동 생성 이메일</span>
+                    <input value={userEmailPreview} readOnly />
+                  </label>
+                  <label className="compact-field">
+                    <span>부서</span>
+                    <select value={userForm.departmentId} onChange={(e) => setUserForm({ ...userForm, departmentId: e.target.value })}>
+                      {activeDepartments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                    </select>
+                  </label>
+                  <label className="compact-field">
+                    <span>권한 역할 <InlineHint label="일반 사용자 생성 화면에서는 역할만 선택하고 계정 유형은 자동으로 user 처리됩니다." /></span>
+                    <select value={userForm.roleId} onChange={(e) => setUserForm({ ...userForm, roleId: e.target.value })}>
+                      {activeRoles.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                    </select>
+                  </label>
+                  <label className="compact-field">
+                    <span>상태</span>
+                    <select value={userForm.status} onChange={(e) => setUserForm({ ...userForm, status: e.target.value })}>
+                      <option value="active">active</option>
+                      <option value="inactive">inactive</option>
+                    </select>
+                  </label>
+                  <label className="compact-field">
+                    <span>계정 분류</span>
+                    <input value={userTypeSummary} readOnly />
+                  </label>
+                </div>
+                <div className="actions compact-actions">
+                  <button type="submit" disabled={loading}>
+                    {userForm.userId ? copy.editUser : copy.createUser}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => setUserForm({
+                      ...initialUserForm,
+                      departmentId: activeDepartments.find((item) => item.status === "active")?.id || activeDepartments[0]?.id || "",
+                      roleId: activeRoles.find((item) => item.name === "일반사용자")?.id || activeRoles[0]?.id || "",
+                    })}
+                  >
+                    {copy.newUser}
+                  </button>
+                  <button type="button" className="secondary" onClick={() => setManagementDialog("orgImport")}>
+                    조직/사용자 일괄 업로드
+                  </button>
+                </div>
+                  </form>
+                </div>
+              ) : null}
+              {managementDialog === "orgImport" ? (
+                <div className="org-import-modal-backdrop" role="presentation" onClick={() => { if (!loading) closeManagementDialog(); }}>
+                  <section className="org-import-modal" role="dialog" aria-modal="true" aria-label="조직/사용자 일괄 업로드" onClick={(event) => event.stopPropagation()}>
+                    <div className="org-import-modal-head">
+                      <div>
+                        <strong>조직/사용자 일괄 업로드</strong>
+                        <p className="muted">검증 후 미리보기와 누락 사용자 확인을 마쳐야 실제 반영됩니다.</p>
                       </div>
-                      <p>{item.host}</p>
-                      <p className="muted">{item.expectedValue}</p>
-                      <p>{item.message}</p>
-                    </article>
-                  ))}
+                      <div className="ops-head-actions">
+                        <button type="button" className="secondary" onClick={() => void handleOrgImportTemplateDownload()} disabled={loading}>템플릿 다운로드</button>
+                        <button type="button" className="secondary" onClick={closeManagementDialog} disabled={loading}>닫기</button>
+                      </div>
+                    </div>
+                    <div className="org-import-modal-body">
+                      <div className="org-import-file-row">
+                        <div className="compact-field org-import-file-field">
+                          <span>비활성화 정책 <InlineHint label="기본 정책은 업로드 부서 범위 안의 검수용 계정만 누락 비교 대상으로 삼고, admin·cyhuh·ysla 같은 보호 계정은 별도 경고로 분리합니다." /></span>
+                          <select value={orgImportDeactivationScope} onChange={(event) => setOrgImportDeactivationScope(event.target.value as "none" | "uploaded_departments_only" | "company_all")}>
+                            <option value="uploaded_departments_only">업로드 부서 내 검수용 계정만 비교</option>
+                            <option value="none">누락 사용자 자동 비활성화 안 함</option>
+                            <option value="company_all">회사 전체 누락 비교</option>
+                          </select>
+                        </div>
+                        <div className="compact-field org-import-file-field">
+                          <span>업로드 파일 <InlineHint label="엑셀 업로드 직후에는 DB에 반영되지 않고, 검증/미리보기 후 관리자 확인을 거쳐야 적용됩니다." /></span>
+                          <div className="org-import-file-picker">
+                            <input
+                              id="org-import-file"
+                              className="org-import-file-input"
+                              type="file"
+                              accept=".xlsx"
+                              onChange={handleOrgImportFileChange}
+                            />
+                            <label htmlFor="org-import-file" className="button-like secondary">파일 선택</label>
+                            <div className={`org-import-file-name ${orgImportFile ? "has-file" : ""}`}>{orgImportFile?.name || "선택된 파일 없음"}</div>
+                          </div>
+                        </div>
+                        <div className="org-import-actions">
+                          <button type="button" className="secondary" onClick={() => void handleOrgImportValidate()} disabled={!orgImportFile || loading}>검증 실행</button>
+                          <button type="button" onClick={() => void handleOrgImportApply()} disabled={!orgImportReadyToApply || loading}>적용 실행</button>
+                        </div>
+                      </div>
+                      {orgImportBatch ? (
+                        <div className="org-import-preview-grid">
+                          <div className="ops-toolbar-meta">
+                            <span className="mini-stat">기존 활성 부서 비활성 {orgImportBatch.inactiveDepartmentCount}개</span>
+                            <span className="mini-stat">신규 부서 {orgImportBatch.createdDepartmentCount}개</span>
+                            <span className="mini-stat">기존 사용자 이동 {orgImportBatch.movedUserCount}명</span>
+                            <span className="mini-stat">신규 사용자 {orgImportBatch.createdUserCount}명</span>
+                            <span className="mini-stat">누락 사용자 비활성 {orgImportBatch.deactivatedUserCount}명</span>
+                            <span className="mini-stat">보호 제외 사용자 {orgImportBatch.protectedUsers.length}명</span>
+                          </div>
+                          <div className="org-import-preview-columns">
+                            <div className="permission-preview-panel">
+                              <strong>부서 미리보기</strong>
+                              <div className="stack-list org-import-stack">
+                                {orgImportBatch.departments.slice(0, 8).map((item) => (
+                                  <span key={`${item.rowNumber}-${item.systemDepartmentCode}`} className="meta-chip org-import-chip">
+                                    {item.departmentName} · {item.departmentCode} · {item.systemDepartmentCode}
+                                  </span>
+                                ))}
+                                {orgImportBatch.departments.length === 0 ? <span className="muted">검증된 부서가 없습니다.</span> : null}
+                              </div>
+                            </div>
+                            <div className="permission-preview-panel">
+                              <strong>사용자 미리보기</strong>
+                              <div className="stack-list org-import-stack">
+                                {orgImportBatch.users.slice(0, 8).map((item) => (
+                                  <span key={`${item.rowNumber}-${item.loginId}`} className="meta-chip org-import-chip">
+                                    {item.name} · {item.loginId} · {item.departmentName || item.departmentCode} · {item.action}
+                                  </span>
+                                ))}
+                                {orgImportBatch.users.length === 0 ? <span className="muted">검증된 사용자가 없습니다.</span> : null}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="permission-preview-panel">
+                            <strong>현재 비활성화 정책</strong>
+                            <p className="muted">
+                              {orgImportBatch.deactivationScope === "company_all"
+                                ? "회사 전체 누락 비교"
+                                : orgImportBatch.deactivationScope === "none"
+                                  ? "자동 비활성화 안 함"
+                                  : "업로드 부서 내 검수용 계정만 비교"}
+                            </p>
+                          </div>
+                          {orgImportBatch.protectedUsers.length > 0 ? (
+                            <div className="permission-preview-panel warning-list">
+                              <div className="ops-list-head"><strong>보호 제외 사용자</strong><span className="mini-stat">{orgImportBatch.protectedUsers.length}명</span></div>
+                              <div className="table-wrap ops-scroll org-import-deactivation-scroll"><table className="data-table"><thead><tr><th>이름</th><th>아이디</th><th>이메일</th><th>현재 부서</th><th>현재 권한 역할</th><th>현재 상태</th><th>제외 사유</th></tr></thead><tbody>{orgImportBatch.protectedUsers.map((item) => <tr key={`protected-${item.userId}`}><td>{item.name}</td><td>{item.loginId}</td><td>{item.email}</td><td>{item.currentDepartmentName}</td><td>{item.currentRoleName}</td><td>{item.currentStatus}</td><td>{item.reason}</td></tr>)}</tbody></table></div>
+                              <p className="muted">보호 계정이 남아 있으면 서버 apply가 차단됩니다. 업로드 파일을 수정한 뒤 다시 검증하세요.</p>
+                            </div>
+                          ) : null}
+                          {orgImportBatch.usersToDeactivate.length > 0 ? (
+                            <div className="permission-preview-panel org-import-danger-panel">
+                              <div className="ops-list-head"><strong>업로드 파일 누락으로 비활성화 예정인 기존 사용자</strong><span className="mini-stat">{orgImportBatch.usersToDeactivate.length}명</span></div>
+                              <div className="table-wrap ops-scroll org-import-deactivation-scroll"><table className="data-table"><thead><tr><th>이름</th><th>아이디</th><th>이메일</th><th>현재 부서</th><th>현재 권한 역할</th><th>현재 상태</th><th>사유</th></tr></thead><tbody>{orgImportBatch.usersToDeactivate.map((item) => <tr key={item.userId}><td>{item.name}</td><td>{item.loginId}</td><td>{item.email}</td><td>{item.currentDepartmentName}</td><td>{item.currentRoleName}</td><td>{item.currentStatus}</td><td>{item.reason}</td></tr>)}</tbody></table></div>
+                              <div className="org-import-confirm-box"><label className="org-import-confirm-check"><input type="checkbox" checked={orgImportConfirmChecked} onChange={(event) => setOrgImportConfirmChecked(event.target.checked)} /><span>누락 사용자 비활성화 동의</span></label><label className="compact-field"><span>확인 문구 입력</span><input value={orgImportConfirmationText} onChange={(event) => setOrgImportConfirmationText(event.target.value)} placeholder={orgImportExpectedConfirmationText} /></label>{!orgImportConfirmationSatisfied ? <p className="muted">체크 또는 확인 문구 입력 후 적용할 수 있습니다.</p> : null}</div>
+                            </div>
+                          ) : <div className="permission-preview-panel org-import-safe-panel"><strong>누락 사용자 비활성화 예정 없음</strong><p className="muted">이번 배치는 기존 사용자 자동 비활성화 없이 적용할 수 있습니다.</p></div>}
+                          {orgImportBatch.errors.length > 0 ? <div className="message-list error-list">{orgImportBatch.errors.map((item, index) => <p key={`error-${orgImportBatch.batchId}-${index}`}>{`${item.sheet ?? "batch"}${item.rowNumber ? ` ${item.rowNumber}행` : ""}: ${item.message}`}</p>)}</div> : null}
+                          {orgImportBatch.warnings.length > 0 ? <div className="message-list warning-list">{orgImportBatch.warnings.map((item, index) => <p key={`warn-${orgImportBatch.batchId}-${index}`}>{`${item.sheet ?? "batch"}${item.rowNumber ? ` ${item.rowNumber}행` : ""}: ${item.message}`}</p>)}</div> : null}
+                        </div>
+                      ) : null}
+                      {orgImportHistory.length > 0 ? <div className="table-wrap ops-scroll org-import-history-scroll"><table className="data-table"><thead><tr><th>배치</th><th>파일명</th><th>검증</th><th>적용</th><th>누락 비활성화</th></tr></thead><tbody>{orgImportHistory.map((item) => <tr key={item.batchId}><td>{item.batchId}</td><td>{item.fileName}</td><td>{item.validationStatus}</td><td>{item.applyStatus}</td><td>{item.deactivatedUserCount}</td></tr>)}</tbody></table></div> : null}
+                    </div>
+                  </section>
                 </div>
               ) : null}
-            </article>
-            <article>
-              <div className="panel-head">
-                <div>
-                  <h2>{copy.relayTest}</h2>
-                  <p className="muted">Relay 테스트와 운영 점검 결과만 이 메뉴에서 다룹니다.</p>
-                </div>
+              <div className="ops-list-panel">
+                <div className="ops-list-head"><strong>사용자 목록</strong><span className="muted">행을 더블클릭하면 상세·수정 창이 열립니다.</span></div>
+                <div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th><input type="checkbox" aria-label="현재 사용자 결과 전체 선택" checked={filteredUsers.length > 0 && filteredUsers.every((item) => selectedUserIds.includes(item.userId))} onChange={(event) => setSelectedUserIds(event.target.checked ? filteredUsers.map((item) => item.userId) : [])} /></th><th>이름</th><th>아이디/이메일</th><th>부서</th><th>권한 역할</th><th>사용자 상태</th><th>메일 상태</th><th>정합성</th></tr></thead><tbody>
+                  {filteredUsers.map((item) => <tr key={item.userId} onDoubleClick={() => openUserDialog(item)} className="management-list-row"><td><input type="checkbox" aria-label={`${item.userName} 선택`} checked={selectedUserIds.includes(item.userId)} onChange={(event) => toggleSelection(selectedUserIds, item.userId, event.target.checked, setSelectedUserIds)} onClick={(event) => event.stopPropagation()} /></td><td>{item.userName}</td><td>{item.userEmail}</td><td>{item.departmentName}</td><td>{item.roleName}</td><td><span className={`badge ${item.status === "active" ? "badge-ok" : item.status === "deleted" ? "badge-danger" : "badge-warning"}`}>{item.status}</span></td><td>{item.mailAccountStatus}</td><td>{item.consistencyIssues.length === 0 ? "정상" : item.consistencyIssues.map((issue) => issue.code).join(", ")}</td></tr>)}
+                  {filteredUsers.length === 0 ? <tr><td colSpan={8}>조건에 맞는 사용자가 없습니다.</td></tr> : null}
+                </tbody></table></div>
               </div>
-              <form className="compact-form" onSubmit={handleRelayTest}>
-                <label>
-                  테스트 수신자
-                  <input type="email" value={relayRecipient} onChange={(e) => setRelayRecipient(e.target.value)} />
-                </label>
-                <button type="submit" disabled={loading}>{copy.relayTestAction}</button>
-              </form>
-              <article className="status-card">
-                <strong>운영 점검 결과</strong>
-                <p>열린 경고 {monitoringOverview?.alertOpenCount ?? 0}건</p>
-                <p className="muted">디스크 사용률 {monitoringOverview?.diskUsagePercent ?? 0}% / 승인 지연 {monitoringOverview?.approvalBacklogCount ?? 0}건</p>
-              </article>
-              {relayResult ? (
-                <div className={`notice ${relayResult.status === "success" ? "success" : "warning"}`}>
-                  <strong>{relayResult.status}</strong>
-                  <p>{relayResult.message}</p>
-                </div>
-              ) : null}
-            </article>
+            </div>
           </section>
-        );
-      case "mail":
+        );      case "departments":
         return (
-          <section className="panel">
-            <div className="panel-head">
-              <div><h2>메일 운영</h2><p className="muted">Provider 잠금, 실제 연결, worker heartbeat와 외부 전달 큐를 관리합니다.</p></div>
-              <button type="button" className="secondary" onClick={() => void refreshMailDelivery()}>새로고침</button>
-            </div>
-            {mailDeliveryStatus ? <div className="overview-grid">
-              <article className="status-card"><strong>외부 발송 잠금</strong><p>{mailDeliveryStatus.provider.deliveryEnabled ? "해제" : "잠금"}</p><button type="button" onClick={() => void toggleMailDeliveryLock()}>{mailDeliveryStatus.provider.deliveryEnabled ? "외부 발송 잠금" : "검증 후 잠금 해제"}</button></article>
-              <article className="status-card"><strong>Provider 연결</strong><p>{mailDeliveryStatus.provider.providerType} / {mailDeliveryStatus.provider.lastTestStatus}</p><p className="muted">{mailDeliveryStatus.provider.relayHost}:{mailDeliveryStatus.provider.relayPort}</p><button type="button" className="secondary" onClick={() => void runMailProviderTest()}>연결 테스트</button></article>
-              <article className="status-card"><strong>Worker heartbeat</strong><p>{String(mailDeliveryStatus.worker.status ?? "미확인")}</p><p className="muted">{String(mailDeliveryStatus.worker.last_heartbeat_at ?? "heartbeat 없음")}</p></article>
-              <article className="status-card"><strong>큐 요약</strong><p>{Object.entries(mailDeliveryStatus.summary).map(([key,value]) => key+" "+value).join(" / ") || "큐 없음"}</p></article>
-            </div> : <p className="muted">메일 운영 상태를 불러오는 중입니다.</p>}
-            <div className="status-card"><strong>외부 전달 큐</strong>
-              <table><thead><tr><th>수신자</th><th>제목</th><th>상태</th><th>attempt</th><th>작업</th></tr></thead><tbody>
-              {mailDeliveryQueue.map(item => <tr key={item.queueId}><td>{item.recipientEmail}</td><td>{item.subject}</td><td>{item.status}</td><td>{item.attemptCount}</td><td>{["failed","blocked","retry_pending"].includes(item.status) ? <button type="button" className="secondary" onClick={() => void retryDelivery(item.queueId)}>재시도</button> : "-"}</td></tr>)}
-              {mailDeliveryQueue.length === 0 ? <tr><td colSpan={5}>표시할 외부 전달 큐가 없습니다.</td></tr> : null}
-              </tbody></table>
+          <section className="panel ops-panel">
+            <div className="ops-shell management-shell">
+              <div className="panel-head ops-head"><div><h2>부서 관리</h2></div><div className="ops-head-actions"><span className="mini-stat">전체 {overview.departments.length}개</span><span className="mini-stat">조회 {filteredDepartmentRows.length}개</span><span className="mini-stat">선택 {selectedDepartmentIds.length}개</span></div></div>
+              <div className="management-list-toolbar" role="toolbar" aria-label="부서 목록 작업">
+                <label className="compact-field"><span>부서 검색</span><input value={departmentSearch} onChange={(event) => setDepartmentSearch(event.target.value)} placeholder="부서명 또는 부서 코드" /></label>
+                <label className="compact-field"><span>상태</span><select value={departmentStatusFilter} onChange={(event) => setDepartmentStatusFilter(event.target.value)}><option value="visible">활성/비활성</option><option value="active">active</option><option value="inactive">inactive</option><option value="deleted">deleted</option><option value="all">전체</option></select></label>
+                <div className="actions compact-actions"><button type="button" onClick={() => openDepartmentDialog()} disabled={loading}>부서 등록</button><button type="button" className="secondary" onClick={() => requestBulkAction("departments", "active", selectedDepartmentIds)} disabled={loading || selectedDepartmentIds.length === 0}>활성화</button><button type="button" className="secondary" onClick={() => requestBulkAction("departments", "inactive", selectedDepartmentIds)} disabled={loading || selectedDepartmentIds.length === 0}>비활성화</button><button type="button" className="danger-action" onClick={() => requestBulkAction("departments", "delete", selectedDepartmentIds)} disabled={loading || selectedDepartmentIds.length === 0}>삭제</button></div>
+              </div>
+              {managementDialog === "department" ? <div className="management-modal-backdrop" role="presentation" onClick={closeManagementDialog}><form className="management-modal management-editor-modal" onSubmit={handleDepartmentSubmit} onClick={(event) => event.stopPropagation()}><div className="management-modal-head"><strong>{departmentEditingId ? "부서 수정" : "부서 등록"}</strong><button type="button" className="secondary" onClick={closeManagementDialog}>닫기</button></div><div className="ops-toolbar-grid department-toolbar-grid"><label className="compact-field"><span>부서명</span><input value={departmentName} onChange={(event) => setDepartmentName(event.target.value)} /></label><label className="compact-field"><span>상위 부서 <InlineHint label="최상위를 선택하면 루트 부서로 생성됩니다." /></span><select value={departmentParentId} onChange={(event) => setDepartmentParentId(event.target.value)}><option value="">최상위(없음)</option>{selectableDepartmentRows.map((row) => <option key={row.item.id} value={row.item.id}>{`${"  ".repeat(row.level)}${row.path}`}</option>)}</select></label><label className="compact-field compact-field-wide"><span>경로 미리보기</span><input value={departmentPathPreview} readOnly /></label></div><div className="actions compact-actions"><button type="submit" disabled={loading}>{departmentEditingId ? "저장" : "등록"}</button></div></form></div> : null}
+              <div className="ops-list-panel"><div className="ops-list-head"><strong>부서 계층 목록</strong><span className="muted">행을 더블클릭하면 상세·수정 창이 열립니다.</span></div><div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th><input type="checkbox" aria-label="현재 부서 결과 전체 선택" checked={filteredDepartmentRows.length > 0 && filteredDepartmentRows.every((row) => selectedDepartmentIds.includes(row.item.id))} onChange={(event) => setSelectedDepartmentIds(event.target.checked ? filteredDepartmentRows.map((row) => row.item.id) : [])} /></th><th>구조</th><th>시스템 코드</th><th>업무 코드</th><th>경로</th><th>상위 부서</th><th>상태</th><th>연결 사용자</th></tr></thead><tbody>{filteredDepartmentRows.map((row) => <tr key={row.item.id} onDoubleClick={() => openDepartmentDialog(row.item)} className="management-list-row"><td><input type="checkbox" aria-label={`${row.item.name} 선택`} checked={selectedDepartmentIds.includes(row.item.id)} onChange={(event) => toggleSelection(selectedDepartmentIds, row.item.id, event.target.checked, setSelectedDepartmentIds)} onClick={(event) => event.stopPropagation()} /></td><td><span className="department-tree-label" style={{ paddingLeft: `${row.level * 16}px` }}>{row.level > 0 ? "└ " : "• "}{row.item.name}</span></td><td>{row.item.systemDepartmentCode ?? "-"}</td><td>{row.item.departmentCode ?? "-"}</td><td>{row.path}</td><td>{row.parentName || "최상위"}</td><td><span className={`badge ${row.item.status === "active" ? "badge-ok" : row.item.status === "deleted" ? "badge-danger" : "badge-warning"}`}>{row.item.status}</span></td><td>{overview.users.filter((user) => user.departmentId === row.item.id && user.status !== "deleted").length}</td></tr>)}{filteredDepartmentRows.length === 0 ? <tr><td colSpan={8}>조건에 맞는 부서가 없습니다.</td></tr> : null}</tbody></table></div></div>
             </div>
           </section>
-        );
+        );      case "roles":
+        return (
+          <section className="panel ops-panel">
+            <div className="ops-shell management-shell">
+              <div className="panel-head ops-head"><div><h2>권한 관리</h2></div><div className="ops-head-actions"><span className="mini-stat">전체 {overview.roles.length}개</span><span className="mini-stat">조회 {filteredRoles.length}개</span><span className="mini-stat">선택 {selectedRoleIds.length}개</span></div></div>
+              <div className="management-list-toolbar" role="toolbar" aria-label="권한 역할 목록 작업">
+                <label className="compact-field"><span>역할 검색</span><input value={roleSearch} onChange={(event) => setRoleSearch(event.target.value)} placeholder="역할명 또는 권한 코드" /></label>
+                <label className="compact-field"><span>상태</span><select value={roleStatusFilter} onChange={(event) => setRoleStatusFilter(event.target.value)}><option value="visible">활성/비활성</option><option value="active">active</option><option value="inactive">inactive</option><option value="deleted">deleted</option><option value="all">전체</option></select></label>
+                <div className="actions compact-actions"><button type="button" onClick={() => openRoleDialog()} disabled={loading}>새 권한 역할</button><button type="button" className="secondary" onClick={() => requestBulkAction("roles", "active", selectedRoleIds)} disabled={loading || selectedRoleIds.length === 0}>활성화</button><button type="button" className="secondary" onClick={() => requestBulkAction("roles", "inactive", selectedRoleIds)} disabled={loading || selectedRoleIds.length === 0}>비활성화</button><button type="button" className="danger-action" onClick={() => requestBulkAction("roles", "delete", selectedRoleIds)} disabled={loading || selectedRoleIds.length === 0}>삭제</button></div>
+              </div>
+              {managementDialog === "role" && roleEditorOpen ? <div className="management-modal-backdrop" role="presentation" onClick={closeManagementDialog}><form className="management-modal management-role-modal" onSubmit={handleRoleCreate} onClick={(event) => event.stopPropagation()}><div className="management-modal-head"><div><strong>{roleEditingId ? "권한 역할 상세·편집" : "권한 역할 등록"}</strong><span className="muted">권한은 기능군별 선택으로만 관리합니다.</span></div><button type="button" className="secondary" onClick={closeManagementDialog}>닫기</button></div><div className="role-detail-meta">{roleEditingId ? <><span className="meta-chip">연결 사용자 {roleUserCounts.get(roleEditingId) ?? 0}명</span><span className="meta-chip">상태 {overview.roles.find((item) => item.id === roleEditingId)?.status ?? "-"}</span><span className="meta-chip">삭제 {(roleUserCounts.get(roleEditingId) ?? 0) > 0 ? "서버 차단 대상" : "가능 여부는 서버 재검증"}</span></> : <span className="meta-chip">새 사용자 정의 역할</span>}</div><div className="ops-toolbar-grid role-editor-toolbar-grid"><label className="compact-field"><span>역할명</span><input value={roleName} onChange={(event) => setRoleName(event.target.value)} /></label><div className="compact-field compact-field-wide"><span>선택 권한</span><div className="badge-row permission-preview-row">{selectedPermissionPreviewItems.length > 0 ? selectedPermissionPreviewItems.map((item) => <span key={item.code} className="meta-chip permission-preview-chip" title={item.code}><strong>{item.label}</strong><small>{item.code}</small></span>) : <span className="muted">선택된 권한 없음</span>}</div></div></div><div className="permission-group-grid">{permissionGroups.map((group) => { const groupCodes = group.options.map((option) => option.code); const selectedCount = groupCodes.filter((code) => normalizedRoleSelectedPermissions.includes(code)).length; return <article key={group.key} className="status-card permission-group-card"><div className="status-title"><strong>{group.label}</strong><span className="mini-stat">{selectedCount}/{groupCodes.length}</span></div><div className="row-actions"><button type="button" className="secondary" onClick={() => handleRoleGroupSelection(groupCodes, true)}>전체 선택</button><button type="button" className="secondary" onClick={() => handleRoleGroupSelection(groupCodes, false)} disabled={selectedCount === 0}>전체 해제</button></div><div className="stack-list">{group.options.map((option) => <label key={option.code} className="permission-check"><input type="checkbox" checked={normalizedRoleSelectedPermissions.includes(option.code)} onChange={(event) => handleRolePermissionToggle(option.code, event.target.checked)} /><span>{option.label}</span><small>{option.code}</small></label>)}</div></article>; })}</div><div className="actions compact-actions"><button type="submit" disabled={loading}>{roleEditingId ? "권한 수정 저장" : "권한 역할 등록"}</button></div></form></div> : null}
+              <div className="ops-list-panel"><div className="ops-list-head"><strong>권한 역할 목록</strong><span className="muted">행을 더블클릭하면 권한 조회·편집 창이 열립니다.</span></div><div className="table-wrap ops-scroll role-list-scroll"><table className="data-table"><thead><tr><th><input type="checkbox" aria-label="현재 권한 역할 결과 전체 선택" checked={filteredRoles.length > 0 && filteredRoles.every((item) => selectedRoleIds.includes(item.id))} onChange={(event) => setSelectedRoleIds(event.target.checked ? filteredRoles.map((item) => item.id) : [])} /></th><th>역할명</th><th>상태</th><th>권한 수</th><th>연결 사용자</th><th>삭제 기준</th></tr></thead><tbody>{filteredRoles.map((item) => { const connectedUserCount = roleUserCounts.get(item.id) ?? 0; const isDefaultRole = ["관리자", "일반사용자"].includes(item.name); return <tr key={item.id} onDoubleClick={() => openRoleDialog(item)} className="management-list-row"><td><input type="checkbox" aria-label={`${item.name} 선택`} checked={selectedRoleIds.includes(item.id)} onChange={(event) => toggleSelection(selectedRoleIds, item.id, event.target.checked, setSelectedRoleIds)} onClick={(event) => event.stopPropagation()} /></td><td>{item.name}</td><td><span className={`badge ${item.status === "active" ? "badge-ok" : item.status === "deleted" ? "badge-danger" : "badge-warning"}`}>{item.status}</span></td><td>{item.permissions.length}</td><td>{connectedUserCount}</td><td>{item.status === "deleted" ? "삭제됨" : isDefaultRole ? "기본 역할" : connectedUserCount > 0 ? "연결 사용자 있음" : "삭제 가능"}</td></tr>; })}{filteredRoles.length === 0 ? <tr><td colSpan={6}>조건에 맞는 권한 역할이 없습니다.</td></tr> : null}</tbody></table></div></div>
+            </div>
+          </section>
+        );      case "service":
+        return <section className="panel ops-panel"><div className="ops-shell"><div className="panel-head ops-head"><h2>서비스 운영</h2><div className="actions compact-actions"><button type="button" onClick={() => setOperationsDialog("domain")}>도메인 검증 실행</button><button type="button" className="secondary" onClick={() => setOperationsDialog("relay")}>Relay 테스트 실행</button></div></div><div className="overview-grid"><article className="status-card"><strong>운영 점검</strong><span className="mini-stat">열린 경고 {monitoringOverview?.alertOpenCount ?? 0}건</span></article><article className="status-card"><strong>Relay 상태</strong><span className="mini-stat">{relayResult?.status ?? "최근 실행 없음"}</span></article></div><div className="ops-list-panel"><div className="ops-list-head"><strong>도메인 검증 이력</strong><span className="muted">행을 더블클릭하면 실행 결과를 확인합니다.</span></div><div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>유형</th><th>대상</th><th>상태</th><th>결과</th></tr></thead><tbody>{(domainResult?.checks ?? []).map((item) => <tr key={`${item.recordType}-${item.host}`} onDoubleClick={() => { setOperationDetail({ title: "도메인 검증 상세", lines: [item.recordType, item.host, item.message, item.status] }); setOperationsDialog("audit"); }}><td>{item.recordType}</td><td>{item.host}</td><td>{item.status}</td><td>{item.message}</td></tr>)}{!domainResult ? <tr><td colSpan={4}>검증 이력이 없습니다.</td></tr> : null}</tbody></table></div></div></div></section>;
+      case "mail":
+        return <section className="panel ops-panel"><div className="ops-shell"><div className="panel-head ops-head"><h2>메일 설정</h2><div className="actions compact-actions"><button type="button" onClick={() => setOperationsDialog("mailTest")}>제공자 연결 테스트</button><button type="button" className="secondary" onClick={() => setOperationsDialog("provider")}>제공자 설정</button><button type="button" className="secondary" onClick={() => void refreshMailDelivery()}>새로고침</button></div></div><div className="overview-grid"><article className="status-card"><strong>Provider</strong><span className="mini-stat">{mailDeliveryStatus?.provider.providerKey ?? "self_hosted_smtp"}</span></article><article className="status-card"><strong>발송 큐</strong><span className="mini-stat">queued {mailDeliveryStatus?.summary.queuedCount ?? 0} / failed {mailDeliveryStatus?.summary.failedCount ?? 0}</span></article></div><div className="ops-list-panel"><div className="ops-list-head"><strong>최근 전달 이력</strong></div><div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>수신자</th><th>제목</th><th>상태</th><th>재시도</th></tr></thead><tbody>{(mailDeliveryQueue?.queue ?? []).map((item) => <tr key={item.queueId} onDoubleClick={() => { setOperationDetail({ title: "전달 상세", lines: [item.recipient, item.subject, item.status, `재시도 ${item.attemptCount}`, item.lastError ?? "오류 없음"] }); setOperationsDialog("audit"); }}><td>{item.recipient}</td><td>{item.subject}</td><td>{item.status}</td><td>{item.attemptCount}</td></tr>)}{(mailDeliveryQueue?.queue?.length ?? 0) === 0 ? <tr><td colSpan={4}>전달 이력이 없습니다.</td></tr> : null}</tbody></table></div></div></div></section>;
       case "storage":
         return (
           <section className="panel">
             <div className="panel-head">
               <div>
                 <h2>저장소/DB 상태</h2>
-                <p className="muted">저장소 상태, DB 상태, 백업/복구 요약만 표시합니다.</p>
               </div>
             </div>
             <div className="overview-grid">
               <article className="status-card">
                 <strong>저장소 상태</strong>
                 <p>{health?.components.storage?.status ?? "unknown"}</p>
-                <p className="muted">{health?.components.storage?.message ?? "저장소 상태를 아직 확인하지 못했습니다."}</p>
+
               </article>
               <article className="status-card">
                 <strong>DB 상태</strong>
                 <p>{health?.components.db?.status ?? "unknown"}</p>
-                <p className="muted">{health?.components.db?.message ?? "DB 상태를 아직 확인하지 못했습니다."}</p>
+
               </article>
               <article className="status-card">
                 <strong>백업/복구 요약</strong>
                 <p>{health?.components.storage?.details?.backup_status || "요약 미수집"}</p>
-                <p className="muted">복구 절차: 운영 저장소 정책 및 DB 스냅샷 기준</p>
+
               </article>
             </div>
           </section>
         );
       case "approval":
         return (
-          <section className="panel">
-            <div className="panel-head">
-              <div>
-                <h2>{copy.approvalAuditTitle}</h2>
-                <p className="muted">결재 감사 로그, 상태 전이 이벤트, 필터, 상세 조회만 표시합니다.</p>
+          <section className="panel ops-panel">
+            <div className="ops-shell">
+              <div className="panel-head ops-head">
+                <div>
+                  <h2>{copy.approvalAuditTitle}</h2>
+                </div>
+                <div className="ops-head-actions">
+                  <span className="mini-stat">전체 {approvalAuditLogs.length}건</span>
+                  <span className="mini-stat">표시 {filteredApprovalAuditLogs.length}건</span>
+                </div>
               </div>
-              <div className="actions">
-                <button type="button" className="secondary" onClick={() => void refreshApprovalAuditLogs()}>
-                  {copy.refreshApprovalLogs}
-                </button>
+              <div className="ops-toolbar">
+                <div className="ops-toolbar-grid approval-toolbar-grid">
+                  <label className="compact-field compact-field-wide">
+                    <span>로그 필터 <InlineHint label="이벤트, 문서 ID, 처리자, 상태 전이, 사유 기준으로 현재 목록을 즉시 좁힙니다." /></span>
+                    <input value={approvalSearch} onChange={(event) => setApprovalSearch(event.target.value)} placeholder="이벤트, 문서 ID, 처리자, 상태 전이" />
+                  </label>
+                </div>
+                <div className="actions compact-actions">
+                  <button type="button" className="secondary" onClick={() => void refreshApprovalAuditLogs()}>
+                    {copy.refreshApprovalLogs}
+                  </button>
+                </div>
               </div>
-            </div>
-            <div className="overview-grid">
-              <article className="status-card">
-                <strong>필터</strong>
-                <p>문서 ID 기준 상세 조회와 최근 상태 전이 이벤트 확인</p>
-              </article>
-            </div>
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>시각</th>
-                    <th>이벤트</th>
-                    <th>문서</th>
-                    <th>처리자</th>
-                    <th>상태 전이</th>
-                    <th>사유</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {approvalAuditLogs.slice(0, 20).map((item) => (
-                    <tr key={item.id}>
-                      <td>{new Date(item.createdAt).toLocaleString()}</td>
-                      <td>{item.event}</td>
-                      <td>{item.targetId}</td>
-                      <td>{item.actorUserName}</td>
-                      <td>{`${item.statusBefore ?? "-"} -> ${item.statusAfter ?? "-"}`}</td>
-                      <td>{item.reason ?? "-"}</td>
-                    </tr>
-                  ))}
-                  {approvalAuditLogs.length === 0 ? (
-                    <tr>
-                      <td colSpan={6}>결재 감사 로그가 없습니다.</td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
+              <div className="ops-list-panel">
+                <div className="ops-list-head">
+                  <strong>감사 로그 목록</strong>
+                </div>
+                <div className="table-wrap ops-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>시각</th>
+                        <th>이벤트</th>
+                        <th>문서</th>
+                        <th>처리자</th>
+                        <th>상태 전이</th>
+                        <th>사유</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredApprovalAuditLogs.slice(0, 200).map((item) => (
+                        <tr key={item.id}>
+                          <td>{new Date(item.createdAt).toLocaleString()}</td>
+                          <td>{item.event}</td>
+                          <td>{item.targetId}</td>
+                          <td>{item.actorUserName}</td>
+                          <td>{`${item.statusBefore ?? "-"} -> ${item.statusAfter ?? "-"}`}</td>
+                          <td>{item.reason ?? "-"}</td>
+                        </tr>
+                      ))}
+                      {filteredApprovalAuditLogs.length === 0 ? (
+                        <tr>
+                          <td colSpan={6}>{approvalSearch ? "조건에 맞는 결재 감사 로그가 없습니다." : "결재 감사 로그가 없습니다."}</td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           </section>
         );
@@ -1474,45 +2439,113 @@ export default function App() {
             <div className="panel-head">
               <div>
                 <h2>브랜드/화면 설정</h2>
-                <p className="muted">브랜드 설정, 메뉴 구성, 설정 계약, 반영 확인, 사용자 화면 연결만 표시합니다.</p>
               </div>
             </div>
-            <div className="overview-grid">
-              <article className="status-card">
-                <strong>브랜드 설정</strong>
-                <p>{overview.company.name} 기준 대표/보조/강조/차단 색상을 관리합니다.</p>
-              </article>
-              <article className="status-card">
-                <strong>메뉴 구성</strong>
-                <p>{uiContractDraft.menuOrder.join(" > ")}</p>
-                <p className="muted">홈 카드 우선순위: {uiContractDraft.homeCardOrder.join(" > ")}</p>
-              </article>
-              <article className="status-card">
-                <strong>반영 확인</strong>
-                <p>user-web / mobile-app / desktop-client 상단 바, 메뉴 순서, Help 경로 반영</p>
-              </article>
+            <div className="ops-head-actions" style={{ marginBottom: 16 }}>
+              <span className="mini-stat">회사 {uiContractDraft.company.name}</span>
+              <span className="mini-stat">도메인 {uiContractDraft.company.domain}</span>
+              <span className="mini-stat">메뉴 {uiContractDraft.menuOrder.join(" · ")}</span>
             </div>
             <div className="split-panel">
               <article>
-                <h3>설정 계약</h3>
+                <h3>회사 식별 정보</h3>
+                <div className="brand-identity-card">
+                  <div className="brand-identity-grid">
+                    <label>
+                      회사명
+                      <input value={uiContractDraft.company.name} readOnly />
+                    </label>
+                    <label>
+                      도메인
+                      <input value={uiContractDraft.company.domain} readOnly />
+                    </label>
+                  </div>
+                  <div className="logo-editor-row">
+                    <div className="company-logo-shell">
+                      <img src={uiContractDraft.company.logoDataUrl} alt={`${uiContractDraft.company.name} 로고`} className="company-logo-image" />
+                    </div>
+                    <div className="logo-editor-actions">
+                      <div className="logo-editor-title">
+                        회사 로고 <InlineHint label="업로드한 로고는 저장 후 관리자 웹과 사용자 웹 헤더에 공통 반영됩니다." />
+                      </div>
+                      <input type="file" accept="image/*" onChange={(event) => void handleCompanyLogoUpload(event)} />
+                      <div className="actions">
+                        <button type="button" className="secondary" onClick={restoreDefaultCompanyLogo}>기본 로고 복구</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <h3 style={{ marginTop: 18 }}>설정</h3>
                 <form className="wizard" onSubmit={(event) => event.preventDefault()}>
                   <div className="field-grid">
-                    <label>
-                      대표 색상
-                      <input value={uiContractDraft.brand.primary} onChange={(e) => setUiContractDraft((current) => ({ ...current, brand: { ...current.brand, primary: e.target.value } }))} />
-                    </label>
-                    <label>
-                      보조 색상
-                      <input value={uiContractDraft.brand.secondary} onChange={(e) => setUiContractDraft((current) => ({ ...current, brand: { ...current.brand, secondary: e.target.value } }))} />
-                    </label>
-                    <label>
-                      강조 색상
-                      <input value={uiContractDraft.brand.accent} onChange={(e) => setUiContractDraft((current) => ({ ...current, brand: { ...current.brand, accent: e.target.value } }))} />
-                    </label>
-                    <label>
-                      차단 색상
-                      <input value={uiContractDraft.brand.blocked} onChange={(e) => setUiContractDraft((current) => ({ ...current, brand: { ...current.brand, blocked: e.target.value } }))} />
-                    </label>
+                    {[
+                      { key: "primary", label: "대표 색상", helper: "주요 버튼과 활성 상태" },
+                      { key: "secondary", label: "보조 색상", helper: "헤더와 보조 카드" },
+                      { key: "accent", label: "강조 색상", helper: "배지와 보조 강조 포인트" },
+                      { key: "blocked", label: "차단 색상", helper: "차단/경고 상태" },
+                    ].map((item) => {
+                      const colorKey = item.key as keyof UiContract["brand"];
+                      const fallbackColor = defaultUiContract.brand[colorKey];
+                      const colorValue = uiContractDraft.brand[colorKey];
+                      const normalizedColor = normalizeHexColor(colorValue, fallbackColor);
+                      return (
+                        <label key={item.key} className="color-setting-card">
+                          <span>{item.label}</span>
+                          <div className="color-control-row">
+                            <input
+                              type="color"
+                              value={normalizedColor}
+                              onChange={(e) =>
+                                setUiContractDraft((current) => ({
+                                  ...current,
+                                  brand: {
+                                    ...current.brand,
+                                    [colorKey]: e.target.value,
+                                  },
+                                  company: {
+                                    ...current.company,
+                                    logoDataUrl: current.company.logoDataUrl.startsWith("data:image/svg+xml")
+                                      ? buildDefaultCompanyLogo(current.company.name, colorKey === "primary" ? e.target.value : current.brand.primary, colorKey === "secondary" ? e.target.value : current.brand.secondary)
+                                      : current.company.logoDataUrl,
+                                  },
+                                }))
+                              }
+                            />
+                            <input
+                              value={colorValue}
+                              onChange={(e) =>
+                                setUiContractDraft((current) => ({
+                                  ...current,
+                                  brand: {
+                                    ...current.brand,
+                                    [colorKey]: e.target.value,
+                                  },
+                                }))
+                              }
+                              onBlur={(e) => {
+                                const nextColor = normalizeHexColor(e.target.value, fallbackColor);
+                                setUiContractDraft((current) => ({
+                                  ...current,
+                                  brand: {
+                                    ...current.brand,
+                                    [colorKey]: nextColor,
+                                  },
+                                  company: {
+                                    ...current.company,
+                                    logoDataUrl: current.company.logoDataUrl.startsWith("data:image/svg+xml")
+                                      ? buildDefaultCompanyLogo(current.company.name, colorKey === "primary" ? nextColor : current.brand.primary, colorKey === "secondary" ? nextColor : current.brand.secondary)
+                                      : current.company.logoDataUrl,
+                                  },
+                                }));
+                              }}
+                            />
+                            <span className="color-swatch" style={{ background: normalizedColor }} />
+                          </div>
+                          <InlineHint label={item.helper} />
+                        </label>
+                      );
+                    })}
                     <label>
                       좌측 메뉴 순서
                       <input value={uiContractDraft.menuOrder.join(", ")} onChange={(e) => setUiContractDraft((current) => ({ ...current, menuOrder: e.target.value.split(",").map((item) => item.trim()).filter(Boolean) }))} />
@@ -1533,90 +2566,50 @@ export default function App() {
                 </form>
               </article>
               <article>
-                <h3>사용자 화면 연결</h3>
-                <div className="overview-grid">
-                  {settingsContracts.map((item) => (
-                    <article key={item.title} className="status-card">
-                      <strong>{item.title}</strong>
-                      <p>{item.values}</p>
-                      <p className="muted">반영 대상: {item.targets}</p>
-                    </article>
-                  ))}
+                <h3>미리보기</h3>
+                <div className="brand-preview-grid">
+                  <article className="brand-preview-card">
+                    <div className="brand-preview-header" style={{ background: normalizeHexColor(uiContractDraft.brand.secondary, defaultUiContract.brand.secondary), color: "#ffffff" }}>
+                      운영 헤더 미리보기
+                    </div>
+                    <div className="brand-preview-body">
+                      <div className="company-identity-block preview-identity">
+                        <div className="company-logo-shell preview-logo-shell">
+                          <img src={uiContractDraft.company.logoDataUrl} alt={`${uiContractDraft.company.name} 로고`} className="company-logo-image" />
+                        </div>
+                        <div>
+                          <strong>{uiContractDraft.company.name}</strong>
+                          <p className="muted">{uiContractDraft.company.domain}</p>
+                        </div>
+                      </div>
+                      <button type="button" style={{ background: normalizeHexColor(uiContractDraft.brand.primary, defaultUiContract.brand.primary) }}>
+                        주요 버튼
+                      </button>
+                      <button type="button" className="secondary">보조 버튼</button>
+                      <span className="badge" style={{ background: normalizeHexColor(uiContractDraft.brand.accent, defaultUiContract.brand.accent), color: "#ffffff" }}>
+                        강조 배지
+                      </span>
+                      <span className="badge" style={{ background: normalizeHexColor(uiContractDraft.brand.blocked, defaultUiContract.brand.blocked), color: "#ffffff" }}>
+                        차단 상태
+                      </span>
+                    </div>
+                  </article>
+                  <article className="brand-preview-card">
+                    <div className="brand-preview-body">
+                      <div className="brand-preview-panel" style={{ borderColor: normalizeHexColor(uiContractDraft.brand.primary, defaultUiContract.brand.primary) }}>
+                        <strong>{uiContractDraft.company.name} 로고/색상 공통 반영</strong>
+                      </div>
+                    </div>
+                  </article>
                 </div>
               </article>
             </div>
           </section>
         );
       case "language":
-        return (
-          <section className="panel">
-            <div className="panel-head">
-              <div>
-                <h2>다국어/메시지</h2>
-                <p className="muted">언어, 시간대, 상태 메시지, 메시지 카테고리만 표시합니다.</p>
-              </div>
-            </div>
-            <div className="status-grid">
-              <article className="status-card">
-                <strong>언어</strong>
-                <select value={locale} onChange={(event) => saveLocale(event.target.value as AppLocale)} style={{ display: "block", width: "100%", marginTop: 8 }}>
-                  {supportedLocales.map((value) => (
-                    <option key={value} value={value}>
-                      {value}
-                    </option>
-                  ))}
-                </select>
-              </article>
-              <article className="status-card">
-                <strong>시간대</strong>
-                <select value={timezone} onChange={(event) => saveTimezone(event.target.value)} style={{ display: "block", width: "100%", marginTop: 8 }}>
-                  {supportedTimezones.map((value) => (
-                    <option key={value} value={value}>
-                      {value}
-                    </option>
-                  ))}
-                </select>
-              </article>
-            </div>
-            <div className="overview-grid">
-              {messageCategories.map((item) => (
-                <article key={item.title} className="status-card">
-                  <strong>{item.title}</strong>
-                  <p>{item.body}</p>
-                </article>
-              ))}
-            </div>
-          </section>
-        );
+        return renderContentMessagesPanel();
       case "help":
-        return (
-          <section className="panel">
-            <div className="panel-head">
-              <div>
-                <h2>도움말/정책</h2>
-                <p className="muted">운영 가이드, 정책 안내, 공통 인증 계약 요약, 점검 항목만 표시합니다.</p>
-              </div>
-            </div>
-            <div className="overview-grid">
-              <article className="status-card">
-                <strong>운영 가이드</strong>
-                <p>초기 설정, 관리자 로그인, 사용자 생성, 서비스 운영 점검 순서로 확인합니다.</p>
-              </article>
-              <article className="status-card">
-                <strong>정책 안내</strong>
-                <p>정책 본문은 사용자 웹/모바일/설치형의 Help 및 정책 안내 영역에서 확인합니다.</p>
-              </article>
-              <article className="status-card">
-                <strong>공통 인증 계약 요약</strong>
-                <p className="muted">{copy.authContract}</p>
-              </article>
-              <article className="status-card">
-                <strong>점검 항목</strong>
-                <p>DB 연결, health.initialized, 로그인 화면 전환, 관리자 메뉴 진입 확인</p>
-              </article>
-            </div>
-          </section>
-        );
+        return renderHelpPoliciesPanel();
       default:
         return null;
     }
@@ -1767,7 +2760,10 @@ export default function App() {
             <form className="compact-form" onSubmit={handleLogin}>
               <label>
                 {copy.adminEmail}
-                <input type="email" value={loginForm.email} onChange={(e) => setLoginForm({ ...loginForm, email: e.target.value })} />
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 10, alignItems: "center" }}>
+                  <input value={loginForm.loginId} onChange={(e) => setLoginForm({ ...loginForm, loginId: normalizeLoginIdInput(e.target.value) })} placeholder="admin" />
+                  <span style={{ height: 40, display: "inline-flex", alignItems: "center", padding: "0 12px", borderRadius: 12, border: "1px solid #dbe4ec", background: "#f8fafc", color: "#475569", fontSize: 13, fontWeight: 700 }}>@{uiContractDraft.company.domain}</span>
+                </div>
               </label>
               <label>
                 {copy.adminPassword}
@@ -1946,10 +2942,15 @@ export default function App() {
       {initialized && token && overview && (
         <section className="console-layout">
           <aside className="console-sidebar">
-            <div>
-              <p className="eyebrow">MoaWorks Admin</p>
-              <h2>{overview.company.name}</h2>
-              <p className="muted">{overview.company.domain}</p>
+            <div className="company-identity-block">
+              <div className="company-logo-shell sidebar-logo-shell">
+                <img src={uiContractDraft.company.logoDataUrl} alt={`${uiContractDraft.company.name} 로고`} className="company-logo-image" />
+              </div>
+              <div>
+                <p className="eyebrow">MoaWorks Admin</p>
+                <h2>{uiContractDraft.company.name}</h2>
+                <p className="muted">{uiContractDraft.company.domain}</p>
+              </div>
             </div>
             <nav className="console-menu" aria-label="관리자 메뉴">
               {adminMenus.map((item) => (
@@ -1957,16 +2958,15 @@ export default function App() {
                   key={item.key}
                   type="button"
                   className={item.key === activeAdminMenu ? "menu-item active" : "menu-item"}
-                  onClick={() => setActiveAdminMenu(item.key)}
+                  onClick={() => navigateAdminMenu(item.key)}
                 >
                   <span>{item.label}</span>
-                  <small>{item.description}</small>
                 </button>
               ))}
             </nav>
             <div className="console-profile">
               <strong>관리자 세션</strong>
-              <p className="muted">{loginForm.email || "관리자"}</p>
+              <p className="muted">{loginForm.loginId || "관리자"}</p>
               <button
                 type="button"
                 className="secondary"
@@ -1980,7 +2980,8 @@ export default function App() {
                   setMonitoringOverview(null);
                   setMonitoringEvents([]);
                   setApprovalAuditLogs([]);
-                    setActiveAdminMenu("dashboard");
+                  setAlertPanelOpen(false);
+                  setActiveAdminMenu("dashboard");
                 }}
               >
                 {t(locale, "logout")}
@@ -1993,16 +2994,129 @@ export default function App() {
               <div>
                 <p className="muted">관리자 콘솔 / {activeMenu.label}</p>
                 <h2>{activeMenu.label}</h2>
-                <p className="muted">{activeMenu.description}</p>
               </div>
               <div className="topbar-actions">
                 <input aria-label="빠른 이동" placeholder="메뉴 또는 작업 검색" readOnly value={activeMenu.label} />
-                <button type="button" className="secondary" onClick={() => void refreshMonitoring()}>
-                  경고/알림
-                </button>
+                <div className="alert-panel-wrap">
+                  <button
+                    type="button"
+                    className={`secondary alert-toggle ${alertPanelOpen ? "is-open" : ""}`}
+                    onClick={() => setAlertPanelOpen((current) => !current)}
+                  >
+                    경고/알림 {alertSummaryCount > 0 ? `${alertSummaryCount}건` : "0건"}
+                  </button>
+                  {alertPanelOpen ? (
+                    <div className="alert-panel" role="dialog" aria-label="경고 및 알림 요약">
+                      <div className="alert-panel-head">
+                        <strong>운영 알림 요약</strong>
+                        <button type="button" className="secondary" onClick={() => setAlertPanelOpen(false)}>닫기</button>
+                      </div>
+                      <div className="alert-panel-body">
+                        <div className="alert-panel-summary">
+                          <span className="mini-stat">화면 알림 {alertItems.length}건</span>
+                          <span className="mini-stat">열린 운영 경고 {monitoringOverview?.alertOpenCount ?? 0}건</span>
+                        </div>
+                        {alertItems.length > 0 ? (
+                          <div className="alert-panel-list">
+                            {alertItems.map((item, index) => (
+                              <div key={`${item.level}-${index}`} className={`alert-item ${item.level}`}>
+                                <strong>{item.level === "error" ? "오류" : item.level === "warning" ? "경고" : "성공"}</strong>
+                                <p>{item.text}</p>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="alert-item neutral">
+                            <strong>현재 알림 없음</strong>
+                            <p>메뉴 본문을 밀지 않도록 경고와 성공 메시지는 이 패널 안에서만 확인합니다.</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </div>
+            {message ? (
+              <div className="notice success console-toast" role="status" aria-live="polite">
+                <strong>{message}</strong>
+              </div>
+            ) : null}
             {renderAdminPanel()}
+            {contentDialog ? (
+              <div className="management-modal-backdrop" role="presentation" onClick={() => !loading && setContentDialog(null)}>
+                <section className="management-modal content-editor-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+                  {contentDialog.resource === "message" ? (
+                    <form className="compact-form" onSubmit={saveContentMessage}>
+                      <div className="management-modal-head"><div><strong>{contentDialog.mode === "create" ? "새 메시지" : "메시지 상세"}</strong>{contentDialog.item ? <span className="muted">상태 {contentDialog.item.status} · {contentDialog.item.is_system ? "시스템 항목" : "운영 항목"}</span> : null}</div><button type="button" className="secondary" onClick={() => setContentDialog(null)}>닫기</button></div>
+                      {contentDialog.item?.is_system ? <div className="notice warning"><strong>시스템 항목 보호</strong><p>시스템 메시지는 조회만 가능하며 수정·상태 변경·삭제는 서버에서도 차단됩니다.</p></div> : null}
+                      {contentDialog.item?.status === "deleted" ? <div className="notice warning"><strong>삭제 상태</strong><p>삭제된 메시지는 조회만 가능하며 다시 수정할 수 없습니다.</p></div> : null}
+                      {contentDialogError ? <div className="notice warning"><strong>처리 실패</strong><p>{contentDialogError}</p></div> : null}
+                      <fieldset className="ops-toolbar-grid content-editor-grid" disabled={loading || Boolean(contentDialog.item?.is_system) || contentDialog.item?.status === "deleted"}>
+                        <label className="compact-field"><span>메시지 키</span><input value={contentMessageDraft.key} onChange={(event) => setContentMessageDraft((current) => ({ ...current, key: event.target.value }))} required /></label>
+                        <label className="compact-field"><span>기본 언어</span><input value={contentMessageDraft.defaultLocale} onChange={(event) => setContentMessageDraft((current) => ({ ...current, defaultLocale: event.target.value }))} required /></label>
+                        <label className="compact-field"><span>분류</span><input value={contentMessageDraft.category} onChange={(event) => setContentMessageDraft((current) => ({ ...current, category: event.target.value }))} required /></label>
+                        <label className="compact-field"><span>번역 언어</span><input value={contentMessageDraft.locale} onChange={(event) => setContentMessageDraft((current) => ({ ...current, locale: event.target.value }))} required /></label>
+                        <label className="compact-field content-editor-wide"><span>번역 내용</span><textarea value={contentMessageDraft.content} onChange={(event) => setContentMessageDraft((current) => ({ ...current, content: event.target.value }))} required /></label>
+                      </fieldset>
+                      <div className="actions compact-actions"><button type="submit" disabled={loading || Boolean(contentDialog.item?.is_system) || contentDialog.item?.status === "deleted"}>{contentDialog.mode === "create" ? "등록" : "수정 저장"}</button></div>
+                    </form>
+                  ) : (
+                    <form className="compact-form" onSubmit={saveHelpPolicy}>
+                      <div className="management-modal-head"><div><strong>{contentDialog.mode === "create" ? "새 정책" : "정책 상세"}</strong>{contentDialog.item ? <span className="muted">상태 {contentDialog.item.status} · 버전 {contentDialog.item.version} · {contentDialog.item.is_system ? "시스템 항목" : "운영 항목"}</span> : null}</div><button type="button" className="secondary" onClick={() => setContentDialog(null)}>닫기</button></div>
+                      {contentDialog.item?.is_system ? <div className="notice warning"><strong>시스템 항목 보호</strong><p>시스템 정책은 조회만 가능하며 수정·상태 변경·삭제는 서버에서도 차단됩니다.</p></div> : null}
+                      {contentDialog.item?.status === "deleted" ? <div className="notice warning"><strong>삭제 상태</strong><p>삭제된 정책은 조회만 가능하며 다시 수정할 수 없습니다.</p></div> : null}
+                      {contentDialogError ? <div className="notice warning"><strong>처리 실패</strong><p>{contentDialogError}</p></div> : null}
+                      <fieldset className="ops-toolbar-grid content-editor-grid" disabled={loading || Boolean(contentDialog.item?.is_system) || contentDialog.item?.status === "deleted"}>
+                        <label className="compact-field"><span>정책 코드</span><input value={helpPolicyDraft.code} onChange={(event) => setHelpPolicyDraft((current) => ({ ...current, code: event.target.value }))} disabled={contentDialog.mode === "detail"} required /></label>
+                        <label className="compact-field"><span>제목</span><input value={helpPolicyDraft.title} onChange={(event) => setHelpPolicyDraft((current) => ({ ...current, title: event.target.value }))} required /></label>
+                        <label className="compact-field"><span>분류</span><input value={helpPolicyDraft.category} onChange={(event) => setHelpPolicyDraft((current) => ({ ...current, category: event.target.value }))} required /></label>
+                        <label className="compact-field"><span>대상</span><select value={helpPolicyDraft.audience} onChange={(event) => setHelpPolicyDraft((current) => ({ ...current, audience: event.target.value }))}><option value="all">all</option><option value="admin">admin</option><option value="user">user</option></select></label>
+                        <label className="compact-field content-editor-wide"><span>본문</span><textarea value={helpPolicyDraft.content} onChange={(event) => setHelpPolicyDraft((current) => ({ ...current, content: event.target.value }))} required /></label>
+                      </fieldset>
+                      <div className="actions compact-actions"><button type="submit" disabled={loading || Boolean(contentDialog.item?.is_system) || contentDialog.item?.status === "deleted"}>{contentDialog.mode === "create" ? "등록" : "수정 저장"}</button></div>
+                    </form>
+                  )}
+                </section>
+              </div>
+            ) : null}
+            {contentBulkDialog ? (
+              <div className="management-modal-backdrop" role="presentation" onClick={() => !loading && setContentBulkDialog(null)}>
+                <section className="management-modal management-confirm-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+                  <div className="management-modal-head"><strong>{contentBulkDialog.action === "delete" ? "삭제 상태 전환 확인" : "일괄 상태 변경 확인"}</strong><button type="button" className="secondary" onClick={() => setContentBulkDialog(null)} disabled={loading}>닫기</button></div>
+                  <p>{contentBulkDialog.resource === "message" ? "메시지" : "정책"} {contentBulkDialog.ids.length}건을 {contentBulkDialog.action === "delete" ? "deleted 상태로 전환" : contentBulkDialog.action === "published" ? "발행" : contentBulkDialog.action === "active" ? "활성화" : "비활성화"}합니다.</p>
+                  <p className="muted">시스템 항목과 삭제된 항목은 서버에서 다시 검증하며 변경할 수 없습니다.</p>
+                  {contentDialogError ? <div className="notice warning"><strong>작업 차단</strong><p>{contentDialogError}</p></div> : null}
+                  <div className="actions compact-actions"><button type="button" className={contentBulkDialog.action === "delete" ? "danger-action" : ""} onClick={() => void executeContentBulkAction()} disabled={loading}>확인</button><button type="button" className="secondary" onClick={() => setContentBulkDialog(null)} disabled={loading}>취소</button></div>
+                </section>
+              </div>
+            ) : null}
+            {operationsDialog ? (
+              <div className="management-modal-backdrop" role="presentation" onClick={() => !loading && setOperationsDialog(null)}>
+                <section className="management-modal operations-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+                  <div className="management-modal-head"><strong>{operationsDialog === "domain" ? "도메인 검증 실행" : operationsDialog === "relay" ? "Relay 테스트 실행" : operationsDialog === "mailTest" ? "제공자 연결 테스트" : operationsDialog === "provider" ? "메일 제공자 설정" : operationsDialog === "storage" ? "운영 점검 실행" : operationsDialog === "brand" ? "브랜드/화면 설정 편집" : operationsDialog === "language" ? "다국어/메시지 설정" : operationsDialog === "help" ? "도움말/정책 상세" : "감사 로그 상세"}</strong><button type="button" className="secondary" onClick={() => setOperationsDialog(null)}>닫기</button></div>
+                  {operationsDialog === "domain" ? <form className="compact-form" onSubmit={(event) => { void handleDomainVerify(event); setOperationsDialog(null); }}><label>검증 도메인<input value={domainInput} onChange={(event) => setDomainInput(event.target.value)} /></label><button type="submit" disabled={loading}>검증 실행</button></form> : null}
+                  {operationsDialog === "relay" ? <form className="compact-form" onSubmit={(event) => { void handleRelayTest(event); setOperationsDialog(null); }}><label>테스트 수신자<input type="email" value={relayRecipient} onChange={(event) => setRelayRecipient(event.target.value)} /></label><button type="submit" disabled={loading}>Relay 테스트</button></form> : null}
+                  {operationsDialog === "mailTest" ? <form className="compact-form" onSubmit={(event) => { void handleMailDeliveryTest(event); setOperationsDialog(null); }}><label>제공자 연결 테스트 대상(입력 미사용)<input type="email" value={relayRecipient} onChange={(event) => setRelayRecipient(event.target.value)} /></label><button type="submit" disabled={loading}>제공자 연결 테스트</button></form> : null}
+                  {operationsDialog === "provider" ? <div className="stack-list"><span className="mini-stat">Provider {mailDeliveryStatus?.provider.providerKey ?? "self_hosted_smtp"}</span><span className="mini-stat">발신 주소 {mailDeliveryStatus?.provider.senderAddress ?? "-"}</span><button type="button" onClick={() => { void refreshMailDelivery(); setOperationsDialog(null); }}>저장값 다시 불러오기</button></div> : null}
+                  {operationsDialog === "storage" ? <div className="stack-list"><span className="mini-stat">저장소 {health?.components.storage?.status ?? "unknown"}</span><span className="mini-stat">DB {health?.components.db?.status ?? "unknown"}</span><button type="button" onClick={() => { void refreshDirectory(); void refreshMonitoring(); setOperationsDialog(null); }}>점검 실행</button></div> : null}
+                  {operationsDialog === "brand" ? <div className="stack-list"><span className="mini-stat">회사명/도메인은 초기 설정 원천의 읽기 전용 값입니다.</span><button type="button" onClick={() => { void handleUiContractSave(); setOperationsDialog(null); }}>현재 설정 저장</button><button type="button" className="secondary" onClick={() => void reloadUiContract()}>저장값 다시 불러오기</button></div> : null}
+                  {operationsDialog === "language" ? <div className="ops-toolbar-grid"><label className="compact-field"><span>언어</span><select value={locale} onChange={(event) => saveLocale(event.target.value as AppLocale)}>{supportedLocales.map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label className="compact-field"><span>시간대</span><select value={timezone} onChange={(event) => saveTimezone(event.target.value)}>{supportedTimezones.map((value) => <option key={value} value={value}>{value}</option>)}</select></label></div> : null}
+                  {(operationsDialog === "audit" || operationsDialog === "help") && operationDetail ? <div className="stack-list"><strong>{operationDetail.title}</strong>{operationDetail.lines.map((line) => <p key={line}>{line}</p>)}</div> : null}
+                </section>
+              </div>
+            ) : null}
+            {bulkConfirmation ? (
+              <div className="management-modal-backdrop" role="presentation" onClick={() => { if (!loading) { setBulkConfirmation(null); setBulkActionError(""); } }}>
+                <section className="management-modal management-confirm-modal" role="dialog" aria-modal="true" aria-label="일괄 작업 확인" onClick={(event) => event.stopPropagation()}>
+                  <div className="management-modal-head"><strong>{bulkConfirmation.action === "delete" ? "삭제 상태 전환 확인" : "일괄 상태 변경 확인"}</strong><button type="button" className="secondary" onClick={() => { setBulkConfirmation(null); setBulkActionError(""); }} disabled={loading}>닫기</button></div>
+                  <p>{bulkConfirmation.target === "users" ? "사용자" : bulkConfirmation.target === "departments" ? "부서" : "권한 역할"} {bulkConfirmation.ids.length}개를 {bulkConfirmation.action === "delete" ? "deleted 상태로 전환" : bulkConfirmation.action === "active" ? "활성화" : "비활성화"}합니다.</p>
+                  {bulkConfirmation.action === "delete" ? <p className="muted">삭제 가능 여부와 차단 사유는 서버가 다시 검증합니다. 연결 사용자·하위 부서·기본 역할·현재 관리자 계정은 서버 정책에 따라 차단될 수 있습니다.</p> : null}
+                  {bulkActionError ? <div className="notice warning"><strong>작업 차단</strong><p>{bulkActionError}</p></div> : null}
+                  <div className="actions compact-actions"><button type="button" className={bulkConfirmation.action === "delete" ? "danger-action" : ""} onClick={() => void executeBulkAction()} disabled={loading}>확인</button><button type="button" className="secondary" onClick={() => { setBulkConfirmation(null); setBulkActionError(""); }} disabled={loading}>취소</button></div>
+                </section>
+              </div>
+            ) : null}
           </section>
         </section>
       )}

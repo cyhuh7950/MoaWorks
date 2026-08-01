@@ -1,13 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import StreamingResponse
 
 from app.api.dependencies import require_admin
 from app.schemas.directory import (
     AuthUserSummary,
     DepartmentCreateRequest,
+    DepartmentUpdateRequest,
     DepartmentRecord,
     DirectoryOverviewResponse,
     DomainVerifyRequest,
     DomainVerifyResponse,
+    OrgImportApplyRequest,
+    OrgImportBatchResponse,
     RelayTestRequest,
     RelayTestResponse,
     RoleCreateRequest,
@@ -19,6 +23,7 @@ from app.schemas.directory import (
 )
 from app.services.directory_store import DirectoryStore
 from app.services.domain_service import DomainService
+from app.services.org_import_service import OrgImportService
 from app.services.relay_service import RelayService
 from app.services.mail_delivery_operations import MailDeliveryOperations
 from app.schemas.mail_messenger import (
@@ -43,6 +48,23 @@ def create_department(
     return DirectoryStore().create_department(payload.name, payload.parentId, payload.sortOrder)
 
 
+@router.patch("/departments/{department_id}", response_model=DepartmentRecord)
+def update_department(
+    department_id: str,
+    payload: DepartmentUpdateRequest,
+    _: AuthUserSummary = Depends(require_admin),
+) -> DepartmentRecord:
+    return DirectoryStore().update_department(department_id, payload)
+
+
+@router.delete("/departments/{department_id}", response_model=DepartmentRecord)
+def delete_department(
+    department_id: str,
+    _: AuthUserSummary = Depends(require_admin),
+) -> DepartmentRecord:
+    return DirectoryStore().delete_department(department_id)
+
+
 @router.post("/roles", response_model=RoleRecord)
 def create_role(
     payload: RoleCreateRequest,
@@ -58,6 +80,14 @@ def update_role(
     _: AuthUserSummary = Depends(require_admin),
 ) -> RoleRecord:
     return DirectoryStore().update_role(role_id, payload)
+
+
+@router.delete("/roles/{role_id}", response_model=RoleRecord)
+def delete_role(
+    role_id: str,
+    _: AuthUserSummary = Depends(require_admin),
+) -> RoleRecord:
+    return DirectoryStore().delete_role(role_id)
 
 
 @router.post("/users", response_model=UserView)
@@ -77,6 +107,14 @@ def update_user(
     return DirectoryStore().update_user(user_id, payload)
 
 
+@router.delete("/users/{user_id}", response_model=UserView)
+def delete_user(
+    user_id: str,
+    actor: AuthUserSummary = Depends(require_admin),
+) -> UserView:
+    return DirectoryStore().delete_user(actor.userId, user_id)
+
+
 @router.post("/domains/verify", response_model=DomainVerifyResponse)
 def verify_domain(
     payload: DomainVerifyRequest,
@@ -91,6 +129,48 @@ def test_relay(
     _: AuthUserSummary = Depends(require_admin),
 ) -> RelayTestResponse:
     return RelayService(DirectoryStore()).test(payload.providerConfigId, payload.testRecipient)
+
+
+@router.get("/org-import/template")
+def download_org_import_template(_: AuthUserSummary = Depends(require_admin)) -> StreamingResponse:
+    content = OrgImportService().build_template()
+    return StreamingResponse(
+        iter([content]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="moaworks-org-import-template.xlsx"'},
+    )
+
+
+@router.post("/org-import/validate", response_model=OrgImportBatchResponse)
+async def validate_org_import(
+    file: UploadFile = File(...),
+    deactivation_scope: str = Form("uploaded_departments_only"),
+    actor: AuthUserSummary = Depends(require_admin),
+) -> OrgImportBatchResponse:
+    content = await file.read()
+    return OrgImportService().validate_upload(actor, file.filename or "org-import.xlsx", content, deactivation_scope)
+
+
+@router.post("/org-import/apply", response_model=OrgImportBatchResponse)
+def apply_org_import(
+    payload: OrgImportApplyRequest,
+    actor: AuthUserSummary = Depends(require_admin),
+) -> OrgImportBatchResponse:
+    try:
+        return OrgImportService().apply_batch(actor, payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "ORG_IMPORT_APPLY_INVALID", "userMessage": str(exc), "adminMessage": str(exc)},
+        ) from exc
+
+
+@router.get("/org-import/{batch_id}", response_model=OrgImportBatchResponse)
+def get_org_import_batch(
+    batch_id: str,
+    _: AuthUserSummary = Depends(require_admin),
+) -> OrgImportBatchResponse:
+    return OrgImportService().get_batch(batch_id)
 
 
 def _delivery_service() -> MailDeliveryOperations:

@@ -30,6 +30,7 @@ from app.schemas.directory import (
     AuditLogView,
     AuthUserSummary,
     CompanyRecord,
+    DepartmentUpdateRequest,
     DepartmentRecord,
     DirectoryOverviewResponse,
     MailAccountRecord,
@@ -408,6 +409,65 @@ class DirectoryStore:
             connection.commit()
         return self._to_department_record(row)
 
+    def update_department(self, department_id: str, payload: DepartmentUpdateRequest) -> DepartmentRecord:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                current = self._fetch_required_department(cursor, department_id)
+                next_name = payload.name.strip() if payload.name is not None else current["name"]
+                next_parent_id = current["parent_id"] if payload.parentId is None else payload.parentId
+                next_sort_order = payload.sortOrder if payload.sortOrder is not None else current["sort_order"]
+                next_status = payload.status or current["status"]
+                if next_parent_id:
+                    parent = self._fetch_required_department(cursor, next_parent_id)
+                    if parent["id"] == department_id:
+                        raise ValueError("부서를 자기 자신 아래로 이동할 수 없습니다.")
+                    if parent["status"] == "deleted":
+                        raise ValueError("삭제된 부서는 상위 부서로 선택할 수 없습니다.")
+                cursor.execute(
+                    """
+                    UPDATE departments
+                    SET name = %s, parent_id = %s, status = %s, sort_order = %s
+                    WHERE id = %s
+                    RETURNING id, company_id, name, parent_id, status, sort_order, created_at
+                    """,
+                    (next_name, next_parent_id, next_status, next_sort_order, department_id),
+                )
+                row = cursor.fetchone()
+                self._insert_audit(cursor=cursor, company_id=current["company_id"], actor_user_id=None,
+                                   actor_user_name="system", target_type="department", target_id=department_id,
+                                   event="directory.department_updated", status_before=current["status"],
+                                   status_after=next_status, reason=None)
+            connection.commit()
+        return self._to_department_record(row)
+
+    def delete_department(self, department_id: str) -> DepartmentRecord:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                current = self._fetch_required_department(cursor, department_id)
+                if current["status"] == "deleted":
+                    raise ValueError("이미 삭제된 부서입니다.")
+                if current["parent_id"] is None or current["name"] == "본사":
+                    raise ValueError("기본 부서는 삭제할 수 없습니다.")
+                cursor.execute("SELECT 1 FROM departments WHERE parent_id = %s AND status != 'deleted' LIMIT 1", (department_id,))
+                if cursor.fetchone() is not None:
+                    raise ValueError("하위 부서가 있어 삭제할 수 없습니다.")
+                cursor.execute("SELECT 1 FROM users WHERE department_id = %s AND status != 'deleted' LIMIT 1", (department_id,))
+                if cursor.fetchone() is not None:
+                    raise ValueError("소속 사용자가 있어 삭제할 수 없습니다.")
+                cursor.execute(
+                    "UPDATE departments SET status = 'deleted' WHERE id = %s RETURNING id, company_id, name, parent_id, status, sort_order, created_at",
+                    (department_id,),
+                )
+                row = cursor.fetchone()
+                self._insert_audit(cursor=cursor, company_id=current["company_id"], actor_user_id=None,
+                                   actor_user_name="system", target_type="department", target_id=department_id,
+                                   event="directory.department_deleted", status_before=current["status"],
+                                   status_after="deleted", reason="상태 삭제")
+            connection.commit()
+        return self._to_department_record(row)
+
     def create_role(self, name: str, permissions: list[str]) -> RoleRecord:
         self.db.ensure_migrations_applied()
         company = self._require_company()
@@ -467,10 +527,34 @@ class DirectoryStore:
             connection.commit()
         return self._to_role_record(row)
 
+    def delete_role(self, role_id: str) -> RoleRecord:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                current = self._fetch_required_role(cursor, role_id)
+                if current["status"] == "deleted":
+                    raise ValueError("이미 삭제된 권한 역할입니다.")
+                if current["name"] in {"관리자", "일반사용자"}:
+                    raise ValueError("기본 권한 역할은 삭제할 수 없습니다.")
+                cursor.execute("SELECT 1 FROM users WHERE role_id = %s AND status != 'deleted' LIMIT 1", (role_id,))
+                if cursor.fetchone() is not None:
+                    raise ValueError("사용자가 연결된 권한 역할은 삭제할 수 없습니다.")
+                cursor.execute(
+                    "UPDATE roles SET status = 'deleted' WHERE id = %s RETURNING id, company_id, name, permissions, status, created_at",
+                    (role_id,),
+                )
+                row = cursor.fetchone()
+                self._insert_audit(cursor=cursor, company_id=current["company_id"], actor_user_id=None,
+                                   actor_user_name="system", target_type="role", target_id=role_id,
+                                   event="directory.role_deleted", status_before=current["status"],
+                                   status_after="deleted", reason="상태 삭제")
+            connection.commit()
+        return self._to_role_record(row)
+
     def create_user(self, payload: UserCreateRequest) -> UserView:
         self.db.ensure_migrations_applied()
         company = self._require_company()
-        normalized_email = payload.email.lower()
+        normalized_email = (payload.email or f"{payload.loginId}@{company.domain}").lower()
         now = self._now()
         user_id = self._new_id("user")
         mail_account_id = self._new_id("mail")
@@ -606,6 +690,31 @@ class DirectoryStore:
                     status_after=next_status,
                     reason=None,
                 )
+                row = self._fetch_user_view_row(cursor, user_id)
+            connection.commit()
+        return self._row_to_user_view(row)
+
+    def delete_user(self, actor_user_id: str, user_id: str) -> UserView:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                current = self._fetch_user_access_row(cursor, "u.id = %s", (user_id,))
+                if current is None:
+                    raise ValueError("대상 사용자를 찾을 수 없습니다.")
+                if current["user_id"] == actor_user_id:
+                    raise ValueError("본인 계정은 삭제할 수 없습니다.")
+                if current["user_status"] == "deleted":
+                    raise ValueError("이미 삭제된 사용자입니다.")
+                if current["user_type"] == "admin":
+                    cursor.execute("SELECT COUNT(*) AS count FROM users WHERE user_type = 'admin' AND status != 'deleted'")
+                    if int(cursor.fetchone()["count"]) <= 1:
+                        raise ValueError("마지막 관리자 계정은 삭제할 수 없습니다.")
+                cursor.execute("UPDATE users SET status = 'deleted', updated_at = %s WHERE id = %s", (self._now(), user_id))
+                cursor.execute("UPDATE mail_accounts SET status = 'deleted', updated_at = %s WHERE user_id = %s", (self._now(), user_id))
+                self._insert_audit(cursor=cursor, company_id=current["company_id"], actor_user_id=actor_user_id,
+                                   actor_user_name="system", target_type="user", target_id=user_id,
+                                   event="directory.user_deleted", status_before=current["user_status"],
+                                   status_after="deleted", reason="상태 삭제")
                 row = self._fetch_user_view_row(cursor, user_id)
             connection.commit()
         return self._row_to_user_view(row)
