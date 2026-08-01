@@ -7,13 +7,13 @@
   "portableDirectory": "MoaWorks-Desktop-0.1.0-win-x64-portable",
   "zip": {
     "fileName": "MoaWorks-Desktop-0.1.0-win-x64-portable.zip",
-    "size": 113002235,
-    "sha256": "42c0425e8aca866de7b6d863a02bb2d3d74090ca8f7faa468cc3807bea9bb919"
+    "size": 144177242,
+    "sha256": "33dacd5489452c48ac56a96c7f26def2706ee2936c8d96ed661d7e1eee981366"
   },
   "executable": {
     "fileName": "MoaWorks Desktop Client.exe",
-    "size": 186293248,
-    "sha256": "84bd29528b06f173c0ea062295b7e21e380e6be9367cb7aa687f1e7b375b455a"
+    "size": 225613824,
+    "sha256": "8593db40c0c6e5e3c4b6b0a225b1dc9a549ecdf10f6cf2010cf5b6ce869ce07f"
   },
   "appCode": {
     "path": "resources/app/electron/main.js",
@@ -21,5 +21,5 @@
     "sha256": "b3164e33571f6423fab069c859191bdf1c6b6873aa5788d8f2131be9e888c4de"
   },
   "status": "success",
-  "generatedAt": "2026-07-31T06:47:27.725Z"
+  "generatedAt": "2026-08-01T01:15:23.018Z"
 }
