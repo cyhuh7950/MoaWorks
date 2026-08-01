@@ -860,6 +860,10 @@ export async function fetchUiContract(token: string): Promise<UiContract> {
   });
 }
 
+export async function fetchPublicUiContract(): Promise<UiContract> {
+  return request<UiContract>("/ui-contract");
+}
+
 export async function updateUiContract(token: string, payload: UiContract): Promise<UiContract> {
   return request<UiContract>("/ui-contract/admin", {
     method: "PUT",

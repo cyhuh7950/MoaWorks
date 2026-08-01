@@ -31,6 +31,7 @@ import {
   fetchMonitoringOverview,
   fetchApprovalAuditLogs,
   fetchOrgImportBatch,
+  fetchPublicUiContract,
   fetchUiContract,
   getStoredToken,
   initializeSetup,
@@ -113,6 +114,8 @@ type LoginForm = {
   loginId: string;
   password: string;
 };
+
+type PublicUiContractState = "pending" | "ready" | "error";
 
 type UserForm = {
   userId: string;
@@ -692,6 +695,8 @@ export default function App() {
   const [translationLoading, setTranslationLoading] = useState(false);
   const [form, setForm] = useState<SetupForm>(initialForm);
   const [loginForm, setLoginForm] = useState<LoginForm>({ loginId: "", password: "" });
+  const [publicUiContractState, setPublicUiContractState] = useState<PublicUiContractState>("pending");
+  const [publicUiContractError, setPublicUiContractError] = useState("");
   const [userForm, setUserForm] = useState<UserForm>(initialUserForm);
   const [userSearch, setUserSearch] = useState("");
   const [userStatusFilter, setUserStatusFilter] = useState("visible");
@@ -813,6 +818,22 @@ export default function App() {
     const data = await fetchHealth();
     setHealth(data);
     return data;
+  }
+
+  async function refreshPublicUiContract() {
+    try {
+      const contract = await fetchPublicUiContract();
+      const domain = contract.company?.domain?.trim();
+      if (!domain) {
+        throw new Error("public UI contract domain is empty");
+      }
+      setUiContractDraft(mergeUiContract(contract));
+      setPublicUiContractError("");
+      setPublicUiContractState("ready");
+    } catch {
+      setPublicUiContractError("회사 도메인을 확인하지 못했습니다. 잠시 후 새로고침한 뒤 다시 시도하세요.");
+      setPublicUiContractState("error");
+    }
   }
 
   async function refreshDirectory(nextToken = token) {
@@ -1142,6 +1163,7 @@ export default function App() {
     void refreshHealth().catch((error) => {
       setErrors([error instanceof Error ? error.message : "상태 조회 실패"]);
     });
+    void refreshPublicUiContract();
     void refreshTranslationState();
   }, []);
 
@@ -1262,6 +1284,15 @@ export default function App() {
 
   async function handleLogin(event: FormEvent) {
     event.preventDefault();
+    if (publicUiContractState !== "ready") {
+      setErrors(["회사 도메인을 확인한 후 로그인할 수 있습니다."]);
+      return;
+    }
+    const companyDomain = uiContractDraft.company.domain.trim();
+    if (!companyDomain) {
+      setErrors(["회사 도메인을 확인한 후 로그인할 수 있습니다."]);
+      return;
+    }
     setLoading(true);
     setErrors([]);
     setMessage("");
@@ -1271,7 +1302,7 @@ export default function App() {
         return;
       }
       const response = await login({
-        email: buildCompanyLoginEmail(loginForm.loginId, uiContractDraft.company.domain),
+        email: buildCompanyLoginEmail(loginForm.loginId, companyDomain),
         password: loginForm.password,
       });
       storeToken(response.accessToken);
@@ -1792,10 +1823,11 @@ export default function App() {
     }
   }
 
-  const isHealthPending = health === null;
+  const isPublicLoginContractPending = health?.initialized === true && !token && publicUiContractState === "pending";
+  const isHealthPending = health === null || isPublicLoginContractPending;
   const initialized = health?.initialized === true;
   const showSetupWizard = health?.initialized === false;
-  const showLoginPanel = initialized && (!token || !overview);
+  const showLoginPanel = initialized && (!token || !overview) && (Boolean(token) || publicUiContractState !== "pending");
   const hasStoredSessionButNoOverview = initialized && Boolean(token) && !overview;
   const supportedTranslationTargets = translationPolicy?.supportedTargetLocales?.length ? translationPolicy.supportedTargetLocales : (translationStatus?.supportedTargetLocales ?? ["en"]);
   const activeMenu = adminMenus.find((item) => item.key === activeAdminMenu) ?? adminMenus[0];
@@ -2698,8 +2730,15 @@ export default function App() {
       {showLoginPanel && (
         <section className="login-landing">
           <article className="login-brief">
-            <p className="eyebrow">{t(locale, "appTitle")}</p>
-            <h1>MoaWorks 관리자 플랫폼</h1>
+            <div className="company-identity-block">
+              <div className="company-logo-shell sidebar-logo-shell">
+                <img src={uiContractDraft.company.logoDataUrl} alt={`${uiContractDraft.company.name} 로고`} className="company-logo-image" />
+              </div>
+              <div>
+                <p className="eyebrow">{t(locale, "appTitle")}</p>
+                <h1>{uiContractDraft.company.name} 관리자 플랫폼</h1>
+              </div>
+            </div>
             <p className="lead">시스템 상태를 확인하고 관리자 계정으로 운영 콘솔에 진입합니다.</p>
             <div className="login-summary-grid">
               <div className="status-card">
@@ -2745,6 +2784,12 @@ export default function App() {
                 저장된 관리자 세션을 확인하지 못했습니다. 다시 로그인해 운영 화면을 복구하세요.
               </div>
             )}
+            {publicUiContractState === "error" && (
+              <div className="notice danger">
+                <strong>로그인 도메인 확인 실패</strong>
+                <p>{publicUiContractError}</p>
+              </div>
+            )}
             {uniqueErrors.length > 0 && (
               <div className="notice danger">
                 <strong>확인 필요</strong>
@@ -2762,14 +2807,14 @@ export default function App() {
                 {copy.adminEmail}
                 <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 10, alignItems: "center" }}>
                   <input value={loginForm.loginId} onChange={(e) => setLoginForm({ ...loginForm, loginId: normalizeLoginIdInput(e.target.value) })} placeholder="admin" />
-                  <span style={{ height: 40, display: "inline-flex", alignItems: "center", padding: "0 12px", borderRadius: 12, border: "1px solid #dbe4ec", background: "#f8fafc", color: "#475569", fontSize: 13, fontWeight: 700 }}>@{uiContractDraft.company.domain}</span>
+                  <span style={{ height: 40, display: "inline-flex", alignItems: "center", padding: "0 12px", borderRadius: 12, border: "1px solid #dbe4ec", background: "#f8fafc", color: "#475569", fontSize: 13, fontWeight: 700 }}>@{publicUiContractState === "ready" ? uiContractDraft.company.domain : "도메인 확인 필요"}</span>
                 </div>
               </label>
               <label>
                 {copy.adminPassword}
                 <input type="password" value={loginForm.password} onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })} />
               </label>
-              <button type="submit" disabled={loading}>로그인</button>
+              <button type="submit" disabled={loading || publicUiContractState !== "ready"}>로그인</button>
             </form>
           </article>
         </section>
