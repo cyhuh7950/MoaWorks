@@ -3,8 +3,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from io import BytesIO
 import json
+from pathlib import Path
 import secrets
 from uuid import uuid4
+from zipfile import BadZipFile, ZipFile
 
 from openpyxl import Workbook, load_workbook
 
@@ -24,6 +26,12 @@ from app.services.security_service import SecurityService
 
 
 class OrgImportService:
+    MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+    MAX_ZIP_ENTRIES = 128
+    MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
+    MAX_DATA_ROWS = 10_000
+    XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    ALLOWED_MIME_TYPES = frozenset({XLSX_MIME_TYPE, "application/octet-stream"})
     DEPARTMENT_HEADERS = ["department_code", "department_name", "parent_department_code", "sort_order", "status"]
     USER_HEADERS = ["login_id", "name", "department_code", "role_code", "status"]
     DEFAULT_DEACTIVATION_SCOPE = "uploaded_departments_only"
@@ -54,9 +62,30 @@ class OrgImportService:
         workbook.save(buffer)
         return buffer.getvalue()
 
+    def validate_file_metadata(self, file_name: str, content_type: str | None) -> None:
+        if Path(file_name or "").suffix.lower() != ".xlsx":
+            raise ValueError("조직 일괄 등록은 .xlsx 파일만 지원합니다.")
+        normalized_content_type = str(content_type or "").split(";", 1)[0].strip().lower()
+        if normalized_content_type not in self.ALLOWED_MIME_TYPES:
+            raise ValueError("지원하지 않는 엑셀 파일 형식입니다.")
+
+    def validate_workbook_archive(self, content: bytes) -> None:
+        if len(content) > self.MAX_UPLOAD_BYTES:
+            raise ValueError("업로드 파일은 10 MiB 이하여야 합니다.")
+        try:
+            with ZipFile(BytesIO(content)) as archive:
+                entries = archive.infolist()
+                if len(entries) > self.MAX_ZIP_ENTRIES:
+                    raise ValueError("엑셀 내부 파일 항목 수가 허용 범위를 초과했습니다.")
+                uncompressed_bytes = sum(max(0, int(entry.file_size)) for entry in entries)
+                if uncompressed_bytes > self.MAX_UNCOMPRESSED_BYTES:
+                    raise ValueError("엑셀 압축 해제 예상 크기가 허용 범위를 초과했습니다.")
+        except BadZipFile as exc:
+            raise ValueError("올바른 .xlsx 파일이 아닙니다.") from exc
+
     def validate_upload(self, actor: AuthUserSummary, file_name: str, content: bytes, deactivation_scope: str | None = None) -> OrgImportBatchResponse:
-        self.db.ensure_migrations_applied()
         departments, users = self._parse_workbook(content)
+        self.db.ensure_migrations_applied()
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
                 analysis = self._analyze_import(cursor, departments, users, actor=actor, deactivation_scope=deactivation_scope)
@@ -412,19 +441,25 @@ class OrgImportService:
         return self._row_to_batch_response(row)
 
     def _parse_workbook(self, content: bytes) -> tuple[list[dict], list[dict]]:
+        self.validate_workbook_archive(content)
         try:
-            workbook = load_workbook(filename=BytesIO(content), data_only=True)
+            workbook = load_workbook(filename=BytesIO(content), data_only=True, read_only=True)
         except Exception as exc:  # noqa: BLE001
-            raise ValueError(f"엑셀 파일을 읽지 못했습니다: {exc}") from exc
+            raise ValueError("엑셀 파일을 읽지 못했습니다. 올바른 템플릿인지 확인하세요.") from exc
 
-        if "departments" not in workbook.sheetnames or "users" not in workbook.sheetnames:
-            raise ValueError("엑셀 파일에는 departments, users 시트가 모두 있어야 합니다.")
+        try:
+            if "departments" not in workbook.sheetnames or "users" not in workbook.sheetnames:
+                raise ValueError("엑셀 파일에는 departments, users 시트가 모두 있어야 합니다.")
 
-        department_rows = self._read_sheet_rows(workbook["departments"], self.DEPARTMENT_HEADERS)
-        user_rows = self._read_sheet_rows(workbook["users"], self.USER_HEADERS)
-        return department_rows, user_rows
+            department_rows = self._read_sheet_rows(workbook["departments"], self.DEPARTMENT_HEADERS)
+            user_rows = self._read_sheet_rows(workbook["users"], self.USER_HEADERS)
+            return department_rows, user_rows
+        finally:
+            workbook.close()
 
     def _read_sheet_rows(self, worksheet, expected_headers: list[str]) -> list[dict]:
+        if int(worksheet.max_row or 0) > self.MAX_DATA_ROWS + 1:
+            raise ValueError(f"{worksheet.title} 시트의 데이터 행은 10,000행 이하여야 합니다.")
         header_cells = next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True), None)
         if header_cells is None:
             raise ValueError(f"{worksheet.title} 시트 헤더를 찾을 수 없습니다.")

@@ -147,8 +147,30 @@ async def validate_org_import(
     deactivation_scope: str = Form("uploaded_departments_only"),
     actor: AuthUserSummary = Depends(require_admin),
 ) -> OrgImportBatchResponse:
-    content = await file.read()
-    return OrgImportService().validate_upload(actor, file.filename or "org-import.xlsx", content, deactivation_scope)
+    service = OrgImportService()
+    try:
+        service.validate_file_metadata(file.filename or "", file.content_type)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "ORG_IMPORT_FILE_INVALID", "userMessage": str(exc)},
+        ) from exc
+
+    content = await file.read(service.MAX_UPLOAD_BYTES + 1)
+    if len(content) > service.MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail={"code": "ORG_IMPORT_FILE_TOO_LARGE", "userMessage": "업로드 파일은 10 MiB 이하여야 합니다."},
+        )
+    try:
+        return service.validate_upload(actor, file.filename or "org-import.xlsx", content, deactivation_scope)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "ORG_IMPORT_FILE_INVALID", "userMessage": str(exc)},
+        ) from exc
 
 
 @router.post("/org-import/apply", response_model=OrgImportBatchResponse)
