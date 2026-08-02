@@ -23,14 +23,17 @@ const check = async (name, callback) => {
 };
 
 let browser;
-const measure = async (markup, selector) => {
+const measurements = {};
+const measure = async (name, markup, selector) => {
   browser ??= await chromium.launch({ channel: "chrome", headless: true });
   const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
   try {
     await page.setContent(`<style>${css}</style>${markup}`);
     const box = await page.locator(selector).boundingBox();
     assert.ok(box, `${selector} bounding box missing`);
-    return Object.fromEntries(Object.entries(box).map(([key, value]) => [key, Math.round(value)]));
+    const rounded = Object.fromEntries(Object.entries(box).map(([key, value]) => [key, Math.round(value)]));
+    measurements[name] = rounded;
+    return rounded;
   } finally {
     await page.close();
   }
@@ -45,16 +48,16 @@ await check("mail compose defaults to centered 960x760", async () => {
   assert.match(normal, /transform:\s*translate\(-50%,\s*-50%\)/);
   assert.match(normal, /width:\s*min\(960px,\s*calc\(100vw\s*-\s*48px\)\)/);
   assert.match(normal, /height:\s*min\(760px,\s*calc\(100vh\s*-\s*48px\)\)/);
-  assert.deepEqual(await measure(mailMarkup("normal"), ".user-mail-compose-popup"), { x: 480, y: 160, width: 960, height: 760 });
+  assert.deepEqual(await measure("mailNormal", mailMarkup("normal"), ".user-mail-compose-popup"), { x: 480, y: 160, width: 960, height: 760 });
 });
 
 await check("mail compose maximizes to a 12px viewport margin", async () => {
   const maximized = rule(".user-mail-compose-popup.is-maximized");
   assert.match(maximized, /inset:\s*12px/);
-  assert.match(maximized, /width:\s*auto/);
-  assert.match(maximized, /height:\s*auto/);
+  assert.match(maximized, /width:\s*calc\(100vw\s*-\s*24px\)/);
+  assert.match(maximized, /height:\s*calc\(100vh\s*-\s*24px\)/);
   assert.match(maximized, /transform:\s*none/);
-  assert.deepEqual(await measure(mailMarkup("maximized"), ".user-mail-compose-popup"), { x: 12, y: 12, width: 1896, height: 1056 });
+  assert.deepEqual(await measure("mailMaximized", mailMarkup("maximized"), ".user-mail-compose-popup"), { x: 12, y: 12, width: 1896, height: 1056 });
 });
 
 await check("mail compose minimizes to a compact bottom-right titlebar", () => {
@@ -89,20 +92,24 @@ await check("approval compose prioritizes a 300px body and bounded attachments",
   assert.match(rule(".ui033-compose__content textarea"), /min-height:\s*300px/);
   assert.match(rule(".ui033-compose__attachments"), /max-height:\s*150px/);
   assert.match(rule(".ui033-file-list"), /overflow:\s*auto/);
-  assert.deepEqual(await measure(approvalMarkup("normal"), ".ui033-compose-popup"), { x: 480, y: 160, width: 960, height: 760 });
+  assert.deepEqual(await measure("approvalNormal", approvalMarkup("normal"), ".ui033-compose-popup"), { x: 480, y: 160, width: 960, height: 760 });
 });
 
 await check("approval maximize and mobile viewport margins remain bounded", async () => {
   const maximized = rule(".ui033-compose-popup.is-maximized");
+  assert.match(maximized, /position:\s*fixed/);
+  assert.match(maximized, /inset:\s*12px/);
   assert.match(maximized, /width:\s*calc\(100vw\s*-\s*24px\)/);
   assert.match(maximized, /height:\s*calc\(100vh\s*-\s*24px\)/);
+  assert.match(maximized, /transform:\s*none/);
   assert.match(css, /@media\s*\(max-width:\s*720px\)[\s\S]*?\.ui033-compose-popup\s*\{[^}]*width:\s*calc\(100vw\s*-\s*24px\)[^}]*height:\s*calc\(100vh\s*-\s*24px\)/);
-  assert.deepEqual(await measure(approvalMarkup("maximized"), ".ui033-compose-popup"), { x: 12, y: 12, width: 1896, height: 1056 });
+  assert.deepEqual(await measure("approvalMaximized", approvalMarkup("maximized"), ".ui033-compose-popup"), { x: 12, y: 12, width: 1896, height: 1056 });
 });
 
 await browser?.close();
 
 for (const [name, passed, error] of checks) console.log(`${passed ? "PASS" : "FAIL"} ${name}${error ? `: ${error}` : ""}`);
+console.log(`MEASUREMENTS ${JSON.stringify({ viewport: { width: 1920, height: 1080 }, ...measurements })}`);
 const failures = checks.filter(([, passed]) => !passed);
 console.log(`${checks.length - failures.length}/${checks.length} PASS`);
 if (failures.length) process.exit(1);

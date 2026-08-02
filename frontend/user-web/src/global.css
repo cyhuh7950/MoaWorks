@@ -1434,8 +1434,8 @@ textarea {
 
 .user-mail-compose-popup.is-maximized {
   inset: 12px;
-  width: auto;
-  height: auto;
+  width: calc(100vw - 24px);
+  height: calc(100vh - 24px);
   min-width: 0;
   min-height: 0;
   transform: none;
@@ -2833,7 +2833,7 @@ textarea {
 
 /* UI-033 approval compose popup */
 .ui033-compose-popup { width: 960px; height: 760px; max-width: calc(100vw - 48px); max-height: calc(100vh - 48px); display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; overflow: hidden; }
-.ui033-compose-popup.is-maximized { width: calc(100vw - 24px) !important; height: calc(100vh - 24px); max-width: none; max-height: none; }
+.ui033-compose-popup.is-maximized { position: fixed; inset: 12px; width: calc(100vw - 24px) !important; height: calc(100vh - 24px); max-width: none; max-height: none; margin: 0; transform: none; }
 .ui033-compose-popup > .common-popup-body { min-height: 0; overflow: hidden; padding-top: 10px; }
 .ui033-compose { height: 100%; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; font-size: 12px; }
 .ui033-compose button, .ui033-compose input, .ui033-compose textarea { font: inherit; }
