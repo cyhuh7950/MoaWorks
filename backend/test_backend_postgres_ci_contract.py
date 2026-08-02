@@ -7,6 +7,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "backend-postgresql.yml"
 DEF01_TEST = ROOT / "backend" / "test_content_operations_patch_help_postgres.py"
+TEST_REQUIREMENTS = ROOT / "backend" / "requirements-test.txt"
 
 
 class BackendPostgresCiContractTest(unittest.TestCase):
@@ -16,7 +17,19 @@ class BackendPostgresCiContractTest(unittest.TestCase):
         self.assertIn("postgres:15-alpine", workflow)
         self.assertIn("pg_isready", workflow)
         self.assertIn("python-version: '3.12'", workflow)
-        self.assertIn("pip install -r requirements.txt", workflow)
+        self.assertIn("pip install -r requirements-test.txt", workflow)
+
+    def test_workflow_installs_pinned_test_dependencies_and_node24_actions(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        requirements = TEST_REQUIREMENTS.read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual(requirements, ["-r requirements.txt", "httpx==0.28.1", "pytest==8.4.2"])
+        self.assertIn("actions/checkout@v5", workflow)
+        self.assertIn("actions/setup-python@v6", workflow)
+        self.assertIn("cache-dependency-path: backend/requirements-test.txt", workflow)
+        self.assertIn("pip install -r requirements-test.txt", workflow)
+        self.assertNotIn("actions/checkout@v4", workflow)
+        self.assertNotIn("actions/setup-python@v5", workflow)
 
     def test_workflow_enables_both_real_postgresql_suites(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
