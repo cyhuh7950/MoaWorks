@@ -10,7 +10,7 @@ const css = read("src/global.css");
 
 const rule = (selector) => {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
+  const match = css.match(new RegExp(`(?:^|})\\s*${escaped}\\s*\\{([^}]*)\\}`, "m"));
   assert.ok(match, `${selector} rule missing`);
   return match[1];
 };
@@ -52,7 +52,7 @@ check("mail compose body receives remaining vertical space", () => {
   assert.match(rule(".user-mail-compose-popup"), /grid-template-rows:\s*auto\s+minmax\(0,\s*1fr\)/);
   assert.match(rule(".user-mail-compose-body"), /overflow:\s*auto/);
   assert.match(rule(".user-mail-compose-field.is-body"), /min-height:\s*0/);
-  assert.match(app, /className="user-mail-compose-field is-body"/);
+  assert.match(app, /className="user-mail-compose-field is-body"[\s\S]*?<span>본문<\/span>[\s\S]*?aria-label="mail-compose-body"/);
 });
 
 check("only approval compose opts into CommonPopup maximize", () => {

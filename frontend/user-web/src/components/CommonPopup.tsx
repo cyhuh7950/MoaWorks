@@ -2,11 +2,11 @@ import { useEffect, useId, useRef, useState, type MutableRefObject, type ReactNo
 
 type Mode = "normal" | "minimized" | "maximized";
 type Bounds = { left: number; top: number; width: number; height: number };
-type Props = { title: string; children: ReactNode; open: boolean; onClose: () => void; dirty?: boolean; error?: string; saving?: boolean; floating?: boolean; initialFocusRef?: RefObject<HTMLElement | null>; closeRequestRef?: MutableRefObject<(() => void) | null>; kind?: "dialog" | "alertdialog"; className?: string };
+type Props = { title: string; children: ReactNode; open: boolean; onClose: () => void; dirty?: boolean; error?: string; saving?: boolean; floating?: boolean; maximizable?: boolean; initialFocusRef?: RefObject<HTMLElement | null>; closeRequestRef?: MutableRefObject<(() => void) | null>; kind?: "dialog" | "alertdialog"; className?: string };
 const selector = "button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex='-1'])";
 const items = (root: HTMLElement | null) => root ? Array.from(root.querySelectorAll<HTMLElement>(selector)) : [];
 
-export function CommonPopup({ title, children, open, onClose, dirty = false, error = "", saving = false, floating = false, initialFocusRef, closeRequestRef, kind = "dialog", className = "" }: Props) {
+export function CommonPopup({ title, children, open, onClose, dirty = false, error = "", saving = false, floating = false, maximizable = false, initialFocusRef, closeRequestRef, kind = "dialog", className = "" }: Props) {
   const panel = useRef<HTMLDivElement>(null);
   const close = useRef<HTMLButtonElement>(null);
   const confirmPanel = useRef<HTMLDivElement>(null);
@@ -43,13 +43,14 @@ export function CommonPopup({ title, children, open, onClose, dirty = false, err
   useEffect(() => {
     if (!open) return;
     opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (maximizable && !floating) setMode("normal");
     setConfirm(false);
     requestAnimationFrame(() => {
       const editable = panel.current?.querySelector<HTMLElement>("input:not([disabled]),textarea:not([disabled]),select:not([disabled])");
       (initialFocusRef?.current ?? editable ?? close.current)?.focus();
     });
     return () => opener.current?.focus();
-  }, [initialFocusRef, open]);
+  }, [floating, initialFocusRef, maximizable, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -110,7 +111,7 @@ export function CommonPopup({ title, children, open, onClose, dirty = false, err
   return <div className={`common-popup-backdrop ${floating ? "is-floating" : ""}`}><div ref={panel} role={kind} aria-modal={floating ? undefined : true} aria-labelledby={titleId} aria-describedby={descriptionId} className={`common-popup ${className} ${floating ? "is-floating" : ""} is-${mode}`} style={style} onMouseUp={saveBounds}>
     <div className="common-popup-header" onMouseDown={drag}><h2 id={titleId}>{title}</h2><div>
       {floating ? <button type="button" aria-label="최소화" onClick={minimize}>—</button> : null}
-      {floating ? <button type="button" aria-label={expanded ? "복원" : "확대"} onClick={maximize}>{expanded ? "↙" : "↗"}</button> : null}
+      {floating || maximizable ? <button type="button" aria-label={expanded ? "복원" : "확대"} onClick={maximize}>{expanded ? "↙" : "↗"}</button> : null}
       <button ref={close} type="button" aria-label="닫기" disabled={saving} onClick={closeRequest}>×</button>
     </div></div>
     <p id={descriptionId} className="common-popup-description">변경 사항은 저장 또는 닫기 확인 후 반영됩니다.</p>

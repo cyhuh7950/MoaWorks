@@ -4971,7 +4971,7 @@ export default function App() {
               secondary={(
             <article className="user-mail-detail-panel">
               {quickComposeMode === "mail" ? (
-                <form className={`user-mail-compose-popup is-${composeWindow}`} onSubmit={(event) => event.preventDefault()} style={{ display: "grid", gap: 12, position: "fixed", zIndex: 30, right: mailComposePosition ? "auto" : 24, bottom: mailComposePosition ? "auto" : 24, left: mailComposePosition?.left, top: mailComposePosition?.top, width: composeWindow === "maximized" ? "min(900px, calc(100vw - 280px))" : "min(520px, calc(100vw - 48px))", maxHeight: "calc(100vh - 48px)", overflowY: "auto", resize: composeWindow === "normal" ? "both" : "none", borderRadius: 18, border: "1px solid #cbd5e1", background: "#fff", padding: 18, boxShadow: "0 18px 50px rgba(15, 23, 42, .24)" }}>
+                <form className={`user-mail-compose-popup is-${composeWindow}`} onSubmit={(event) => event.preventDefault()} style={composeWindow === "normal" && mailComposePosition ? { left: mailComposePosition.left, top: mailComposePosition.top, transform: "none" } : undefined}>
                   <div className="user-mail-compose-titlebar" onMouseDown={startMailComposeDrag} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
                     <div>
                       <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>메일 작성</div>
@@ -4999,7 +4999,7 @@ export default function App() {
                     <span>제목</span>
                     <input aria-label="mail-compose-subject" value={mailComposeForm.subject} onChange={(event) => setMailComposeForm((current) => ({ ...current, subject: event.target.value }))} placeholder="제목 입력" />
                   </label>
-                  <label className="user-mail-compose-field">
+                  <label className="user-mail-compose-field is-body">
                     <span>본문</span>
                     <textarea aria-label="mail-compose-body" value={mailComposeForm.bodyText} onChange={(event) => setMailComposeForm((current) => ({ ...current, bodyText: event.target.value }))} placeholder="본문 입력" />
                   </label>
@@ -5486,6 +5486,7 @@ export default function App() {
               saving={loading}
               error={approvalError}
               className="ui033-compose-popup"
+              maximizable
               closeRequestRef={approvalComposeCloseRequestRef}
             >
               <form className="ui033-compose" onSubmit={handleCreate}>

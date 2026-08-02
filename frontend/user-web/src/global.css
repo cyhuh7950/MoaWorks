@@ -1410,12 +1410,51 @@ textarea {
 }
 
 .user-mail-compose-popup {
+  position: fixed;
+  z-index: 30;
+  left: 50%;
+  top: 50%;
+  width: min(960px, calc(100vw - 48px));
+  height: min(760px, calc(100vh - 48px));
   min-width: 380px;
+  min-height: 360px;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  overflow: hidden;
+  resize: both;
+  transform: translate(-50%, -50%);
+  border: 1px solid #cbd5e1;
+  border-radius: 18px;
+  padding: 18px;
+  background: #fff;
+  box-shadow: 0 18px 50px rgba(15, 23, 42, .24);
+}
+
+.user-mail-compose-popup.is-maximized {
+  inset: 12px;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  transform: none;
+  resize: none;
 }
 
 .user-mail-compose-popup.is-minimized {
+  left: auto;
+  top: auto;
+  right: 20px;
+  bottom: 20px;
+  width: min(360px, calc(100vw - 24px));
+  height: auto;
+  min-width: 0;
   min-height: auto;
   max-height: none !important;
+  grid-template-rows: auto;
+  transform: none;
+  resize: none;
 }
 
 .user-mail-compose-popup.is-minimized .user-mail-compose-body {
@@ -1434,9 +1473,11 @@ textarea {
 
 
 .user-mail-compose-body {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
   min-height: 0;
+  overflow: auto;
 }
 
 .user-mail-compose-recipients {
@@ -1483,10 +1524,17 @@ textarea {
 }
 
 .user-mail-compose-field textarea {
+  height: 100%;
   min-height: 160px;
   padding: 10px;
   resize: vertical;
   line-height: 1.5;
+}
+
+.user-mail-compose-field.is-body {
+  flex: 1 1 240px;
+  min-height: 0;
+  align-items: stretch;
 }
 
 .user-mail-compose-recipients button,
@@ -2785,6 +2833,7 @@ textarea {
 
 /* UI-033 approval compose popup */
 .ui033-compose-popup { width: 960px; height: 760px; max-width: calc(100vw - 48px); max-height: calc(100vh - 48px); display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; overflow: hidden; }
+.ui033-compose-popup.is-maximized { width: calc(100vw - 24px) !important; height: calc(100vh - 24px); max-width: none; max-height: none; }
 .ui033-compose-popup > .common-popup-body { min-height: 0; overflow: hidden; padding-top: 10px; }
 .ui033-compose { height: 100%; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; font-size: 12px; }
 .ui033-compose button, .ui033-compose input, .ui033-compose textarea { font: inherit; }
@@ -2792,12 +2841,12 @@ textarea {
 .ui033-compose__tabs button { flex: 1; min-height: 34px; border: 0; border-radius: 8px; background: transparent; color: #64748b; cursor: pointer; }
 .ui033-compose__tabs button[aria-selected="true"] { background: #fff; color: #0f766e; font-weight: 800; box-shadow: 0 1px 4px rgba(15,23,42,.12); }
 .ui033-compose__tabs span { display: inline-grid; min-width: 18px; margin-left: 5px; padding: 2px 5px; border-radius: 999px; background: #dff6ef; font-size: 9px; }
-.ui033-compose__panel { min-height: 0; display: grid; grid-template-rows: auto minmax(180px, 1fr) minmax(150px, auto); gap: 10px; overflow: auto; padding: 2px; }
+.ui033-compose__panel { min-height: 0; display: grid; grid-template-rows: auto minmax(300px, 1fr) minmax(0, 150px); gap: 10px; overflow: auto; padding: 2px; }
 .ui033-compose__panel > label, .ui033-approver-search > label { display: grid; gap: 5px; color: #334155; font-weight: 800; }
 .ui033-compose__panel input, .ui033-compose__panel textarea { box-sizing: border-box; }
 .ui033-compose__content { min-height: 0; }
-.ui033-compose__content textarea { height: 100%; min-height: 180px; resize: vertical; line-height: 1.6; }
-.ui033-compose__attachments { min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 7px; padding: 11px; border: 1px solid #dbe4ec; border-radius: 12px; background: #f8fafc; }
+.ui033-compose__content textarea { height: 100%; min-height: 300px; resize: vertical; line-height: 1.6; }
+.ui033-compose__attachments { min-height: 0; max-height: 150px; box-sizing: border-box; display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 7px; padding: 11px; border: 1px solid #dbe4ec; border-radius: 12px; background: #f8fafc; }
 .ui033-compose__attachments > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .ui033-compose__attachments > header > div { display: grid; gap: 2px; }
 .ui033-compose__attachments span, .ui033-approver-search span, .ui033-approver-selected span { color: #64748b; font-size: 10px; font-weight: 400; }
@@ -2845,8 +2894,11 @@ textarea {
 .ui034-action-popup__footer button.is-danger { border-color: #be123c; background: #be123c; color: #fff; }
 .ui034-action-popup__footer button:disabled { opacity: .55; cursor: wait; }
 
-@media (max-width: 760px) {
+@media (max-width: 720px) {
+  .user-mail-compose-popup { width: calc(100vw - 24px); height: calc(100vh - 24px); min-width: 0; min-height: 0; }
+  .user-mail-compose-popup.is-minimized { height: auto; }
   .ui033-compose-popup { width: calc(100vw - 24px); height: calc(100vh - 24px); max-width: none; max-height: none; }
+  .ui033-compose-popup > .common-popup-body { overflow: auto; }
   .ui033-compose__line { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(220px, 1fr) minmax(220px, 1fr); }
 }
 .ui038-schedule-popup { width: 720px; max-width: calc(100vw - 48px); font-size: 12px; }
