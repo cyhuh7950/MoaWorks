@@ -40,15 +40,15 @@ jobs:
       MOAWORKS_DEF01_POSTGRES_INTEGRATION: '1'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: pip
-          cache-dependency-path: backend/requirements.txt
+          cache-dependency-path: backend/requirements-test.txt
       - name: Install backend dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-test.txt
       - name: Run PostgreSQL integration tests
         run: python -m unittest test_ui041_postgres_contacts test_content_operations_patch_help_postgres -v
       - name: Run full backend regression
