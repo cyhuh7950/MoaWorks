@@ -80,6 +80,10 @@ class ApprovalDelegationNotFoundError(Exception):
     pass
 
 
+class DirectoryUserEmailConflictError(RuntimeError):
+    pass
+
+
 class DirectoryStore:
     def __init__(self) -> None:
         self.db = PostgresService()
@@ -567,7 +571,7 @@ class DirectoryStore:
                 provider = self._fetch_provider_row(cursor)
                 cursor.execute("SELECT 1 FROM users WHERE email = %s", (normalized_email,))
                 if cursor.fetchone() is not None:
-                    raise ValueError("이미 존재하는 이메일입니다.")
+                    raise DirectoryUserEmailConflictError("이미 존재하는 이메일입니다.")
 
                 cursor.execute(
                     """

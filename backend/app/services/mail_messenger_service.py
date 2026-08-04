@@ -87,6 +87,10 @@ class MessengerConflictError(RuntimeError):
     pass
 
 
+class MailFolderConflictError(RuntimeError):
+    pass
+
+
 class MailMessengerService:
     def __init__(self) -> None:
         self.db = PostgresService()
@@ -1232,7 +1236,7 @@ class MailMessengerService:
                     (actor.companyId, actor.userId, payload.name),
                 )
                 if cursor.fetchone():
-                    raise ValueError("같은 이름의 사용자 메일함이 이미 있습니다.")
+                    raise MailFolderConflictError("같은 이름의 사용자 메일함이 이미 있습니다.")
                 cursor.execute(
                     "SELECT COUNT(*) AS count FROM mail_user_folders WHERE company_id = %s AND user_id = %s",
                     (actor.companyId, actor.userId),
@@ -1260,7 +1264,7 @@ class MailMessengerService:
                     (actor.companyId, actor.userId, payload.name, folder_id),
                 )
                 if cursor.fetchone():
-                    raise ValueError("같은 이름의 사용자 메일함이 이미 있습니다.")
+                    raise MailFolderConflictError("같은 이름의 사용자 메일함이 이미 있습니다.")
                 cursor.execute("UPDATE mail_user_folders SET name = %s, updated_at = %s WHERE id = %s", (payload.name, self._now(), folder_id))
                 self._write_mail_bulk_audit(cursor, actor, folder_id, "folder_update", {"updated": False}, {"updated": True}, "folder", self._new_id("mailfolder"))
             connection.commit()

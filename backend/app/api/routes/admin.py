@@ -21,7 +21,7 @@ from app.schemas.directory import (
     UserUpdateRequest,
     UserView,
 )
-from app.services.directory_store import DirectoryStore
+from app.services.directory_store import DirectoryStore, DirectoryUserEmailConflictError
 from app.services.domain_service import DomainService
 from app.services.org_import_service import OrgImportService
 from app.services.relay_service import RelayService
@@ -95,7 +95,13 @@ def create_user(
     payload: UserCreateRequest,
     _: AuthUserSummary = Depends(require_admin),
 ) -> UserView:
-    return DirectoryStore().create_user(payload)
+    try:
+        return DirectoryStore().create_user(payload)
+    except DirectoryUserEmailConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "USER_EMAIL_CONFLICT", "userMessage": str(exc), "adminMessage": str(exc)},
+        ) from exc
 
 
 @router.patch("/users/{user_id}", response_model=UserView)

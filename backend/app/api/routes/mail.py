@@ -69,7 +69,12 @@ from app.schemas.mail_messenger import (
     MailTagView,
     MailboxSettingsRow,
 )
-from app.services.mail_messenger_service import MailMessengerService, MailPreferenceConflictError, MailSignatureConflictError
+from app.services.mail_messenger_service import (
+    MailFolderConflictError,
+    MailMessengerService,
+    MailPreferenceConflictError,
+    MailSignatureConflictError,
+)
 from app.services.mailbox_backup_service import MailboxBackupService
 from app.services.mailbox_scope import MailboxScope
 from app.services.mailbox_settings_service import (
@@ -160,6 +165,15 @@ def _parse_mailbox_scope(mailbox_key: str) -> MailboxScope:
 
 
 def _handle_error(exc: Exception) -> None:
+    if isinstance(exc, MailFolderConflictError):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "MAIL_FOLDER_NAME_CONFLICT",
+                "userMessage": str(exc),
+                "adminMessage": str(exc),
+            },
+        ) from exc
     if isinstance(exc, ExternalMailRateLimitedError):
         raise HTTPException(status_code=429, detail={"code":"MAIL_EXTERNAL_TEST_RATE_LIMITED","userMessage":str(exc)}) from exc
     if isinstance(exc, (ExternalMailConflictError, ExternalMailLimitError, ExternalMailTestRequiredError, ExternalMailCollectionBusyError)):
