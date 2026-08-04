@@ -237,7 +237,11 @@ class ObservabilityService:
             for item in events
             if item.get("category") == MonitoringCategory.MAIL.value
             and datetime.fromisoformat(item["occurredAt"]) >= now - timedelta(hours=24)
-            and (
+        ]
+        mail_failures_24h = [
+            item
+            for item in mail_events_24h
+            if (
                 str(item.get("eventType", "")).endswith("fail")
                 or str(item.get("eventType", "")) == "mail.relay.fail"
             )
@@ -272,7 +276,11 @@ class ObservabilityService:
         )
         alert_open = sum(1 for item in state["alerts"] if item.get("status") == AlertStatus.OPEN.value)
         return MonitoringOverview(
-            mailFailureRate24h=float(len(mail_events_24h)),
+            mailFailureRate24h=(
+                float(len(mail_failures_24h)) / float(len(mail_events_24h)) * 100.0
+                if mail_events_24h
+                else 0.0
+            ),
             approvalBacklogCount=approval_backlog,
             relayFailureCount1h=len(mail_events_1h),
             diskUsagePercent=float(disk_status),
