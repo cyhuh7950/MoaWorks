@@ -1,7 +1,52 @@
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from fastapi.testclient import TestClient
+
+from app.main import app
+from app.services.admin_access_policy import AdminAccessDecision, AdminAccessOperations
 from app.services.admin_access_policy import evaluate_admin_access
+
+
+class FakeCursor:
+    def __init__(self, rows: list[dict]) -> None:
+        self.rows = iter(rows)
+        self.queries: list[str] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def execute(self, query: str) -> None:
+        self.queries.append(query)
+
+    def fetchone(self):
+        return next(self.rows, None)
+
+
+class FakeConnection:
+    def __init__(self, cursor: FakeCursor) -> None:
+        self._cursor = cursor
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def cursor(self) -> FakeCursor:
+        return self._cursor
+
+
+class FakeDb:
+    def __init__(self, rows: list[dict]) -> None:
+        self.cursor = FakeCursor(rows)
+
+    def connect(self) -> FakeConnection:
+        return FakeConnection(self.cursor)
 
 
 class AdminAccessPolicyTest(unittest.TestCase):
@@ -39,6 +84,46 @@ class AdminAccessPolicyTest(unittest.TestCase):
         self.assertIn("internal;", config)
         self.assertIn("X-MoaWorks-Admin-Access-Token", config)
         self.assertIn("ADMIN_ACCESS_CHECK_TOKEN", compose)
+
+    def test_internal_check_requires_token_and_enforces_decision(self) -> None:
+        client = TestClient(app)
+        path = "/api/v1/internal/admin-access/check"
+        client_ip = {"X-MoaWorks-Client-IP": "203.0.113.10"}
+
+        self.assertEqual(client.get(path, headers=client_ip).status_code, 401)
+        with patch("app.api.routes.admin_access_internal.settings.admin_access_check_token", "test-token"):
+            with patch.object(
+                AdminAccessOperations,
+                "check",
+                return_value=AdminAccessDecision(True, "public", "public_mode"),
+            ):
+                allowed = client.get(path, headers={**client_ip, "X-MoaWorks-Admin-Access-Token": "test-token"})
+            with patch.object(
+                AdminAccessOperations,
+                "check",
+                return_value=AdminAccessDecision(False, "restricted", "cidr_not_allowed"),
+            ):
+                denied = client.get(path, headers={**client_ip, "X-MoaWorks-Admin-Access-Token": "test-token"})
+
+        self.assertEqual(allowed.status_code, 204)
+        self.assertEqual(denied.status_code, 403)
+
+    def test_operations_use_bootstrap_policy_before_migration(self) -> None:
+        operation = AdminAccessOperations(db=FakeDb([{"relation": None}]))
+        with patch("app.services.admin_access_policy.settings.admin_access_bootstrap_mode", "private"):
+            decision = operation.check("10.0.0.20")
+        self.assertTrue(decision.allowed)
+
+    def test_operations_prefer_latest_persisted_policy(self) -> None:
+        db = FakeDb(
+            [
+                {"relation": "mail_domain_settings"},
+                {"admin_access_mode": "restricted", "admin_allowed_cidrs": ["198.51.100.0/24"]},
+            ]
+        )
+        decision = AdminAccessOperations(db=db).check("198.51.100.10")
+        self.assertTrue(decision.allowed)
+        self.assertEqual(len(db.cursor.queries), 2)
 
 
 if __name__ == "__main__":

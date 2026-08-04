@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     mail_layer_imap_port: int = 993
     mail_ingest_token: str = ""
     mail_inbound_max_message_bytes: int = 25 * 1024 * 1024
+    admin_access_check_token: str = ""
+    admin_access_bootstrap_mode: str = "restricted"
+    admin_access_bootstrap_cidrs: list[str] = [
+        "127.0.0.0/8",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+    ]
 
     storage_driver: str = "local"
     storage_local_path: str = "./data/storage"

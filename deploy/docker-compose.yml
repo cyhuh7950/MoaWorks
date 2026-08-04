@@ -32,6 +32,9 @@ services:
       dockerfile: deploy/admin-web.Dockerfile
     ports:
       - "${FRONTEND_PORT:-3510}:3510"
+    environment:
+      ADMIN_ACCESS_CHECK_TOKEN: ${ADMIN_ACCESS_CHECK_TOKEN}
+      TRUSTED_PROXY_CIDR: ${TRUSTED_PROXY_CIDR:-172.16.0.0/12}
     depends_on:
       - server
 
