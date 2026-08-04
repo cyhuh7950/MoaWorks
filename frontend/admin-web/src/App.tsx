@@ -20,12 +20,14 @@ import {
   createRole,
   createUser,
   deleteDepartment,
+  deleteAdminMessengerRoom,
   deleteRole,
   deleteUser,
   downloadOrgImportTemplate,
   fetchDirectory,
   fetchHealth,
   fetchMailDeliveryQueue,
+  fetchAdminMessengerRooms,
   fetchMailDeliveryStatus,
   fetchMailOperations,
   fetchMonitoringEvents,
@@ -55,6 +57,7 @@ import {
   type UiContract as ServerUiContract,
   type DirectoryOverview,
   type MailDeliveryQueueResponse,
+  type AdminMessengerRoom,
   type MailDeliveryStatusResponse,
   type MailOperationsOverview,
   type MailSendResponse,
@@ -212,7 +215,7 @@ type UiContract = {
   };
 };
 
-type AdminMenuKey = "dashboard" | "users" | "departments" | "roles" | "service" | "mail" | "storage" | "approval" | "brand" | "language" | "help";
+type AdminMenuKey = "dashboard" | "users" | "departments" | "roles" | "service" | "mail" | "messenger" | "storage" | "approval" | "brand" | "language" | "help";
 
 const adminMenus: Array<{ key: AdminMenuKey; label: string; description: string }> = [
   { key: "dashboard", label: "대시보드", description: "상태와 빠른 작업" },
@@ -221,6 +224,7 @@ const adminMenus: Array<{ key: AdminMenuKey; label: string; description: string 
   { key: "roles", label: "권한 관리", description: "역할과 권한 상태" },
   { key: "service", label: "서비스 운영", description: "운영 점검과 연결 확인" },
   { key: "mail", label: "메일 설정", description: "메일 연결 상태와 테스트" },
+  { key: "messenger", label: "메신저 관리", description: "대화방 상태와 보존 관리" },
   { key: "storage", label: "저장소/DB 상태", description: "저장소와 DB 점검" },
   { key: "approval", label: "결재/감사", description: "감사 로그와 이벤트" },
   { key: "brand", label: "브랜드/화면 설정", description: "설정 계약과 반영" },
@@ -713,6 +717,9 @@ export default function App() {
   const [mailDeliveryStatus, setMailDeliveryStatus] = useState<MailDeliveryStatusResponse | null>(null);
   const [mailDeliveryQueue, setMailDeliveryQueue] = useState<MailDeliveryQueueResponse | null>(null);
   const [mailDeliveryTestResult, setMailDeliveryTestResult] = useState<MailSendResponse | null>(null);
+  const [adminMessengerRooms, setAdminMessengerRooms] = useState<AdminMessengerRoom[]>([]);
+  const [adminMessengerStatus, setAdminMessengerStatus] = useState<"active" | "deleted" | "all">("all");
+  const [messengerDeleteTarget, setMessengerDeleteTarget] = useState<AdminMessengerRoom | null>(null);
   const [mailOperations, setMailOperations] = useState<MailOperationsOverview | null>(null);
   const [mailDomainOperationsForm, setMailDomainOperationsForm] = useState<MailDomainOperationsForm>({ registeredDomain: "", mailDomain: "", adminAccessMode: "restricted", adminAllowedCidrs: "" });
   const [mailProviderOperationsForm, setMailProviderOperationsForm] = useState<MailProviderOperationsForm>({ providerKey: "self_hosted", relayHost: "", relayPort: "25", tlsMode: "none", senderAddress: "", username: "", password: "", dkimDomain: "", dkimSelector: "", dkimPrivateKey: "" });
@@ -934,6 +941,28 @@ export default function App() {
         dkimSelector: selected.dkimSelector ?? "",
         dkimPrivateKey: "",
       }));
+    }
+  }
+
+  async function refreshAdminMessengerRooms(nextToken = token, statusFilter = adminMessengerStatus) {
+    if (!nextToken) return;
+    const response = await fetchAdminMessengerRooms(nextToken, statusFilter);
+    setAdminMessengerRooms(response.rooms ?? []);
+  }
+
+  async function confirmDeleteAdminMessengerRoom() {
+    if (!token || !messengerDeleteTarget) return;
+    setLoading(true);
+    setErrors([]);
+    try {
+      await deleteAdminMessengerRoom(token, messengerDeleteTarget.roomId);
+      setMessengerDeleteTarget(null);
+      await refreshAdminMessengerRooms(token);
+      setMessage("대화방을 삭제 상태로 전환했습니다. 대화와 첨부는 14일 후 자동 정리됩니다.");
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "대화방 삭제 실패"]);
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -1243,6 +1272,9 @@ export default function App() {
       void refreshMailDelivery(token).catch((error) => {
         setErrors((current) => [...current, error instanceof Error ? error.message : "자체 SMTP 상태 조회 실패"]);
       });
+      void refreshAdminMessengerRooms(token).catch((error) => {
+        setErrors((current) => [...current, error instanceof Error ? error.message : "메신저 대화방 조회 실패"]);
+      });
       void refreshApprovalAuditLogs(token).catch((error) => {
         setErrors((current) => [...current, error instanceof Error ? error.message : "결재 감사 로그 조회 실패"]);
       });
@@ -1366,6 +1398,7 @@ export default function App() {
       setToken(response.accessToken);
       await refreshDirectory(response.accessToken);
       await refreshMailDelivery(response.accessToken);
+      await refreshAdminMessengerRooms(response.accessToken);
       await refreshTranslationState(response.accessToken);
       await reloadUiContract(response.accessToken);
     } catch (error) {
@@ -2551,6 +2584,31 @@ export default function App() {
             </div>
           </section>
         );
+      case "messenger":
+        return (
+          <section className="panel ops-panel">
+            <div className="ops-shell">
+              <div className="panel-head ops-head">
+                <div><h2>메신저 대화방 관리</h2><p className="muted">활성 대화방과 삭제 보존 상태를 확인합니다.</p></div>
+                <div className="actions compact-actions">
+                  <label className="compact-field"><span>상태</span><select value={adminMessengerStatus} onChange={(event) => { const next = event.target.value as "active" | "deleted" | "all"; setAdminMessengerStatus(next); void refreshAdminMessengerRooms(token, next); }}><option value="all">전체</option><option value="active">활성</option><option value="deleted">삭제 보존</option></select></label>
+                  <button type="button" className="secondary" onClick={() => void refreshAdminMessengerRooms()} disabled={loading}>새로고침</button>
+                </div>
+              </div>
+              <div className="overview-grid">
+                <article className="status-card"><strong>조회 대화방</strong><span className="mini-stat">{adminMessengerRooms.length}개</span></article>
+                <article className="status-card"><strong>보존 정책</strong><span className="mini-stat">삭제 후 14일</span></article>
+              </div>
+              <div className="ops-list-panel">
+                <div className="ops-list-head"><strong>대화방 목록</strong><span className="muted">삭제하면 즉시 숨김 처리되고 대화·첨부는 14일 후 자동 정리됩니다.</span></div>
+                <div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>대화방</th><th>방장</th><th>상태</th><th>참여자</th><th>메시지</th><th>갱신일</th><th>보존 만료</th><th>작업</th></tr></thead><tbody>
+                  {adminMessengerRooms.map((room) => <tr key={room.roomId}><td>{room.roomName}</td><td>{room.ownerUserName}</td><td><span className={`badge ${room.status === "active" ? "badge-ok" : "badge-warning"}`}>{room.status}</span></td><td>{room.participantCount}</td><td>{room.messageCount}</td><td>{new Date(room.updatedAt).toLocaleString("ko-KR")}</td><td>{room.retentionExpiresAt ? new Date(room.retentionExpiresAt).toLocaleString("ko-KR") : "-"}</td><td><button type="button" className="danger-action" disabled={loading || room.status !== "active"} onClick={() => setMessengerDeleteTarget(room)}>삭제</button></td></tr>)}
+                  {adminMessengerRooms.length === 0 ? <tr><td colSpan={8}>표시할 대화방이 없습니다.</td></tr> : null}
+                </tbody></table></div>
+              </div>
+            </div>
+          </section>
+        );
       case "storage":
         return (
           <section className="panel">
@@ -3311,6 +3369,16 @@ export default function App() {
                   <p className="muted">시스템 항목과 삭제된 항목은 서버에서 다시 검증하며 변경할 수 없습니다.</p>
                   {contentDialogError ? <div className="notice warning"><strong>작업 차단</strong><p>{contentDialogError}</p></div> : null}
                   <div className="actions compact-actions"><button type="button" className={contentBulkDialog.action === "delete" ? "danger-action" : ""} onClick={() => void executeContentBulkAction()} disabled={loading}>확인</button><button type="button" className="secondary" onClick={() => setContentBulkDialog(null)} disabled={loading}>취소</button></div>
+                </section>
+              </div>
+            ) : null}
+            {messengerDeleteTarget ? (
+              <div className="management-modal-backdrop" role="presentation" onClick={() => !loading && setMessengerDeleteTarget(null)}>
+                <section className="management-modal management-confirm-modal" role="alertdialog" aria-modal="true" aria-label="대화방 삭제 확인" onClick={(event) => event.stopPropagation()}>
+                  <div className="management-modal-head"><strong>대화방 삭제 확인</strong><button type="button" className="secondary" onClick={() => setMessengerDeleteTarget(null)} disabled={loading}>닫기</button></div>
+                  <p><strong>{messengerDeleteTarget.roomName}</strong> 대화방을 삭제 상태로 전환합니다.</p>
+                  <p className="muted">사용자 화면에서는 즉시 숨겨지고 대화·첨부는 14일 후 자동 정리됩니다. 감사 이력은 보존됩니다.</p>
+                  <div className="actions compact-actions"><button type="button" className="danger-action" onClick={() => void confirmDeleteAdminMessengerRoom()} disabled={loading}>삭제</button><button type="button" className="secondary" onClick={() => setMessengerDeleteTarget(null)} disabled={loading}>취소</button></div>
                 </section>
               </div>
             ) : null}

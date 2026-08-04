@@ -27,10 +27,11 @@ from app.services.org_import_service import OrgImportService
 from app.services.relay_service import RelayService
 from app.services.mail_delivery_operations import MailDeliveryOperations
 from app.services.mail_messenger_service import MailMessengerService
-from app.services.resource_policy import ResourceNotFoundError
+from app.services.resource_policy import ResourceNotFoundError, ResourceStateError
 from app.schemas.mail_messenger import (
     MailDeliveryProviderTestRequest, MailDeliveryProviderUpdateRequest, MailDeliveryProviderView,
     MailDeliveryQueueDetailResponse, MailDeliveryQueueListResponse, MailDeliveryStatusResponse,
+    AdminMessengerRoomListResponse,
     MessengerRoomDeleteResponse,
 )
 
@@ -263,4 +264,20 @@ def admin_delete_messenger_room(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "MESSENGER_FORBIDDEN", "userMessage": str(exc)},
+        ) from exc
+
+
+@router.get("/messenger/rooms", response_model=AdminMessengerRoomListResponse)
+def list_admin_messenger_rooms(
+    status_filter: str = Query(default="all", alias="status"),
+    limit: int = Query(default=200, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: AuthUserSummary = Depends(require_admin),
+) -> AdminMessengerRoomListResponse:
+    try:
+        return MailMessengerService().list_admin_rooms(user, status_filter, limit, offset)
+    except ResourceStateError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "MESSENGER_STATE_INVALID", "userMessage": str(exc)},
         ) from exc

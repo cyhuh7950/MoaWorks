@@ -122,8 +122,11 @@ class Stage02MessengerLifecyclePolicyTest(unittest.TestCase):
 
     def test_admin_route_can_soft_delete_room(self) -> None:
         source = (ROOT / "app" / "api" / "routes" / "admin.py").read_text(encoding="utf-8")
+        self.assertIn('@router.get("/messenger/rooms"', source)
         self.assertIn('@router.delete("/messenger/rooms/{room_id}"', source)
+        self.assertIn("list_admin_rooms", source)
         self.assertIn("allow_admin=True", source)
+        self.assertIn("AdminMessengerRoomListResponse", source)
         self.assertIn("MessengerRoomDeleteResponse", source)
 
 

@@ -371,6 +371,26 @@ export type MailDeliveryQueueResponse = {
   events: MailDeliveryEventItem[];
 };
 
+export type AdminMessengerRoom = {
+  roomId: string;
+  roomType: string;
+  roomName: string;
+  status: "active" | "deleted";
+  ownerUserId: string;
+  ownerUserName: string;
+  participantCount: number;
+  messageCount: number;
+  createdAt: string;
+  updatedAt: string;
+  closedAt: string | null;
+  retentionExpiresAt: string | null;
+};
+
+export type AdminMessengerRoomListResponse = {
+  rooms: AdminMessengerRoom[];
+  total: number;
+};
+
 export type MailSendResponse = {
   mailId: string;
   status: string;
@@ -781,6 +801,19 @@ export async function retryMailDelivery(token: string, queueId: string) {
     headers: authHeaders(token),
   });
   return { message: "메일 전달 큐 재시도를 요청했습니다." };
+}
+
+export async function fetchAdminMessengerRooms(token: string, status: "active" | "deleted" | "all" = "all") {
+  return request<AdminMessengerRoomListResponse>(`/admin/messenger/rooms?status=${encodeURIComponent(status)}&limit=200`, {
+    headers: authHeaders(token),
+  });
+}
+
+export async function deleteAdminMessengerRoom(token: string, roomId: string) {
+  return request<{ roomId: string; status: string; deletedAt: string; retentionExpiresAt: string }>(`/admin/messenger/rooms/${roomId}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
 }
 
 export async function fetchMonitoringOverview(token: string): Promise<MonitoringOverview> {

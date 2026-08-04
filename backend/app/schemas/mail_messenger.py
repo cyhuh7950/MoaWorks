@@ -1191,6 +1191,26 @@ class MessengerRoomListResponse(BaseModel):
     rooms: list[MessengerRoomSummary]
 
 
+class AdminMessengerRoomView(BaseModel):
+    roomId: str
+    roomType: str
+    roomName: str
+    status: Literal["active", "deleted"]
+    ownerUserId: str
+    ownerUserName: str
+    participantCount: int = 0
+    messageCount: int = 0
+    createdAt: datetime
+    updatedAt: datetime
+    closedAt: datetime | None = None
+    retentionExpiresAt: datetime | None = None
+
+
+class AdminMessengerRoomListResponse(BaseModel):
+    rooms: list[AdminMessengerRoomView]
+    total: int
+
+
 class MessengerRoomDetailResponse(MessengerRoomSummary):
     participants: list[dict]
 

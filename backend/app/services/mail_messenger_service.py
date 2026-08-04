@@ -13,6 +13,8 @@ from app.services.mail_delivery_service import MailDeliveryPolicy
 
 from app.schemas.directory import AuthUserSummary
 from app.schemas.mail_messenger import (
+    AdminMessengerRoomListResponse,
+    AdminMessengerRoomView,
     MailAttachmentMeta,
     MailAttachmentView,
     MailBasicPreferencesResponse,
@@ -1826,6 +1828,61 @@ class MailMessengerService:
             )
             rooms = [self._to_room_summary(row, actor.userId) for row in cursor.fetchall()]
         return MessengerRoomListResponse(rooms=rooms)
+
+    def list_admin_rooms(
+        self,
+        actor: AuthUserSummary,
+        status_filter: str = "all",
+        limit: int = 200,
+        offset: int = 0,
+    ) -> AdminMessengerRoomListResponse:
+        if status_filter not in {"active", "deleted", "all"}:
+            raise ResourceStateError("대화방 상태 필터를 확인하세요.")
+        bounded_limit = max(1, min(limit, 200))
+        bounded_offset = max(0, offset)
+        status_sql = "" if status_filter == "all" else " AND room.status=%s"
+        count_params: list[object] = [actor.companyId]
+        if status_filter != "all":
+            count_params.append(status_filter)
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT COUNT(*)::INT AS total FROM messenger_rooms room WHERE room.company_id=%s{status_sql}",
+                tuple(count_params),
+            )
+            total = int((cursor.fetchone() or {"total": 0})["total"] or 0)
+            cursor.execute(
+                f"""SELECT room.id,room.room_type,room.room_name,room.status,
+                    room.created_by_user_id,owner.name AS owner_user_name,
+                    room.created_at,room.updated_at,room.closed_at,room.retention_expires_at,
+                    COALESCE(member_count.count,0)::INT AS participant_count,
+                    COALESCE(message_count.count,0)::INT AS message_count
+                FROM messenger_rooms room
+                JOIN users owner ON owner.id=room.created_by_user_id
+                LEFT JOIN LATERAL (
+                    SELECT COUNT(*) FROM messenger_room_members member
+                    JOIN users active_member ON active_member.id=member.user_id AND active_member.status='active'
+                    WHERE member.room_id=room.id AND member.left_at IS NULL
+                ) member_count ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT COUNT(*) FROM messenger_messages message WHERE message.room_id=room.id
+                ) message_count ON TRUE
+                WHERE room.company_id=%s{status_sql}
+                ORDER BY room.updated_at DESC,room.id DESC
+                LIMIT %s OFFSET %s""",
+                tuple([*count_params, bounded_limit, bounded_offset]),
+            )
+            rooms = [
+                AdminMessengerRoomView(
+                    roomId=row["id"], roomType=row["room_type"], roomName=row["room_name"],
+                    status=row["status"], ownerUserId=row["created_by_user_id"], ownerUserName=row["owner_user_name"],
+                    participantCount=row["participant_count"], messageCount=row["message_count"],
+                    createdAt=row["created_at"], updatedAt=row["updated_at"], closedAt=row["closed_at"],
+                    retentionExpiresAt=row["retention_expires_at"],
+                )
+                for row in cursor.fetchall()
+            ]
+        return AdminMessengerRoomListResponse(rooms=rooms, total=total)
 
     def create_room(self, actor: AuthUserSummary, payload: MessengerRoomCreateRequest) -> MessengerRoomDetailResponse:
         self.db.ensure_migrations_applied()
