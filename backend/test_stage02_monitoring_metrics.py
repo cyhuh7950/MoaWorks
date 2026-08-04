@@ -5,6 +5,8 @@ import unittest
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.schemas.notification_center import NotificationPreferences
+from app.services.notification_center_service import NotificationCenterService
 from app.services.observability_service import ObservabilityService
 
 
@@ -76,6 +78,69 @@ class _Database:
         return _Connection()
 
 
+class _PreferencesCursor:
+    def __init__(self, database: "_PreferencesDatabase") -> None:
+        self.database = database
+        self._row: dict | None = None
+
+    def __enter__(self) -> "_PreferencesCursor":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def execute(self, query: str, params: tuple | None = None) -> None:
+        normalized = " ".join(query.split()).lower()
+        if normalized.startswith("select * from notification_preferences"):
+            self._row = dict(self.database.row)
+            return
+        if normalized.startswith("insert into notification_preferences"):
+            self.database.saved_params = params
+            return
+        if normalized.startswith("insert into notification_action_audit"):
+            return
+        raise AssertionError(f"unexpected query: {normalized}")
+
+    def fetchone(self) -> dict | None:
+        return self._row
+
+
+class _PreferencesConnection:
+    def __init__(self, database: "_PreferencesDatabase") -> None:
+        self.database = database
+
+    def __enter__(self) -> "_PreferencesConnection":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def cursor(self) -> _PreferencesCursor:
+        return _PreferencesCursor(self.database)
+
+    def commit(self) -> None:
+        return None
+
+
+class _PreferencesDatabase:
+    def __init__(self) -> None:
+        self.row = {
+            "enabled": False,
+            "quiet_hours_enabled": True,
+            "quiet_hours_start": "23:00",
+            "quiet_hours_end": "06:00",
+            "categories": {"mail": {"enabled": False, "importantOnly": True}},
+            "updated_at": datetime.now(UTC),
+        }
+        self.saved_params: tuple | None = None
+
+    def ensure_migrations_applied(self) -> None:
+        return None
+
+    def connect(self) -> _PreferencesConnection:
+        return _PreferencesConnection(self)
+
+
 class Stage02MonitoringMetricsTest(unittest.TestCase):
     def test_approval_backlog_counts_current_submitted_documents(self) -> None:
         with tempfile.TemporaryDirectory(prefix="moaworks-stage02-") as temp_dir:
@@ -86,6 +151,22 @@ class Stage02MonitoringMetricsTest(unittest.TestCase):
             overview = service.get_monitoring_overview()
 
         self.assertEqual(overview.approvalBacklogCount, 1)
+
+    def test_partial_notification_put_preserves_unsent_preferences(self) -> None:
+        database = _PreferencesDatabase()
+        service = NotificationCenterService(db_service=database)
+
+        saved = service.save_preferences(
+            user_id="user-1",
+            preferences=NotificationPreferences(enabled=True),
+        )
+
+        self.assertTrue(saved.enabled)
+        self.assertTrue(saved.quietHoursEnabled)
+        self.assertEqual(saved.quietHoursStart, "23:00")
+        self.assertEqual(saved.quietHoursEnd, "06:00")
+        self.assertFalse(saved.categories["mail"].enabled)
+        self.assertTrue(saved.categories["mail"].importantOnly)
 
 
 if __name__ == "__main__":
