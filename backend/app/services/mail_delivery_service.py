@@ -8,6 +8,8 @@ import smtplib
 import ssl
 from typing import Protocol
 
+from app.services.mail_transports import MailTransportFailure
+
 @dataclass(frozen=True)
 class RecipientClassification:
     internal: list[tuple[str, str, str]]
@@ -69,7 +71,7 @@ class MailDeliveryWorker:
         try:
             response = self.adapter.send(envelope, provider)
             return DeliveryResult("sent", relay_response=mask_delivery_error(response))
-        except RelayDeliveryError as exc:
+        except (RelayDeliveryError, MailTransportFailure) as exc:
             maximum = int(provider.get("max_retry_count", 3))
             error = mask_delivery_error(str(exc))
             if exc.transient and attempt < maximum:

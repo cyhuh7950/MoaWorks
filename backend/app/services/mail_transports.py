@@ -32,6 +32,12 @@ SmtpFactory = Callable[..., SmtpClient]
 MxResolver = Callable[[str], Sequence[str]]
 
 
+class MailTransportFailure(ValueError):
+    def __init__(self, message: str, *, transient: bool) -> None:
+        super().__init__(message)
+        self.transient = transient
+
+
 @dataclass(frozen=True, slots=True)
 class OutboundMessage:
     sender_email: str
@@ -91,7 +97,7 @@ class SelfHostedSmtpTransport:
         recipient_domain = message.recipient_email.rsplit("@", 1)[1].lower()
         candidates = [host.strip().rstrip(".").lower() for host in self.mx_resolver(recipient_domain) if host.strip()]
         if not candidates:
-            raise ValueError("외부 SMTP 대상 MX를 찾지 못했습니다.")
+            raise MailTransportFailure("외부 SMTP 대상 MX를 찾지 못했습니다.", transient=False)
 
         last_error: Exception | None = None
         for host in candidates:
@@ -115,7 +121,13 @@ class SelfHostedSmtpTransport:
                 )
             except Exception as exc:  # pragma: no cover - multi-host network path
                 last_error = exc
-        raise ValueError(f"자체 SMTP 발송 실패: {last_error}") from last_error
+        transient = isinstance(
+            last_error,
+            (TimeoutError, OSError, smtplib.SMTPServerDisconnected, smtplib.SMTPConnectError),
+        )
+        if isinstance(last_error, smtplib.SMTPResponseException):
+            transient = 400 <= int(last_error.smtp_code) < 500
+        raise MailTransportFailure(f"자체 SMTP 발송 실패: {last_error}", transient=transient) from last_error
 
 
 class OciEmailDeliveryTransport:
@@ -130,7 +142,7 @@ class OciEmailDeliveryTransport:
 
     def send(self, message: OutboundMessage, *, config: RelaySmtpConfig) -> DeliveryReceipt:
         if config.port not in {465, 587}:
-            raise ValueError("OCI SMTP 포트는 465 또는 587이어야 합니다.")
+            raise MailTransportFailure("OCI SMTP 포트는 465 또는 587이어야 합니다.", transient=False)
         prepared = _build_message(message)
         factory = self.smtp_ssl_factory if config.port == 465 else self.smtp_factory
         try:
@@ -154,11 +166,19 @@ class OciEmailDeliveryTransport:
                 if refused:
                     raise ValueError("OCI SMTP 서버가 수신자를 거부했습니다.")
         except smtplib.SMTPAuthenticationError as exc:
-            raise ValueError("OCI SMTP 인증 실패") from exc
-        except ValueError:
+            raise MailTransportFailure("OCI SMTP 인증 실패", transient=False) from exc
+        except MailTransportFailure:
             raise
+        except ValueError as exc:
+            raise MailTransportFailure(str(exc), transient=False) from exc
+        except (TimeoutError, OSError, smtplib.SMTPServerDisconnected, smtplib.SMTPConnectError) as exc:
+            raise MailTransportFailure("OCI SMTP 연결 실패", transient=True) from exc
+        except smtplib.SMTPResponseException as exc:
+            raise MailTransportFailure(
+                "OCI SMTP 응답 실패", transient=400 <= int(exc.smtp_code) < 500
+            ) from exc
         except Exception as exc:  # pragma: no cover - network dependent
-            raise ValueError("OCI SMTP 발송 실패") from exc
+            raise MailTransportFailure("OCI SMTP 발송 실패", transient=False) from exc
         return DeliveryReceipt(
             provider_key="oci_email_delivery",
             endpoint=f"smtps://{config.host}:{config.port}",
@@ -202,7 +222,7 @@ class MailProviderRoutingAdapter:
         elif provider_type == "oci_email_delivery":
             password = str(provider.get("password") or "")
             if not password:
-                raise ValueError("OCI SMTP 자격증명이 설정되지 않았습니다.")
+                raise MailTransportFailure("OCI SMTP 자격증명이 설정되지 않았습니다.", transient=False)
             receipt = self.oci_transport.send(
                 message,
                 config=RelaySmtpConfig(
@@ -216,7 +236,9 @@ class MailProviderRoutingAdapter:
         elif provider_type in {"smtp", "aws_ses"} and self.legacy_relay_adapter is not None:
             return self.legacy_relay_adapter.send(envelope, provider)
         else:
-            raise ValueError(f"지원하지 않는 발신 Provider입니다: {raw_provider_type}")
+            raise MailTransportFailure(
+                f"지원하지 않는 발신 Provider입니다: {raw_provider_type}", transient=False
+            )
 
         return (
             f"provider={receipt.provider_key};endpoint={receipt.endpoint};"

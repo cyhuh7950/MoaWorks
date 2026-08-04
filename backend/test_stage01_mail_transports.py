@@ -8,6 +8,7 @@ import dns.resolver
 from app.services.mail_transports import (
     OciEmailDeliveryTransport,
     OutboundMessage,
+    MailTransportFailure,
     RelaySmtpConfig,
     SelfHostedSmtpTransport,
     resolve_mx_hosts,
@@ -134,6 +135,29 @@ class MailTransportTest(unittest.TestCase):
             transport.send(sample_message(), config=config)
 
         self.assertNotIn("top-secret", str(raised.exception))
+
+    def test_oci_requires_supported_tls_port(self) -> None:
+        transport = OciEmailDeliveryTransport()
+        config = RelaySmtpConfig(
+            host="smtp.example.net", port=25, username="user", password="secret"
+        )
+
+        with self.assertRaises(MailTransportFailure) as raised:
+            transport.send(sample_message(), config=config)
+
+        self.assertFalse(raised.exception.transient)
+
+    def test_oci_missing_starttls_is_permanent_failure(self) -> None:
+        smtp = FakeSmtp(starttls_available=False)
+        transport = OciEmailDeliveryTransport(smtp_factory=lambda **_: smtp)
+        config = RelaySmtpConfig(
+            host="smtp.example.net", port=587, username="user", password="secret"
+        )
+
+        with self.assertRaises(MailTransportFailure) as raised:
+            transport.send(sample_message(), config=config)
+
+        self.assertFalse(raised.exception.transient)
 
 
 if __name__ == "__main__":
