@@ -232,6 +232,10 @@ export type TranslationItem = {
   cacheHit: boolean;
   translated: boolean;
   statusMessage?: string | null;
+  detectedSourceLocale?: string | null;
+  model: string;
+  estimatedCost?: number | null;
+  reviewId?: string | null;
 };
 
 export type TranslationResponse = {
@@ -259,7 +263,38 @@ export type TranslationPolicy = {
   cacheEnabled: boolean;
   supportedSourceLocales: string[];
   supportedTargetLocales: string[];
+  model: string;
+  apiBaseUrl: string;
+  apiKeyConfigured: boolean;
+  apiKeyMasked?: string | null;
+  timeoutSeconds: number;
+  maxRetries: number;
+  rateLimitPerMinute: number;
+  circuitFailureThreshold: number;
+  circuitRecoverySeconds: number;
+  costPerMillionUnits?: number | null;
+  costUnit: "tokens" | "characters";
 };
+
+export type TranslationReview = {
+  id: string;
+  companyId: string;
+  sourceLocale: string;
+  targetLocale: string;
+  sourceText: string;
+  translatedText: string;
+  provider: string;
+  model: string;
+  status: string;
+  estimatedCost?: number | null;
+  createdByUserId: string;
+  approvedByUserId?: string | null;
+  approvedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TranslationReviewList = { items: TranslationReview[]; total: number };
 
 export type MailDeliveryProviderStatus = {
   providerId: string;
@@ -890,8 +925,8 @@ export async function bulkDeleteHelpPolicies(token: string, ids: string[]) {
   return request<ContentListResponse<HelpPolicyDocument>>("/admin/content/help-policies/bulk-delete", { method: "POST", headers: authHeaders(token), body: JSON.stringify({ ids }) });
 }
 
-export async function fetchTranslationStatus(): Promise<TranslationStatus> {
-  return request<TranslationStatus>("/translation/status");
+export async function fetchTranslationStatus(token?: string): Promise<TranslationStatus> {
+  return request<TranslationStatus>(token ? "/translation/admin/status" : "/translation/status", token ? { headers: authHeaders(token) } : undefined);
 }
 
 export async function requestTranslation(payload: TranslationRequest, token: string): Promise<TranslationResponse> {
@@ -913,7 +948,7 @@ export async function fetchTranslationPolicy(token: string): Promise<Translation
 
 export async function updateTranslationPolicy(
   token: string,
-  payload: Partial<{ enabled: boolean; provider: string; cacheEnabled: boolean }>,
+  payload: Partial<{ enabled: boolean; provider: string; cacheEnabled: boolean; model: string; apiBaseUrl: string; apiKey: string; timeoutSeconds: number; maxRetries: number; rateLimitPerMinute: number; circuitFailureThreshold: number; circuitRecoverySeconds: number; costPerMillionUnits: number; costUnit: "tokens" | "characters" }>,
 ): Promise<TranslationPolicy> {
   return request<TranslationPolicy>("/translation/admin", {
     method: "PATCH",
@@ -921,6 +956,19 @@ export async function updateTranslationPolicy(
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchTranslationReviews(token: string, reviewStatus?: string): Promise<TranslationReviewList> {
+  const query = reviewStatus ? `?reviewStatus=${encodeURIComponent(reviewStatus)}` : "";
+  return request<TranslationReviewList>(`/translation/reviews${query}`, { headers: authHeaders(token) });
+}
+
+export async function applyTranslationReviewAction(token: string, reviewId: string, payload: { action: "edit" | "approve" | "retranslate"; translatedText?: string }): Promise<TranslationReview> {
+  return request<TranslationReview>(`/translation/reviews/${reviewId}/actions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(payload),
   });
 }

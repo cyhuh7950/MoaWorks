@@ -47,13 +47,16 @@ import {
   syncOciMailSuppressions,
   switchMailOperationsProvider,
   fetchTranslationPolicy,
+  fetchTranslationReviews,
   fetchTranslationStatus,
+  applyTranslationReviewAction,
   requestTranslation,
   type TranslationItem,
   type TranslationRequest,
   type TranslationPolicy,
   type TranslationResponse,
   type TranslationStatus,
+  type TranslationReview,
   type UiContract as ServerUiContract,
   type DirectoryOverview,
   type MailDeliveryQueueResponse,
@@ -726,10 +729,21 @@ export default function App() {
   const [translationStatus, setTranslationStatus] = useState<TranslationStatus | null>(null);
   const [translationPolicy, setTranslationPolicy] = useState<TranslationPolicy | null>(null);
   const [translationSource, setTranslationSource] = useState("");
+  const [translationSourceLocale, setTranslationSourceLocale] = useState("auto");
   const [translationTargetLocale, setTranslationTargetLocale] = useState("en");
   const [translationResult, setTranslationResult] = useState<TranslationItem[]>([]);
   const [translationError, setTranslationError] = useState("");
   const [translationLoading, setTranslationLoading] = useState(false);
+  const [translationReviews, setTranslationReviews] = useState<TranslationReview[]>([]);
+  const [translationReviewStatus, setTranslationReviewStatus] = useState("all");
+  const [selectedTranslationReviewId, setSelectedTranslationReviewId] = useState("");
+  const [translationReviewDraft, setTranslationReviewDraft] = useState("");
+  const [translationPolicyForm, setTranslationPolicyForm] = useState({
+    provider: "disabled", model: "", apiBaseUrl: "", apiKey: "", cacheEnabled: true,
+    timeoutSeconds: "15", maxRetries: "2", rateLimitPerMinute: "60",
+    circuitFailureThreshold: "5", circuitRecoverySeconds: "60",
+    costPerMillionUnits: "", costUnit: "tokens" as "tokens" | "characters",
+  });
   const [form, setForm] = useState<SetupForm>(initialForm);
   const [loginForm, setLoginForm] = useState<LoginForm>({ loginId: "", password: "" });
   const [publicUiContractState, setPublicUiContractState] = useState<PublicUiContractState>("pending");
@@ -1089,7 +1103,7 @@ export default function App() {
   }
 
   async function refreshTranslationState(nextToken = token) {
-    const status = await fetchTranslationStatus();
+    const status = await fetchTranslationStatus(nextToken || undefined);
     setTranslationStatus(status);
     if (!nextToken) {
       setTranslationPolicy(null);
@@ -1098,6 +1112,15 @@ export default function App() {
     try {
       const policy = await fetchTranslationPolicy(nextToken);
       setTranslationPolicy(policy);
+      setTranslationPolicyForm({
+        provider: policy.provider, model: policy.model, apiBaseUrl: policy.apiBaseUrl, apiKey: "",
+        cacheEnabled: policy.cacheEnabled, timeoutSeconds: String(policy.timeoutSeconds),
+        maxRetries: String(policy.maxRetries), rateLimitPerMinute: String(policy.rateLimitPerMinute),
+        circuitFailureThreshold: String(policy.circuitFailureThreshold), circuitRecoverySeconds: String(policy.circuitRecoverySeconds),
+        costPerMillionUnits: policy.costPerMillionUnits == null ? "" : String(policy.costPerMillionUnits), costUnit: policy.costUnit,
+      });
+      const reviews = await fetchTranslationReviews(nextToken, translationReviewStatus === "all" ? undefined : translationReviewStatus);
+      setTranslationReviews(reviews.items);
       setTranslationTargetLocale(toTranslationLocale(policy.supportedTargetLocales.includes(translationTargetLocale) ? translationTargetLocale : policy.supportedTargetLocales[0]));
     } catch (error) {
       setTranslationPolicy(null);
@@ -1212,6 +1235,61 @@ export default function App() {
     }
   }
 
+  async function saveTranslationProviderPolicy(event: FormEvent) {
+    event.preventDefault();
+    if (!token) return;
+    setTranslationLoading(true);
+    setTranslationError("");
+    try {
+      const payload = {
+        enabled: translationStatus?.enabled ?? false,
+        provider: translationPolicyForm.provider,
+        model: translationPolicyForm.model,
+        apiBaseUrl: translationPolicyForm.apiBaseUrl,
+        cacheEnabled: translationPolicyForm.cacheEnabled,
+        timeoutSeconds: Number(translationPolicyForm.timeoutSeconds),
+        maxRetries: Number(translationPolicyForm.maxRetries),
+        rateLimitPerMinute: Number(translationPolicyForm.rateLimitPerMinute),
+        circuitFailureThreshold: Number(translationPolicyForm.circuitFailureThreshold),
+        circuitRecoverySeconds: Number(translationPolicyForm.circuitRecoverySeconds),
+        ...(translationPolicyForm.costPerMillionUnits ? { costPerMillionUnits: Number(translationPolicyForm.costPerMillionUnits) } : {}),
+        costUnit: translationPolicyForm.costUnit,
+        ...(translationPolicyForm.apiKey ? { apiKey: translationPolicyForm.apiKey } : {}),
+      };
+      await updateTranslationPolicy(token, payload);
+      await refreshTranslationState(token);
+      setMessage("번역 Provider 정책을 저장했습니다. 비밀키 원문은 다시 표시하지 않습니다.");
+    } catch (error) {
+      setTranslationError(error instanceof Error ? error.message : "번역 Provider 정책 저장 실패");
+    } finally {
+      setTranslationLoading(false);
+    }
+  }
+
+  async function runTranslationReviewAction(action: "edit" | "approve" | "retranslate") {
+    if (!token || !selectedTranslationReviewId) return;
+    if (action === "edit" && !translationReviewDraft.trim()) {
+      setTranslationError("수정 번역문을 입력하세요.");
+      return;
+    }
+    setTranslationLoading(true);
+    setTranslationError("");
+    try {
+      const updated = await applyTranslationReviewAction(token, selectedTranslationReviewId, {
+        action,
+        ...(action === "edit" ? { translatedText: translationReviewDraft.trim() } : {}),
+      });
+      setTranslationReviewDraft(updated.translatedText);
+      const reviews = await fetchTranslationReviews(token, translationReviewStatus === "all" ? undefined : translationReviewStatus);
+      setTranslationReviews(reviews.items);
+      setMessage(action === "edit" ? "번역문 수정 이력을 저장했습니다." : action === "approve" ? "번역을 승인했습니다." : "Provider 재번역을 완료했습니다.");
+    } catch (error) {
+      setTranslationError(error instanceof Error ? error.message : "번역 검수 작업 실패");
+    } finally {
+      setTranslationLoading(false);
+    }
+  }
+
   async function runTranslationDemo(event: FormEvent) {
     event.preventDefault();
     if (!token) {
@@ -1223,7 +1301,7 @@ export default function App() {
       setTranslationError("번역 원문을 입력하세요.");
       return;
     }
-    const sourceLocale = toTranslationLocale(locale);
+    const sourceLocale = translationSourceLocale;
     setTranslationLoading(true);
     setTranslationError("");
     try {
@@ -2011,6 +2089,7 @@ export default function App() {
   const showLoginPanel = initialized && (!token || !overview) && (Boolean(token) || publicUiContractState !== "pending");
   const hasStoredSessionButNoOverview = initialized && Boolean(token) && !overview;
   const supportedTranslationTargets = translationPolicy?.supportedTargetLocales?.length ? translationPolicy.supportedTargetLocales : (translationStatus?.supportedTargetLocales ?? ["en"]);
+  const selectedTranslationReview = translationReviews.find((item) => item.id === selectedTranslationReviewId) ?? null;
   const activeMenu = adminMenus.find((item) => item.key === activeAdminMenu) ?? adminMenus[0];
   const showAdminConsole = initialized && Boolean(token) && Boolean(overview);
   const uniqueErrors = normalizeWarnings(errors);
@@ -2141,7 +2220,43 @@ export default function App() {
   const renderContentMessagesPanel = () => (
     <section className="panel ops-panel content-ops-panel">
       <div className="ops-shell content-ops-shell">
-        <div className="panel-head ops-head"><div><h2>다국어/메시지</h2></div><div className="ops-head-actions"><span className="mini-stat">전체 {contentMessages.length}건</span><span className="mini-stat">조회 {filteredContentMessages.length}건</span></div></div>
+        <div className="panel-head ops-head"><div><h2>다국어/메시지</h2></div><div className="ops-head-actions"><span className={`badge ${translationStatus?.available ? "badge-ok" : "badge-warning"}`}>Provider {translationStatus?.provider ?? "확인 중"}</span><span className="mini-stat">검수 {translationReviews.length}건</span><span className="mini-stat">메시지 {filteredContentMessages.length}/{contentMessages.length}건</span></div></div>
+        <div className="ops-list-panel">
+          <div className="ops-list-head"><strong>번역 Provider 운영</strong><span className="muted">API 키는 암호화 저장되며 저장 후 원문을 다시 표시하지 않습니다.</span></div>
+          <form className="ops-toolbar-grid" onSubmit={saveTranslationProviderPolicy}>
+            <label className="compact-field"><span>Provider</span><select value={translationPolicyForm.provider} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, provider: event.target.value }))}><option value="disabled">disabled</option><option value="openai-compatible">OpenAI 호환 LLM</option><option value="deepl">DeepL</option></select></label>
+            <label className="compact-field"><span>모델</span><input value={translationPolicyForm.model} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, model: event.target.value }))} placeholder="Provider 모델명" /></label>
+            <label className="compact-field compact-field-wide"><span>API Base URL</span><input value={translationPolicyForm.apiBaseUrl} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, apiBaseUrl: event.target.value }))} placeholder="https://.../v1 또는 https://api-free.deepl.com/v2" /></label>
+            <label className="compact-field"><span>API 키 {translationPolicy?.apiKeyConfigured ? "(설정됨)" : "(미설정)"}</span><input type="password" autoComplete="new-password" value={translationPolicyForm.apiKey} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, apiKey: event.target.value }))} placeholder={translationPolicy?.apiKeyConfigured ? "변경할 때만 입력" : "API 키 입력"} /></label>
+            <label className="compact-field"><span>Timeout(초)</span><input type="number" min="1" max="120" value={translationPolicyForm.timeoutSeconds} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, timeoutSeconds: event.target.value }))} /></label>
+            <label className="compact-field"><span>재시도</span><input type="number" min="0" max="5" value={translationPolicyForm.maxRetries} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, maxRetries: event.target.value }))} /></label>
+            <label className="compact-field"><span>분당 제한</span><input type="number" min="1" max="10000" value={translationPolicyForm.rateLimitPerMinute} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, rateLimitPerMinute: event.target.value }))} /></label>
+            <label className="compact-field"><span>차단 실패 횟수</span><input type="number" min="1" max="100" value={translationPolicyForm.circuitFailureThreshold} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, circuitFailureThreshold: event.target.value }))} /></label>
+            <label className="compact-field"><span>회복 대기(초)</span><input type="number" min="1" max="3600" value={translationPolicyForm.circuitRecoverySeconds} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, circuitRecoverySeconds: event.target.value }))} /></label>
+            <label className="compact-field"><span>백만 단위당 비용</span><input type="number" min="0" step="0.000001" value={translationPolicyForm.costPerMillionUnits} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, costPerMillionUnits: event.target.value }))} placeholder="계약 요율" /></label>
+            <label className="compact-field"><span>비용 단위</span><select value={translationPolicyForm.costUnit} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, costUnit: event.target.value as "tokens" | "characters" }))}><option value="tokens">tokens</option><option value="characters">characters</option></select></label>
+            <label className="permission-check"><input type="checkbox" checked={translationPolicyForm.cacheEnabled} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, cacheEnabled: event.target.checked }))} /><span>PostgreSQL 캐시 사용</span></label>
+            <div className="actions compact-actions"><button type="submit" disabled={translationLoading}>Provider 정책 저장</button><button type="button" className="secondary" disabled={translationLoading} onClick={() => void toggleTranslationPolicy(!(translationStatus?.enabled ?? false))}>{translationStatus?.enabled ? "번역 비활성화" : "번역 활성화"}</button></div>
+          </form>
+        </div>
+        <div className="split-panel">
+          <form className="ops-list-panel" onSubmit={runTranslationDemo}>
+            <div className="ops-list-head"><strong>실제 번역</strong><span className="muted">자동 감지 또는 원문 언어를 직접 선택합니다.</span></div>
+            <div className="ops-toolbar-grid">
+              <label className="compact-field"><span>원문 언어</span><select value={translationSourceLocale} onChange={(event) => setTranslationSourceLocale(event.target.value)}><option value="auto">자동 감지</option>{translationPolicy?.supportedSourceLocales.filter((item) => item !== "auto").map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+              <label className="compact-field"><span>번역 언어</span><select value={translationTargetLocale} onChange={(event) => setTranslationTargetLocale(event.target.value)}>{supportedTranslationTargets.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+            </div>
+            <label><span>원문</span><textarea value={translationSource} onChange={(event) => setTranslationSource(event.target.value)} /></label>
+            <div className="actions compact-actions"><button type="submit" disabled={translationLoading || !translationStatus?.enabled}>번역 실행</button></div>
+            {translationResult.map((item, index) => <article key={`${item.originalText}-${index}`} className="status-card"><div className="status-title"><strong>{item.sourceLocale} → {item.targetLocale}</strong><span className="badge">{item.cacheHit ? "DB cache" : item.provider}</span></div><p>{item.translatedText}</p><p className="muted">모델 {item.model || "-"} / 검수 {item.reviewId ?? "캐시 결과"}</p></article>)}
+          </form>
+          <div className="ops-list-panel">
+            <div className="ops-list-head"><strong>번역 검수</strong><label className="compact-field"><span>상태</span><select value={translationReviewStatus} onChange={(event) => { const next = event.target.value; setTranslationReviewStatus(next); if (token) void fetchTranslationReviews(token, next === "all" ? undefined : next).then((response) => setTranslationReviews(response.items)); }}><option value="all">전체</option><option value="pending">검수 대기</option><option value="edited">수정</option><option value="approved">승인</option><option value="failed">실패</option></select></label></div>
+            <div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>원문</th><th>언어</th><th>Provider</th><th>상태</th><th>수정일</th></tr></thead><tbody>{translationReviews.map((item) => <tr key={item.id} className="management-list-row" onClick={() => { setSelectedTranslationReviewId(item.id); setTranslationReviewDraft(item.translatedText); }}><td>{item.sourceText.slice(0, 40)}</td><td>{item.sourceLocale} → {item.targetLocale}</td><td>{item.provider}</td><td>{item.status}</td><td>{contentDate(item.updatedAt)}</td></tr>)}{translationReviews.length === 0 ? <tr><td colSpan={5}>검수 항목이 없습니다.</td></tr> : null}</tbody></table></div>
+          </div>
+        </div>
+        {selectedTranslationReview ? <div className="ops-list-panel"><div className="ops-list-head"><strong>원문·번역문 비교</strong><span className="muted">{selectedTranslationReview.provider} / {selectedTranslationReview.model || "기본 모델"} / {selectedTranslationReview.status}</span></div><div className="split-panel"><label><span>원문</span><textarea value={selectedTranslationReview.sourceText} readOnly /></label><label><span>번역문</span><textarea value={translationReviewDraft} onChange={(event) => setTranslationReviewDraft(event.target.value)} /></label></div><div className="actions compact-actions"><button type="button" onClick={() => void runTranslationReviewAction("edit")} disabled={translationLoading}>수정 저장</button><button type="button" onClick={() => void runTranslationReviewAction("approve")} disabled={translationLoading || selectedTranslationReview.status === "approved"}>승인</button><button type="button" className="secondary" onClick={() => void runTranslationReviewAction("retranslate")} disabled={translationLoading || !translationStatus?.available}>재번역</button></div></div> : null}
+        {translationError ? <p className="notice danger">{translationError}</p> : null}
         <div className="management-list-toolbar" role="toolbar" aria-label="메시지 목록 작업">
           <label className="compact-field"><span>검색</span><input value={messageSearch} onChange={(event) => setMessageSearch(event.target.value)} placeholder="키 또는 분류" /></label>
           <label className="compact-field"><span>상태</span><select value={messageStatusFilter} onChange={(event) => setMessageStatusFilter(event.target.value)}><option value="visible">활성/비활성</option><option value="active">active</option><option value="inactive">inactive</option><option value="deleted">deleted</option><option value="all">전체</option></select></label>

@@ -24,10 +24,10 @@ const check = (condition, message) => {
 
 check(packageJson.devDependencies.vite === "7.3.6", "Vite must be pinned to 7.3.6");
 check(packageJson.devDependencies["@vitejs/plugin-react"] === "5.2.0", "plugin-react must be pinned to 5.2.0");
-check(packageJson.devDependencies.postcss === "8.5.18", "PostCSS must be pinned to 8.5.18");
+check(packageJson.devDependencies.postcss === "8.5.25", "PostCSS must be pinned to 8.5.25");
 check(packageLock.packages["node_modules/vite"]?.version === "7.3.6", "lock must resolve Vite 7.3.6");
 check(packageLock.packages["node_modules/@vitejs/plugin-react"]?.version === "5.2.0", "lock must resolve plugin-react 5.2.0");
-check(packageLock.packages["node_modules/postcss"]?.version === "8.5.18", "lock must resolve PostCSS 8.5.18");
+check(packageLock.packages["node_modules/postcss"]?.version === "8.5.25", "lock must resolve PostCSS 8.5.25");
 
 check(dockerfile.includes("FROM node:24.18.0-alpine3.23 AS build"), "builder image must be pinned");
 check(dockerfile.includes("frontend/admin-web/package-lock.json"), "Docker build must copy the lockfile");
