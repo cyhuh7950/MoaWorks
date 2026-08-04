@@ -45,6 +45,29 @@ class _Cursor:
                     "payload": {},
                     "resolved": False,
                 },
+                *[
+                    {
+                        "event_type": "mail.relay.test.result",
+                        "category": "mail",
+                        "severity": "info",
+                        "resource_type": "mailProvider",
+                        "resource_id": f"provider-success-{index}",
+                        "occurred_at": now,
+                        "payload": {},
+                        "resolved": False,
+                    }
+                    for index in range(3)
+                ],
+                {
+                    "event_type": "mail.relay.fail",
+                    "category": "mail",
+                    "severity": "error",
+                    "resource_type": "mailProvider",
+                    "resource_id": "provider-fail",
+                    "occurred_at": now,
+                    "payload": {},
+                    "resolved": False,
+                },
             ]
             return
         if "from approval_documents" in normalized:
@@ -151,6 +174,16 @@ class Stage02MonitoringMetricsTest(unittest.TestCase):
             overview = service.get_monitoring_overview()
 
         self.assertEqual(overview.approvalBacklogCount, 1)
+
+    def test_mail_failure_rate_is_percentage_of_mail_events(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="moaworks-stage02-") as temp_dir:
+            state_file = Path(temp_dir) / "observability-state.json"
+            service = ObservabilityService(state_file=state_file, db_service=_Database())
+            service._use_file_backend = False
+
+            overview = service.get_monitoring_overview()
+
+        self.assertEqual(overview.mailFailureRate24h, 25.0)
 
     def test_partial_notification_put_preserves_unsent_preferences(self) -> None:
         database = _PreferencesDatabase()
