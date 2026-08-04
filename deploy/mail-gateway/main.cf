@@ -1,5 +1,7 @@
 compatibility_level = 3.6
 maillog_file = /dev/stdout
+import_environment = MAIL_INGEST_TOKEN MAIL_INGEST_URL
+export_environment = TZ MAIL_CONFIG LANG MAIL_INGEST_TOKEN MAIL_INGEST_URL
 myhostname = ${MAIL_HOSTNAME}
 myorigin = $myhostname
 mydestination = localhost

@@ -29,6 +29,8 @@ class MailGatewayContractTest(unittest.TestCase):
         self.assertIn("virtual_mailbox_maps = pgsql:", main_cf)
         self.assertNotIn("proxy:pgsql:", main_cf)
         self.assertIn("maillog_file = /dev/stdout", main_cf)
+        self.assertIn("import_environment = MAIL_INGEST_TOKEN MAIL_INGEST_URL", main_cf)
+        self.assertIn("export_environment = TZ MAIL_CONFIG LANG MAIL_INGEST_TOKEN MAIL_INGEST_URL", main_cf)
         self.assertIn("moaworks-ingest", master_cf)
         self.assertIn("flags=Rq", master_cf)
         self.assertIn("smtp      inet  n       -       n       -       -       smtpd", master_cf)
