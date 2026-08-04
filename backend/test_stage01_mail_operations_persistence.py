@@ -98,7 +98,7 @@ class MailOperationsPersistenceTest(unittest.TestCase):
             actor_user_id="user-admin",
         )
 
-        statements = "\n".join(query for query, _ in cursor.statements)
+        statements = "\n".join(f"{query} {params}" for query, params in cursor.statements)
         self.assertEqual(plan.new_message_provider, "self_hosted")
         self.assertIn("mail.outbound_provider.rolled_back", statements)
         self.assertNotIn("UPDATE mail_delivery_queue", statements)

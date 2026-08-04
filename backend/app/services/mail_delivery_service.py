@@ -62,8 +62,10 @@ class MailDeliveryWorker:
     def deliver_claimed(self, job, provider: dict) -> DeliveryResult:
         if not provider.get("delivery_enabled") or provider.get("last_test_status") != "success":
             return DeliveryResult("blocked", error_message="외부 발송 잠금 또는 연결 검증이 필요합니다.")
+        if provider.get("provider_type") == "oci_email_delivery" and _job_value(job, "recipient_suppressed", False):
+            return DeliveryResult("blocked", error_message="OCI suppression 목록에 등록된 수신자입니다.")
         attempt = int(_job_value(job, "attempt_count", 0)) + 1
-        envelope = {key: _job_value(job, key) for key in ("delivery_kind","sender_email","sender_display_name","reply_to_email","message_encoding","recipient_email","subject","body_text","body_html","attachments")}
+        envelope = {key: _job_value(job, key) for key in ("queue_id","delivery_kind","sender_email","sender_display_name","reply_to_email","message_encoding","recipient_email","subject","body_text","body_html","attachments")}
         if _job_value(job, "delivery_kind") == "auto_forward" or _job_value(job, "delivery_kind") == "out_of_office":
             envelope["sender_email"] = _job_value(job, "sender_email_override") or envelope["sender_email"]
             envelope["sender_display_name"] = _job_value(job, "sender_display_name_override") or envelope["sender_display_name"]

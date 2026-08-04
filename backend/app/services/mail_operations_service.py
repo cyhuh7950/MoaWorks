@@ -160,3 +160,40 @@ class MailOperationsService:
             ),
         )
         return plan
+
+    def rollback_outbound_provider(
+        self,
+        *,
+        cursor,
+        company_id: str,
+        actor_user_id: str,
+        actor_user_name: str = "관리자",
+    ) -> ProviderSwitchPlan:
+        cursor.execute(
+            """SELECT active_outbound_provider_key,previous_outbound_provider_key
+            FROM mail_domain_settings WHERE company_id=%s""",
+            (company_id,),
+        )
+        state = cursor.fetchone()
+        if state is None or not state.get("previous_outbound_provider_key"):
+            raise ValueError("되돌릴 이전 발신 Provider가 없습니다.")
+        plan = self.switch_outbound_provider(
+            cursor=cursor,
+            company_id=company_id,
+            actor_user_id=actor_user_id,
+            current_provider=state["active_outbound_provider_key"],
+            target_provider=state["previous_outbound_provider_key"],
+            actor_user_name=actor_user_name,
+        )
+        cursor.execute(
+            """INSERT INTO audit_logs (
+                id,company_id,actor_user_id,actor_user_name,target_type,target_id,event,
+                status_before,status_after,reason,created_at
+            ) VALUES (%s,%s,%s,%s,'mail_domain_settings',%s,'mail.outbound_provider.rolled_back',%s,%s,%s,%s)""",
+            (
+                f"audit_{uuid4().hex}", company_id, actor_user_id, actor_user_name, company_id,
+                plan.previous_provider, plan.new_message_provider,
+                "관리자가 직전 발신 Provider로 rollback했습니다.", datetime.now(UTC),
+            ),
+        )
+        return plan

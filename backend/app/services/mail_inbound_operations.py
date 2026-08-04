@@ -10,6 +10,7 @@ import secrets
 from uuid import uuid4
 
 from app.core.config import settings
+from app.services.mail_delivery_feedback import MailDeliveryFeedbackOperations, parse_delivery_feedback
 from app.services.mail_inbound_service import classify_inbound_security, parse_inbound_message
 from app.services.postgres_service import PostgresService
 
@@ -72,9 +73,23 @@ class MailInboundOperations:
         return f"{prefix}_{uuid4().hex}"
 
     def ingest(self, *, envelope_from: str, recipient_email: str, raw_message: bytes) -> MailInboundIngestResult:
+        normalized_recipient = recipient_email.strip().lower()
+        if normalized_recipient.startswith("bounce+"):
+            feedback = parse_delivery_feedback(
+                envelope_recipient=normalized_recipient,
+                raw_message=raw_message,
+            )
+            now = datetime.now(UTC)
+            self.db.ensure_migrations_applied()
+            with self.db.connect() as connection:
+                with connection.cursor() as cursor:
+                    raw_storage_key = self.storage.store_raw(feedback.content_sha256, raw_message)
+                    inserted = MailDeliveryFeedbackOperations.record(cursor, feedback, raw_storage_key, now)
+                connection.commit()
+            return MailInboundIngestResult(feedback.queue_id, "bounce", not inserted)
         parsed = parse_inbound_message(raw_message)
         decision = classify_inbound_security(parsed)
-        recipient_email = recipient_email.strip().lower()
+        recipient_email = normalized_recipient
         now = datetime.now(UTC)
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection:

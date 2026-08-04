@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from email.message import EmailMessage
+from email.policy import SMTP
 from email.utils import make_msgid
+import re
 import smtplib
 import ssl
 from typing import Callable, Protocol, Sequence
@@ -39,6 +41,33 @@ class MailTransportFailure(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class DkimSigningConfig:
+    domain: str
+    selector: str
+    private_key: bytes
+
+
+class DkimSigner(Protocol):
+    def sign(self, message: EmailMessage, config: DkimSigningConfig) -> None: ...
+
+
+class DkimPySigner:
+    def sign(self, message: EmailMessage, config: DkimSigningConfig) -> None:
+        import dkim
+
+        signature = dkim.sign(
+            message.as_bytes(policy=SMTP),
+            selector=config.selector.encode("ascii"),
+            domain=config.domain.encode("idna"),
+            privkey=config.private_key,
+            canonicalize=(b"relaxed", b"relaxed"),
+            include_headers=[b"from", b"to", b"subject", b"date", b"message-id", b"reply-to"],
+        ).decode("ascii")
+        _, value = signature.split(":", 1)
+        message["DKIM-Signature"] = re.sub(r"\r?\n[ \t]+", " ", value).strip()
+
+
+@dataclass(frozen=True, slots=True)
 class OutboundMessage:
     sender_email: str
     recipient_email: str
@@ -46,6 +75,7 @@ class OutboundMessage:
     body_text: str
     body_html: str | None
     message_id: str
+    envelope_from: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,12 +118,15 @@ def resolve_mx_hosts(domain: str) -> list[str]:
 
 
 class SelfHostedSmtpTransport:
-    def __init__(self, *, mx_resolver: MxResolver, smtp_factory: SmtpFactory = smtplib.SMTP) -> None:
+    def __init__(self, *, mx_resolver: MxResolver, smtp_factory: SmtpFactory = smtplib.SMTP, dkim_signer: DkimSigner | None = None) -> None:
         self.mx_resolver = mx_resolver
         self.smtp_factory = smtp_factory
+        self.dkim_signer = dkim_signer or DkimPySigner()
 
-    def send(self, message: OutboundMessage, *, helo_name: str, timeout_sec: int) -> DeliveryReceipt:
+    def send(self, message: OutboundMessage, *, helo_name: str, timeout_sec: int, dkim_config: DkimSigningConfig | None = None) -> DeliveryReceipt:
         prepared = _build_message(message)
+        if dkim_config is not None:
+            self.dkim_signer.sign(prepared, dkim_config)
         recipient_domain = message.recipient_email.rsplit("@", 1)[1].lower()
         candidates = [host.strip().rstrip(".").lower() for host in self.mx_resolver(recipient_domain) if host.strip()]
         if not candidates:
@@ -109,7 +142,7 @@ class SelfHostedSmtpTransport:
                         smtp.ehlo(helo_name)
                     refused = smtp.send_message(
                         prepared,
-                        from_addr=message.sender_email,
+                        from_addr=message.envelope_from or message.sender_email,
                         to_addrs=[message.recipient_email],
                     )
                     if refused:
@@ -160,7 +193,7 @@ class OciEmailDeliveryTransport:
                 smtp.login(config.username, config.password)
                 refused = smtp.send_message(
                     prepared,
-                    from_addr=message.sender_email,
+                    from_addr=message.envelope_from or message.sender_email,
                     to_addrs=[message.recipient_email],
                 )
                 if refused:
@@ -204,6 +237,9 @@ class MailProviderRoutingAdapter:
         sender_email = str(provider.get("from_address") or envelope.get("sender_email") or "").strip().lower()
         recipient_email = str(envelope.get("recipient_email") or "").strip().lower()
         sender_domain = sender_email.rsplit("@", 1)[-1] if "@" in sender_email else "localhost"
+        queue_id = str(envelope.get("queue_id") or "").strip()
+        bounce_domain = str(provider.get("dkim_domain") or sender_domain).strip().lower()
+        envelope_from = f"bounce+{queue_id}@{bounce_domain}" if queue_id else sender_email
         message = OutboundMessage(
             sender_email=sender_email,
             recipient_email=recipient_email,
@@ -211,13 +247,23 @@ class MailProviderRoutingAdapter:
             body_text=str(envelope.get("body_text") or ""),
             body_html=envelope.get("body_html"),
             message_id=str(envelope.get("message_id") or make_msgid(domain=sender_domain)),
+            envelope_from=envelope_from,
         )
 
         if provider_type == "self_hosted":
+            private_key = provider.get("dkim_private_key")
+            dkim_config = None
+            if private_key:
+                dkim_config = DkimSigningConfig(
+                    domain=str(provider.get("dkim_domain") or sender_domain),
+                    selector=str(provider.get("dkim_selector") or "selector1"),
+                    private_key=str(private_key).encode("utf-8"),
+                )
             receipt = self.self_hosted_transport.send(
                 message,
                 helo_name=str(provider.get("helo_name") or f"mail.{sender_domain}"),
                 timeout_sec=int(provider.get("timeout_sec") or 20),
+                dkim_config=dkim_config,
             )
         elif provider_type == "oci_email_delivery":
             password = str(provider.get("password") or "")

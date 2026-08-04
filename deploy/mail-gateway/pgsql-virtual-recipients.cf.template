@@ -2,4 +2,4 @@ hosts = ${POSTGRES_HOST}:${POSTGRES_PORT}
 user = ${POSTGRES_USER}
 password = ${POSTGRES_PASSWORD}
 dbname = ${POSTGRES_DB}
-query = SELECT 1 FROM users u JOIN companies c ON c.id = u.company_id JOIN mail_domain_settings d ON d.company_id = c.id WHERE u.status = 'active' AND LOWER(u.email) = LOWER('%s') AND LOWER(split_part(u.email, '@', 2)) = LOWER(d.mail_domain) LIMIT 1
+query = SELECT 1 FROM mail_domain_settings d WHERE LOWER(split_part('%s','@',2))=LOWER(d.mail_domain) AND (LOWER(split_part('%s','@',1)) ~ '^bounce\+delivery_[a-z0-9_-]+$' OR EXISTS (SELECT 1 FROM users u WHERE u.company_id=d.company_id AND u.status='active' AND LOWER(u.email)=LOWER('%s'))) LIMIT 1

@@ -8,8 +8,8 @@ class FakeSelfHostedTransport:
     def __init__(self) -> None:
         self.calls = []
 
-    def send(self, message, *, helo_name: str, timeout_sec: int) -> DeliveryReceipt:
-        self.calls.append((message, helo_name, timeout_sec))
+    def send(self, message, *, helo_name: str, timeout_sec: int, dkim_config=None) -> DeliveryReceipt:
+        self.calls.append((message, helo_name, timeout_sec, dkim_config))
         return DeliveryReceipt("self_hosted", "smtp://mx.example.net:25", True)
 
 
