@@ -6,8 +6,9 @@ from app.services.mail_operations_service import MailOperationsService
 
 
 class RecordingCursor:
-    def __init__(self, queued_rows: list[dict] | None = None) -> None:
+    def __init__(self, queued_rows: list[dict] | None = None, one_rows: list[dict] | None = None) -> None:
         self.queued_rows = queued_rows or []
+        self.one_rows = list(one_rows or [])
         self.statements: list[tuple[str, tuple | None]] = []
 
     def execute(self, query: str, params: tuple | None = None) -> None:
@@ -15,6 +16,9 @@ class RecordingCursor:
 
     def fetchall(self) -> list[dict]:
         return self.queued_rows
+
+    def fetchone(self) -> dict | None:
+        return self.one_rows.pop(0) if self.one_rows else None
 
 
 class MailOperationsPersistenceTest(unittest.TestCase):
@@ -59,7 +63,8 @@ class MailOperationsPersistenceTest(unittest.TestCase):
             queued_rows=[
                 {"queue_id": "q-1", "provider_key": "oci_email_delivery"},
                 {"queue_id": "q-2", "provider_key": "self_hosted"},
-            ]
+            ],
+            one_rows=[{"id": "provider-self", "delivery_enabled": True, "last_test_status": "success"}],
         )
 
         plan = self.service.switch_outbound_provider(
@@ -74,6 +79,7 @@ class MailOperationsPersistenceTest(unittest.TestCase):
         self.assertEqual(plan.new_message_provider, "self_hosted")
         self.assertEqual(plan.pinned_queue_providers["q-1"], "oci_email_delivery")
         self.assertIn("UPDATE mail_domain_settings", statements)
+        self.assertIn("UPDATE mail_provider_configs", statements)
         self.assertIn("INSERT INTO audit_logs", statements)
         self.assertNotIn("UPDATE mail_delivery_queue", statements)
 
