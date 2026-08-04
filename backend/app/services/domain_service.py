@@ -1,50 +1,137 @@
+from __future__ import annotations
+
+from typing import Protocol
+
+import dns.exception
+import dns.reversename
+import dns.resolver
+
 from app.schemas.directory import DomainVerifyItem, DomainVerifyResponse
 from app.services.directory_store import DirectoryStore
 
 
+class DnsLookupError(RuntimeError):
+    pass
+
+
+class DnsResolver(Protocol):
+    def resolve(self, host: str, record_type: str) -> list[str]: ...
+
+    def reverse(self, address: str) -> list[str]: ...
+
+
+class DnsPythonResolver:
+    def resolve(self, host: str, record_type: str) -> list[str]:
+        try:
+            answers = dns.resolver.resolve(host, record_type, lifetime=10)
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+            return []
+        except (dns.exception.Timeout, dns.resolver.NoNameservers) as exc:
+            raise DnsLookupError("공인 DNS resolver 응답을 확인할 수 없습니다.") from exc
+        if record_type == "MX":
+            return [f"{int(answer.preference)} {str(answer.exchange).rstrip('.').lower()}" for answer in answers]
+        if record_type == "TXT":
+            return [b"".join(answer.strings).decode("utf-8", errors="replace") for answer in answers]
+        return [str(answer).rstrip(".").lower() for answer in answers]
+
+    def reverse(self, address: str) -> list[str]:
+        try:
+            answers = dns.resolver.resolve(dns.reversename.from_address(address), "PTR", lifetime=10)
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+            return []
+        except (dns.exception.Timeout, dns.resolver.NoNameservers) as exc:
+            raise DnsLookupError("공인 PTR resolver 응답을 확인할 수 없습니다.") from exc
+        return [str(answer).rstrip(".").lower() for answer in answers]
+
+
 class DomainService:
-    def __init__(self, store: DirectoryStore) -> None:
+    def __init__(self, store: DirectoryStore, resolver: DnsResolver | None = None) -> None:
         self.store = store
+        self.resolver = resolver or DnsPythonResolver()
 
     def verify(self, domain: str) -> DomainVerifyResponse:
-        normalized = domain.strip().lower()
+        normalized = domain.strip().lower().rstrip(".")
         if "." not in normalized:
             raise ValueError("도메인 형식이 올바르지 않습니다.")
 
         company = self.store.get_overview().company
-        matches_company = normalized == company.domain.lower()
+        matches_company = normalized == company.domain.lower().rstrip(".")
+        mail_host = f"mail.{normalized}"
+        dkim_host = f"selector1._domainkey.{normalized}"
+        dmarc_host = f"_dmarc.{normalized}"
+
+        a_values, a_error = self._lookup(mail_host, "A")
+        mx_values, mx_error = self._lookup(normalized, "MX")
+        root_txt, root_txt_error = self._lookup(normalized, "TXT")
+        dkim_values, dkim_error = self._lookup(dkim_host, "TXT")
+        dmarc_values, dmarc_error = self._lookup(dmarc_host, "TXT")
 
         checks = [
-            DomainVerifyItem(
-                recordType="MX",
-                host=normalized,
-                expectedValue="mail." + normalized,
-                status="pass" if matches_company else "warning",
-                message="설계상 대표 MX 호스트 기준과 일치합니다." if matches_company else "회사 기본 도메인과 다릅니다. 운영 전 실제 MX 확인이 필요합니다.",
+            self._check("A", mail_host, "공인 IPv4 주소", a_values, bool(a_values), a_error),
+            self._check(
+                "MX", normalized, f"10 {mail_host}", mx_values,
+                any(value.split(maxsplit=1)[-1].rstrip(".").lower() == mail_host for value in mx_values), mx_error,
             ),
-            DomainVerifyItem(
-                recordType="SPF",
-                host=normalized,
-                expectedValue="v=spf1 include:mail-layer ~all",
-                status="pass" if matches_company else "warning",
-                message="로컬 Relay 기준 SPF 초안입니다." if matches_company else "외부 DNS 조회 없이 형식 안내만 제공합니다.",
+            self._check(
+                "SPF", normalized, "v=spf1 <self-hosted IP and/or OCI include> ~all", root_txt,
+                any(value.lower().startswith("v=spf1") for value in root_txt), root_txt_error,
             ),
-            DomainVerifyItem(
-                recordType="DKIM",
-                host=f"selector1._domainkey.{normalized}",
-                expectedValue="k=rsa; p=<generated-public-key>",
-                status="pending",
-                message="단계 2에서는 DKIM 공개키 배포 전이므로 안내 상태로 유지합니다.",
+            self._check(
+                "DKIM", dkim_host, "v=DKIM1; k=rsa; p=<public-key>", dkim_values,
+                any(value.lower().startswith("v=dkim1") for value in dkim_values), dkim_error,
             ),
-            DomainVerifyItem(
-                recordType="DMARC",
-                host=f"_dmarc.{normalized}",
-                expectedValue="v=DMARC1; p=none; rua=mailto:postmaster@" + normalized,
-                status="pass" if matches_company else "warning",
-                message="운영 전 모니터링 정책 초안을 제공합니다.",
+            self._check(
+                "DMARC", dmarc_host, "v=DMARC1; p=none", dmarc_values,
+                any(value.lower().startswith("v=dmarc1") for value in dmarc_values), dmarc_error,
             ),
         ]
 
-        overall_status = "pass" if matches_company else "warning"
-        return DomainVerifyResponse(domain=normalized, overallStatus=overall_status, checks=checks)
+        ptr_values: list[str] = []
+        ptr_error: str | None = None
+        for address in a_values:
+            try:
+                ptr_values.extend(self.resolver.reverse(address))
+            except DnsLookupError as exc:
+                ptr_error = str(exc)
+                break
+        checks.append(
+            self._check(
+                "PTR", ", ".join(a_values) or mail_host, mail_host, ptr_values,
+                bool(a_values) and mail_host in ptr_values, ptr_error,
+            )
+        )
 
+        all_pass = matches_company and all(check.status == "pass" for check in checks)
+        return DomainVerifyResponse(
+            domain=normalized,
+            overallStatus="pass" if all_pass else "warning",
+            checks=checks,
+        )
+
+    def _lookup(self, host: str, record_type: str) -> tuple[list[str], str | None]:
+        try:
+            return self.resolver.resolve(host, record_type), None
+        except DnsLookupError as exc:
+            return [], str(exc)
+
+    @staticmethod
+    def _check(record_type, host, expected, actual, matched, error) -> DomainVerifyItem:
+        if error:
+            status = "error"
+            message = error
+        elif not actual:
+            status = "warning"
+            message = f"실제 공인 DNS에서 {record_type} 레코드가 조회되지 않았습니다."
+        elif matched:
+            status = "pass"
+            message = "실제 공인 DNS 조회값이 운영 기준과 일치합니다."
+        else:
+            status = "warning"
+            message = "실제 공인 DNS 조회값이 운영 기준과 다릅니다: " + ", ".join(actual)
+        return DomainVerifyItem(
+            recordType=record_type,
+            host=host,
+            expectedValue=expected,
+            status=status,
+            message=message,
+        )

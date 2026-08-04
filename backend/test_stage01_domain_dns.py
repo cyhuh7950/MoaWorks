@@ -1,7 +1,11 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
-from app.services.domain_service import DomainService
+import dns.exception
+import dns.resolver
+
+from app.services.domain_service import DnsLookupError, DnsPythonResolver, DomainService
 
 
 class FakeStore:
@@ -23,7 +27,48 @@ class FakeDnsResolver:
         return self.records.get((address, "PTR"), [])
 
 
+class TextAnswer:
+    def __init__(self, value: str):
+        self.value = value
+
+    def __str__(self) -> str:
+        return self.value
+
+
 class DomainDnsVerificationTest(unittest.TestCase):
+    def test_invalid_domain_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "도메인 형식"):
+            DomainService(FakeStore(), resolver=FakeDnsResolver({})).verify("localhost")
+
+    @patch("dns.resolver.resolve")
+    def test_dns_python_resolver_formats_a_mx_txt_and_ptr(self, resolve) -> None:
+        resolver = DnsPythonResolver()
+        resolve.return_value = [TextAnswer("168.107.4.6.")]
+        self.assertEqual(resolver.resolve("mail.example", "A"), ["168.107.4.6"])
+
+        resolve.return_value = [SimpleNamespace(preference=10, exchange=TextAnswer("mx.example."))]
+        self.assertEqual(resolver.resolve("example", "MX"), ["10 mx.example"])
+
+        resolve.return_value = [SimpleNamespace(strings=[b"v=spf1 ", b"~all"])]
+        self.assertEqual(resolver.resolve("example", "TXT"), ["v=spf1 ~all"])
+
+        resolve.return_value = [TextAnswer("mail.example.")]
+        self.assertEqual(resolver.reverse("168.107.4.6"), ["mail.example"])
+
+    @patch("dns.resolver.resolve", side_effect=dns.resolver.NXDOMAIN)
+    def test_dns_python_resolver_returns_empty_for_missing_name(self, _resolve) -> None:
+        resolver = DnsPythonResolver()
+        self.assertEqual(resolver.resolve("missing.example", "A"), [])
+        self.assertEqual(resolver.reverse("192.0.2.1"), [])
+
+    @patch("dns.resolver.resolve", side_effect=dns.exception.Timeout)
+    def test_dns_python_resolver_reports_timeout_without_false_pass(self, _resolve) -> None:
+        resolver = DnsPythonResolver()
+        with self.assertRaises(DnsLookupError):
+            resolver.resolve("example", "MX")
+        with self.assertRaises(DnsLookupError):
+            resolver.reverse("192.0.2.1")
+
     def test_verification_uses_actual_a_mx_txt_and_ptr_results(self) -> None:
         resolver = FakeDnsResolver({
             ("mail.moaworks.sinsan.kr", "A"): ["168.107.4.6"],
