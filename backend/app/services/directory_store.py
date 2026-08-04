@@ -125,8 +125,10 @@ class DirectoryStore:
                 )
                 cursor.execute(
                     """
-                    INSERT INTO departments (id, company_id, name, parent_id, status, sort_order, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO departments (
+                        id, company_id, name, parent_id, status, sort_order, is_default, created_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s)
                     """,
                     (department_id, company_id, "본사", None, "active", 100, now),
                 )
@@ -452,7 +454,7 @@ class DirectoryStore:
                 current = self._fetch_required_department(cursor, department_id)
                 if current["status"] == "deleted":
                     raise ValueError("이미 삭제된 부서입니다.")
-                if current["parent_id"] is None or current["name"] == "본사":
+                if current["is_default"]:
                     raise ValueError("기본 부서는 삭제할 수 없습니다.")
                 cursor.execute("SELECT 1 FROM departments WHERE parent_id = %s AND status != 'deleted' LIMIT 1", (department_id,))
                 if cursor.fetchone() is not None:
@@ -1908,7 +1910,7 @@ class DirectoryStore:
 
     def _fetch_required_department(self, cursor, department_id: str) -> dict:
         cursor.execute(
-            "SELECT id, company_id, name, parent_id, status, sort_order, created_at FROM departments WHERE id = %s",
+            "SELECT id, company_id, name, parent_id, status, sort_order, is_default, created_at FROM departments WHERE id = %s",
             (department_id,),
         )
         row = cursor.fetchone()
