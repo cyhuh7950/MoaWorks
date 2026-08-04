@@ -1,4 +1,5 @@
 compatibility_level = 3.6
+maillog_file = /dev/stdout
 myhostname = ${MAIL_HOSTNAME}
 myorigin = $myhostname
 mydestination = localhost
