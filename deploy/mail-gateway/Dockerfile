@@ -12,7 +12,10 @@ COPY deploy/mail-gateway/pgsql-virtual-recipients.cf.template /etc/postfix/pgsql
 COPY deploy/mail-gateway/moaworks-ingest.sh /usr/local/bin/moaworks-ingest.sh
 COPY deploy/mail-gateway/entrypoint.sh /usr/local/bin/entrypoint.sh
 
-RUN chmod 0755 /usr/local/bin/moaworks-ingest.sh /usr/local/bin/entrypoint.sh
+RUN chmod 0755 /usr/local/bin/moaworks-ingest.sh /usr/local/bin/entrypoint.sh \
+    && chmod 0644 /etc/postfix/main.cf.template /etc/postfix/master.cf \
+       /etc/postfix/pgsql-virtual-domains.cf.template \
+       /etc/postfix/pgsql-virtual-recipients.cf.template
 
 EXPOSE 25
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
