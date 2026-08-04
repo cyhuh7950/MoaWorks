@@ -27,6 +27,7 @@ class MailGatewayContractTest(unittest.TestCase):
         self.assertIn("smtpd_recipient_restrictions", main_cf)
         self.assertIn("moaworks-ingest", master_cf)
         self.assertIn("flags=Rq", master_cf)
+        self.assertIn("smtp      inet  n       -       n       -       -       smtpd", master_cf)
         self.assertIn("/etc/postfix/main.cf.template", dockerfile)
         self.assertIn("envsubst '${MAIL_HOSTNAME}'", entrypoint)
 
