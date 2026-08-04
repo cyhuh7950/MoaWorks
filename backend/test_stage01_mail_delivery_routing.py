@@ -22,6 +22,15 @@ class FakeOciTransport:
         return DeliveryReceipt("oci_email_delivery", "smtps://oci.example:587", True)
 
 
+class FakeLegacyRelayAdapter:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def send(self, envelope, provider) -> str:
+        self.calls.append((envelope, provider))
+        return "relay accepted"
+
+
 def envelope() -> dict:
     return {
         "sender_email": "admin@moaworks.sinsan.kr",
@@ -50,9 +59,11 @@ class MailDeliveryRoutingTest(unittest.TestCase):
     def setUp(self) -> None:
         self.self_transport = FakeSelfHostedTransport()
         self.oci_transport = FakeOciTransport()
+        self.legacy_relay = FakeLegacyRelayAdapter()
         self.adapter = MailProviderRoutingAdapter(
             self_hosted_transport=self.self_transport,
             oci_transport=self.oci_transport,
+            legacy_relay_adapter=self.legacy_relay,
         )
 
     def test_self_hosted_provider_uses_direct_mx_transport(self) -> None:
@@ -82,6 +93,12 @@ class MailDeliveryRoutingTest(unittest.TestCase):
 
         self.assertEqual(len(self.self_transport.calls), 0)
         self.assertEqual(len(self.oci_transport.calls), 0)
+
+    def test_existing_smtp_provider_remains_on_legacy_relay(self) -> None:
+        detail = self.adapter.send(envelope(), provider("smtp"))
+
+        self.assertEqual(detail, "relay accepted")
+        self.assertEqual(len(self.legacy_relay.calls), 1)
 
     def test_delivery_worker_operations_use_provider_router_by_default(self) -> None:
         operations = MailDeliveryOperations()
