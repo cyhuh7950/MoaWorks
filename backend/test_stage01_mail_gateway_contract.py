@@ -33,6 +33,8 @@ class MailGatewayContractTest(unittest.TestCase):
         self.assertIn("smtp      inet  n       -       n       -       -       smtpd", master_cf)
         self.assertIn("/etc/postfix/main.cf.template", dockerfile)
         self.assertIn("envsubst '${MAIL_HOSTNAME}'", entrypoint)
+        self.assertIn("chown root:postfix", entrypoint)
+        self.assertIn("chmod 0640", entrypoint)
 
 
 if __name__ == "__main__":
