@@ -118,20 +118,25 @@ class DomainService:
     def _check(record_type, host, expected, actual, matched, error) -> DomainVerifyItem:
         if error:
             status = "error"
+            code = "DNS_LOOKUP_UNAVAILABLE"
             message = error
         elif not actual:
             status = "warning"
+            code = "DNS_RECORD_MISSING"
             message = f"실제 공인 DNS에서 {record_type} 레코드가 조회되지 않았습니다."
         elif matched:
             status = "pass"
+            code = "DNS_RECORD_MATCHED"
             message = "실제 공인 DNS 조회값이 운영 기준과 일치합니다."
         else:
             status = "warning"
+            code = "DNS_RECORD_MISMATCH"
             message = "실제 공인 DNS 조회값이 운영 기준과 다릅니다: " + ", ".join(actual)
         return DomainVerifyItem(
             recordType=record_type,
             host=host,
             expectedValue=expected,
             status=status,
+            code=code,
             message=message,
         )

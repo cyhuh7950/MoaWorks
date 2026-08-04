@@ -173,6 +173,7 @@ export type DomainVerifyResponse = {
     host: string;
     expectedValue: string;
     status: string;
+    code: string;
     message: string;
   }>;
 };

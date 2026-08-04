@@ -538,6 +538,7 @@ class DomainVerifyItem(BaseModel):
     host: str
     expectedValue: str
     status: str
+    code: str
     message: str
 
 
