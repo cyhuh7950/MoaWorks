@@ -22,6 +22,10 @@ for (const token of [
 }
 check(app.includes("saveTranslationProviderPolicy"), "provider policy save handler must be wired");
 check(app.includes("runTranslationReviewAction"), "review action handler must be wired");
+check(
+  app.includes('<button type="button" disabled={translationLoading || !translationStatus?.enabled} onClick={() => void runTranslationDemo()}>번역 실행</button>'),
+  "translation run button must invoke its handler directly in the deployed admin UI",
+);
 check(!app.includes("window.localStorage.setItem(\"translation"), "translation operations must not persist to localStorage");
 
 console.log(`PASS stage03 translation operations contract (${assertions} assertions)`);
