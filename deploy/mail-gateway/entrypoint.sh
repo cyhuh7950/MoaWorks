@@ -10,6 +10,7 @@ set -eu
 : "${MAIL_INGEST_URL:?MAIL_INGEST_URL is required}"
 : "${MAIL_HOSTNAME:?MAIL_HOSTNAME is required}"
 
+envsubst '${MAIL_HOSTNAME}' < /etc/postfix/main.cf.template > /etc/postfix/main.cf
 envsubst < /etc/postfix/pgsql-virtual-domains.cf.template > /etc/postfix/pgsql-virtual-domains.cf
 envsubst < /etc/postfix/pgsql-virtual-recipients.cf.template > /etc/postfix/pgsql-virtual-recipients.cf
 chmod 0600 /etc/postfix/pgsql-virtual-domains.cf /etc/postfix/pgsql-virtual-recipients.cf

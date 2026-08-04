@@ -20,11 +20,15 @@ class MailGatewayContractTest(unittest.TestCase):
     def test_gateway_rejects_unknown_recipient_and_delivers_only_after_internal_ingest(self) -> None:
         main_cf = (ROOT / "deploy" / "mail-gateway" / "main.cf").read_text(encoding="utf-8")
         master_cf = (ROOT / "deploy" / "mail-gateway" / "master.cf").read_text(encoding="utf-8")
+        dockerfile = (ROOT / "deploy" / "mail-gateway" / "Dockerfile").read_text(encoding="utf-8")
+        entrypoint = (ROOT / "deploy" / "mail-gateway" / "entrypoint.sh").read_text(encoding="utf-8")
 
         self.assertIn("reject_unlisted_recipient", main_cf)
         self.assertIn("smtpd_recipient_restrictions", main_cf)
         self.assertIn("moaworks-ingest", master_cf)
         self.assertIn("flags=Rq", master_cf)
+        self.assertIn("/etc/postfix/main.cf.template", dockerfile)
+        self.assertIn("envsubst '${MAIL_HOSTNAME}'", entrypoint)
 
 
 if __name__ == "__main__":
