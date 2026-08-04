@@ -105,6 +105,11 @@ class MessengerAttachmentStorage:
             raise ValueError("첨부 파일을 찾을 수 없습니다.")
         return path
 
+    def delete_attached(self, storage_key: str) -> None:
+        upload_id = self._upload_id_from_storage_key(storage_key)
+        self._data_path(upload_id).unlink(missing_ok=True)
+        self._metadata_path(upload_id).unlink(missing_ok=True)
+
     def cleanup_expired(self, *, older_than: timedelta = timedelta(hours=24)) -> int:
         if not self.upload_root.exists():
             return 0

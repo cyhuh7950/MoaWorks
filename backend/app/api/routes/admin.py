@@ -26,9 +26,12 @@ from app.services.domain_service import DomainService
 from app.services.org_import_service import OrgImportService
 from app.services.relay_service import RelayService
 from app.services.mail_delivery_operations import MailDeliveryOperations
+from app.services.mail_messenger_service import MailMessengerService
+from app.services.resource_policy import ResourceNotFoundError
 from app.schemas.mail_messenger import (
     MailDeliveryProviderTestRequest, MailDeliveryProviderUpdateRequest, MailDeliveryProviderView,
     MailDeliveryQueueDetailResponse, MailDeliveryQueueListResponse, MailDeliveryStatusResponse,
+    MessengerRoomDeleteResponse,
 )
 
 
@@ -205,6 +208,8 @@ def _delivery_service() -> MailDeliveryOperations:
     return MailDeliveryOperations()
 
 def _delivery_error(exc: Exception):
+    if isinstance(exc, ResourceNotFoundError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code":"MAIL_DELIVERY_NOT_FOUND","userMessage":"대상을 찾을 수 없습니다.","adminMessage":str(exc)})
     if isinstance(exc, PermissionError):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={"code":"MAIL_DELIVERY_FORBIDDEN","userMessage":str(exc)})
     if isinstance(exc, ValueError):
@@ -240,3 +245,22 @@ def test_mail_delivery_provider(payload: MailDeliveryProviderTestRequest, user: 
 def update_mail_delivery_provider(payload: MailDeliveryProviderUpdateRequest, user: AuthUserSummary = Depends(require_admin)):
     try: return _delivery_service().update_provider(user,payload)
     except Exception as exc: _delivery_error(exc)
+
+
+@router.delete("/messenger/rooms/{room_id}", response_model=MessengerRoomDeleteResponse)
+def admin_delete_messenger_room(
+    room_id: str,
+    user: AuthUserSummary = Depends(require_admin),
+) -> MessengerRoomDeleteResponse:
+    try:
+        return MailMessengerService().delete_room(user, room_id, allow_admin=True)
+    except ResourceNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "MESSENGER_NOT_FOUND", "userMessage": "대상을 찾을 수 없습니다.", "adminMessage": str(exc)},
+        ) from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "MESSENGER_FORBIDDEN", "userMessage": str(exc)},
+        ) from exc

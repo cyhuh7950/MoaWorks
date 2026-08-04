@@ -14,6 +14,7 @@ from app.services.mail_transports import (
     resolve_mx_hosts,
 )
 from app.services.postgres_service import PostgresService
+from app.services.resource_policy import ResourceNotFoundError
 from app.services.security_service import SecurityService
 
 _CONNECTION_FIELDS = {
@@ -115,7 +116,7 @@ class MailDeliveryOperations:
                 JOIN mail_messages m ON m.id=q.mail_id JOIN mail_recipients r ON r.id=q.recipient_id
                 WHERE q.id=%s AND q.company_id=%s""", (queue_id, actor.companyId))
                 row = cursor.fetchone()
-                if row is None: raise PermissionError("외부 전달 큐에 접근할 권한이 없습니다.")
+                if row is None: raise ResourceNotFoundError("외부 전달 큐를 찾을 수 없습니다.")
                 cursor.execute("SELECT attempt_number,result,error_message,relay_response,started_at,finished_at FROM mail_delivery_attempts WHERE queue_id=%s ORDER BY attempt_number DESC", (queue_id,))
                 attempts = cursor.fetchall()
                 cursor.execute("SELECT event,status_before,status_after,reason,created_at FROM audit_logs WHERE company_id=%s AND target_type='mail_delivery_queue' AND target_id=%s ORDER BY created_at DESC LIMIT 50", (actor.companyId, queue_id))

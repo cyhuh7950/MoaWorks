@@ -47,6 +47,7 @@ from app.schemas.observability import EventEnvelope, MonitoringCategory, Severit
 from app.services.observability_service import ObservabilityService
 from app.schemas.setup import SetupInitializeRequest
 from app.services.postgres_service import PostgresService
+from app.services.resource_policy import ResourceNotFoundError
 from app.services.security_service import SecurityService
 from app.services.approval_attachment_storage import (
     APPROVAL_ATTACHMENT_MAX_COUNT,
@@ -1988,7 +1989,7 @@ class DirectoryStore:
         cursor.execute(query, (document_id,))
         row = cursor.fetchone()
         if row is None:
-            raise ValueError("대상 결재 문서를 찾을 수 없습니다.")
+            raise ResourceNotFoundError("대상 결재 문서를 찾을 수 없습니다.")
         return row
 
     def _fetch_approval_lines(self, cursor, document_id: str, *, for_update: bool = False) -> list[dict]:

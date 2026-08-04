@@ -109,6 +109,7 @@ from app.services.mail_external_service import (
     ExternalMailNotFoundError, ExternalMailForbiddenError,
 )
 from app.services.mail_delivery_operations import MailDeliveryOperations
+from app.services.resource_policy import ResourceNotFoundError
 
 
 router = APIRouter()
@@ -165,6 +166,11 @@ def _parse_mailbox_scope(mailbox_key: str) -> MailboxScope:
 
 
 def _handle_error(exc: Exception) -> None:
+    if isinstance(exc, ResourceNotFoundError):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "MAIL_NOT_FOUND", "userMessage": "대상을 찾을 수 없습니다.", "adminMessage": str(exc)},
+        ) from exc
     if isinstance(exc, MailFolderConflictError):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

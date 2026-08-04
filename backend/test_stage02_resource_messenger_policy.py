@@ -45,9 +45,9 @@ class Stage02ResourcePolicyTest(unittest.TestCase):
         approval_source = (ROOT / "app" / "services" / "directory_store.py").read_text(encoding="utf-8")
         for source, marker in (
             (mail_source, "def _fetch_accessible_room"),
-            (mail_source, "def _fetch_mail_detail_row"),
+            (mail_source, "def _fetch_accessible_mail"),
             (delivery_source, "def queue_detail"),
-            (approval_source, "def get_approval_document"),
+            (approval_source, "def _fetch_required_approval_document"),
         ):
             section = source[source.index(marker):]
             self.assertIn("ResourceNotFoundError", section[:5000])
@@ -108,7 +108,7 @@ class Stage02MessengerLifecyclePolicyTest(unittest.TestCase):
             '"messenger.room.owner_transferred"',
             '"messenger.room.left"',
             '"messenger.room.deleted"',
-            '"messenger.retention.purged"',
+            "messenger.retention.purged",
             "left_at IS NULL",
             "status='active'",
             "timedelta(days=14)",
@@ -119,6 +119,12 @@ class Stage02MessengerLifecyclePolicyTest(unittest.TestCase):
         source = (ROOT / "app" / "workers" / "mail_retention_worker.py").read_text(encoding="utf-8")
         self.assertIn("MailMessengerService", source)
         self.assertIn("run_messenger_retention_batch", source)
+
+    def test_admin_route_can_soft_delete_room(self) -> None:
+        source = (ROOT / "app" / "api" / "routes" / "admin.py").read_text(encoding="utf-8")
+        self.assertIn('@router.delete("/messenger/rooms/{room_id}"', source)
+        self.assertIn("allow_admin=True", source)
+        self.assertIn("MessengerRoomDeleteResponse", source)
 
 
 if __name__ == "__main__":

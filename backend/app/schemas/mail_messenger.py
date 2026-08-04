@@ -1133,6 +1133,23 @@ class MessengerRoomParticipantsRequest(BaseModel):
     expectedUpdatedAt: datetime
 
 
+class MessengerRoomOwnerTransferRequest(BaseModel):
+    newOwnerUserId: str = Field(min_length=1, max_length=100)
+    expectedUpdatedAt: datetime
+
+
+class MessengerRoomLeaveResponse(BaseModel):
+    roomId: str
+    leftAt: datetime
+
+
+class MessengerRoomDeleteResponse(BaseModel):
+    roomId: str
+    status: Literal["deleted"]
+    deletedAt: datetime
+    retentionExpiresAt: datetime
+
+
 class MessengerMessageSendRequest(BaseModel):
     body: str = Field(default="", max_length=10000)
     messageType: Literal["text", "file"] = Field(default="text")
@@ -1162,6 +1179,9 @@ class MessengerRoomSummary(BaseModel):
     participantCount: int = 0
     createdByUserId: str
     canManageParticipants: bool = False
+    canLeave: bool = True
+    canDelete: bool = False
+    status: str = "active"
     createdAt: datetime
     updatedAt: datetime
     retentionExpiresAt: datetime | None = None

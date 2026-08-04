@@ -620,6 +620,9 @@ export type MessengerRoomSummary = {
   participantCount: number;
   createdByUserId: string;
   canManageParticipants: boolean;
+  canLeave: boolean;
+  canDelete: boolean;
+  status: string;
   createdAt: string;
   updatedAt: string;
   retentionExpiresAt: string | null;
@@ -1662,6 +1665,29 @@ export async function updateMessengerRoomParticipants(token: string, roomId: str
     body: JSON.stringify({ participantUserIds, expectedUpdatedAt }),
   });
 }
+
+export async function transferMessengerRoomOwner(token: string, roomId: string, newOwnerUserId: string, expectedUpdatedAt: string) {
+  return request<MessengerRoomDetail>(`/messenger/rooms/${roomId}/owner`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+    body: JSON.stringify({ newOwnerUserId, expectedUpdatedAt }),
+  });
+}
+
+export async function leaveMessengerRoom(token: string, roomId: string) {
+  return request<{ roomId: string; leftAt: string }>(`/messenger/rooms/${roomId}/leave`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+}
+
+export async function deleteMessengerRoom(token: string, roomId: string) {
+  return request<{ roomId: string; status: string; deletedAt: string; retentionExpiresAt: string }>(`/messenger/rooms/${roomId}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+}
+
 export async function fetchMessengerRoom(token: string, roomId: string): Promise<MessengerRoomDetail> {
   return request<MessengerRoomDetail>(`/messenger/rooms/${roomId}`, {
     headers: authHeaders(token),

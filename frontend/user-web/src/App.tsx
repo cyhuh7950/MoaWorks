@@ -19,6 +19,7 @@ import {
   createMailTag,
   deleteMailFolder,
   deleteMailTag,
+  deleteMessengerRoom,
   downloadMailAttachment,
   downloadApprovalAttachment,
   downloadMailboxBackup,
@@ -95,6 +96,7 @@ import {
   fetchUiContract,
   getUserToken,
   login,
+  leaveMessengerRoom,
   markMailRead,
   readMessengerRoom,
   readWorkspaceNotice,
@@ -112,6 +114,7 @@ import {
   storeUserToken,
   submitApproval,
   toggleMailStar,
+  transferMessengerRoomOwner,
   updateMailBasicPreferences,
   updateMailboxPolicy,
   updateSpamRule,
@@ -185,6 +188,8 @@ import { NotificationCenter } from "./NotificationCenter";
 import { UserHome } from "./UserHome";
 import { CompactWarning, ConfirmModal, FeedbackState, ToastViewport, useFeedbackQueue } from "./components/FeedbackSystem";
 import { CommonPopup } from "./components/CommonPopup";
+
+type MessengerRoomLifecycleAction = "none" | "transfer" | "leave" | "delete";
 import {
   classifyApprovalDocuments,
   findApprovalDocumentMenu,
@@ -1523,6 +1528,8 @@ export default function App() {
   const [messengerDraft, setMessengerDraft] = useState("");
   const [messengerError, setMessengerError] = useState("");
   const [messengerLoading, setMessengerLoading] = useState(false);
+  const [messengerLifecycleAction, setMessengerLifecycleAction] = useState<MessengerRoomLifecycleAction>("none");
+  const [messengerNewOwnerId, setMessengerNewOwnerId] = useState("");
   const notificationStreamAbortRef = useRef<AbortController | null>(null);
   const notificationStreamTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const notificationButtonRef = useRef<HTMLButtonElement>(null);
@@ -3143,7 +3150,10 @@ export default function App() {
       const roomsResponse = await fetchMessengerRooms(targetToken);
       const rooms = roomsResponse.rooms ?? [];
       setMessengerRoomsData(rooms);
-      const targetRoomId = preferredRoomId || selectedRoomId || rooms[0]?.roomId || "";
+      const requestedRoomId = preferredRoomId || selectedRoomId;
+      const targetRoomId = rooms.some((room) => room.roomId === requestedRoomId)
+        ? requestedRoomId
+        : rooms[0]?.roomId || "";
       if (targetRoomId) {
         const [roomDetail, messagesResponse] = await Promise.all([
           fetchMessengerRoom(targetToken, targetRoomId),
@@ -3203,6 +3213,58 @@ export default function App() {
       await selectMessengerRoom(token, selectedRoomId, { markRead: true });
     } catch (error) {
       setMessengerError(normalizeClientError(error, "메시지 전송 실패"));
+    } finally {
+      setMessengerLoading(false);
+    }
+  }
+
+  async function handleMessengerOwnerTransfer() {
+    if (!token || !selectedRoomId || !selectedRoomDetail || !messengerNewOwnerId) return;
+    setMessengerLoading(true);
+    setMessengerError("");
+    try {
+      await transferMessengerRoomOwner(token, selectedRoomId, messengerNewOwnerId, selectedRoomDetail.updatedAt);
+      setMessengerLifecycleAction("none");
+      setMessengerNewOwnerId("");
+      await selectMessengerRoom(token, selectedRoomId, { markRead: false });
+    } catch (error) {
+      setMessengerError(normalizeClientError(error, "방장 이전 실패"));
+    } finally {
+      setMessengerLoading(false);
+    }
+  }
+
+  async function handleMessengerLeave() {
+    if (!token || !selectedRoomId) return;
+    setMessengerLoading(true);
+    setMessengerError("");
+    try {
+      await leaveMessengerRoom(token, selectedRoomId);
+      setMessengerLifecycleAction("none");
+      setSelectedRoomId("");
+      setSelectedRoomDetail(null);
+      setRoomMessages([]);
+      await loadMessengerWorkspace(token);
+    } catch (error) {
+      setMessengerError(normalizeClientError(error, "대화방 나가기 실패"));
+    } finally {
+      setMessengerLoading(false);
+    }
+  }
+
+  async function handleMessengerDelete() {
+    if (!token || !selectedRoomId) return;
+    setMessengerLoading(true);
+    setMessengerError("");
+    try {
+      await deleteMessengerRoom(token, selectedRoomId);
+      setMessengerLifecycleAction("none");
+      setSelectedRoomId("");
+      setSelectedRoomDetail(null);
+      setRoomMessages([]);
+      await loadMessengerWorkspace(token);
+    } catch (error) {
+      setMessengerError(normalizeClientError(error, "대화방 삭제 실패"));
     } finally {
       setMessengerLoading(false);
     }
@@ -5622,6 +5684,38 @@ export default function App() {
               {messengerError ? <p style={{ color: "#b91c1c", marginTop: 14 }}>{messengerError}</p> : null}
             </article>
             <aside style={{ display: "grid", gap: 12, alignContent: "start", overflowY: "auto" }}>
+              {selectedRoomDetail ? (
+                <article style={{ borderRadius: 20, padding: 16, border: "1px solid #dbe4ec", background: "#fff" }}>
+                  <strong>대화방 관리</strong>
+                  <p style={{ color: "#475569", lineHeight: 1.6, fontSize: 12 }}>
+                    나가면 참여가 종료됩니다. 삭제된 대화와 첨부는 14일 후 자동 정리됩니다.
+                  </p>
+                  {selectedRoomDetail.canDelete ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextOwner = selectedRoomDetail.participants.find((item) => item.userId !== selectedRoomDetail.createdByUserId);
+                        setMessengerNewOwnerId(nextOwner?.userId || "");
+                        setMessengerLifecycleAction("transfer");
+                      }}
+                      disabled={messengerLoading || selectedRoomDetail.participants.length < 2}
+                      style={{ width: "100%", minHeight: 38, borderRadius: 12, border: "1px solid #cbd5e1", background: "#fff", fontSize: 12, fontWeight: 700 }}
+                    >
+                      방장 이전
+                    </button>
+                  ) : null}
+                  {selectedRoomDetail.canLeave ? (
+                    <button type="button" onClick={() => setMessengerLifecycleAction("leave")} disabled={messengerLoading} style={{ width: "100%", minHeight: 38, marginTop: 8, borderRadius: 12, border: "1px solid #cbd5e1", background: "#fff", fontSize: 12, fontWeight: 700 }}>
+                      대화방 나가기
+                    </button>
+                  ) : null}
+                  {selectedRoomDetail.canDelete ? (
+                    <button type="button" onClick={() => setMessengerLifecycleAction("delete")} disabled={messengerLoading} style={{ width: "100%", minHeight: 38, marginTop: 8, borderRadius: 12, border: "1px solid #fecaca", background: "#fff7f7", color: "#b91c1c", fontSize: 12, fontWeight: 700 }}>
+                      대화방 삭제
+                    </button>
+                  ) : null}
+                </article>
+              ) : null}
               {collaborationPanels.map((item) => (
                 <article key={item.title} style={{ borderRadius: 20, padding: 16, border: "1px solid #dbe4ec", background: "#fff" }}>
                   <strong>{item.title}</strong>
@@ -5629,6 +5723,47 @@ export default function App() {
                 </article>
               ))}
             </aside>
+            <CommonPopup
+              title={messengerLifecycleAction === "transfer" ? "방장 이전" : messengerLifecycleAction === "leave" ? "대화방 나가기" : "대화방 삭제"}
+              open={messengerLifecycleAction !== "none"}
+              onClose={() => { setMessengerLifecycleAction("none"); setMessengerNewOwnerId(""); }}
+              saving={messengerLoading}
+              error={messengerError}
+              kind="alertdialog"
+            >
+              <div style={{ display: "grid", gap: 12, fontSize: 12 }}>
+                {messengerLifecycleAction === "transfer" ? (
+                  <label style={{ display: "grid", gap: 6 }}>
+                    <span>새 방장</span>
+                    <select value={messengerNewOwnerId} onChange={(event) => setMessengerNewOwnerId(event.target.value)}>
+                      {selectedRoomDetail?.participants.filter((item) => item.userId !== selectedRoomDetail.createdByUserId).map((item) => (
+                        <option key={item.userId} value={item.userId}>{item.userName} · {item.userEmail}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <p style={{ margin: 0, lineHeight: 1.7 }}>
+                    {messengerLifecycleAction === "leave"
+                      ? "이 대화방에서 나갑니다. 기존 대화 기록은 보존 정책에 따라 유지됩니다."
+                      : "대화방을 삭제합니다. 대화와 첨부는 14일간 보존된 후 자동 정리됩니다."}
+                  </p>
+                )}
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                  <button type="button" onClick={() => setMessengerLifecycleAction("none")}>취소</button>
+                  <button
+                    type="button"
+                    disabled={messengerLoading || (messengerLifecycleAction === "transfer" && !messengerNewOwnerId)}
+                    onClick={() => {
+                      if (messengerLifecycleAction === "transfer") void handleMessengerOwnerTransfer();
+                      if (messengerLifecycleAction === "leave") void handleMessengerLeave();
+                      if (messengerLifecycleAction === "delete") void handleMessengerDelete();
+                    }}
+                  >
+                    {messengerLifecycleAction === "transfer" ? "이전" : messengerLifecycleAction === "leave" ? "나가기" : "삭제"}
+                  </button>
+                </div>
+              </div>
+            </CommonPopup>
           </section>
         );
       }
