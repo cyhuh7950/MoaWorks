@@ -32,6 +32,10 @@ class Settings(BaseSettings):
         "172.16.0.0/12",
         "192.168.0.0/16",
     ]
+    oci_email_api_enabled: bool = False
+    oci_region: str = "ap-seoul-1"
+    oci_tenancy_id: str = ""
+    oci_compartment_id: str = ""
 
     storage_driver: str = "local"
     storage_local_path: str = "./data/storage"

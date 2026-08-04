@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
 from uuid import uuid4
 
 from app.services.mail_operations_policy import (
@@ -33,7 +34,7 @@ class MailOperationsService:
                 active_outbound_provider_key, previous_outbound_provider_key,
                 provider_switched_at, created_at, updated_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, '[]'::jsonb, %s, NULL, NULL, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, NULL, NULL, %s, %s)
             ON CONFLICT (company_id) DO UPDATE
             SET registered_domain = EXCLUDED.registered_domain,
                 mail_domain = EXCLUDED.mail_domain,
@@ -41,6 +42,7 @@ class MailOperationsService:
                 admin_host = EXCLUDED.admin_host,
                 mail_host = EXCLUDED.mail_host,
                 admin_access_mode = EXCLUDED.admin_access_mode,
+                admin_allowed_cidrs = EXCLUDED.admin_allowed_cidrs,
                 active_outbound_provider_key = EXCLUDED.active_outbound_provider_key,
                 updated_at = EXCLUDED.updated_at
             """,
@@ -52,6 +54,7 @@ class MailOperationsService:
                 contract.admin_host,
                 contract.mail_host,
                 contract.admin_access_mode,
+                json.dumps(contract.admin_allowed_cidrs),
                 validated_provider,
                 now,
                 now,
@@ -89,7 +92,7 @@ class MailOperationsService:
             queued_items=cursor.fetchall(),
         )
         target_types = (
-            ("self_hosted", "self_hosted_smtp")
+            ("self_hosted", "self_hosted_smtp", "smtp")
             if plan.new_message_provider == "self_hosted"
             else ("oci_email_delivery",)
         )

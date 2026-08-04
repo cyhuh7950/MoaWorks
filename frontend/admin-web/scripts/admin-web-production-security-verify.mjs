@@ -34,7 +34,7 @@ check(dockerfile.includes("frontend/admin-web/package-lock.json"), "Docker build
 check(dockerfile.includes("RUN npm ci"), "Docker build must use npm ci");
 check(dockerfile.includes("RUN npm run build"), "Docker build must compile admin-web");
 check(dockerfile.includes("FROM nginx:1.28.3-alpine3.23 AS runtime"), "runtime image must be pinned Nginx");
-check(dockerfile.includes("COPY deploy/admin-web.nginx.conf /etc/nginx/conf.d/default.conf"), "runtime must install admin Nginx config");
+check(dockerfile.includes("COPY deploy/admin-web.nginx.conf /etc/nginx/templates/default.conf.template"), "runtime must install the env-substituted admin Nginx template");
 check(dockerfile.includes("COPY --from=build /app/dist /usr/share/nginx/html"), "runtime must contain only built assets");
 check(dockerfile.includes("EXPOSE 3510"), "runtime must expose port 3510");
 check(dockerfile.includes("HEALTHCHECK") && dockerfile.includes("http://127.0.0.1:3510/health"), "runtime healthcheck must use port 3510");
@@ -44,6 +44,8 @@ check(nginx.includes("listen 3510;"), "Nginx must listen on 3510");
 check(nginx.includes("location = /health"), "Nginx must provide a health endpoint");
 check(nginx.includes("try_files $uri $uri/ /index.html;"), "Nginx must provide SPA fallback");
 check(nginx.includes("location /api/") && nginx.includes("proxy_pass http://server:8000;"), "Nginx must proxy same-origin API requests");
+check(nginx.includes("auth_request /_admin_access_check") && nginx.includes("internal;"), "Nginx must enforce the internal admin access policy");
+check(nginx.includes("${ADMIN_ACCESS_CHECK_TOKEN}") && nginx.includes("${TRUSTED_PROXY_CIDR}"), "Nginx template must receive access token and trusted proxy CIDR at runtime");
 check(nginx.includes('add_header Content-Security-Policy'), "Nginx must provide CSP");
 check(nginx.includes('add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;'), "Nginx must provide HSTS");
 check(nginx.includes('add_header Permissions-Policy "camera=(), geolocation=(), microphone=(), payment=(), usb=()" always;'), "Nginx must provide Permissions-Policy");

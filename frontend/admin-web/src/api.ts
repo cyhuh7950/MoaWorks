@@ -290,6 +290,44 @@ export type MailDeliveryStatusResponse = {
   summary: MailDeliveryQueueSummary;
 };
 
+export type MailOperationsProvider = {
+  providerId: string;
+  providerKey: "self_hosted" | "oci_email_delivery";
+  active: boolean;
+  deliveryEnabled: boolean;
+  relayHost: string;
+  relayPort: number;
+  tlsMode: "none" | "starttls" | "tls";
+  senderAddress: string | null;
+  usernameConfigured: boolean;
+  passwordConfigured: boolean;
+  dkimDomain: string | null;
+  dkimSelector: string | null;
+  dkimPrivateKeyConfigured: boolean;
+  lastTestStatus: string;
+  lastConnectionAt: string | null;
+  lastConnectionError: string | null;
+};
+
+export type MailOperationsOverview = {
+  domain: null | {
+    registeredDomain: string;
+    mailDomain: string;
+    userHost: string;
+    adminHost: string;
+    mailHost: string;
+    adminAccessMode: "public" | "restricted" | "private";
+    adminAllowedCidrs: string[];
+    activeOutboundProvider: "self_hosted" | "oci_email_delivery";
+    previousOutboundProvider: "self_hosted" | "oci_email_delivery" | null;
+    providerSwitchedAt: string | null;
+  };
+  providers: MailOperationsProvider[];
+  queue: Record<string, number>;
+  feedbackCount: number;
+  ociSuppression: { activeCount: number; lastSeenAt: string | null };
+};
+
 export type MailDeliveryQueueItem = {
   queueId: string;
   mailId: string;
@@ -479,7 +517,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBase}${path}`, init);
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.adminMessage ?? data.userMessage ?? data.detail ?? "요청 처리에 실패했습니다.");
+    const detail = data.detail;
+    const detailMessage = typeof detail === "string" ? detail : detail?.userMessage ?? detail?.adminMessage;
+    throw new Error(data.adminMessage ?? data.userMessage ?? detailMessage ?? "요청 처리에 실패했습니다.");
   }
   return data as T;
 }
@@ -675,6 +715,51 @@ export async function fetchMailDeliveryQueue(token: string): Promise<MailDeliver
     })),
     attempts: [], events: [],
   };
+}
+
+export async function fetchMailOperations(token: string): Promise<MailOperationsOverview> {
+  return request<MailOperationsOverview>("/admin/mail-operations", { headers: authHeaders(token) });
+}
+
+export async function updateMailOperationsDomain(token: string, payload: {
+  registeredDomain: string;
+  mailDomain: string;
+  adminAccessMode: "public" | "restricted" | "private";
+  adminAllowedCidrs: string[];
+}): Promise<MailOperationsOverview> {
+  return request<MailOperationsOverview>("/admin/mail-operations/domain", {
+    method: "PUT", headers: authHeaders(token), body: JSON.stringify(payload),
+  });
+}
+
+export async function updateMailOperationsProvider(token: string, providerKey: "self_hosted" | "oci_email_delivery", payload: Record<string, unknown>) {
+  return request<MailOperationsProvider>(`/admin/mail-operations/providers/${providerKey}`, {
+    method: "PUT", headers: authHeaders(token), body: JSON.stringify(payload),
+  });
+}
+
+export async function switchMailOperationsProvider(token: string, targetProvider: "self_hosted" | "oci_email_delivery") {
+  return request<{ previousProvider: string; activeProvider: string; pinnedQueueCount: number }>("/admin/mail-operations/providers/switch", {
+    method: "POST", headers: authHeaders(token), body: JSON.stringify({ targetProvider }),
+  });
+}
+
+export async function testMailOperationsProvider(token: string, providerKey: "self_hosted" | "oci_email_delivery", recipient: string) {
+  return request<MailOperationsProvider>(`/admin/mail-operations/providers/${providerKey}/test`, {
+    method: "POST", headers: authHeaders(token), body: JSON.stringify({ recipient }),
+  });
+}
+
+export async function rollbackMailOperationsProvider(token: string) {
+  return request<{ previousProvider: string; activeProvider: string; pinnedQueueCount: number }>("/admin/mail-operations/providers/rollback", {
+    method: "POST", headers: authHeaders(token),
+  });
+}
+
+export async function syncOciMailSuppressions(token: string) {
+  return request<{ suppressionCount: number; approvedSenders: Array<{ email: string; status: string }>; emailDomains: Array<{ name: string; status: string }>; syncedAt: string }>("/admin/mail-operations/oci/suppressions/sync", {
+    method: "POST", headers: authHeaders(token),
+  });
 }
 
 export async function testMailDelivery(
