@@ -206,9 +206,38 @@ class NotificationCenterService:
     def save_preferences(self, *, user_id: str, preferences: NotificationPreferences) -> NotificationPreferences:
         self.db.ensure_migrations_applied()
         now = _now()
-        categories = {key: value.model_dump() for key, value in preferences.categories.items()}
+        editable_fields = {
+            "enabled",
+            "quietHoursEnabled",
+            "quietHoursStart",
+            "quietHoursEnd",
+            "categories",
+        }
+        changed_fields = editable_fields.intersection(preferences.model_fields_set)
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
+                cursor.execute("SELECT * FROM notification_preferences WHERE user_id = %s FOR UPDATE", (user_id,))
+                row = cursor.fetchone()
+                if row is None:
+                    current = NotificationPreferences(categories=_DEFAULT_CATEGORIES)
+                else:
+                    current_categories = dict(_DEFAULT_CATEGORIES)
+                    current_categories.update(row.get("categories") or {})
+                    current = NotificationPreferences(
+                        enabled=row["enabled"],
+                        quietHoursEnabled=row["quiet_hours_enabled"],
+                        quietHoursStart=row["quiet_hours_start"],
+                        quietHoursEnd=row["quiet_hours_end"],
+                        categories=current_categories,
+                        updatedAt=row["updated_at"],
+                    )
+                updates = {field: getattr(preferences, field) for field in changed_fields if field != "categories"}
+                if "categories" in changed_fields:
+                    merged_categories = dict(current.categories)
+                    merged_categories.update(preferences.categories)
+                    updates["categories"] = merged_categories
+                saved = current.model_copy(update=updates)
+                categories = {key: value.model_dump() for key, value in saved.categories.items()}
                 cursor.execute(
                     """
                     INSERT INTO notification_preferences (
@@ -225,17 +254,24 @@ class NotificationCenterService:
                     """,
                     (
                         user_id,
-                        preferences.enabled,
-                        preferences.quietHoursEnabled,
-                        preferences.quietHoursStart,
-                        preferences.quietHoursEnd,
+                        saved.enabled,
+                        saved.quietHoursEnabled,
+                        saved.quietHoursStart,
+                        saved.quietHoursEnd,
                         Jsonb(categories),
                         now,
                     ),
                 )
-                self._insert_audit(cursor, user_id, user_id, "notification.preferences.updated", "user_save", {"categories": list(categories)})
+                self._insert_audit(
+                    cursor,
+                    user_id,
+                    user_id,
+                    "notification.preferences.updated",
+                    "user_save",
+                    {"changedFields": sorted(changed_fields), "categories": list(categories)},
+                )
             connection.commit()
-        return preferences.model_copy(update={"updatedAt": now})
+        return saved.model_copy(update={"updatedAt": now})
 
     def _validate_targets(self, user_id: str, notification_ids: list[str], *, include_archived: bool = False) -> list[NotificationEnvelope]:
         unique_ids = list(dict.fromkeys(notification_ids))
