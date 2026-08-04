@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     mail_layer_host: str = "mail-layer"
     mail_layer_smtp_port: int = 587
     mail_layer_imap_port: int = 993
+    mail_ingest_token: str = ""
+    mail_inbound_max_message_bytes: int = 25 * 1024 * 1024
 
     storage_driver: str = "local"
     storage_local_path: str = "./data/storage"

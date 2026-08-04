@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from email import policy
 from email.message import Message
 from email.parser import BytesParser
+from email.utils import parseaddr
 from hashlib import sha256
 
 
@@ -51,8 +52,7 @@ def parse_inbound_message(raw_message: bytes) -> ParsedInboundMessage:
                 content=content,
             )
         )
-    sender = message.get("From")
-    sender_email = sender.address.lower() if hasattr(sender, "address") else str(sender or "").strip().lower()
+    sender_email = parseaddr(str(message.get("From") or ""))[1].strip().lower()
     digest = sha256(raw_message).hexdigest()
     return ParsedInboundMessage(
         message_id=str(message.get("Message-ID") or f"<{digest}@inbound.local>"),
