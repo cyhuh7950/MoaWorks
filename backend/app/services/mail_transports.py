@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from email.message import EmailMessage
+from email.utils import make_msgid
 import smtplib
 import ssl
 from typing import Callable, Protocol, Sequence
@@ -21,6 +22,10 @@ class SmtpClient(Protocol):
     def login(self, username: str, password: str) -> object: ...
 
     def send_message(self, message, *, from_addr: str, to_addrs: list[str]) -> dict: ...
+
+
+class LegacyRelayAdapter(Protocol):
+    def send(self, envelope: dict, provider: dict) -> str: ...
 
 
 SmtpFactory = Callable[..., SmtpClient]
@@ -51,6 +56,29 @@ class DeliveryReceipt:
     provider_key: str
     endpoint: str
     remote_smtp_accepted: bool
+
+
+def resolve_mx_hosts(domain: str) -> list[str]:
+    import dns.exception
+    import dns.resolver
+
+    normalized = domain.strip().lower().rstrip(".")
+    if not normalized:
+        raise ValueError("수신자 도메인이 비어 있습니다.")
+    try:
+        answers = dns.resolver.resolve(normalized, "MX", lifetime=10)
+    except dns.resolver.NoAnswer:
+        return [normalized]
+    except dns.resolver.NXDOMAIN:
+        return []
+    except (dns.exception.Timeout, dns.resolver.NoNameservers) as exc:
+        raise ValueError("외부 SMTP 대상 MX 조회에 실패했습니다.") from exc
+
+    records = sorted(
+        ((int(answer.preference), str(answer.exchange).strip().rstrip(".").lower()) for answer in answers),
+        key=lambda item: item[0],
+    )
+    return [host for _, host in records if host]
 
 
 class SelfHostedSmtpTransport:
@@ -135,6 +163,64 @@ class OciEmailDeliveryTransport:
             provider_key="oci_email_delivery",
             endpoint=f"smtps://{config.host}:{config.port}",
             remote_smtp_accepted=True,
+        )
+
+
+class MailProviderRoutingAdapter:
+    def __init__(
+        self,
+        *,
+        self_hosted_transport: SelfHostedSmtpTransport,
+        oci_transport: OciEmailDeliveryTransport,
+        legacy_relay_adapter: LegacyRelayAdapter | None = None,
+    ) -> None:
+        self.self_hosted_transport = self_hosted_transport
+        self.oci_transport = oci_transport
+        self.legacy_relay_adapter = legacy_relay_adapter
+
+    def send(self, envelope: dict, provider: dict) -> str:
+        raw_provider_type = str(provider.get("provider_type") or "").strip().lower()
+        provider_type = "self_hosted" if raw_provider_type == "self_hosted_smtp" else raw_provider_type
+        sender_email = str(provider.get("from_address") or envelope.get("sender_email") or "").strip().lower()
+        recipient_email = str(envelope.get("recipient_email") or "").strip().lower()
+        sender_domain = sender_email.rsplit("@", 1)[-1] if "@" in sender_email else "localhost"
+        message = OutboundMessage(
+            sender_email=sender_email,
+            recipient_email=recipient_email,
+            subject=str(envelope.get("subject") or ""),
+            body_text=str(envelope.get("body_text") or ""),
+            body_html=envelope.get("body_html"),
+            message_id=str(envelope.get("message_id") or make_msgid(domain=sender_domain)),
+        )
+
+        if provider_type == "self_hosted":
+            receipt = self.self_hosted_transport.send(
+                message,
+                helo_name=str(provider.get("helo_name") or f"mail.{sender_domain}"),
+                timeout_sec=int(provider.get("timeout_sec") or 20),
+            )
+        elif provider_type == "oci_email_delivery":
+            password = str(provider.get("password") or "")
+            if not password:
+                raise ValueError("OCI SMTP 자격증명이 설정되지 않았습니다.")
+            receipt = self.oci_transport.send(
+                message,
+                config=RelaySmtpConfig(
+                    host=str(provider.get("relay_host") or ""),
+                    port=int(provider.get("relay_port") or 587),
+                    username=str(provider.get("username") or ""),
+                    password=password,
+                    timeout_sec=int(provider.get("timeout_sec") or 20),
+                ),
+            )
+        elif provider_type in {"smtp", "aws_ses"} and self.legacy_relay_adapter is not None:
+            return self.legacy_relay_adapter.send(envelope, provider)
+        else:
+            raise ValueError(f"지원하지 않는 발신 Provider입니다: {raw_provider_type}")
+
+        return (
+            f"provider={receipt.provider_key};endpoint={receipt.endpoint};"
+            f"remote_smtp_accepted={str(receipt.remote_smtp_accepted).lower()}"
         )
 
 

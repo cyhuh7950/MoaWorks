@@ -1,11 +1,16 @@
 import smtplib
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import dns.resolver
 
 from app.services.mail_transports import (
     OciEmailDeliveryTransport,
     OutboundMessage,
     RelaySmtpConfig,
     SelfHostedSmtpTransport,
+    resolve_mx_hosts,
 )
 
 
@@ -52,6 +57,24 @@ def sample_message() -> OutboundMessage:
 
 
 class MailTransportTest(unittest.TestCase):
+    @patch("dns.resolver.resolve")
+    def test_mx_resolver_orders_hosts_by_preference(self, resolver) -> None:
+        resolver.return_value = [
+            SimpleNamespace(preference=20, exchange="mx2.example.net."),
+            SimpleNamespace(preference=10, exchange="mx1.example.net."),
+        ]
+
+        self.assertEqual(resolve_mx_hosts("Example.NET."), ["mx1.example.net", "mx2.example.net"])
+        resolver.assert_called_once_with("example.net", "MX", lifetime=10)
+
+    @patch("dns.resolver.resolve", side_effect=dns.resolver.NoAnswer)
+    def test_mx_resolver_uses_implicit_mx_when_record_is_absent(self, _resolver) -> None:
+        self.assertEqual(resolve_mx_hosts("example.net"), ["example.net"])
+
+    @patch("dns.resolver.resolve", side_effect=dns.resolver.NXDOMAIN)
+    def test_mx_resolver_rejects_nonexistent_domain(self, _resolver) -> None:
+        self.assertEqual(resolve_mx_hosts("missing.example"), [])
+
     def test_self_hosted_resolves_mx_and_uses_opportunistic_starttls(self) -> None:
         smtp = FakeSmtp()
         calls: list[tuple[str, int, int]] = []

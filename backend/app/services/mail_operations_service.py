@@ -70,11 +70,16 @@ class MailOperationsService:
     ) -> ProviderSwitchPlan:
         cursor.execute(
             """
-            SELECT id AS queue_id, provider_key
-            FROM mail_delivery_queue
-            WHERE company_id = %s
-              AND status IN ('queued', 'sending', 'retry_pending')
-            ORDER BY created_at ASC
+            SELECT q.id AS queue_id,
+                   CASE
+                       WHEN p.provider_type IN ('self_hosted', 'self_hosted_smtp') THEN 'self_hosted'
+                       ELSE p.provider_type
+                   END AS provider_key
+            FROM mail_delivery_queue q
+            JOIN mail_provider_configs p ON p.id = q.provider_config_id
+            WHERE q.company_id = %s
+              AND q.status IN ('queued', 'processing', 'retry_pending')
+            ORDER BY q.created_at ASC
             """,
             (company_id,),
         )
@@ -83,7 +88,37 @@ class MailOperationsService:
             target_provider=target_provider,
             queued_items=cursor.fetchall(),
         )
+        target_types = (
+            ("self_hosted", "self_hosted_smtp")
+            if plan.new_message_provider == "self_hosted"
+            else ("oci_email_delivery",)
+        )
+        cursor.execute(
+            """
+            SELECT id, delivery_enabled, last_test_status
+            FROM mail_provider_configs
+            WHERE company_id = %s
+              AND provider_type = ANY(%s)
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (company_id, list(target_types)),
+        )
+        target = cursor.fetchone()
+        if target is None:
+            raise ValueError("전환할 발신 Provider 설정을 찾을 수 없습니다.")
+        if not target.get("delivery_enabled") or target.get("last_test_status") != "success":
+            raise ValueError("실제 연결 테스트를 통과하고 활성화된 Provider만 선택할 수 있습니다.")
         now = datetime.now(UTC)
+        cursor.execute(
+            """
+            UPDATE mail_provider_configs
+            SET active = (id = %s),
+                updated_at = %s
+            WHERE company_id = %s
+            """,
+            (target["id"], now, company_id),
+        )
         cursor.execute(
             """
             UPDATE mail_domain_settings

@@ -7,6 +7,12 @@ from uuid import uuid4
 
 from app.services.mail_attachment_storage import MailAttachmentStorage
 from app.services.mail_delivery_service import MailDeliveryWorker, SmtpRelayAdapter, mask_delivery_error
+from app.services.mail_transports import (
+    MailProviderRoutingAdapter,
+    OciEmailDeliveryTransport,
+    SelfHostedSmtpTransport,
+    resolve_mx_hosts,
+)
 from app.services.postgres_service import PostgresService
 from app.services.security_service import SecurityService
 
@@ -45,7 +51,11 @@ def prepare_provider_update(current: dict, values: dict, encrypt_secret) -> dict
 class MailDeliveryOperations:
     def __init__(self, db=None, adapter=None, storage=None):
         self.db = db or PostgresService()
-        self.adapter = adapter or SmtpRelayAdapter()
+        self.adapter = adapter or MailProviderRoutingAdapter(
+            self_hosted_transport=SelfHostedSmtpTransport(mx_resolver=resolve_mx_hosts),
+            oci_transport=OciEmailDeliveryTransport(),
+            legacy_relay_adapter=SmtpRelayAdapter(),
+        )
         self.storage = storage or MailAttachmentStorage()
         self.security = SecurityService()
 

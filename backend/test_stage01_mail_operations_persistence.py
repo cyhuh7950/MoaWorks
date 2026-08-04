@@ -26,7 +26,7 @@ class MailOperationsPersistenceTest(unittest.TestCase):
         self.service = MailOperationsService()
 
     def test_migration_defines_domain_settings_and_provider_contract(self) -> None:
-        migration = Path(__file__).parent / "migrations" / "021_mail_operations.sql"
+        migration = Path(__file__).parent / "migrations" / "047_mail_operations.sql"
 
         sql = migration.read_text(encoding="utf-8")
 
