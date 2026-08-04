@@ -252,11 +252,15 @@ class ObservabilityService:
                 or str(item.get("eventType", "")) == "mail.relay.fail"
             )
         ]
-        approval_backlog = sum(
-            1
-            for item in events
-            if item.get("category") == MonitoringCategory.APPROVAL.value
-            and str(item.get("eventType", "")) in {"approval.status.changed", "approval.submit"}
+        approval_backlog = (
+            sum(
+                1
+                for item in events
+                if item.get("category") == MonitoringCategory.APPROVAL.value
+                and str(item.get("eventType", "")) in {"approval.status.changed", "approval.submit"}
+            )
+            if self._use_file_backend
+            else self._count_submitted_approval_documents()
         )
         disk_status = next(
             (
@@ -841,6 +845,14 @@ class ObservabilityService:
             }
             for row in rows
         ]
+
+    def _count_submitted_approval_documents(self) -> int:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) AS count FROM approval_documents WHERE status = 'submitted'")
+                row = cursor.fetchone()
+        return int(row["count"] if row else 0)
 
     def _is_visible(self, item: dict[str, Any], user_id: str, include_admin: bool) -> bool:
         visibility = item.get("visibility", Visibility.BOTH.value)
