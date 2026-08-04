@@ -44,6 +44,43 @@ services:
     depends_on:
       - server
 
+  mail-gateway:
+    build:
+      context: ..
+      dockerfile: deploy/mail-gateway/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-moaworks}
+      POSTGRES_USER: ${POSTGRES_USER:-moaworks}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      MAIL_HOSTNAME: ${MAIL_HOSTNAME:-mail.moaworks.local}
+      MAIL_INGEST_URL: http://server:8000/api/v1/internal/mail/ingest
+      MAIL_INGEST_TOKEN: ${MAIL_INGEST_TOKEN:-local-inbound-change-me}
+    ports:
+      - "${MAIL_SMTP_PORT:-2525}:25"
+    volumes:
+      - mail-spool:/var/spool/postfix
+    depends_on:
+      - server
+      - rspamd
+      - clamav
+
+  rspamd:
+    image: rspamd/rspamd:3.11
+    volumes:
+      - ./mail-gateway/rspamd-worker-proxy.inc:/etc/rspamd/local.d/worker-proxy.inc:ro
+      - ./mail-gateway/rspamd-antivirus.conf:/etc/rspamd/local.d/antivirus.conf:ro
+    depends_on:
+      - clamav
+
+  clamav:
+    image: clamav/clamav:1.4
+    volumes:
+      - clamav-db:/var/lib/clamav
+
   mail-layer:
     build:
       context: ..
@@ -79,3 +116,5 @@ services:
 volumes:
   postgres-data:
   storage-data:
+  mail-spool:
+  clamav-db:

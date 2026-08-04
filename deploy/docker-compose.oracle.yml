@@ -50,6 +50,56 @@ services:
       - proxy_net
     restart: unless-stopped
 
+  mail-gateway:
+    container_name: moaworks-mail-gateway
+    build:
+      context: ..
+      dockerfile: deploy/mail-gateway/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      POSTGRES_HOST: shared-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      MAIL_HOSTNAME: ${MAIL_HOSTNAME:-mail.moaworks.sinsan.kr}
+      MAIL_INGEST_URL: http://server:8000/api/v1/internal/mail/ingest
+      MAIL_INGEST_TOKEN: ${MAIL_INGEST_TOKEN}
+    ports:
+      - "25:25"
+    volumes:
+      - mail-spool:/var/spool/postfix
+    depends_on:
+      - server
+      - rspamd
+      - clamav
+    networks:
+      - app_net
+      - pg_net
+    restart: unless-stopped
+
+  rspamd:
+    container_name: moaworks-rspamd
+    image: rspamd/rspamd:3.11
+    volumes:
+      - ./mail-gateway/rspamd-worker-proxy.inc:/etc/rspamd/local.d/worker-proxy.inc:ro
+      - ./mail-gateway/rspamd-antivirus.conf:/etc/rspamd/local.d/antivirus.conf:ro
+    depends_on:
+      - clamav
+    networks:
+      - app_net
+    restart: unless-stopped
+
+  clamav:
+    container_name: moaworks-clamav
+    image: clamav/clamav:1.4
+    volumes:
+      - clamav-db:/var/lib/clamav
+    networks:
+      - app_net
+    restart: unless-stopped
+
   mail-layer:
     container_name: moaworks-mail-layer
     build:
@@ -142,6 +192,8 @@ services:
 
 volumes:
   storage-data:
+  mail-spool:
+  clamav-db:
 
 networks:
   app_net:
