@@ -1290,8 +1290,8 @@ export default function App() {
     }
   }
 
-  async function runTranslationDemo(event: FormEvent) {
-    event.preventDefault();
+  async function runTranslationDemo(event?: FormEvent) {
+    event?.preventDefault();
     if (!token) {
       setTranslationError("로그인 후 번역 데모를 실행하세요.");
       return;
@@ -2247,7 +2247,7 @@ export default function App() {
               <label className="compact-field"><span>번역 언어</span><select value={translationTargetLocale} onChange={(event) => setTranslationTargetLocale(event.target.value)}>{supportedTranslationTargets.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
             </div>
             <label><span>원문</span><textarea value={translationSource} onChange={(event) => setTranslationSource(event.target.value)} /></label>
-            <div className="actions compact-actions"><button type="submit" disabled={translationLoading || !translationStatus?.enabled}>번역 실행</button></div>
+            <div className="actions compact-actions"><button type="button" disabled={translationLoading || !translationStatus?.enabled} onClick={() => void runTranslationDemo()}>번역 실행</button></div>
             {translationResult.map((item, index) => <article key={`${item.originalText}-${index}`} className="status-card"><div className="status-title"><strong>{item.sourceLocale} → {item.targetLocale}</strong><span className="badge">{item.cacheHit ? "DB cache" : item.provider}</span></div><p>{item.translatedText}</p><p className="muted">모델 {item.model || "-"} / 검수 {item.reviewId ?? "캐시 결과"}</p></article>)}
           </form>
           <div className="ops-list-panel">
