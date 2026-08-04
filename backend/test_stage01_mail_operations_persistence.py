@@ -83,6 +83,26 @@ class MailOperationsPersistenceTest(unittest.TestCase):
         self.assertIn("INSERT INTO audit_logs", statements)
         self.assertNotIn("UPDATE mail_delivery_queue", statements)
 
+    def test_provider_rollback_restores_previous_provider_without_rewriting_queue(self) -> None:
+        cursor = RecordingCursor(
+            queued_rows=[],
+            one_rows=[
+                {"active_outbound_provider_key": "oci_email_delivery", "previous_outbound_provider_key": "self_hosted"},
+                {"id": "provider-self", "delivery_enabled": True, "last_test_status": "success"},
+            ],
+        )
+
+        plan = self.service.rollback_outbound_provider(
+            cursor=cursor,
+            company_id="cmp-default",
+            actor_user_id="user-admin",
+        )
+
+        statements = "\n".join(query for query, _ in cursor.statements)
+        self.assertEqual(plan.new_message_provider, "self_hosted")
+        self.assertIn("mail.outbound_provider.rolled_back", statements)
+        self.assertNotIn("UPDATE mail_delivery_queue", statements)
+
 
 if __name__ == "__main__":
     unittest.main()
