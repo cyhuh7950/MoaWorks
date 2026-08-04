@@ -3,6 +3,7 @@ import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useS
 import {
   ApiRequestError,
   createMessengerRoom,
+  deleteMessengerRoom,
   downloadMessengerAttachment,
   favoriteMessengerRoom,
   fetchMe,
@@ -11,7 +12,9 @@ import {
   fetchMessengerRooms,
   fetchWorkspaceDirectory,
   readMessengerRoom,
+  leaveMessengerRoom,
   sendMessengerMessage,
+  transferMessengerRoomOwner,
   updateMessengerRoomParticipants,
   uploadMessengerAttachment,
   type MessengerAttachment,
@@ -66,6 +69,9 @@ export function MessengerPanel({ token }: { token: string }) {
   const [roomType, setRoomType] = useState<"direct" | "group">("group");
   const [participantIds, setParticipantIds] = useState<string[]>([]);
   const [participantsOpen, setParticipantsOpen] = useState(false);
+  const [lifecycleAction, setLifecycleAction] = useState<"none" | "transfer" | "leave" | "delete">("none");
+  const [newOwnerUserId, setNewOwnerUserId] = useState("");
+  const [lifecycleSaving, setLifecycleSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const roomNameRef = useRef<HTMLInputElement>(null);
 
@@ -83,14 +89,14 @@ export function MessengerPanel({ token }: { token: string }) {
     }
   }, [token]);
 
-  const refresh = useCallback(async (preferredRoomId?: string) => {
+  const refresh = useCallback(async (preferredRoomId?: string, resetSelection = false) => {
     try {
       setError("");
       const [response, members, me] = await Promise.all([fetchMessengerRooms(token), fetchWorkspaceDirectory(token), fetchMe(token)]);
       setRooms(response.rooms);
       setDirectory(members);
       setCurrentUserId(me.user.userId);
-      const target = preferredRoomId || selectedId || response.rooms[0]?.roomId || "";
+      const target = resetSelection ? response.rooms[0]?.roomId || "" : preferredRoomId || selectedId || response.rooms[0]?.roomId || "";
       if (target) {
         setSelectedId(target);
         await loadRoom(target);
@@ -215,6 +221,59 @@ export function MessengerPanel({ token }: { token: string }) {
     } catch (cause) { setError(errorText(cause)); }
   }
 
+  function openLifecycleAction(action: "transfer" | "leave" | "delete") {
+    if (!room) return;
+    setError("");
+    setNewOwnerUserId(action === "transfer" ? room.participants.find((item) => item.userId !== room.createdByUserId)?.userId || "" : "");
+    setLifecycleAction(action);
+  }
+
+  function closeLifecycleAction() {
+    if (lifecycleSaving) return;
+    setLifecycleAction("none");
+    setNewOwnerUserId("");
+  }
+
+  async function transferRoomOwner(event: FormEvent) {
+    event.preventDefault();
+    if (!room || !newOwnerUserId || lifecycleSaving) return;
+    setLifecycleSaving(true);
+    setError("");
+    try {
+      const updated = await transferMessengerRoomOwner(token, room.roomId, newOwnerUserId, room.updatedAt);
+      setLifecycleAction("none");
+      setNewOwnerUserId("");
+      await refresh(updated.roomId);
+    } catch (cause) { setError(errorText(cause)); }
+    finally { setLifecycleSaving(false); }
+  }
+
+  async function leaveRoom() {
+    if (!room || lifecycleSaving) return;
+    setLifecycleSaving(true);
+    setError("");
+    try {
+      await leaveMessengerRoom(token, room.roomId);
+      setLifecycleAction("none");
+      setSelectedId("");
+      await refresh(undefined, true);
+    } catch (cause) { setError(errorText(cause)); }
+    finally { setLifecycleSaving(false); }
+  }
+
+  async function deleteRoom() {
+    if (!room || lifecycleSaving) return;
+    setLifecycleSaving(true);
+    setError("");
+    try {
+      await deleteMessengerRoom(token, room.roomId);
+      setLifecycleAction("none");
+      setSelectedId("");
+      await refresh(undefined, true);
+    } catch (cause) { setError(errorText(cause)); }
+    finally { setLifecycleSaving(false); }
+  }
+
   function roomGroup(title: string, items: MessengerRoomSummary[]) {
     return <section className="ui040-room-group"><h3>{title}</h3>{items.map((item) => <article className={selectedId === item.roomId ? "is-selected" : ""} key={item.roomId}>
       <button className="ui040-room-select" type="button" onClick={() => void selectRoom(item.roomId)}>
@@ -239,8 +298,9 @@ export function MessengerPanel({ token }: { token: string }) {
       <form className="ui040-composer" onSubmit={submitMessage}><div>{staged.map((item) => <span key={item.uploadId}>{item.fileName}<button type="button" aria-label={`${item.fileName} 첨부 제거`} onClick={() => setStaged((current) => current.filter((file) => file.uploadId !== item.uploadId))}>×</button></span>)}</div><textarea aria-label="메시지 입력" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onComposerKeyDown} disabled={!selectedId || sending} placeholder="메시지를 입력하세요. Ctrl+Enter로 전송" /><input ref={fileInputRef} type="file" multiple hidden onChange={(event) => void uploadFiles(event.target.files)} /><button type="button" onClick={() => fileInputRef.current?.click()} disabled={!selectedId || uploading || staged.length >= MAX_FILES}>첨부</button><button className="is-primary" type="submit" disabled={sending || !selectedId || (!draft.trim() && staged.length === 0)}>{sending ? "전송 중" : "전송"}</button></form>
       {error ? <p className="ui040-error" role="alert">{error}</p> : null}
     </main>
-    <aside className="ui040-drawer"><nav aria-label="대화방 정보"><button type="button" aria-pressed={drawerTab === "participants"} onClick={() => setDrawerTab("participants")}>참여자</button><button type="button" aria-pressed={drawerTab === "files"} onClick={() => setDrawerTab("files")}>공유 파일</button></nav>{drawerTab === "participants" ? <section><header><h2>참여자</h2>{room?.canManageParticipants ? <button type="button" onClick={openParticipantEditor}>참여자 변경</button> : null}</header>{room?.participants.map((item) => <article key={item.userId}><strong>{item.userName}</strong><span>{item.departmentName || "부서 미지정"}</span><small>{item.userEmail}</small><time>{item.lastReadAt ? `최근 읽음 ${formatTime(item.lastReadAt)}` : "읽음 기록 없음"}</time></article>)}</section> : <section><h2>공유 파일</h2>{sharedFiles.length ? sharedFiles.map(({ message, attachment }) => <button className="ui040-shared-file" type="button" key={attachment.attachmentId} onClick={() => void downloadMessengerAttachment(token, message.roomId, message.messageId, attachment)}><strong>{attachment.fileName}</strong><small>{formatSize(attachment.sizeBytes)} · {formatTime(message.createdAt)}</small></button>) : <p className="ui040-state">공유된 파일이 없습니다.</p>}</section>}</aside>
+    <aside className="ui040-drawer"><nav aria-label="대화방 정보"><button type="button" aria-pressed={drawerTab === "participants"} onClick={() => setDrawerTab("participants")}>참여자</button><button type="button" aria-pressed={drawerTab === "files"} onClick={() => setDrawerTab("files")}>공유 파일</button></nav>{drawerTab === "participants" ? <section><header><h2>참여자</h2>{room?.canManageParticipants ? <button type="button" onClick={openParticipantEditor}>참여자 변경</button> : null}</header>{room?.participants.map((item) => <article key={item.userId}><strong>{item.userName}</strong><span>{item.departmentName || "부서 미지정"}</span><small>{item.userEmail}</small><time>{item.lastReadAt ? `최근 읽음 ${formatTime(item.lastReadAt)}` : "읽음 기록 없음"}</time></article>)}</section> : <section><h2>공유 파일</h2>{sharedFiles.length ? sharedFiles.map(({ message, attachment }) => <button className="ui040-shared-file" type="button" key={attachment.attachmentId} onClick={() => void downloadMessengerAttachment(token, message.roomId, message.messageId, attachment)}><strong>{attachment.fileName}</strong><small>{formatSize(attachment.sizeBytes)} · {formatTime(message.createdAt)}</small></button>) : <p className="ui040-state">공유된 파일이 없습니다.</p>}</section>}{room ? <section className="ui040-room-management"><header><h2>대화방 관리</h2></header><p>나가면 참여가 종료됩니다. 삭제된 대화와 첨부는 14일 후 자동 정리됩니다.</p>{room.canDelete ? <button type="button" onClick={() => openLifecycleAction("transfer")} disabled={lifecycleSaving || room.participants.length < 2}>방장 이전</button> : null}{room.canLeave ? <button type="button" onClick={() => openLifecycleAction("leave")} disabled={lifecycleSaving}>대화방 나가기</button> : null}{room.canDelete ? <button type="button" onClick={() => openLifecycleAction("delete")} disabled={lifecycleSaving}>대화방 삭제</button> : null}</section> : null}</aside>
     <CommonPopup title="새 대화" open={createOpen} onClose={() => setCreateOpen(false)} dirty={Boolean(roomName || participantIds.length)} error={error} initialFocusRef={roomNameRef} className="ui040-popup"><form onSubmit={submitRoom}><label>대화방 이름<input ref={roomNameRef} required maxLength={80} value={roomName} onChange={(event) => setRoomName(event.target.value)} /></label><label>대화 유형<select value={roomType} onChange={(event) => setRoomType(event.target.value as "direct" | "group")}><option value="direct">1:1 대화</option><option value="group">그룹 대화</option></select></label><fieldset><legend>참여자 선택</legend>{directory.users.filter((user) => user.id !== currentUserId).map((user) => <label key={user.id}><input type="checkbox" checked={participantIds.includes(user.id)} onChange={(event) => setParticipantIds((current) => event.target.checked ? [...current, user.id] : current.filter((id) => id !== user.id))} />{user.name} · {user.department_name || "미지정"}</label>)}</fieldset><footer><button type="button" onClick={() => setCreateOpen(false)}>취소</button><button className="is-primary" type="submit">생성</button></footer></form></CommonPopup>
     <CommonPopup title="참여자 변경" open={participantsOpen} onClose={() => setParticipantsOpen(false)} dirty={Boolean(room && participantIds.join() !== room.participantIds.join())} error={error} className="ui040-popup"><form onSubmit={saveParticipants}><fieldset><legend>같은 회사의 활성 사용자</legend>{directory.users.map((user) => <label key={user.id}><input type="checkbox" checked={participantIds.includes(user.id)} disabled={user.id === room?.createdByUserId} onChange={(event) => setParticipantIds((current) => event.target.checked ? [...current, user.id] : current.filter((id) => id !== user.id))} />{user.name} · {user.department_name || "미지정"}</label>)}</fieldset><footer><button type="button" onClick={() => setParticipantsOpen(false)}>취소</button><button className="is-primary" type="submit">저장</button></footer></form></CommonPopup>
+    <CommonPopup title={lifecycleAction === "transfer" ? "방장 이전" : lifecycleAction === "leave" ? "대화방 나가기" : "대화방 삭제"} open={lifecycleAction !== "none"} onClose={closeLifecycleAction} saving={lifecycleSaving} error={error} className="ui040-popup" kind="alertdialog">{lifecycleAction === "transfer" ? <form onSubmit={transferRoomOwner}><p>새 방장을 선택하면 현재 방장은 일반 참여자로 유지됩니다.</p><label>새 방장<select required value={newOwnerUserId} onChange={(event) => setNewOwnerUserId(event.target.value)}><option value="">선택</option>{room?.participants.filter((item) => item.userId !== room.createdByUserId).map((item) => <option key={item.userId} value={item.userId}>{item.userName}</option>)}</select></label><footer><button type="button" onClick={closeLifecycleAction} disabled={lifecycleSaving}>취소</button><button className="is-primary" type="submit" disabled={!newOwnerUserId || lifecycleSaving}>이전</button></footer></form> : <div><p>{lifecycleAction === "leave" ? "이 대화방에서 나가면 다시 초대되기 전까지 대화를 볼 수 없습니다." : "대화방을 삭제하면 즉시 목록에서 숨겨지고 대화와 첨부는 14일 후 자동 정리됩니다."}</p><footer><button type="button" onClick={closeLifecycleAction} disabled={lifecycleSaving}>취소</button><button className="is-primary" type="button" onClick={() => void (lifecycleAction === "leave" ? leaveRoom() : deleteRoom())} disabled={lifecycleSaving}>{lifecycleAction === "leave" ? "나가기" : "삭제"}</button></footer></div>}</CommonPopup>
   </section>;
 }
