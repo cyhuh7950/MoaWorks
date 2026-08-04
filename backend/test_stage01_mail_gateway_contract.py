@@ -25,6 +25,9 @@ class MailGatewayContractTest(unittest.TestCase):
 
         self.assertIn("reject_unlisted_recipient", main_cf)
         self.assertIn("smtpd_recipient_restrictions", main_cf)
+        self.assertIn("virtual_mailbox_domains = pgsql:", main_cf)
+        self.assertIn("virtual_mailbox_maps = pgsql:", main_cf)
+        self.assertNotIn("proxy:pgsql:", main_cf)
         self.assertIn("moaworks-ingest", master_cf)
         self.assertIn("flags=Rq", master_cf)
         self.assertIn("smtp      inet  n       -       n       -       -       smtpd", master_cf)
