@@ -14,6 +14,7 @@ class MailGatewayContractTest(unittest.TestCase):
         self.assertIn("mail-spool:", compose)
         self.assertIn("rspamd:", compose)
         self.assertIn("clamav:", compose)
+        self.assertIn("image: clamav/clamav-debian:1.4.3", compose)
         self.assertIn('"127.0.0.1:${BACKEND_PORT:-8510}:8000"', compose)
 
     def test_gateway_rejects_unknown_recipient_and_delivers_only_after_internal_ingest(self) -> None:

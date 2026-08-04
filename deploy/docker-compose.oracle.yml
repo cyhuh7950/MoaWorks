@@ -96,7 +96,7 @@ services:
 
   clamav:
     container_name: moaworks-clamav
-    image: clamav/clamav:1.4
+    image: clamav/clamav-debian:1.4.3
     volumes:
       - clamav-db:/var/lib/clamav
     networks:
