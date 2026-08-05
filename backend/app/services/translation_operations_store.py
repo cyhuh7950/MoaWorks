@@ -25,6 +25,8 @@ DEFAULT_POLICY: dict[str, Any] = {
     "rateLimitPerMinute": 60,
     "circuitFailureThreshold": 5,
     "circuitRecoverySeconds": 60,
+    "inputCostPerMillionTokens": None,
+    "outputCostPerMillionTokens": None,
     "costPerMillionUnits": None,
     "costUnit": "tokens",
 }
@@ -57,6 +59,8 @@ class TranslationOperationsStore:
             "rateLimitPerMinute": row["rate_limit_per_minute"],
             "circuitFailureThreshold": row["circuit_failure_threshold"],
             "circuitRecoverySeconds": row["circuit_recovery_seconds"],
+            "inputCostPerMillionTokens": float(row["input_cost_per_million_tokens"]) if row.get("input_cost_per_million_tokens") is not None else None,
+            "outputCostPerMillionTokens": float(row["output_cost_per_million_tokens"]) if row.get("output_cost_per_million_tokens") is not None else None,
             "costPerMillionUnits": float(row["cost_per_million_units"]) if row.get("cost_per_million_units") is not None else None,
             "costUnit": row["cost_unit"],
         }
@@ -86,6 +90,8 @@ class TranslationOperationsStore:
             "rateLimitPerMinute": values.get("rateLimitPerMinute", current["rateLimitPerMinute"]),
             "circuitFailureThreshold": values.get("circuitFailureThreshold", current["circuitFailureThreshold"]),
             "circuitRecoverySeconds": values.get("circuitRecoverySeconds", current["circuitRecoverySeconds"]),
+            "inputCostPerMillionTokens": values.get("inputCostPerMillionTokens", current["inputCostPerMillionTokens"]),
+            "outputCostPerMillionTokens": values.get("outputCostPerMillionTokens", current["outputCostPerMillionTokens"]),
             "costPerMillionUnits": values.get("costPerMillionUnits", current["costPerMillionUnits"]),
             "costUnit": values.get("costUnit", current["costUnit"]),
         }
@@ -95,8 +101,10 @@ class TranslationOperationsStore:
                 INSERT INTO translation_provider_configs (
                     id, company_id, provider_type, model, api_base_url, encrypted_api_key, enabled,
                     cache_enabled, timeout_seconds, max_retries, rate_limit_per_minute,
-                    circuit_failure_threshold, circuit_recovery_seconds, cost_per_million_units, cost_unit, created_at, updated_at
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
+                    circuit_failure_threshold, circuit_recovery_seconds,
+                    input_cost_per_million_tokens, output_cost_per_million_tokens,
+                    cost_per_million_units, cost_unit, created_at, updated_at
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
                 ON CONFLICT (company_id) DO UPDATE SET
                     provider_type=EXCLUDED.provider_type, model=EXCLUDED.model,
                     api_base_url=EXCLUDED.api_base_url, encrypted_api_key=EXCLUDED.encrypted_api_key,
@@ -105,6 +113,8 @@ class TranslationOperationsStore:
                     rate_limit_per_minute=EXCLUDED.rate_limit_per_minute,
                     circuit_failure_threshold=EXCLUDED.circuit_failure_threshold,
                     circuit_recovery_seconds=EXCLUDED.circuit_recovery_seconds,
+                    input_cost_per_million_tokens=EXCLUDED.input_cost_per_million_tokens,
+                    output_cost_per_million_tokens=EXCLUDED.output_cost_per_million_tokens,
                     cost_per_million_units=EXCLUDED.cost_per_million_units, cost_unit=EXCLUDED.cost_unit, updated_at=NOW()
                 """,
                 (
@@ -112,6 +122,7 @@ class TranslationOperationsStore:
                     merged["apiBaseUrl"], encrypted, merged["enabled"], merged["cacheEnabled"],
                     merged["timeoutSeconds"], merged["maxRetries"], merged["rateLimitPerMinute"],
                     merged["circuitFailureThreshold"], merged["circuitRecoverySeconds"],
+                    merged["inputCostPerMillionTokens"], merged["outputCostPerMillionTokens"],
                     merged["costPerMillionUnits"], merged["costUnit"],
                 ),
             )

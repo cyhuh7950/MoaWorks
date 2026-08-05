@@ -272,6 +272,8 @@ export type TranslationPolicy = {
   rateLimitPerMinute: number;
   circuitFailureThreshold: number;
   circuitRecoverySeconds: number;
+  inputCostPerMillionTokens?: number | null;
+  outputCostPerMillionTokens?: number | null;
   costPerMillionUnits?: number | null;
   costUnit: "tokens" | "characters";
   providerOptions: TranslationProviderOption[];
@@ -974,7 +976,7 @@ export async function fetchTranslationPolicy(token: string): Promise<Translation
 
 export async function updateTranslationPolicy(
   token: string,
-  payload: Partial<{ enabled: boolean; provider: string; cacheEnabled: boolean; model: string; apiBaseUrl: string; apiKey: string; timeoutSeconds: number; maxRetries: number; rateLimitPerMinute: number; circuitFailureThreshold: number; circuitRecoverySeconds: number; costPerMillionUnits: number; costUnit: "tokens" | "characters" }>,
+  payload: Partial<{ enabled: boolean; provider: string; cacheEnabled: boolean; model: string; apiBaseUrl: string; apiKey: string; timeoutSeconds: number; maxRetries: number; rateLimitPerMinute: number; circuitFailureThreshold: number; circuitRecoverySeconds: number; inputCostPerMillionTokens: number | null; outputCostPerMillionTokens: number | null; costPerMillionUnits: number | null; costUnit: "tokens" | "characters" }>,
 ): Promise<TranslationPolicy> {
   return request<TranslationPolicy>("/translation/admin", {
     method: "PATCH",

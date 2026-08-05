@@ -163,10 +163,23 @@ class TranslationService:
 
             try:
                 result = self._invoke_with_resilience(provider, text_request.text, source_locale, target_locale, config, actor)
-                rate = config.get("costPerMillionUnits")
-                units = result.metadata.get("billableUnits")
-                if isinstance(rate, (int, float)) and isinstance(units, (int, float)) and rate >= 0:
-                    result = replace(result, estimated_cost=float(rate) * float(units) / 1_000_000)
+                input_rate = config.get("inputCostPerMillionTokens")
+                output_rate = config.get("outputCostPerMillionTokens")
+                usage = result.metadata.get("usage")
+                prompt_tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
+                completion_tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
+                split_values = (input_rate, output_rate, prompt_tokens, completion_tokens)
+                if all(isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0 for value in split_values):
+                    estimated_cost = (
+                        float(prompt_tokens) * float(input_rate)
+                        + float(completion_tokens) * float(output_rate)
+                    ) / 1_000_000
+                    result = replace(result, estimated_cost=estimated_cost)
+                else:
+                    rate = config.get("costPerMillionUnits")
+                    units = result.metadata.get("billableUnits")
+                    if isinstance(rate, (int, float)) and isinstance(units, (int, float)) and rate >= 0:
+                        result = replace(result, estimated_cost=float(rate) * float(units) / 1_000_000)
             except Exception as exc:
                 logger.warning("translation_provider_error", extra={"provider": provider.name, "sourceLocale": source_locale, "targetLocale": target_locale, "errorType": type(exc).__name__})
                 fallback_used = True

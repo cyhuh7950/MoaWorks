@@ -87,6 +87,8 @@ class TranslationPolicyRequest(BaseModel):
     rateLimitPerMinute: int | None = Field(default=None, ge=1, le=10000)
     circuitFailureThreshold: int | None = Field(default=None, ge=1, le=100)
     circuitRecoverySeconds: int | None = Field(default=None, ge=1, le=3600)
+    inputCostPerMillionTokens: float | None = Field(default=None, ge=0)
+    outputCostPerMillionTokens: float | None = Field(default=None, ge=0)
     costPerMillionUnits: float | None = Field(default=None, ge=0)
     costUnit: Literal["tokens", "characters"] | None = None
 
@@ -111,6 +113,8 @@ class TranslationPolicyRequest(BaseModel):
     @model_validator(mode="after")
     def validate_provider_url(self):
         _validate_provider_url(self.provider, self.apiBaseUrl)
+        if (self.inputCostPerMillionTokens is None) != (self.outputCostPerMillionTokens is None):
+            raise ValueError("입력·출력 토큰 단가는 함께 입력하거나 함께 비워야 합니다.")
         return self
 
 
@@ -199,6 +203,8 @@ class TranslationPolicyResponse(BaseModel):
     rateLimitPerMinute: int = 60
     circuitFailureThreshold: int = 5
     circuitRecoverySeconds: int = 60
+    inputCostPerMillionTokens: float | None = None
+    outputCostPerMillionTokens: float | None = None
     costPerMillionUnits: float | None = None
     costUnit: Literal["tokens", "characters"] = "tokens"
     providerOptions: list[TranslationProviderOption] = Field(default_factory=list)

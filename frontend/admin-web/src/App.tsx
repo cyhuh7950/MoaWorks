@@ -749,6 +749,7 @@ export default function App() {
     provider: "disabled", model: "", apiBaseUrl: "", apiKey: "", cacheEnabled: true,
     timeoutSeconds: "15", maxRetries: "2", rateLimitPerMinute: "60",
     circuitFailureThreshold: "5", circuitRecoverySeconds: "60",
+    inputCostPerMillionTokens: "", outputCostPerMillionTokens: "",
     costPerMillionUnits: "", costUnit: "tokens" as "tokens" | "characters",
   });
   const [form, setForm] = useState<SetupForm>(initialForm);
@@ -1124,6 +1125,8 @@ export default function App() {
         cacheEnabled: policy.cacheEnabled, timeoutSeconds: String(policy.timeoutSeconds),
         maxRetries: String(policy.maxRetries), rateLimitPerMinute: String(policy.rateLimitPerMinute),
         circuitFailureThreshold: String(policy.circuitFailureThreshold), circuitRecoverySeconds: String(policy.circuitRecoverySeconds),
+        inputCostPerMillionTokens: policy.inputCostPerMillionTokens == null ? "" : String(policy.inputCostPerMillionTokens),
+        outputCostPerMillionTokens: policy.outputCostPerMillionTokens == null ? "" : String(policy.outputCostPerMillionTokens),
         costPerMillionUnits: policy.costPerMillionUnits == null ? "" : String(policy.costPerMillionUnits), costUnit: policy.costUnit,
       });
       setTranslationConnectionResult(null);
@@ -1262,7 +1265,9 @@ export default function App() {
         rateLimitPerMinute: Number(translationPolicyForm.rateLimitPerMinute),
         circuitFailureThreshold: Number(translationPolicyForm.circuitFailureThreshold),
         circuitRecoverySeconds: Number(translationPolicyForm.circuitRecoverySeconds),
-        ...(translationPolicyForm.costPerMillionUnits ? { costPerMillionUnits: Number(translationPolicyForm.costPerMillionUnits) } : {}),
+        inputCostPerMillionTokens: translationPolicyForm.inputCostPerMillionTokens === "" ? null : Number(translationPolicyForm.inputCostPerMillionTokens),
+        outputCostPerMillionTokens: translationPolicyForm.outputCostPerMillionTokens === "" ? null : Number(translationPolicyForm.outputCostPerMillionTokens),
+        costPerMillionUnits: translationPolicyForm.costPerMillionUnits === "" ? null : Number(translationPolicyForm.costPerMillionUnits),
         costUnit: translationPolicyForm.costUnit,
         ...(translationPolicyForm.apiKey ? { apiKey: translationPolicyForm.apiKey } : {}),
       };
@@ -2311,7 +2316,9 @@ export default function App() {
             <label className="compact-field"><span>분당 제한</span><input type="number" min="1" max="10000" value={translationPolicyForm.rateLimitPerMinute} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, rateLimitPerMinute: event.target.value }))} /></label>
             <label className="compact-field"><span>차단 실패 횟수</span><input type="number" min="1" max="100" value={translationPolicyForm.circuitFailureThreshold} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, circuitFailureThreshold: event.target.value }))} /></label>
             <label className="compact-field"><span>회복 대기(초)</span><input type="number" min="1" max="3600" value={translationPolicyForm.circuitRecoverySeconds} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, circuitRecoverySeconds: event.target.value }))} /></label>
-            <label className="compact-field"><span>백만 단위당 비용</span><input type="number" min="0" step="0.000001" value={translationPolicyForm.costPerMillionUnits} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, costPerMillionUnits: event.target.value }))} placeholder="계약 요율" /></label>
+            <label className="compact-field"><span>입력 토큰 백만 개당 비용</span><input type="number" min="0" step="0.000001" value={translationPolicyForm.inputCostPerMillionTokens} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, inputCostPerMillionTokens: event.target.value }))} placeholder="계약 입력 요율" /></label>
+            <label className="compact-field"><span>출력 토큰 백만 개당 비용</span><input type="number" min="0" step="0.000001" value={translationPolicyForm.outputCostPerMillionTokens} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, outputCostPerMillionTokens: event.target.value }))} placeholder="계약 출력 요율" /></label>
+            <label className="compact-field"><span>혼합 단가(호환용)</span><input type="number" min="0" step="0.000001" value={translationPolicyForm.costPerMillionUnits} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, costPerMillionUnits: event.target.value }))} placeholder="기존 계약 요율" /></label>
             <label className="compact-field"><span>비용 단위</span><select value={translationPolicyForm.costUnit} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, costUnit: event.target.value as "tokens" | "characters" }))}><option value="tokens">tokens</option><option value="characters">characters</option></select></label>
             <label className="permission-check"><input type="checkbox" checked={translationPolicyForm.cacheEnabled} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, cacheEnabled: event.target.checked }))} /><span>PostgreSQL 캐시 사용</span></label>
             <div className="actions compact-actions"><button type="button" className="secondary" disabled={translationLoading || translationPolicyForm.provider === "disabled" || !translationPolicyForm.apiBaseUrl.trim()} onClick={() => void loadTranslationProviderModels()}>모델 불러오기</button><button type="button" className="secondary" disabled={translationLoading || translationPolicyForm.provider === "disabled" || !translationPolicyForm.model.trim() || !translationPolicyForm.apiBaseUrl.trim()} onClick={() => void runTranslationProviderConnectionTest()}>연결 테스트</button><button type="submit" disabled={translationLoading || !translationPolicyForm.model.trim()}>Provider 정책 저장</button><button type="button" className="secondary" disabled={translationLoading} onClick={() => void toggleTranslationPolicy(!(translationStatus?.enabled ?? false))}>{translationStatus?.enabled ? "번역 비활성화" : "번역 활성화"}</button></div>
