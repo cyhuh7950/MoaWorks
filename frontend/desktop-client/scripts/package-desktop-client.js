@@ -33,10 +33,13 @@ const zipPath = path.join(evidenceRoot, `${bundleName}.zip`);
 const manifestPath = path.join(evidenceRoot, `${bundleName}.manifest.json`);
 const logPath = path.join(evidenceRoot, `${bundleName}.log`);
 const electronDist = path.join(projectRoot, "node_modules", "electron", "dist");
+const runtimePackage = "electron-squirrel-startup";
+const runtimePackageDir = path.join(projectRoot, "node_modules", runtimePackage);
 const executableName = "MoaWorks Desktop Client.exe";
 
 if (process.platform !== "win32") fail("Windows x64 portable package must be built on Windows.");
 if (!fs.existsSync(path.join(electronDist, "electron.exe"))) fail("Electron Windows runtime is missing. Run npm ci first.");
+if (!fs.existsSync(path.join(runtimePackageDir, "index.js"))) fail(`${runtimePackage} runtime is missing. Run npm ci first.`);
 
 fs.mkdirSync(evidenceRoot, { recursive: true });
 fs.rmSync(bundleDir, { recursive: true, force: true });
@@ -50,6 +53,7 @@ for (const name of ["index.html", "package.json", "README.md"]) {
   fs.copyFileSync(path.join(projectRoot, name), path.join(appDir, name));
 }
 copyDirectory(path.join(projectRoot, "electron"), path.join(appDir, "electron"));
+copyDirectory(runtimePackageDir, path.join(appDir, "node_modules", runtimePackage));
 fs.rmSync(path.join(bundleDir, "resources", "default_app.asar"), { force: true });
 
 const executablePath = path.join(bundleDir, executableName);

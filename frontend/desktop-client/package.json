@@ -2,7 +2,7 @@
   "name": "moaworks-desktop-client",
   "productName": "MoaWorks Desktop Client",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "main": "electron/main.js",
   "scripts": {
     "postinstall": "install-electron",
