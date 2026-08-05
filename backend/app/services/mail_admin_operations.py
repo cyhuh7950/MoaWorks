@@ -212,9 +212,9 @@ class MailAdminOperations:
                 except Exception as exc:
                     test_status, response, error = "failed", "", mask_delivery_error(str(exc))
                 cursor.execute(
-                    """UPDATE mail_provider_configs SET last_test_status=%s,last_test_message=%s,last_connection_at=%s,
+                    """UPDATE mail_provider_configs SET last_test_status=%s,delivery_enabled=%s,last_test_message=%s,last_connection_at=%s,
                     last_connection_error=%s,updated_at=%s WHERE id=%s AND company_id=%s RETURNING *""",
-                    (test_status, response or "실제 외부 SMTP 연결 테스트 실패", now, error, now, provider["id"], actor.companyId),
+                    (test_status, test_status == "success", response or "실제 외부 SMTP 연결 테스트 실패", now, error, now, provider["id"], actor.companyId),
                 )
                 updated = cursor.fetchone()
                 self._audit(cursor, actor, "mail_provider_config", provider["id"], "mail.provider.tested", test_status)

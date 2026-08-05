@@ -317,7 +317,13 @@ class MailAdminOperationsContractTest(unittest.TestCase):
             "username": "smtp-user", "encrypted_password": "cipher", "active": False,
             "delivery_enabled": False, "last_test_status": "untested", "encrypted_dkim_private_key": None,
         }
-        updated = {**provider, "last_test_status": "success", "last_connection_at": None, "last_connection_error": None}
+        updated = {
+            **provider,
+            "delivery_enabled": True,
+            "last_test_status": "success",
+            "last_connection_at": None,
+            "last_connection_error": None,
+        }
         cursor = RecordingCursor(one_rows=[provider, {"mail_domain": "moaworks.sinsan.kr", "mail_host": "mail.moaworks.sinsan.kr"}, updated])
 
         class Adapter:
@@ -333,6 +339,7 @@ class MailAdminOperationsContractTest(unittest.TestCase):
         with patch.object(operation.security, "decrypt_secret", return_value="smtp-password"):
             result = operation.test_provider(actor(), "oci_email_delivery", "external@example.net")
         self.assertEqual(result["lastTestStatus"], "success")
+        self.assertTrue(result["deliveryEnabled"])
         self.assertEqual(adapter.calls[0][0]["recipient_email"], "external@example.net")
         self.assertEqual(adapter.calls[0][1]["password"], "smtp-password")
         self.assertNotIn("smtp-password", str(result))
