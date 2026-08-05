@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-07-31T07:42:19.244Z",
+  "generatedAt": "2026-08-05T12:22:28.180Z",
   "source": "npm-audit-omit-dev",
   "policy": {
     "approach": "conservative-explicit-allowlist",
@@ -36,10 +36,10 @@
     "vulnerabilities": {
       "info": 0,
       "low": 0,
-      "moderate": 6,
-      "high": 15,
+      "moderate": 7,
+      "high": 0,
       "critical": 0,
-      "total": 21
+      "total": 7
     },
     "dependencies": {
       "prod": 554,
@@ -52,9 +52,9 @@
   },
   "summary": {
     "runtime": 0,
-    "buildOnly": 21,
+    "buildOnly": 7,
     "unclassified": 0,
-    "total": 21
+    "total": 7
   },
   "packages": [
     {
@@ -167,199 +167,6 @@
       "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
     },
     {
-      "package": "@react-native/babel-plugin-codegen",
-      "severity": "high",
-      "isDirect": false,
-      "reachability": "build-only",
-      "viaPackages": [
-        "@react-native/codegen"
-      ],
-      "directAdvisories": [],
-      "effects": [
-        "@react-native/babel-preset"
-      ],
-      "range": "0.73.0-nightly-20230603-fd9e295be - 0.73.0-nightly-20230922-52104c6ee || 0.73.2 - 0.74.0-nightly-20240220-e9351f0f8 || 0.74.1 - 0.84.0-rc.5 || 0.87.0-nightly-20260507-ba204faa7 - 0.87.0-nightly-20260618-65bdf2608",
-      "nodes": [
-        "node_modules/@react-native/babel-plugin-codegen"
-      ],
-      "fixAvailable": {
-        "name": "@react-native/babel-preset",
-        "version": "0.86.2",
-        "isSemVerMajor": true
-      },
-      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
-    },
-    {
-      "package": "@react-native/babel-preset",
-      "severity": "high",
-      "isDirect": true,
-      "reachability": "build-only",
-      "viaPackages": [
-        "@react-native/babel-plugin-codegen"
-      ],
-      "directAdvisories": [],
-      "effects": [
-        "@react-native/metro-babel-transformer"
-      ],
-      "range": "<=0.73.0-nightly-20230922-52104c6ee || 0.73.19 - 0.74.0-nightly-20240220-e9351f0f8 || 0.74.1 - 0.84.0-rc.5",
-      "nodes": [
-        "node_modules/@react-native/babel-preset"
-      ],
-      "fixAvailable": {
-        "name": "@react-native/babel-preset",
-        "version": "0.86.2",
-        "isSemVerMajor": true
-      },
-      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
-    },
-    {
-      "package": "@react-native/codegen",
-      "severity": "high",
-      "isDirect": false,
-      "reachability": "build-only",
-      "viaPackages": [
-        "glob",
-        "jscodeshift"
-      ],
-      "directAdvisories": [],
-      "effects": [
-        "@react-native/babel-plugin-codegen",
-        "react-native"
-      ],
-      "range": "<=0.84.0-rc.5",
-      "nodes": [
-        "node_modules/@react-native/codegen"
-      ],
-      "fixAvailable": {
-        "name": "react-native",
-        "version": "0.86.2",
-        "isSemVerMajor": true
-      },
-      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
-    },
-    {
-      "package": "@react-native/community-cli-plugin",
-      "severity": "high",
-      "isDirect": false,
-      "reachability": "build-only",
-      "viaPackages": [
-        "@react-native/dev-middleware",
-        "@react-native/metro-babel-transformer"
-      ],
-      "directAdvisories": [],
-      "effects": [
-        "react-native"
-      ],
-      "range": "<=0.73.0-nightly-20231002-0371014a3 || 0.73.2 - 0.74.0-nightly-20240220-e9351f0f8 || 0.74.1 - 0.84.1",
-      "nodes": [
-        "node_modules/@react-native/community-cli-plugin"
-      ],
-      "fixAvailable": {
-        "name": "react-native",
-        "version": "0.86.2",
-        "isSemVerMajor": true
-      },
-      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
-    },
-    {
-      "package": "@react-native/dev-middleware",
-      "severity": "high",
-      "isDirect": false,
-      "reachability": "build-only",
-      "viaPackages": [
-        "chromium-edge-launcher"
-      ],
-      "directAdvisories": [],
-      "effects": [
-        "@react-native/community-cli-plugin"
-      ],
-      "range": "<=0.73.0-nightly-20231002-0371014a3 || 0.73.2 - 0.74.0 || 0.75.0-main - 0.84.1",
-      "nodes": [
-        "node_modules/@react-native/dev-middleware"
-      ],
-      "fixAvailable": {
-        "name": "react-native",
-        "version": "0.86.2",
-        "isSemVerMajor": true
-      },
-      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
-    },
-    {
-      "package": "@react-native/metro-babel-transformer",
-      "severity": "high",
-      "isDirect": false,
-      "reachability": "build-only",
-      "viaPackages": [
-        "@react-native/babel-preset"
-      ],
-      "directAdvisories": [],
-      "effects": [
-        "@react-native/community-cli-plugin"
-      ],
-      "range": "0.73.13 - 0.74.0-nightly-20240220-e9351f0f8 || 0.74.1 - 0.84.0-rc.5",
-      "nodes": [
-        "node_modules/@react-native/metro-babel-transformer"
-      ],
-      "fixAvailable": {
-        "name": "react-native",
-        "version": "0.86.2",
-        "isSemVerMajor": true
-      },
-      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
-    },
-    {
-      "package": "brace-expansion",
-      "severity": "high",
-      "isDirect": false,
-      "reachability": "build-only",
-      "viaPackages": [],
-      "directAdvisories": [
-        {
-          "source": 1124334,
-          "name": "brace-expansion",
-          "title": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash",
-          "url": "https://github.com/advisories/GHSA-mh99-v99m-4gvg",
-          "severity": "high"
-        }
-      ],
-      "effects": [
-        "minimatch"
-      ],
-      "range": "<=5.0.7",
-      "nodes": [
-        "node_modules/brace-expansion"
-      ],
-      "fixAvailable": {
-        "name": "react-native",
-        "version": "0.86.2",
-        "isSemVerMajor": true
-      },
-      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
-    },
-    {
-      "package": "chromium-edge-launcher",
-      "severity": "high",
-      "isDirect": false,
-      "reachability": "build-only",
-      "viaPackages": [
-        "rimraf"
-      ],
-      "directAdvisories": [],
-      "effects": [
-        "@react-native/dev-middleware"
-      ],
-      "range": "<=0.2.0 || 1.0.0",
-      "nodes": [
-        "node_modules/chromium-edge-launcher"
-      ],
-      "fixAvailable": {
-        "name": "react-native",
-        "version": "0.86.2",
-        "isSemVerMajor": true
-      },
-      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
-    },
-    {
       "package": "fast-xml-parser",
       "severity": "moderate",
       "isDirect": false,
@@ -390,117 +197,18 @@
       "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
     },
     {
-      "package": "glob",
-      "severity": "high",
-      "isDirect": false,
-      "reachability": "build-only",
-      "viaPackages": [
-        "minimatch"
-      ],
-      "directAdvisories": [],
-      "effects": [
-        "@react-native/codegen",
-        "react-native",
-        "rimraf"
-      ],
-      "range": "4.3.0 - 10.5.0",
-      "nodes": [
-        "node_modules/glob"
-      ],
-      "fixAvailable": {
-        "name": "react-native",
-        "version": "0.86.2",
-        "isSemVerMajor": true
-      },
-      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
-    },
-    {
-      "package": "jscodeshift",
-      "severity": "high",
-      "isDirect": false,
-      "reachability": "build-only",
-      "viaPackages": [
-        "node-dir",
-        "temp"
-      ],
-      "directAdvisories": [],
-      "effects": [
-        "@react-native/codegen"
-      ],
-      "range": "0.6.0 - 17.0.0",
-      "nodes": [
-        "node_modules/jscodeshift"
-      ],
-      "fixAvailable": {
-        "name": "react-native",
-        "version": "0.86.2",
-        "isSemVerMajor": true
-      },
-      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
-    },
-    {
-      "package": "minimatch",
-      "severity": "high",
-      "isDirect": false,
-      "reachability": "build-only",
-      "viaPackages": [
-        "brace-expansion"
-      ],
-      "directAdvisories": [],
-      "effects": [
-        "glob",
-        "node-dir"
-      ],
-      "range": "2.0.0 - 10.0.2",
-      "nodes": [
-        "node_modules/minimatch"
-      ],
-      "fixAvailable": {
-        "name": "react-native",
-        "version": "0.86.2",
-        "isSemVerMajor": true
-      },
-      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
-    },
-    {
-      "package": "node-dir",
-      "severity": "high",
-      "isDirect": false,
-      "reachability": "build-only",
-      "viaPackages": [
-        "minimatch"
-      ],
-      "directAdvisories": [],
-      "effects": [
-        "jscodeshift"
-      ],
-      "range": ">=0.1.9",
-      "nodes": [
-        "node_modules/node-dir"
-      ],
-      "fixAvailable": {
-        "name": "react-native",
-        "version": "0.86.2",
-        "isSemVerMajor": true
-      },
-      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
-    },
-    {
       "package": "react-native",
-      "severity": "high",
+      "severity": "moderate",
       "isDirect": true,
       "reachability": "build-only-carrier",
       "viaPackages": [
         "@react-native-community/cli",
         "@react-native-community/cli-platform-android",
-        "@react-native-community/cli-platform-ios",
-        "@react-native/codegen",
-        "@react-native/community-cli-plugin",
-        "glob"
+        "@react-native-community/cli-platform-ios"
       ],
       "directAdvisories": [],
       "effects": [],
-      "range": "0.28.0-rc.0 - 0.59.10 || 0.72.8 - 0.84.1 || >=0.87.0-nightly-20260507-ba204faa7",
+      "range": "0.73.0-nightly-20230506-1af868c52 - 0.76.0-rc.6 || >=0.87.0-nightly-20260507-ba204faa7",
       "nodes": [
         "node_modules/react-native"
       ],
@@ -510,54 +218,6 @@
         "isSemVerMajor": true
       },
       "rationale": "Runtime package is listed only as a carrier for explicitly classified build-only packages"
-    },
-    {
-      "package": "rimraf",
-      "severity": "high",
-      "isDirect": false,
-      "reachability": "build-only",
-      "viaPackages": [
-        "glob"
-      ],
-      "directAdvisories": [],
-      "effects": [
-        "chromium-edge-launcher",
-        "temp"
-      ],
-      "range": "2.3.0 - 3.0.2 || 4.2.0 - 5.0.10",
-      "nodes": [
-        "node_modules/rimraf",
-        "node_modules/temp/node_modules/rimraf"
-      ],
-      "fixAvailable": {
-        "name": "react-native",
-        "version": "0.86.2",
-        "isSemVerMajor": true
-      },
-      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
-    },
-    {
-      "package": "temp",
-      "severity": "high",
-      "isDirect": false,
-      "reachability": "build-only",
-      "viaPackages": [
-        "rimraf"
-      ],
-      "directAdvisories": [],
-      "effects": [
-        "jscodeshift"
-      ],
-      "range": ">=0.8.4",
-      "nodes": [
-        "node_modules/temp"
-      ],
-      "fixAvailable": {
-        "name": "react-native",
-        "version": "0.86.2",
-        "isSemVerMajor": true
-      },
-      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
     }
   ]
 }
