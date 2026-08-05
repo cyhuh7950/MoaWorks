@@ -54,6 +54,10 @@ class Settings(BaseSettings):
 
     watcher_enabled: bool = True
     watcher_interval_seconds: int = 60
+    operational_backup_worker_enabled: bool = True
+    operational_backup_poll_seconds: int = 60
+    operational_backup_root: str = "./data/backups"
+    operational_runtime_root: str = "./data/runtime"
 
     translation_enabled: bool = False
     translation_provider: str = "disabled"
@@ -105,6 +109,14 @@ class Settings(BaseSettings):
     @property
     def storage_path(self) -> Path:
         return Path(self.storage_local_path).resolve()
+
+    @property
+    def operational_backup_root_path(self) -> Path:
+        return Path(self.operational_backup_root).resolve()
+
+    @property
+    def operational_runtime_root_path(self) -> Path:
+        return Path(self.operational_runtime_root).resolve()
 
 
 settings = Settings()

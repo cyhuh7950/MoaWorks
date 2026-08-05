@@ -32,6 +32,7 @@ import {
   fetchMailOperations,
   fetchMonitoringEvents,
   fetchMonitoringOverview,
+  fetchOperationalBackups,
   fetchApprovalAuditLogs,
   fetchOrgImportBatch,
   fetchPublicUiContract,
@@ -73,10 +74,12 @@ import {
   type HealthResponse,
   type MonitoringEvent,
   type MonitoringOverview,
+  type OperationalBackupOverview,
   type ApprovalAuditLog,
   type OrgImportBatch,
   type RelayTestResponse,
   updateDepartment,
+  updateOperationalBackupPolicy,
   updateMailOperationsDomain,
   updateMailOperationsProvider,
   updateRole,
@@ -86,6 +89,8 @@ import {
   validateOrgImport,
   validateSetup,
   verifyDomain,
+  queueOperationalBackup,
+  queueOperationalRestoreDrill,
 } from "./api";
 import { resolveLocale, supportedLocales, supportedTimezones, t, type AppLocale } from "./i18n";
 
@@ -718,6 +723,8 @@ export default function App() {
   const [overview, setOverview] = useState<DirectoryOverview | null>(null);
   const [monitoringOverview, setMonitoringOverview] = useState<MonitoringOverview | null>(null);
   const [monitoringEvents, setMonitoringEvents] = useState<MonitoringEvent[]>([]);
+  const [operationalBackups, setOperationalBackups] = useState<OperationalBackupOverview | null>(null);
+  const [backupPolicyForm, setBackupPolicyForm] = useState({ enabled: false, intervalHours: "24", retentionDays: "30" });
   const [approvalAuditLogs, setApprovalAuditLogs] = useState<ApprovalAuditLog[]>([]);
   const [domainResult, setDomainResult] = useState<DomainVerifyResponse | null>(null);
   const [relayResult, setRelayResult] = useState<RelayTestResponse | null>(null);
@@ -927,6 +934,63 @@ export default function App() {
     setMonitoringOverview(nextMonitoring);
     const events = await fetchMonitoringEvents(nextToken);
     setMonitoringEvents(events.events ?? []);
+  }
+
+  async function refreshOperationalBackups(nextToken = token) {
+    if (!nextToken) return;
+    const result = await fetchOperationalBackups(nextToken);
+    setOperationalBackups(result);
+    setBackupPolicyForm({
+      enabled: result.policy.enabled,
+      intervalHours: String(result.policy.intervalHours),
+      retentionDays: String(result.policy.retentionDays),
+    });
+  }
+
+  async function handleBackupPolicySave() {
+    if (!token) return;
+    setLoading(true);
+    try {
+      await updateOperationalBackupPolicy(token, {
+        enabled: backupPolicyForm.enabled,
+        intervalHours: Number(backupPolicyForm.intervalHours),
+        retentionDays: Number(backupPolicyForm.retentionDays),
+      });
+      await refreshOperationalBackups(token);
+      setMessage("운영 백업 정책을 저장했습니다.");
+    } catch (error) {
+      setErrors((current) => [...current, error instanceof Error ? error.message : "백업 정책 저장 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleQueueOperationalBackup() {
+    if (!token) return;
+    setLoading(true);
+    try {
+      await queueOperationalBackup(token);
+      await refreshOperationalBackups(token);
+      setMessage("암호화 운영 백업을 요청했습니다.");
+    } catch (error) {
+      setErrors((current) => [...current, error instanceof Error ? error.message : "운영 백업 요청 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleQueueRestoreDrill(backupId: string) {
+    if (!token) return;
+    setLoading(true);
+    try {
+      await queueOperationalRestoreDrill(token, backupId);
+      await refreshOperationalBackups(token);
+      setMessage("격리 복구 훈련을 요청했습니다.");
+    } catch (error) {
+      setErrors((current) => [...current, error instanceof Error ? error.message : "복구 훈련 요청 실패"]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function refreshMailDelivery(nextToken = token) {
@@ -1428,6 +1492,9 @@ export default function App() {
       });
       void refreshMonitoring(token).catch((error) => {
         setErrors((current) => [...current, error instanceof Error ? error.message : "운영 모니터링 조회 실패"]);
+      });
+      void refreshOperationalBackups(token).catch((error) => {
+        setErrors((current) => [...current, error instanceof Error ? error.message : "운영 백업 조회 실패"]);
       });
       void refreshMailDelivery(token).catch((error) => {
         setErrors((current) => [...current, error instanceof Error ? error.message : "자체 SMTP 상태 조회 실패"]);
@@ -2755,7 +2822,15 @@ export default function App() {
             </div>
           </section>
         );      case "service":
-        return <section className="panel ops-panel"><div className="ops-shell"><div className="panel-head ops-head"><h2>서비스 운영</h2><div className="actions compact-actions"><button type="button" onClick={() => setOperationsDialog("domain")}>도메인 검증 실행</button><button type="button" className="secondary" onClick={() => setOperationsDialog("relay")}>Relay 테스트 실행</button></div></div><div className="overview-grid"><article className="status-card"><strong>운영 점검</strong><span className="mini-stat">열린 경고 {monitoringOverview?.alertOpenCount ?? 0}건</span></article><article className="status-card"><strong>Relay 상태</strong><span className="mini-stat">{relayResult?.status ?? "최근 실행 없음"}</span></article></div><div className="ops-list-panel"><div className="ops-list-head"><strong>도메인 검증 이력</strong><span className="muted">행을 더블클릭하면 실행 결과를 확인합니다.</span></div><div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>유형</th><th>대상</th><th>상태</th><th>결과</th></tr></thead><tbody>{(domainResult?.checks ?? []).map((item) => <tr key={`${item.recordType}-${item.host}`} onDoubleClick={() => { setOperationDetail({ title: "도메인 검증 상세", lines: [item.recordType, item.host, item.code, item.message, item.status] }); setOperationsDialog("audit"); }}><td>{item.recordType}</td><td>{item.host}</td><td>{item.status}</td><td>[{item.code}] {item.message}</td></tr>)}{!domainResult ? <tr><td colSpan={4}>검증 이력이 없습니다.</td></tr> : null}</tbody></table></div></div></div></section>;
+        return (
+          <section className="panel ops-panel"><div className="ops-shell">
+            <div className="panel-head ops-head"><div><h2>서비스 운영</h2><p className="muted">감시와 암호화 백업·격리 복구 훈련을 화면에서 운영합니다.</p></div><div className="actions compact-actions"><button type="button" onClick={() => setOperationsDialog("domain")}>도메인 검증 실행</button><button type="button" className="secondary" onClick={() => setOperationsDialog("relay")}>Relay 테스트 실행</button><button type="button" className="secondary" onClick={() => void refreshOperationalBackups()}>새로고침</button></div></div>
+            <div className="overview-grid"><article className="status-card"><strong>운영 점검</strong><span className="mini-stat">열린 경고 {monitoringOverview?.alertOpenCount ?? 0}건</span></article><article className="status-card"><strong>Relay 상태</strong><span className="mini-stat">{relayResult?.status ?? "최근 실행 없음"}</span></article><article className="status-card"><strong>자동 백업</strong><span className="mini-stat">{operationalBackups?.policy.enabled ? `${operationalBackups.policy.intervalHours}시간마다` : "비활성"}</span></article><article className="status-card"><strong>최근 복구 가능 시점</strong><span className="mini-stat">{contentDate(operationalBackups?.backups.find((item) => item.status === "completed")?.snapshotAt)}</span></article></div>
+            <div className="ops-list-panel"><div className="ops-list-head"><strong>백업 정책</strong><span className="muted">DB·첨부·메일 원문·설정을 AES-256-GCM으로 암호화하고 checksum을 검증합니다.</span></div><div className="ops-toolbar-grid"><label className="compact-field"><span>자동 백업</span><select value={backupPolicyForm.enabled ? "enabled" : "disabled"} onChange={(event) => setBackupPolicyForm((current) => ({ ...current, enabled: event.target.value === "enabled" }))}><option value="disabled">비활성</option><option value="enabled">활성</option></select></label><label className="compact-field"><span>주기(시간)</span><input type="number" min="1" max="720" value={backupPolicyForm.intervalHours} onChange={(event) => setBackupPolicyForm((current) => ({ ...current, intervalHours: event.target.value }))} /></label><label className="compact-field"><span>보존(일)</span><input type="number" min="1" max="3650" value={backupPolicyForm.retentionDays} onChange={(event) => setBackupPolicyForm((current) => ({ ...current, retentionDays: event.target.value }))} /></label><div className="actions compact-actions"><button type="button" disabled={loading} onClick={() => void handleBackupPolicySave()}>정책 저장</button><button type="button" className="secondary" disabled={loading} onClick={() => void handleQueueOperationalBackup()}>지금 백업</button></div></div></div>
+            <div className="ops-list-panel"><div className="ops-list-head"><strong>백업·복구 이력</strong><span className="muted">완료된 백업에서 격리 DB 복구 훈련을 실행해 RPO/RTO를 기록합니다.</span></div><div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>생성</th><th>유형</th><th>상태</th><th>크기</th><th>checksum</th><th>복구 훈련</th></tr></thead><tbody>{(operationalBackups?.backups ?? []).map((item) => <tr key={item.backupId}><td>{contentDate(item.createdAt)}</td><td>{item.triggerType}</td><td>{item.status}{item.errorCode ? ` · ${item.errorCode}` : ""}</td><td>{item.sizeBytes == null ? "-" : `${Math.ceil(item.sizeBytes / 1024)} KB`}</td><td>{item.artifactSha256 ? `${item.artifactSha256.slice(0, 12)}…` : "-"}</td><td><button type="button" className="secondary" disabled={loading || item.status !== "completed"} onClick={() => void handleQueueRestoreDrill(item.backupId)}>격리 복구</button></td></tr>)}{(operationalBackups?.backups.length ?? 0) === 0 ? <tr><td colSpan={6}>운영 백업 이력이 없습니다.</td></tr> : null}</tbody></table></div><div className="badge-row">{(operationalBackups?.restoreDrills ?? []).slice(0, 5).map((item) => <span key={item.drillId} className="meta-chip">복구 {item.status} · checksum {item.checksumVerified ? "PASS" : "대기"} · RPO {item.rpoSeconds ?? "-"}초 · RTO {item.rtoSeconds ?? "-"}초</span>)}</div></div>
+            <div className="ops-list-panel"><div className="ops-list-head"><strong>도메인 검증 이력</strong><span className="muted">행을 더블클릭하면 실행 결과를 확인합니다.</span></div><div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>유형</th><th>대상</th><th>상태</th><th>결과</th></tr></thead><tbody>{(domainResult?.checks ?? []).map((item) => <tr key={`${item.recordType}-${item.host}`} onDoubleClick={() => { setOperationDetail({ title: "도메인 검증 상세", lines: [item.recordType, item.host, item.code, item.message, item.status] }); setOperationsDialog("audit"); }}><td>{item.recordType}</td><td>{item.host}</td><td>{item.status}</td><td>[{item.code}] {item.message}</td></tr>)}{!domainResult ? <tr><td colSpan={4}>검증 이력이 없습니다.</td></tr> : null}</tbody></table></div></div>
+          </div></section>
+        );
       case "mail":
         return (
           <section className="panel ops-panel">

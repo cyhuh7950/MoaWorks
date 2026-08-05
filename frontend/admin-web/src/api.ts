@@ -279,6 +279,44 @@ export type TranslationPolicy = {
   providerOptions: TranslationProviderOption[];
 };
 
+export type OperationalBackupOverview = {
+  policy: {
+    enabled: boolean;
+    intervalHours: number;
+    retentionDays: number;
+    encryptionRequired: boolean;
+    storageMode: "managed_local";
+    lastScheduledAt: string | null;
+    nextScheduledAt: string | null;
+    updatedAt: string | null;
+  };
+  backups: Array<{
+    backupId: string;
+    triggerType: "manual" | "schedule";
+    status: "queued" | "running" | "completed" | "failed" | "expired";
+    artifactSha256: string | null;
+    sizeBytes: number | null;
+    snapshotAt: string | null;
+    completedAt: string | null;
+    expiresAt: string | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+    createdAt: string;
+  }>;
+  restoreDrills: Array<{
+    drillId: string;
+    backupId: string;
+    status: "queued" | "running" | "completed" | "failed";
+    checksumVerified: boolean;
+    rpoSeconds: number | null;
+    rtoSeconds: number | null;
+    completedAt: string | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+    createdAt: string;
+  }>;
+};
+
 export type TranslationProviderOption = {
   provider: string;
   label: string;
@@ -955,6 +993,28 @@ export async function bulkDeleteHelpPolicies(token: string, ids: string[]) {
 
 export async function fetchTranslationStatus(token?: string): Promise<TranslationStatus> {
   return request<TranslationStatus>(token ? "/translation/admin/status" : "/translation/status", token ? { headers: authHeaders(token) } : undefined);
+}
+
+export async function fetchOperationalBackups(token: string) {
+  return request<OperationalBackupOverview>("/admin/operations/backups", { headers: authHeaders(token) });
+}
+
+export async function updateOperationalBackupPolicy(token: string, payload: { enabled: boolean; intervalHours: number; retentionDays: number }) {
+  return request<OperationalBackupOverview["policy"]>("/admin/operations/backups/policy", {
+    method: "PUT", headers: authHeaders(token), body: JSON.stringify(payload),
+  });
+}
+
+export async function queueOperationalBackup(token: string) {
+  return request<OperationalBackupOverview["backups"][number]>("/admin/operations/backups/jobs", {
+    method: "POST", headers: authHeaders(token),
+  });
+}
+
+export async function queueOperationalRestoreDrill(token: string, backupId: string) {
+  return request<OperationalBackupOverview["restoreDrills"][number]>(`/admin/operations/backups/jobs/${encodeURIComponent(backupId)}/restore-drills`, {
+    method: "POST", headers: authHeaders(token),
+  });
 }
 
 export async function requestTranslation(payload: TranslationRequest, token: string): Promise<TranslationResponse> {

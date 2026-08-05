@@ -9,6 +9,7 @@ from app.api.errors import register_error_handlers
 from app.api.router import api_router
 from app.core.config import settings
 from app.services.mail_messenger_service import MailMessengerService
+from app.services.operational_backup_service import OperationalBackupService
 from app.services.schedule_notification_service import ScheduleNotificationService
 
 
@@ -39,6 +40,18 @@ async def schedule_notification_loop(stop_event: asyncio.Event) -> None:
             continue
 
 
+async def operational_backup_loop(stop_event: asyncio.Event) -> None:
+    while not stop_event.is_set():
+        try:
+            await asyncio.to_thread(OperationalBackupService().process_once)
+        except Exception:
+            logger.exception("운영 백업·복구 worker 처리에 실패했습니다.")
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=settings.operational_backup_poll_seconds)
+        except TimeoutError:
+            continue
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     stop_event = asyncio.Event()
@@ -47,6 +60,8 @@ async def lifespan(_: FastAPI):
         tasks.append(asyncio.create_task(mail_scheduler_loop(stop_event)))
     if settings.schedule_notification_enabled:
         tasks.append(asyncio.create_task(schedule_notification_loop(stop_event)))
+    if settings.operational_backup_worker_enabled:
+        tasks.append(asyncio.create_task(operational_backup_loop(stop_event)))
     try:
         yield
     finally:
