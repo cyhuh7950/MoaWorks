@@ -4,12 +4,13 @@ import { test } from "node:test";
 
 const read = (path) => readFileSync(path, "utf8");
 
-test("WSL 테스트 배포는 운영 배포와 분리된 Postgres 및 고정 서비스 이름을 제공한다", () => {
+test("WSL 테스트 배포는 기존 local-postgres 및 고정 서비스 이름을 사용한다", () => {
   const compose = read("deploy/docker-compose.wsl.yml");
 
-  assert.match(compose, /container_name:\s*moaworks-postgres/);
+  assert.doesNotMatch(compose, /container_name:\s*moaworks-postgres/);
+  assert.match(compose, /name:\s*postgres_env_default/);
+  assert.match(compose, /POSTGRES_HOST:\s*postgres/);
   assert.match(compose, /POSTGRES_DB:\s*\$\{POSTGRES_DB\}/);
-  assert.match(compose, /postgres-data:/);
   assert.match(compose, /container_name:\s*moaworks-server/);
   assert.match(compose, /container_name:\s*moaworks-admin-web/);
   assert.match(compose, /container_name:\s*moaworks-user-web/);
