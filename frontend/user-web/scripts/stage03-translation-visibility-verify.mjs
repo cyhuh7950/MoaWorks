@@ -4,6 +4,9 @@ import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
 const app = fs.readFileSync(path.join(root, "src", "App.tsx"), "utf8");
+const settingsStart = app.indexOf('if (activePortalMenu === "settings")');
+const settingsEnd = app.indexOf('if (activePortalMenu === "help")', settingsStart);
+const settingsBlock = app.slice(settingsStart, settingsEnd);
 
 assert.ok(
   app.includes("const translationUiVisible = translationStatus?.available === true;"),
@@ -17,5 +20,12 @@ assert.ok(
   !app.includes("Provider: {translationStatus?.provider || \"unknown\"}"),
   "unconfigured provider placeholder must not be shown to users",
 );
+assert.ok(
+  settingsStart >= 0 &&
+    settingsEnd > settingsStart &&
+    settingsBlock.includes("translationUiVisible") &&
+    settingsBlock.includes('data-testid="user-translation-tool"'),
+  "configured translation tool must be reachable from the current user settings route",
+);
 
-console.log("PASS stage03 user translation visibility contract (3 assertions)");
+console.log("PASS stage03 user translation visibility contract (4 assertions)");
