@@ -279,6 +279,21 @@ export type TranslationPolicy = {
   providerOptions: TranslationProviderOption[];
 };
 
+export type MonitoringAlert = {
+  alertId: string;
+  ruleId: string;
+  metric: string;
+  category: "approval" | "mail" | "messenger" | "schedule" | "file" | "notice" | "system";
+  severity: "INFO" | "WARN" | "ERROR" | "CRITICAL";
+  status: "OPEN" | "ACKNOWLEDGED" | "RESOLVED";
+  currentValue: number;
+  threshold: number;
+  detectedAt: string;
+  acknowledgedAt: string | null;
+  resolvedAt: string | null;
+  message: string;
+};
+
 export type OperationalBackupOverview = {
   policy: {
     enabled: boolean;
@@ -993,6 +1008,18 @@ export async function bulkDeleteHelpPolicies(token: string, ids: string[]) {
 
 export async function fetchTranslationStatus(token?: string): Promise<TranslationStatus> {
   return request<TranslationStatus>(token ? "/translation/admin/status" : "/translation/status", token ? { headers: authHeaders(token) } : undefined);
+}
+
+export async function fetchMonitoringAlerts(token: string) {
+  return request<{ alerts: MonitoringAlert[]; total: number }>("/admin/monitoring/alerts", { headers: authHeaders(token) });
+}
+
+export async function acknowledgeMonitoringAlert(token: string, alertId: string) {
+  return request<MonitoringAlert>(`/admin/monitoring/alerts/${encodeURIComponent(alertId)}/ack`, { method: "POST", headers: authHeaders(token) });
+}
+
+export async function resolveMonitoringAlert(token: string, alertId: string) {
+  return request<MonitoringAlert>(`/admin/monitoring/alerts/${encodeURIComponent(alertId)}/resolve`, { method: "POST", headers: authHeaders(token) });
 }
 
 export async function fetchOperationalBackups(token: string) {
