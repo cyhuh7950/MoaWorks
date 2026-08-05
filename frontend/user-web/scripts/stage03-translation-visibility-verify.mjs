@@ -4,9 +4,8 @@ import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
 const app = fs.readFileSync(path.join(root, "src", "App.tsx"), "utf8");
-const settingsStart = app.indexOf('if (activePortalMenu === "settings")');
-const settingsEnd = app.indexOf('if (activePortalMenu === "help")', settingsStart);
-const settingsBlock = app.slice(settingsStart, settingsEnd);
+const workspacePanels = fs.readFileSync(path.join(root, "src", "WorkspacePanels.tsx"), "utf8");
+const settingsHelpPanel = fs.readFileSync(path.join(root, "src", "SettingsHelpPanel.tsx"), "utf8");
 
 assert.ok(
   app.includes("const translationUiVisible = translationStatus?.available === true;"),
@@ -21,10 +20,13 @@ assert.ok(
   "unconfigured provider placeholder must not be shown to users",
 );
 assert.ok(
-  settingsStart >= 0 &&
-    settingsEnd > settingsStart &&
-    settingsBlock.includes("translationUiVisible") &&
-    settingsBlock.includes('data-testid="user-translation-tool"'),
+  app.includes("const translationTool = translationUiVisible ? (") &&
+    app.includes('data-testid="user-translation-tool"') &&
+    app.includes("translationTool={translationTool}") &&
+    workspacePanels.includes("translationTool?: React.ReactNode") &&
+    workspacePanels.includes("translationTool={translationTool}") &&
+    settingsHelpPanel.includes("translationTool?: React.ReactNode") &&
+    settingsHelpPanel.includes("{settingsDetail}{translationTool}"),
   "configured translation tool must be reachable from the current user settings route",
 );
 
