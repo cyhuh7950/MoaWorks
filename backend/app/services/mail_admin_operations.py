@@ -116,13 +116,19 @@ class MailAdminOperations:
                 row = self._find_provider(cursor, actor.companyId, provider_key)
                 if row is None:
                     row = self._create_locked_provider(cursor, actor.companyId, provider_key, values)
-                merged_dkim = (
+                merged_dkim_identity = (
                     values.get("dkimDomain", row.get("dkim_domain")),
                     values.get("dkimSelector", row.get("dkim_selector")),
-                    values.get("dkimPrivateKey") or row.get("encrypted_dkim_private_key"),
                 )
-                if any(merged_dkim) and not all(merged_dkim):
-                    raise ValueError("DKIM 도메인, selector, 개인키는 함께 설정해야 합니다.")
+                if any(merged_dkim_identity) and not all(merged_dkim_identity):
+                    raise ValueError("DKIM 도메인과 selector는 함께 설정해야 합니다.")
+                if provider_key == "self_hosted":
+                    merged_dkim = (
+                        *merged_dkim_identity,
+                        values.get("dkimPrivateKey") or row.get("encrypted_dkim_private_key"),
+                    )
+                    if any(merged_dkim) and not all(merged_dkim):
+                        raise ValueError("자체 메일 엔진의 DKIM 도메인, selector, 개인키는 함께 설정해야 합니다.")
                 updates: dict[str, object] = {}
                 mapping = {
                     "relayHost": "relay_host", "relayPort": "relay_port", "tlsMode": "tls_mode",

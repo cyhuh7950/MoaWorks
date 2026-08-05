@@ -210,6 +210,45 @@ class MailAdminOperationsContractTest(unittest.TestCase):
         self.assertNotIn("smtp-password", str(result))
         self.assertIn("last_test_status=%s", cursor.statements[1][0])
 
+    def test_oci_provider_accepts_managed_dkim_without_private_key(self) -> None:
+        current = {
+            "id": "provider-oci", "provider_type": "oci_email_delivery", "relay_host": "smtp.example",
+            "relay_port": 587, "tls_mode": "starttls", "from_address": "admin@example.net", "username": "smtp-user",
+            "encrypted_password": "cipher", "active": False, "delivery_enabled": False,
+            "last_test_status": "untested", "dkim_domain": None, "dkim_selector": None,
+            "encrypted_dkim_private_key": None,
+        }
+        updated = {
+            **current,
+            "dkim_domain": "mail.example.net",
+            "dkim_selector": "oci202608",
+            "last_test_message": "설정 변경 후 재검증이 필요합니다.",
+        }
+        cursor = RecordingCursor(one_rows=[current, updated])
+        result = MailAdminOperations(db=FakeDb(cursor)).update_provider(
+            actor(),
+            "oci_email_delivery",
+            MailOperationsProviderUpdateRequest(dkimDomain="mail.example.net", dkimSelector="oci202608"),
+        )
+        self.assertEqual(result["dkimDomain"], "mail.example.net")
+        self.assertEqual(result["dkimSelector"], "oci202608")
+        self.assertFalse(result["dkimPrivateKeyConfigured"])
+
+    def test_self_hosted_provider_still_requires_dkim_private_key(self) -> None:
+        current = {
+            "id": "provider-self", "provider_type": "self_hosted", "relay_host": "localhost",
+            "relay_port": 25, "tls_mode": "none", "username": "", "encrypted_password": None,
+            "active": True, "delivery_enabled": True, "last_test_status": "success",
+            "dkim_domain": None, "dkim_selector": None, "encrypted_dkim_private_key": None,
+        }
+        operation = MailAdminOperations(db=FakeDb(RecordingCursor(one_rows=[current])))
+        with self.assertRaisesRegex(ValueError, "개인키"):
+            operation.update_provider(
+                actor(),
+                "self_hosted",
+                MailOperationsProviderUpdateRequest(dkimDomain="mail.example.net", dkimSelector="selector1"),
+            )
+
     def test_missing_provider_is_created_locked_without_plaintext_secret(self) -> None:
         created = {
             "id": "provider-self", "provider_type": "self_hosted", "relay_host": "localhost",
