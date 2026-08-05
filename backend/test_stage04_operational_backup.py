@@ -126,6 +126,34 @@ class Stage04OperationalBackupContractTest(unittest.TestCase):
         self.assertNotIn("private-password", command)
         self.assertEqual(env["PGPASSWORD"], "private-password")
 
+    def test_restore_cleanup_runs_terminate_and_drop_as_separate_commands(self) -> None:
+        calls: list[tuple[list[str], dict[str, str]]] = []
+
+        def runner(command: list[str], env: dict[str, str]) -> None:
+            calls.append((command, env))
+
+        runtime = PostgresBackupRuntime(
+            host="postgres",
+            port=5432,
+            database="moaworks",
+            user="moaworks",
+            password="private-password",
+            runner=runner,
+        )
+
+        runtime.restore_isolated(
+            Path("database.dump"),
+            "moaworks_restore_0123456789ab",
+        )
+
+        self.assertEqual(len(calls), 5)
+        self.assertIn("SELECT pg_terminate_backend", calls[-2][0][-1])
+        self.assertNotIn("DROP DATABASE", calls[-2][0][-1])
+        self.assertEqual(
+            calls[-1][0][-1],
+            'DROP DATABASE IF EXISTS "moaworks_restore_0123456789ab"',
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

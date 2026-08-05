@@ -239,13 +239,19 @@ class PostgresBackupRuntime:
                 environment,
             )
         finally:
-            self.runner(
-                self._psql_command(
-                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                    f"WHERE datname = '{restore_database}'; DROP DATABASE IF EXISTS {quoted};"
-                ),
-                environment,
-            )
+            try:
+                self.runner(
+                    self._psql_command(
+                        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                        f"WHERE datname = '{restore_database}';"
+                    ),
+                    environment,
+                )
+            finally:
+                self.runner(
+                    self._psql_command(f"DROP DATABASE IF EXISTS {quoted}"),
+                    environment,
+                )
 
     def _psql_command(self, sql: str) -> list[str]:
         return [
