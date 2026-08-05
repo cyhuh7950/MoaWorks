@@ -15,9 +15,9 @@ from fastapi import HTTPException, status
 
 from app.core.config import settings
 from app.schemas.directory import AuthUserSummary
-from app.schemas.translation import TranslationConnectionTestRequest, TranslationConnectionTestResponse, TranslationItem, TranslationPolicyRequest, TranslationRequest, TranslationResponse, TranslationStatus
+from app.schemas.translation import TranslationConnectionTestRequest, TranslationConnectionTestResponse, TranslationItem, TranslationModelListRequest, TranslationModelListResponse, TranslationPolicyRequest, TranslationRequest, TranslationResponse, TranslationStatus
 from app.services.translation_operations_store import DEFAULT_POLICY, TranslationOperationsStore
-from app.services.translation_provider import PROVIDER_PROFILES, ProviderResult, TranslationProvider, resolve_translation_provider
+from app.services.translation_provider import PROVIDER_PROFILES, ProviderResult, TranslationProvider, fetch_translation_models, resolve_translation_provider
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +103,28 @@ class TranslationService:
                 message = "LLM Provider 연결에 실패했습니다. 키, 모델, API 주소를 확인하세요."
         self._operations_store().record_connection_test(actor, provider=payload.provider, success=success, code=code)
         return TranslationConnectionTestResponse(success=success, provider=payload.provider, model=payload.model, code=code, message=message, testedAt=datetime.now(UTC))
+
+    def list_models(self, payload: TranslationModelListRequest, actor: AuthUserSummary) -> TranslationModelListResponse:
+        saved = self._operations_store().get_policy(actor.companyId, include_secret=True)
+        draft_key = payload.apiKey.get_secret_value() if payload.apiKey is not None else ""
+        api_key = draft_key or (str(saved.get("apiKey", "")) if saved.get("provider") == payload.provider else "")
+        models: list[str] = []
+        success = False
+        code = "TRANSLATION_PROVIDER_CONFIGURATION_REQUIRED"
+        message = "Provider API 키를 입력하거나 저장하세요."
+        try:
+            models = fetch_translation_models(
+                payload.provider, api_key=api_key, api_base_url=payload.apiBaseUrl,
+                timeout_seconds=payload.timeoutSeconds,
+            )
+            success = True
+            code = "TRANSLATION_PROVIDER_MODELS_OK"
+            message = f"사용 가능한 모델 {len(models)}개를 불러왔습니다."
+        except Exception as exc:
+            code = self._safe_error_code(exc)
+            message = "모델 목록을 불러오지 못했습니다. 키와 API 주소를 확인하세요."
+        self._operations_store().record_model_list(actor, provider=payload.provider, success=success, code=code, count=len(models))
+        return TranslationModelListResponse(success=success, provider=payload.provider, models=models, code=code, message=message, loadedAt=datetime.now(UTC))
 
     def translate(self, request: TranslationRequest, actor: AuthUserSummary | None = None, *, create_reviews: bool = True) -> TranslationResponse:
         config = self._policy(actor, include_secret=True)
@@ -270,6 +292,8 @@ class TranslationService:
             return "provider_timeout"
         if isinstance(exc, HTTPError) and exc.code == 429:
             return "provider_rate_limited"
+        if isinstance(exc, HTTPError):
+            return f"provider_http_{exc.code}"
         return "provider_error"
 
     @staticmethod

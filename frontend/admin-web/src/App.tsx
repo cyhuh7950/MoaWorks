@@ -48,6 +48,7 @@ import {
   syncOciMailSuppressions,
   switchMailOperationsProvider,
   fetchTranslationPolicy,
+  fetchTranslationProviderModels,
   fetchTranslationReviews,
   fetchTranslationStatus,
   applyTranslationReviewAction,
@@ -59,6 +60,7 @@ import {
   type TranslationStatus,
   type TranslationReview,
   type TranslationConnectionTestResponse,
+  type TranslationModelListResponse,
   type UiContract as ServerUiContract,
   type DirectoryOverview,
   type MailDeliveryQueueResponse,
@@ -737,6 +739,8 @@ export default function App() {
   const [translationError, setTranslationError] = useState("");
   const [translationLoading, setTranslationLoading] = useState(false);
   const [translationConnectionResult, setTranslationConnectionResult] = useState<TranslationConnectionTestResponse | null>(null);
+  const [translationModelListResult, setTranslationModelListResult] = useState<TranslationModelListResponse | null>(null);
+  const [translationModels, setTranslationModels] = useState<string[]>([]);
   const [translationReviews, setTranslationReviews] = useState<TranslationReview[]>([]);
   const [translationReviewStatus, setTranslationReviewStatus] = useState("all");
   const [selectedTranslationReviewId, setSelectedTranslationReviewId] = useState("");
@@ -1123,6 +1127,8 @@ export default function App() {
         costPerMillionUnits: policy.costPerMillionUnits == null ? "" : String(policy.costPerMillionUnits), costUnit: policy.costUnit,
       });
       setTranslationConnectionResult(null);
+      setTranslationModelListResult(null);
+      setTranslationModels(policy.model ? [policy.model] : []);
       const reviews = await fetchTranslationReviews(nextToken, translationReviewStatus === "all" ? undefined : translationReviewStatus);
       setTranslationReviews(reviews.items);
       setTranslationTargetLocale(toTranslationLocale(policy.supportedTargetLocales.includes(translationTargetLocale) ? translationTargetLocale : policy.supportedTargetLocales[0]));
@@ -1280,7 +1286,38 @@ export default function App() {
       apiKey: "",
     }));
     setTranslationConnectionResult(null);
+    setTranslationModelListResult(null);
+    setTranslationModels([]);
     setTranslationError("");
+  }
+
+  async function loadTranslationProviderModels() {
+    if (!token) return;
+    setTranslationLoading(true);
+    setTranslationModelListResult(null);
+    setTranslationConnectionResult(null);
+    setTranslationError("");
+    try {
+      const result = await fetchTranslationProviderModels(token, {
+        provider: translationPolicyForm.provider,
+        apiBaseUrl: translationPolicyForm.apiBaseUrl.trim(),
+        timeoutSeconds: Number(translationPolicyForm.timeoutSeconds),
+        ...(translationPolicyForm.apiKey ? { apiKey: translationPolicyForm.apiKey } : {}),
+      });
+      setTranslationModelListResult(result);
+      setTranslationModels(result.models);
+      if (result.success) {
+        setTranslationPolicyForm((current) => ({
+          ...current,
+          model: result.models.includes(current.model) ? current.model : (result.models[0] ?? ""),
+        }));
+      }
+    } catch (error) {
+      setTranslationError(error instanceof Error ? error.message : "Provider 모델 목록 조회 실패");
+      setTranslationModels([]);
+    } finally {
+      setTranslationLoading(false);
+    }
   }
 
   async function runTranslationProviderConnectionTest() {
@@ -2264,9 +2301,9 @@ export default function App() {
           <div className="ops-list-head"><strong>번역 Provider 운영</strong><span className="muted">API 키는 암호화 저장되며 저장 후 원문을 다시 표시하지 않습니다.</span></div>
           <form className="ops-toolbar-grid" onSubmit={saveTranslationProviderPolicy}>
             <label className="compact-field"><span>LLM Provider</span><select value={translationPolicyForm.provider} onChange={(event) => applyTranslationProviderSelection(event.target.value)}><option value="disabled">선택 안 함</option>{translationPolicy?.providerOptions.map((item) => <option key={item.provider} value={item.provider}>{item.label}</option>)}</select></label>
-            <label className="compact-field"><span>모델</span><input value={translationPolicyForm.model} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, model: event.target.value }))} placeholder="Provider 모델명" /></label>
+            <label className="compact-field"><span>모델</span><select value={translationPolicyForm.model} disabled={translationModels.length === 0} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, model: event.target.value }))}><option value="">모델 불러오기 후 선택</option>{translationModels.map((model) => <option key={model} value={model}>{model}</option>)}</select></label>
             <label className="compact-field compact-field-wide"><span>API Base URL</span><input value={translationPolicyForm.apiBaseUrl} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, apiBaseUrl: event.target.value }))} placeholder="Provider 선택 시 기본 주소가 입력됩니다." /></label>
-            <label className="compact-field"><span>API 키 {translationPolicy?.provider === translationPolicyForm.provider && translationPolicy.apiKeyConfigured ? "(설정됨)" : translationPolicy?.providerOptions.find((item) => item.provider === translationPolicyForm.provider)?.apiKeyRequired === false ? "(선택)" : "(미설정)"}</span><input type="password" autoComplete="new-password" value={translationPolicyForm.apiKey} onChange={(event) => { setTranslationPolicyForm((current) => ({ ...current, apiKey: event.target.value })); setTranslationConnectionResult(null); }} placeholder={translationPolicy?.provider === translationPolicyForm.provider && translationPolicy.apiKeyConfigured ? "변경할 때만 입력" : "API 키 입력"} /></label>
+            <label className="compact-field"><span>API 키 {translationPolicy?.provider === translationPolicyForm.provider && translationPolicy.apiKeyConfigured ? "(설정됨)" : translationPolicy?.providerOptions.find((item) => item.provider === translationPolicyForm.provider)?.apiKeyRequired === false ? "(선택)" : "(미설정)"}</span><input type="password" autoComplete="new-password" value={translationPolicyForm.apiKey} onChange={(event) => { setTranslationPolicyForm((current) => ({ ...current, apiKey: event.target.value, model: "" })); setTranslationConnectionResult(null); setTranslationModelListResult(null); setTranslationModels([]); }} placeholder={translationPolicy?.provider === translationPolicyForm.provider && translationPolicy.apiKeyConfigured ? "변경할 때만 입력" : "API 키 입력"} /></label>
             <label className="compact-field"><span>Timeout(초)</span><input type="number" min="1" max="120" value={translationPolicyForm.timeoutSeconds} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, timeoutSeconds: event.target.value }))} /></label>
             <label className="compact-field"><span>재시도</span><input type="number" min="0" max="5" value={translationPolicyForm.maxRetries} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, maxRetries: event.target.value }))} /></label>
             <label className="compact-field"><span>분당 제한</span><input type="number" min="1" max="10000" value={translationPolicyForm.rateLimitPerMinute} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, rateLimitPerMinute: event.target.value }))} /></label>
@@ -2275,8 +2312,9 @@ export default function App() {
             <label className="compact-field"><span>백만 단위당 비용</span><input type="number" min="0" step="0.000001" value={translationPolicyForm.costPerMillionUnits} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, costPerMillionUnits: event.target.value }))} placeholder="계약 요율" /></label>
             <label className="compact-field"><span>비용 단위</span><select value={translationPolicyForm.costUnit} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, costUnit: event.target.value as "tokens" | "characters" }))}><option value="tokens">tokens</option><option value="characters">characters</option></select></label>
             <label className="permission-check"><input type="checkbox" checked={translationPolicyForm.cacheEnabled} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, cacheEnabled: event.target.checked }))} /><span>PostgreSQL 캐시 사용</span></label>
-            <div className="actions compact-actions"><button type="button" className="secondary" disabled={translationLoading || translationPolicyForm.provider === "disabled" || !translationPolicyForm.model.trim() || !translationPolicyForm.apiBaseUrl.trim()} onClick={() => void runTranslationProviderConnectionTest()}>연결 테스트</button><button type="submit" disabled={translationLoading}>Provider 정책 저장</button><button type="button" className="secondary" disabled={translationLoading} onClick={() => void toggleTranslationPolicy(!(translationStatus?.enabled ?? false))}>{translationStatus?.enabled ? "번역 비활성화" : "번역 활성화"}</button></div>
-            {translationConnectionResult ? <p className={`notice ${translationConnectionResult.success ? "success" : "danger"}`}>{translationConnectionResult.message} ({translationConnectionResult.provider} / {translationConnectionResult.model})</p> : null}
+            <div className="actions compact-actions"><button type="button" className="secondary" disabled={translationLoading || translationPolicyForm.provider === "disabled" || !translationPolicyForm.apiBaseUrl.trim()} onClick={() => void loadTranslationProviderModels()}>모델 불러오기</button><button type="button" className="secondary" disabled={translationLoading || translationPolicyForm.provider === "disabled" || !translationPolicyForm.model.trim() || !translationPolicyForm.apiBaseUrl.trim()} onClick={() => void runTranslationProviderConnectionTest()}>연결 테스트</button><button type="submit" disabled={translationLoading || !translationPolicyForm.model.trim()}>Provider 정책 저장</button><button type="button" className="secondary" disabled={translationLoading} onClick={() => void toggleTranslationPolicy(!(translationStatus?.enabled ?? false))}>{translationStatus?.enabled ? "번역 비활성화" : "번역 활성화"}</button></div>
+            {translationModelListResult ? <p className={`notice ${translationModelListResult.success ? "success" : "danger"}`}>{translationModelListResult.message} ({translationModelListResult.code})</p> : null}
+            {translationConnectionResult ? <p className={`notice ${translationConnectionResult.success ? "success" : "danger"}`}>{translationConnectionResult.message} ({translationConnectionResult.provider} / {translationConnectionResult.model} / {translationConnectionResult.code})</p> : null}
           </form>
         </div>
         {translationUiVisible ? (<>

@@ -153,6 +153,37 @@ class TranslationConnectionTestResponse(BaseModel):
     testedAt: datetime
 
 
+class TranslationModelListRequest(BaseModel):
+    provider: str
+    apiBaseUrl: str = Field(min_length=1, max_length=500)
+    apiKey: SecretStr | None = Field(default=None, min_length=1, max_length=1000)
+    timeoutSeconds: int = Field(default=15, ge=1, le=120)
+
+    @field_validator("provider")
+    @classmethod
+    def normalize_provider(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("apiBaseUrl")
+    @classmethod
+    def normalize_api_base_url(cls, value: str) -> str:
+        return value.strip().rstrip("/")
+
+    @model_validator(mode="after")
+    def validate_model_list_config(self):
+        _validate_provider_url(self.provider, self.apiBaseUrl)
+        return self
+
+
+class TranslationModelListResponse(BaseModel):
+    success: bool
+    provider: str
+    models: list[str]
+    code: str
+    message: str
+    loadedAt: datetime
+
+
 class TranslationPolicyResponse(BaseModel):
     provider: str
     enabled: bool

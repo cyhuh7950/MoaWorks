@@ -127,6 +127,14 @@ class TranslationOperationsStore:
             )
             connection.commit()
 
+    def record_model_list(self, actor: AuthUserSummary, *, provider: str, success: bool, code: str, count: int) -> None:
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            self._audit(
+                cursor, actor, "translation.provider.models_list", "translation-provider", actor.companyId,
+                metadata={"provider": provider, "success": success, "code": code, "count": count},
+            )
+            connection.commit()
+
     def read_cache(self, company_id: str, *, source_hash: str, source_locale: str, target_locale: str, provider: str, model: str) -> dict[str, Any] | None:
         with self.db.connect() as connection, connection.cursor() as cursor:
             cursor.execute(

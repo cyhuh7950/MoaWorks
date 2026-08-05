@@ -33,6 +33,7 @@ class ProviderResult:
 
 class JsonTransport(Protocol):
     def post_json(self, *, url: str, headers: dict[str, str], payload: dict, timeout_seconds: float) -> dict: ...
+    def get_json(self, *, url: str, headers: dict[str, str], timeout_seconds: float) -> dict: ...
 
 
 class UrllibJsonTransport:
@@ -40,9 +41,18 @@ class UrllibJsonTransport:
         self.allowed_private_hosts = {item.lower() for item in (allowed_private_hosts or set())}
 
     def post_json(self, *, url: str, headers: dict[str, str], payload: dict, timeout_seconds: float) -> dict:
+        return self._request_json(url=url, headers=headers, payload=payload, timeout_seconds=timeout_seconds, method="POST")
+
+    def get_json(self, *, url: str, headers: dict[str, str], timeout_seconds: float) -> dict:
+        return self._request_json(url=url, headers=headers, payload=None, timeout_seconds=timeout_seconds, method="GET")
+
+    def _request_json(self, *, url: str, headers: dict[str, str], payload: dict | None, timeout_seconds: float, method: str) -> dict:
         self._validate_public_https_url(url)
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        req = urllib_request.Request(url, data=body, headers={**headers, "Content-Type": "application/json"}, method="POST")
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
+        request_headers = {"Accept": "application/json", "User-Agent": "MoaWorks/1.0", **headers}
+        if payload is not None:
+            request_headers["Content-Type"] = "application/json"
+        req = urllib_request.Request(url, data=body, headers=request_headers, method=method)
         opener = urllib_request.build_opener(_NoRedirectHandler())
         with opener.open(req, timeout=timeout_seconds) as response:
             raw = response.read(2 * 1024 * 1024 + 1)
@@ -121,6 +131,8 @@ class OpenAICompatibleProvider(TranslationProvider):
         payload = {
             "model": self.model,
             "temperature": 0,
+            "max_completion_tokens": 2048,
+            "stream": False,
             "messages": [
                 {"role": "system", "content": "Translate faithfully. Return only the translated text."},
                 {"role": "user", "content": f"source={source_locale}; target={target_locale}\n{text}"},
@@ -208,6 +220,35 @@ class DeepLProvider(TranslationProvider):
             raise ValueError("DeepL response has no translated text")
         billed = translations[0].get("billed_characters")
         return ProviderResult(translated.strip(), str(detected).lower(), model="deepl", metadata={"billableUnits": billed, "costUnit": "characters"})
+
+
+def fetch_translation_models(
+    provider_name: str,
+    *,
+    api_key: str = "",
+    api_base_url: str = "",
+    timeout_seconds: float = 15,
+    transport: JsonTransport | None = None,
+) -> list[str]:
+    provider = (provider_name or "").strip().lower()
+    profile = PROVIDER_PROFILES.get(provider)
+    if profile is None:
+        raise ValueError("unsupported translation provider")
+    if profile["apiKeyRequired"] and not api_key:
+        raise ValueError("translation provider API key is required")
+    resolved_base_url = (api_base_url or str(profile["apiBaseUrl"])).rstrip("/")
+    resolved_transport = transport
+    if resolved_transport is None:
+        resolved_transport = UrllibJsonTransport(allowed_private_hosts={"localhost", "127.0.0.1", "ollama"} if provider == "ollama" else None)
+    headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"} if profile["protocol"] == "anthropic" else ({"Authorization": f"Bearer {api_key}"} if api_key else {})
+    response = resolved_transport.get_json(url=f"{resolved_base_url}/models", headers=headers, timeout_seconds=timeout_seconds)
+    data = response.get("data")
+    if not isinstance(data, list):
+        raise ValueError("translation provider model response has no data")
+    models = sorted({item.get("id").strip() for item in data if isinstance(item, dict) and isinstance(item.get("id"), str) and item.get("id").strip()})
+    if not models:
+        raise ValueError("translation provider model response is empty")
+    return models[:1000]
 
 
 def resolve_translation_provider(

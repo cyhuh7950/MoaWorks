@@ -293,6 +293,15 @@ export type TranslationConnectionTestResponse = {
   testedAt: string;
 };
 
+export type TranslationModelListResponse = {
+  success: boolean;
+  provider: string;
+  models: string[];
+  code: string;
+  message: string;
+  loadedAt: string;
+};
+
 export type TranslationReview = {
   id: string;
   companyId: string;
@@ -982,6 +991,17 @@ export async function testTranslationProviderConnection(
   payload: { provider: string; model: string; apiBaseUrl: string; apiKey?: string; timeoutSeconds: number },
 ): Promise<TranslationConnectionTestResponse> {
   return request<TranslationConnectionTestResponse>("/translation/admin/test-connection", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchTranslationProviderModels(
+  token: string,
+  payload: { provider: string; apiBaseUrl: string; apiKey?: string; timeoutSeconds: number },
+): Promise<TranslationModelListResponse> {
+  return request<TranslationModelListResponse>("/translation/admin/models", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(payload),
