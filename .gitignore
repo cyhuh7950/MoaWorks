@@ -14,6 +14,10 @@ frontend/mobile-app/build-evidence/*.bundle
 frontend/desktop-client/build-evidence/*.zip
 frontend/desktop-client/build-evidence/runtime-verify-*/
 frontend/desktop-client/build-evidence/archive-verification/
+frontend/desktop-client/.build-home/
+frontend/desktop-client/.installer-build/
+frontend/desktop-client/.npm-cache/
+frontend/desktop-client/out/
 .next/
 .turbo/
 

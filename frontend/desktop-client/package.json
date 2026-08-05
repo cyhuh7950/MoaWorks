@@ -11,9 +11,21 @@
     "test:coverage": "node --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 test\\*.test.js",
     "check:storage": "node --test test\\archive-service.test.js",
     "build": "node ./scripts/package-desktop-client.js",
-    "package": "node ./scripts/package-desktop-client.js"
+    "package": "node ./scripts/package-desktop-client.js",
+    "package:portable": "node ./scripts/package-desktop-client.js",
+    "package:installer": "node ./scripts/prepare-installer-asar.js && electron-forge make --platform=win32 --arch=x64 && node ./scripts/create-installer-manifest.js"
   },
   "devDependencies": {
+    "@electron/asar": "4.2.1",
+    "@electron-forge/cli": "7.11.2",
+    "@electron-forge/maker-squirrel": "7.11.2",
     "electron": "43.2.0"
+  },
+  "dependencies": {
+    "electron-squirrel-startup": "1.0.1"
+  },
+  "overrides": {
+    "tar": "7.5.22",
+    "tmp": "0.2.7"
   }
 }

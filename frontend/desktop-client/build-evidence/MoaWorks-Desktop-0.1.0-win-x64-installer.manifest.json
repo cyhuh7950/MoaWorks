@@ -1,0 +1,33 @@
+{
+  "product": "MoaWorks Desktop Client",
+  "version": "0.1.0",
+  "platform": "win32",
+  "arch": "x64",
+  "generatedAt": "2026-08-05T11:40:24.786Z",
+  "artifacts": [
+    {
+      "role": "installer",
+      "file": "MoaWorks-Desktop-0.1.0-Setup.exe",
+      "bytes": 139823616,
+      "sha256": "063ba784cbc92a3a9c74f7b82059b28f61b0b381f1f01b2a3dfddab47b4c83e5"
+    },
+    {
+      "role": "update-package",
+      "file": "MoaWorksDesktop-0.1.0-full.nupkg",
+      "bytes": 139069998,
+      "sha256": "e2976c752b98339fa9db1a766480ead8cae056877978832485d8a184724440e5"
+    },
+    {
+      "role": "update-index",
+      "file": "RELEASES",
+      "bytes": 86,
+      "sha256": "3645dad1161b274dcc37f6009c89f0fe265d5a607c6fade3aea7e3ea87694699"
+    },
+    {
+      "role": "runtime-asar",
+      "file": "out/MoaWorks Desktop Client-win32-x64/resources/app.asar",
+      "bytes": 180837,
+      "sha256": "8da5a86f8e8858081579dedceaeb66b6efae9b2208ebbd3b8c6eea62059a9b75"
+    }
+  ]
+}
