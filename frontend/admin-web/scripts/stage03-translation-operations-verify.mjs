@@ -27,6 +27,11 @@ for (const provider of ["CEREBRAS", "GROQ", "MISTRAL", "OPENAI", "UPSTAGE", "GEM
 check(app.includes("saveTranslationProviderPolicy"), "provider policy save handler must be wired");
 check(app.includes("testTranslationProviderConnection"), "provider connection test handler must be wired");
 check(app.includes("연결 테스트"), "provider connection test button must be visible");
+check(app.includes("translationConnectionResult.code"), "connection result must show the safe provider error code");
+check(app.includes("fetchTranslationProviderModels"), "provider model list handler must be wired");
+check(app.includes("모델 불러오기"), "provider model refresh button must be visible");
+check(app.includes('<select value={translationPolicyForm.model}'), "provider model must be selected from a dropdown");
+check(!app.includes('<input value={translationPolicyForm.model}'), "provider model must not be entered as free text");
 check(!app.includes('<option value="deepl">DeepL</option>'), "DeepL must not be exposed as an operating provider");
 check(app.includes("const translationUiVisible = translationStatus?.available === true;"), "translation UI visibility must follow server availability");
 check(app.includes("translationUiVisible ? ("), "actual translation and review panels must be conditional");

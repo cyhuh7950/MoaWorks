@@ -17,6 +17,10 @@ class _RecordingTransport:
         self.calls.append({"url": url, "headers": headers, "payload": payload, "timeout": timeout_seconds})
         return self.response
 
+    def get_json(self, *, url: str, headers: dict[str, str], timeout_seconds: float) -> dict:
+        self.calls.append({"url": url, "headers": headers, "timeout": timeout_seconds})
+        return self.response
+
 
 class Stage03TranslationMigrationTest(unittest.TestCase):
     def test_migration_is_additive_and_tenant_scoped(self) -> None:
@@ -75,6 +79,8 @@ class Stage03ProviderContractTest(unittest.TestCase):
         self.assertEqual(result.model, "translation-model")
         self.assertEqual(transport.calls[0]["url"], "https://llm.example.test/v1/chat/completions")
         self.assertEqual(transport.calls[0]["headers"]["Authorization"], "Bearer secret-value")
+        self.assertEqual(transport.calls[0]["payload"]["max_completion_tokens"], 2048)
+        self.assertFalse(transport.calls[0]["payload"]["stream"])
         self.assertNotIn("secret-value", json.dumps(result.metadata))
 
     def test_deepl_provider_uses_professional_translation_contract(self) -> None:
@@ -127,6 +133,20 @@ class Stage03ProviderContractTest(unittest.TestCase):
         provider.translate("안녕하세요", "auto", "en")
         self.assertNotIn("Authorization", transport.calls[0]["headers"])
 
+    def test_provider_model_catalog_is_loaded_from_live_models_endpoint(self) -> None:
+        from app.services.translation_provider import fetch_translation_models
+
+        transport = _RecordingTransport({"data": [{"id": "llama-3.3-70b-versatile"}, {"id": "llama-3.1-8b-instant"}]})
+
+        models = fetch_translation_models(
+            "groq", api_key="secret-value", api_base_url="https://api.groq.com/openai/v1",
+            transport=transport, timeout_seconds=7,
+        )
+
+        self.assertEqual(models, ["llama-3.1-8b-instant", "llama-3.3-70b-versatile"])
+        self.assertEqual(transport.calls[0]["url"], "https://api.groq.com/openai/v1/models")
+        self.assertEqual(transport.calls[0]["headers"]["Authorization"], "Bearer secret-value")
+
 
 class Stage03SchemaContractTest(unittest.TestCase):
     def test_connection_test_accepts_llm_draft_and_protects_api_key(self) -> None:
@@ -164,7 +184,9 @@ class Stage03SchemaContractTest(unittest.TestCase):
     def test_translation_route_exposes_admin_connection_test_only(self) -> None:
         route = (ROOT / "app" / "api" / "routes" / "translation.py").read_text(encoding="utf-8")
         self.assertIn('@admin_router.post("/admin/test-connection"', route)
+        self.assertIn('@admin_router.post("/admin/models"', route)
         self.assertNotIn('@router.post("/test-connection"', route)
+        self.assertNotIn('@router.post("/models"', route)
 
     def test_admin_policy_accepts_masked_provider_configuration(self) -> None:
         from app.schemas.translation import TranslationPolicyRequest
@@ -299,6 +321,14 @@ class Stage03ResilienceTest(unittest.TestCase):
         self.assertTrue(first.fallbackUsed)
         self.assertEqual(first.items[0].translatedText, "원문 유지")
         self.assertEqual(second.items[0].statusMessage, "circuit_open")
+
+    def test_connection_failure_preserves_safe_http_status_without_response_body(self) -> None:
+        from urllib.error import HTTPError
+        from app.services.translation_service import TranslationService
+
+        error = HTTPError("https://api.groq.com/openai/v1/chat/completions", 403, "Forbidden", {}, None)
+
+        self.assertEqual(TranslationService._safe_error_code(error), "provider_http_403")
 
 
 if __name__ == "__main__":
