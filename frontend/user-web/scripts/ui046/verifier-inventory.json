@@ -9,7 +9,7 @@
   },
   "summary": {
     "liveFiles": 11,
-    "staticFiles": 79,
+    "staticFiles": 105,
     "staleFiles": 11,
     "coreGapAreas": 0,
     "readyAdapters": 8
@@ -90,7 +90,7 @@
       "discovery": {
         "directory": "backend",
         "patterns": ["test_*.py", "*_smoke_test.py"],
-        "expectedCount": 42
+        "expectedCount": 67
       },
       "limitations": ["mock 또는 격리 저장소 중심", "sinsan PostgreSQL row와 audit 실증이 아님"]
     }
