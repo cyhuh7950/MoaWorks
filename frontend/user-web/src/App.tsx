@@ -4780,6 +4780,11 @@ export default function App() {
                   <div style={{ fontSize: 10, color: "#475569" }}>{item.sourceLocale} → {item.targetLocale}</div>
                   <div style={{ marginTop: 8, color: "#334155" }}>{item.originalText}</div>
                   <div style={{ marginTop: 8, color: "#0f766e", fontWeight: 700 }}>{item.translatedText}</div>
+                  {item.statusMessage ? (
+                    <div data-testid="translation-fallback-status" role="alert" style={{ marginTop: 8, color: "#b91c1c" }}>
+                      번역을 완료하지 못했습니다. 원문을 유지했습니다. ({item.statusMessage})
+                    </div>
+                  ) : null}
                 </div>
               ))}
             </div>
