@@ -36,6 +36,9 @@ check(!app.includes('<option value="deepl">DeepL</option>'), "DeepL must not be 
 check(app.includes("const translationUiVisible = translationStatus?.available === true;"), "translation UI visibility must follow server availability");
 check(app.includes("translationUiVisible ? ("), "actual translation and review panels must be conditional");
 check(app.includes("LLM 설정과 활성화 후 번역 실행·검수 화면이 표시됩니다."), "admin must explain the hidden translation UI state");
+check(app.includes("입력 토큰 백만 개당 비용"), "admin must expose a separate input token price");
+check(app.includes("출력 토큰 백만 개당 비용"), "admin must expose a separate output token price");
+check(app.includes("혼합 단가(호환용)"), "admin must identify the legacy blended price as compatibility-only");
 check(app.includes("runTranslationReviewAction"), "review action handler must be wired");
 check(
   app.includes('<button type="button" disabled={translationLoading || !translationStatus?.enabled} onClick={() => void runTranslationDemo()}>번역 실행</button>'),

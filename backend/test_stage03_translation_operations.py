@@ -41,6 +41,15 @@ class Stage03TranslationMigrationTest(unittest.TestCase):
         self.assertNotIn("TRUNCATE", upper)
         self.assertNotIn("DELETE FROM", upper)
 
+    def test_split_token_cost_migration_is_additive(self) -> None:
+        sql = (ROOT / "migrations" / "053_translation_split_token_costs.sql").read_text(encoding="utf-8")
+        self.assertIn("input_cost_per_million_tokens", sql)
+        self.assertIn("output_cost_per_million_tokens", sql)
+        upper = sql.upper()
+        self.assertNotIn("DROP TABLE", upper)
+        self.assertNotIn("TRUNCATE", upper)
+        self.assertNotIn("DELETE FROM", upper)
+
 
 class Stage03ProviderContractTest(unittest.TestCase):
     def test_supported_llm_provider_catalog_is_exact_and_excludes_deepl(self) -> None:
@@ -211,6 +220,19 @@ class Stage03SchemaContractTest(unittest.TestCase):
         self.assertEqual(request.provider, "openai-compatible")
         self.assertEqual(request.apiKey.get_secret_value(), "secret-value")
 
+    def test_admin_policy_requires_split_token_costs_as_a_pair(self) -> None:
+        from pydantic import ValidationError
+        from app.schemas.translation import TranslationPolicyRequest
+
+        request = TranslationPolicyRequest(
+            inputCostPerMillionTokens=10.0,
+            outputCostPerMillionTokens=30.0,
+        )
+        self.assertEqual(request.inputCostPerMillionTokens, 10.0)
+        self.assertEqual(request.outputCostPerMillionTokens, 30.0)
+        with self.assertRaises(ValidationError):
+            TranslationPolicyRequest(inputCostPerMillionTokens=10.0)
+
     def test_review_contract_supports_edit_approve_and_retranslate(self) -> None:
         from app.schemas.translation import TranslationReviewActionRequest
 
@@ -266,7 +288,7 @@ class _FixtureProvider:
         self.calls += 1
         if self.calls <= self.failures:
             raise TimeoutError("provider timeout with no secret")
-        return ProviderResult("Hello", "ko", model="fixture-model", metadata={"usage": {"total_tokens": 5}, "billableUnits": 5, "costUnit": "tokens"})
+        return ProviderResult("Hello", "ko", model="fixture-model", metadata={"usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5}, "billableUnits": 5, "costUnit": "tokens"})
 
 
 class Stage03ResilienceTest(unittest.TestCase):
@@ -311,6 +333,24 @@ class Stage03ResilienceTest(unittest.TestCase):
         self.assertEqual(first.items[0].estimatedCost, 0.0001)
         self.assertTrue(second.items[0].cacheHit)
         self.assertEqual(len(store.reviews), 1)
+
+    def test_split_input_output_token_costs_take_priority_over_legacy_rate(self) -> None:
+        from app.schemas.translation import TranslationRequest
+        from app.services.translation_service import TranslationService
+
+        store = _FixtureStore(self.policy(
+            costPerMillionUnits=999.0,
+            inputCostPerMillionTokens=10.0,
+            outputCostPerMillionTokens=30.0,
+        ))
+        provider = _FixtureProvider()
+        service = TranslationService(store=store)
+        service._resolve_provider = lambda _: provider
+        request = TranslationRequest(texts=[{"text": "비용 분리", "sourceLocale": "ko", "targetLocale": "en"}], useCache=False)
+
+        response = service.translate(request, self.actor())
+
+        self.assertEqual(response.items[0].estimatedCost, 0.00007)
 
     def test_open_circuit_falls_back_to_source_without_extra_provider_call(self) -> None:
         from app.schemas.translation import TranslationRequest
