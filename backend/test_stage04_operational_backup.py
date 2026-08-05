@@ -26,6 +26,7 @@ class Stage04OperationalBackupContractTest(unittest.TestCase):
 
     def test_server_image_includes_postgres_backup_runtime(self) -> None:
         dockerfile = (ROOT.parent / "deploy" / "server.Dockerfile").read_text(encoding="utf-8").lower()
+        self.assertIn("from python:3.12-slim-bookworm", dockerfile)
         self.assertIn("postgresql-client", dockerfile)
 
     def test_archive_contains_database_storage_runtime_and_verified_manifest(self) -> None:
