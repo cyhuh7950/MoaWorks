@@ -1415,6 +1415,7 @@ export default function App() {
   const [translationResult, setTranslationResult] = useState<TranslationItem[]>([]);
   const [translationLoading, setTranslationLoading] = useState(false);
   const [translationError, setTranslationError] = useState("");
+  const translationUiVisible = translationStatus?.available === true;
   const [me, setMe] = useState<AuthUser | null>(null);
   const [logsCount, setLogsCount] = useState(0);
   const [notificationMode, setNotificationMode] = useState<"polling" | "streaming" | "fallback">("polling");
@@ -7287,6 +7288,7 @@ export default function App() {
                   </div>
                 )}
 
+                {translationUiVisible ? (
                 <div
                   style={{
                     marginTop: 22,
@@ -7343,7 +7345,7 @@ export default function App() {
                       >
                         {translationLoading ? "변환 중..." : "번역"}
                       </button>
-                      <span style={{ color: "#64748b", fontSize: 13 }}>Provider: {translationStatus?.provider || "unknown"}</span>
+                      <span style={{ color: "#64748b", fontSize: 13 }}>Provider: {translationStatus.provider}</span>
                     </div>
                     {translationError ? <div style={{ color: "#b91c1c" }}>{translationError}</div> : null}
                     {translationResult.length > 0 ? (
@@ -7361,6 +7363,7 @@ export default function App() {
                     ) : null}
                   </form>
                 </div>
+                ) : null}
               </article>
             </section>
 

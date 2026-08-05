@@ -68,7 +68,7 @@ class TranslationOperationsStore:
         current = self.get_policy(actor.companyId, include_secret=True)
         values = payload.model_dump(exclude_unset=True)
         provider = values.get("provider", current["provider"])
-        if provider not in {"disabled", "openai-compatible", "deepl"}:
+        if provider not in {"disabled", "openai-compatible", "deepl", "cerebras", "groq", "mistral", "openai", "upstage", "gemini", "openrouter", "anthropic", "ollama"}:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"code": "TRANSLATION_PROVIDER_INVALID", "userMessage": "지원하지 않는 번역 Provider입니다.", "adminMessage": f"unsupported provider: {provider}"},
@@ -118,6 +118,14 @@ class TranslationOperationsStore:
             self._audit(cursor, actor, "translation.policy.updated", "translation-provider", actor.companyId, metadata={"provider": merged["provider"], "enabled": merged["enabled"]})
             connection.commit()
         return self.get_policy(actor.companyId)
+
+    def record_connection_test(self, actor: AuthUserSummary, *, provider: str, success: bool, code: str) -> None:
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            self._audit(
+                cursor, actor, "translation.provider.connection_test", "translation-provider", actor.companyId,
+                metadata={"provider": provider, "success": success, "code": code},
+            )
+            connection.commit()
 
     def read_cache(self, company_id: str, *, source_hash: str, source_locale: str, target_locale: str, provider: str, model: str) -> dict[str, Any] | None:
         with self.db.connect() as connection, connection.cursor() as cursor:

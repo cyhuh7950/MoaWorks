@@ -15,9 +15,9 @@ from fastapi import HTTPException, status
 
 from app.core.config import settings
 from app.schemas.directory import AuthUserSummary
-from app.schemas.translation import TranslationItem, TranslationPolicyRequest, TranslationRequest, TranslationResponse, TranslationStatus
+from app.schemas.translation import TranslationConnectionTestRequest, TranslationConnectionTestResponse, TranslationItem, TranslationPolicyRequest, TranslationRequest, TranslationResponse, TranslationStatus
 from app.services.translation_operations_store import DEFAULT_POLICY, TranslationOperationsStore
-from app.services.translation_provider import ProviderResult, TranslationProvider, resolve_translation_provider
+from app.services.translation_provider import PROVIDER_PROFILES, ProviderResult, TranslationProvider, resolve_translation_provider
 
 logger = logging.getLogger(__name__)
 
@@ -64,12 +64,13 @@ class TranslationService:
             **{key: config.get(key, default) for key, default in DEFAULT_POLICY.items()},
             "supportedSourceLocales": _SUPPORTED_SOURCE_LOCALES,
             "supportedTargetLocales": _SUPPORTED_TARGET_LOCALES,
+            "providerOptions": self._provider_options(),
         }
 
     def update_policy(self, payload: TranslationPolicyRequest, actor: AuthUserSummary | None = None) -> dict[str, object]:
         if actor is not None:
             updated = self._operations_store().update_policy(actor, payload)
-            return {**updated, "supportedSourceLocales": _SUPPORTED_SOURCE_LOCALES, "supportedTargetLocales": _SUPPORTED_TARGET_LOCALES}
+            return {**updated, "supportedSourceLocales": _SUPPORTED_SOURCE_LOCALES, "supportedTargetLocales": _SUPPORTED_TARGET_LOCALES, "providerOptions": self._provider_options()}
         if payload.provider is not None and payload.provider not in {"disabled", "noop", "echo"}:
             raise HTTPException(status_code=400, detail={"code": "TRANSLATION_PROVIDER_INVALID", "userMessage": "지원하지 않는 번역 Provider입니다.", "adminMessage": f"unsupported legacy provider: {payload.provider}"})
         config = self._load_config()
@@ -79,6 +80,29 @@ class TranslationService:
                 config[key] = value
         self._save_state(config)
         return self.get_policy()
+
+    def test_connection(self, payload: TranslationConnectionTestRequest, actor: AuthUserSummary) -> TranslationConnectionTestResponse:
+        saved = self._operations_store().get_policy(actor.companyId, include_secret=True)
+        draft_key = payload.apiKey.get_secret_value() if payload.apiKey is not None else ""
+        api_key = draft_key or (str(saved.get("apiKey", "")) if saved.get("provider") == payload.provider else "")
+        provider = resolve_translation_provider(
+            payload.provider, api_key=api_key, api_base_url=payload.apiBaseUrl,
+            model=payload.model, timeout_seconds=payload.timeoutSeconds,
+        )
+        success = False
+        code = "TRANSLATION_PROVIDER_CONFIGURATION_REQUIRED"
+        message = "Provider 설정을 확인하세요."
+        if provider.available:
+            try:
+                result = provider.translate("Connection test", "en", "ko")
+                success = bool(result.translated_text.strip())
+                code = "TRANSLATION_PROVIDER_CONNECTION_OK" if success else "TRANSLATION_PROVIDER_EMPTY_RESPONSE"
+                message = "LLM Provider 연결에 성공했습니다." if success else "Provider 응답이 비어 있습니다."
+            except Exception as exc:
+                code = self._safe_error_code(exc)
+                message = "LLM Provider 연결에 실패했습니다. 키, 모델, API 주소를 확인하세요."
+        self._operations_store().record_connection_test(actor, provider=payload.provider, success=success, code=code)
+        return TranslationConnectionTestResponse(success=success, provider=payload.provider, model=payload.model, code=code, message=message, testedAt=datetime.now(UTC))
 
     def translate(self, request: TranslationRequest, actor: AuthUserSummary | None = None, *, create_reviews: bool = True) -> TranslationResponse:
         config = self._policy(actor, include_secret=True)
@@ -213,6 +237,13 @@ class TranslationService:
             api_base_url=str(config.get("apiBaseUrl", "")), model=str(config.get("model", "")),
             timeout_seconds=float(config.get("timeoutSeconds", 15)),
         )
+
+    @staticmethod
+    def _provider_options() -> list[dict[str, object]]:
+        return [
+            {"provider": key, "label": profile["label"], "apiBaseUrl": profile["apiBaseUrl"], "apiKeyRequired": profile["apiKeyRequired"]}
+            for key, profile in PROVIDER_PROFILES.items()
+        ]
 
     def _read_cache(self, actor: AuthUserSummary | None, source_hash: str, source_text: str, source_locale: str, target_locale: str, provider: str, model: str) -> dict[str, object] | None:
         if actor is not None:

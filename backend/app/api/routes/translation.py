@@ -12,6 +12,8 @@ from app.schemas.translation import (
     TranslationReviewActionRequest,
     TranslationReviewItem,
     TranslationReviewListResponse,
+    TranslationConnectionTestRequest,
+    TranslationConnectionTestResponse,
 )
 from app.schemas.directory import AuthUserSummary
 from app.services.translation_operations_store import TranslationOperationsStore
@@ -49,6 +51,11 @@ def translation_policy(user: AuthUserSummary = Depends(require_admin)) -> Transl
 def update_translation_policy(payload: TranslationPolicyRequest, user: AuthUserSummary = Depends(require_admin)) -> TranslationPolicyResponse:
     service = TranslationService()
     return TranslationPolicyResponse(**service.update_policy(payload, user))
+
+
+@admin_router.post("/admin/test-connection", response_model=TranslationConnectionTestResponse)
+def test_translation_connection(payload: TranslationConnectionTestRequest, user: AuthUserSummary = Depends(require_admin)) -> TranslationConnectionTestResponse:
+    return TranslationService().test_connection(payload, user)
 
 
 @admin_router.get("/reviews", response_model=TranslationReviewListResponse)

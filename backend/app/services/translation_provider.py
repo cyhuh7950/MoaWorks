@@ -9,6 +9,19 @@ from urllib import request as urllib_request
 from urllib.parse import urlparse
 
 
+PROVIDER_PROFILES: dict[str, dict[str, Any]] = {
+    "cerebras": {"label": "CEREBRAS", "apiBaseUrl": "https://api.cerebras.ai/v1", "apiKeyRequired": True, "protocol": "openai"},
+    "groq": {"label": "GROQ", "apiBaseUrl": "https://api.groq.com/openai/v1", "apiKeyRequired": True, "protocol": "openai"},
+    "mistral": {"label": "MISTRAL", "apiBaseUrl": "https://api.mistral.ai/v1", "apiKeyRequired": True, "protocol": "openai"},
+    "openai": {"label": "OPENAI", "apiBaseUrl": "https://api.openai.com/v1", "apiKeyRequired": True, "protocol": "openai"},
+    "upstage": {"label": "UPSTAGE", "apiBaseUrl": "https://api.upstage.ai/v1", "apiKeyRequired": True, "protocol": "openai"},
+    "gemini": {"label": "GEMINI", "apiBaseUrl": "https://generativelanguage.googleapis.com/v1beta/openai", "apiKeyRequired": True, "protocol": "openai"},
+    "openrouter": {"label": "OPENROUTER", "apiBaseUrl": "https://openrouter.ai/api/v1", "apiKeyRequired": True, "protocol": "openai"},
+    "anthropic": {"label": "ANTHROPIC", "apiBaseUrl": "https://api.anthropic.com/v1", "apiKeyRequired": True, "protocol": "anthropic"},
+    "ollama": {"label": "OLLAMA", "apiBaseUrl": "http://ollama:11434/v1", "apiKeyRequired": False, "protocol": "openai"},
+}
+
+
 @dataclass(frozen=True)
 class ProviderResult:
     translated_text: str
@@ -23,6 +36,9 @@ class JsonTransport(Protocol):
 
 
 class UrllibJsonTransport:
+    def __init__(self, *, allowed_private_hosts: set[str] | None = None) -> None:
+        self.allowed_private_hosts = {item.lower() for item in (allowed_private_hosts or set())}
+
     def post_json(self, *, url: str, headers: dict[str, str], payload: dict, timeout_seconds: float) -> dict:
         self._validate_public_https_url(url)
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -37,10 +53,13 @@ class UrllibJsonTransport:
             raise ValueError("translation provider response must be an object")
         return parsed
 
-    @staticmethod
-    def _validate_public_https_url(url: str) -> None:
+    def _validate_public_https_url(self, url: str) -> None:
         parsed = urlparse(url)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        if not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("translation provider URL must be public HTTPS")
+        if parsed.hostname.lower() in self.allowed_private_hosts and parsed.scheme in {"http", "https"}:
+            return
+        if parsed.scheme != "https":
             raise ValueError("translation provider URL must be public HTTPS")
         try:
             addresses = {item[4][0] for item in socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)}
@@ -90,8 +109,8 @@ class EchoProvider(TranslationProvider):
 
 
 class OpenAICompatibleProvider(TranslationProvider):
-    def __init__(self, *, api_key: str, api_base_url: str, model: str, transport: JsonTransport | None = None, timeout_seconds: float = 15) -> None:
-        super().__init__(name="openai-compatible", available=bool(api_key and api_base_url and model))
+    def __init__(self, *, api_key: str, api_base_url: str, model: str, transport: JsonTransport | None = None, timeout_seconds: float = 15, provider_name: str = "openai-compatible", api_key_required: bool = True) -> None:
+        super().__init__(name=provider_name, available=bool(api_base_url and model and (api_key or not api_key_required)))
         self.api_key = api_key
         self.api_base_url = api_base_url.rstrip("/")
         self.model = model
@@ -109,7 +128,7 @@ class OpenAICompatibleProvider(TranslationProvider):
         }
         response = self.transport.post_json(
             url=f"{self.api_base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {self.api_key}"},
+            headers={"Authorization": f"Bearer {self.api_key}"} if self.api_key else {},
             payload=payload,
             timeout_seconds=self.timeout_seconds,
         )
@@ -126,6 +145,38 @@ class OpenAICompatibleProvider(TranslationProvider):
             prompt = usage.get("prompt_tokens", 0)
             completion = usage.get("completion_tokens", 0)
             billable_units = prompt + completion if isinstance(prompt, (int, float)) and isinstance(completion, (int, float)) else None
+        return ProviderResult(translated.strip(), source_locale, model=self.model, metadata={"usage": usage, "billableUnits": billable_units, "costUnit": "tokens"})
+
+
+class AnthropicProvider(TranslationProvider):
+    def __init__(self, *, api_key: str, api_base_url: str, model: str, transport: JsonTransport | None = None, timeout_seconds: float = 15) -> None:
+        super().__init__(name="anthropic", available=bool(api_key and api_base_url and model))
+        self.api_key = api_key
+        self.api_base_url = api_base_url.rstrip("/")
+        self.model = model
+        self.transport = transport or UrllibJsonTransport()
+        self.timeout_seconds = timeout_seconds
+
+    def translate(self, text: str, source_locale: str, target_locale: str) -> ProviderResult:
+        response = self.transport.post_json(
+            url=f"{self.api_base_url}/messages",
+            headers={"x-api-key": self.api_key, "anthropic-version": "2023-06-01"},
+            payload={
+                "model": self.model,
+                "max_tokens": 4096,
+                "system": "Translate faithfully. Return only the translated text.",
+                "messages": [{"role": "user", "content": f"source={source_locale}; target={target_locale}\n{text}"}],
+            },
+            timeout_seconds=self.timeout_seconds,
+        )
+        content = response.get("content")
+        translated = next((item.get("text") for item in content if isinstance(item, dict) and item.get("type") == "text"), None) if isinstance(content, list) else None
+        if not isinstance(translated, str) or not translated.strip():
+            raise ValueError("Anthropic response has no translated text")
+        usage = response.get("usage") if isinstance(response.get("usage"), dict) else {}
+        input_tokens = usage.get("input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
+        billable_units = input_tokens + output_tokens if isinstance(input_tokens, (int, float)) and isinstance(output_tokens, (int, float)) else None
         return ProviderResult(translated.strip(), source_locale, model=self.model, metadata={"usage": usage, "billableUnits": billable_units, "costUnit": "tokens"})
 
 
@@ -171,6 +222,18 @@ def resolve_translation_provider(
     provider = (provider_name or "disabled").strip().lower()
     if provider == "openai-compatible":
         return OpenAICompatibleProvider(api_key=api_key, api_base_url=api_base_url, model=model, transport=transport, timeout_seconds=timeout_seconds)
+    profile = PROVIDER_PROFILES.get(provider)
+    if profile is not None:
+        resolved_base_url = api_base_url or str(profile["apiBaseUrl"])
+        if profile["protocol"] == "anthropic":
+            return AnthropicProvider(api_key=api_key, api_base_url=resolved_base_url, model=model, transport=transport, timeout_seconds=timeout_seconds)
+        resolved_transport = transport
+        if resolved_transport is None and provider == "ollama":
+            resolved_transport = UrllibJsonTransport(allowed_private_hosts={"localhost", "127.0.0.1", "ollama"})
+        return OpenAICompatibleProvider(
+            api_key=api_key, api_base_url=resolved_base_url, model=model, transport=resolved_transport,
+            timeout_seconds=timeout_seconds, provider_name=provider, api_key_required=bool(profile["apiKeyRequired"]),
+        )
     if provider == "deepl":
         return DeepLProvider(api_key=api_key, api_base_url=api_base_url, transport=transport, timeout_seconds=timeout_seconds)
     return {"disabled": DisabledProvider, "noop": NoopProvider, "echo": EchoProvider}.get(provider, DisabledProvider)()

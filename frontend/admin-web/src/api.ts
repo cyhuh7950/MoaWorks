@@ -274,6 +274,23 @@ export type TranslationPolicy = {
   circuitRecoverySeconds: number;
   costPerMillionUnits?: number | null;
   costUnit: "tokens" | "characters";
+  providerOptions: TranslationProviderOption[];
+};
+
+export type TranslationProviderOption = {
+  provider: string;
+  label: string;
+  apiBaseUrl: string;
+  apiKeyRequired: boolean;
+};
+
+export type TranslationConnectionTestResponse = {
+  success: boolean;
+  provider: string;
+  model: string;
+  code: string;
+  message: string;
+  testedAt: string;
 };
 
 export type TranslationReview = {
@@ -956,6 +973,17 @@ export async function updateTranslationPolicy(
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function testTranslationProviderConnection(
+  token: string,
+  payload: { provider: string; model: string; apiBaseUrl: string; apiKey?: string; timeoutSeconds: number },
+): Promise<TranslationConnectionTestResponse> {
+  return request<TranslationConnectionTestResponse>("/translation/admin/test-connection", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(payload),
   });
 }

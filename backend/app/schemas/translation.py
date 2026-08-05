@@ -99,22 +99,58 @@ class TranslationPolicyRequest(BaseModel):
 
     @field_validator("apiBaseUrl")
     @classmethod
-    def validate_api_base_url(cls, value: str | None) -> str | None:
+    def normalize_api_base_url(cls, value: str | None) -> str | None:
         if value is None or not value.strip():
             return value
         normalized = value.strip().rstrip("/")
         parsed = urlparse(normalized)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
-            raise ValueError("API Base URL은 사용자 정보가 없는 HTTPS 주소여야 합니다.")
-        if parsed.hostname.lower() == "localhost":
-            raise ValueError("내부 주소는 Provider URL로 사용할 수 없습니다.")
-        try:
-            address = ip_address(parsed.hostname)
-        except ValueError:
-            return normalized
-        if not address.is_global:
-            raise ValueError("공인 IP만 Provider URL로 사용할 수 있습니다.")
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("API Base URL 형식이 올바르지 않습니다.")
         return normalized
+
+    @model_validator(mode="after")
+    def validate_provider_url(self):
+        _validate_provider_url(self.provider, self.apiBaseUrl)
+        return self
+
+
+class TranslationProviderOption(BaseModel):
+    provider: str
+    label: str
+    apiBaseUrl: str
+    apiKeyRequired: bool
+
+
+class TranslationConnectionTestRequest(BaseModel):
+    provider: str
+    model: str = Field(min_length=1, max_length=200)
+    apiBaseUrl: str = Field(min_length=1, max_length=500)
+    apiKey: SecretStr | None = Field(default=None, min_length=1, max_length=1000)
+    timeoutSeconds: int = Field(default=15, ge=1, le=120)
+
+    @field_validator("provider")
+    @classmethod
+    def normalize_provider(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("apiBaseUrl")
+    @classmethod
+    def normalize_api_base_url(cls, value: str) -> str:
+        return value.strip().rstrip("/")
+
+    @model_validator(mode="after")
+    def validate_connection_config(self):
+        _validate_provider_url(self.provider, self.apiBaseUrl)
+        return self
+
+
+class TranslationConnectionTestResponse(BaseModel):
+    success: bool
+    provider: str
+    model: str
+    code: str
+    message: str
+    testedAt: datetime
 
 
 class TranslationPolicyResponse(BaseModel):
@@ -134,6 +170,7 @@ class TranslationPolicyResponse(BaseModel):
     circuitRecoverySeconds: int = 60
     costPerMillionUnits: float | None = None
     costUnit: Literal["tokens", "characters"] = "tokens"
+    providerOptions: list[TranslationProviderOption] = Field(default_factory=list)
 
 
 class TranslationReviewActionRequest(BaseModel):
@@ -168,3 +205,26 @@ class TranslationReviewItem(BaseModel):
 class TranslationReviewListResponse(BaseModel):
     items: list[TranslationReviewItem]
     total: int
+
+
+def _validate_provider_url(provider: str | None, value: str | None) -> None:
+    if not value:
+        return
+    parsed = urlparse(value)
+    if not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("API Base URL 형식이 올바르지 않습니다.")
+    normalized_provider = (provider or "").strip().lower()
+    if normalized_provider == "ollama":
+        if parsed.scheme not in {"http", "https"} or parsed.hostname.lower() not in {"localhost", "127.0.0.1", "ollama"}:
+            raise ValueError("Ollama URL은 승인된 로컬 호스트만 사용할 수 있습니다.")
+        return
+    if parsed.scheme != "https":
+        raise ValueError("외부 LLM API는 HTTPS 주소여야 합니다.")
+    if parsed.hostname.lower() == "localhost":
+        raise ValueError("내부 주소는 외부 Provider URL로 사용할 수 없습니다.")
+    try:
+        address = ip_address(parsed.hostname)
+    except ValueError:
+        return
+    if not address.is_global:
+        raise ValueError("공인 IP만 외부 Provider URL로 사용할 수 있습니다.")

@@ -43,6 +43,7 @@ import {
   rollbackMailOperationsProvider,
   storeToken,
   testMailOperationsProvider,
+  testTranslationProviderConnection,
   testRelay,
   syncOciMailSuppressions,
   switchMailOperationsProvider,
@@ -57,6 +58,7 @@ import {
   type TranslationResponse,
   type TranslationStatus,
   type TranslationReview,
+  type TranslationConnectionTestResponse,
   type UiContract as ServerUiContract,
   type DirectoryOverview,
   type MailDeliveryQueueResponse,
@@ -734,6 +736,7 @@ export default function App() {
   const [translationResult, setTranslationResult] = useState<TranslationItem[]>([]);
   const [translationError, setTranslationError] = useState("");
   const [translationLoading, setTranslationLoading] = useState(false);
+  const [translationConnectionResult, setTranslationConnectionResult] = useState<TranslationConnectionTestResponse | null>(null);
   const [translationReviews, setTranslationReviews] = useState<TranslationReview[]>([]);
   const [translationReviewStatus, setTranslationReviewStatus] = useState("all");
   const [selectedTranslationReviewId, setSelectedTranslationReviewId] = useState("");
@@ -1119,6 +1122,7 @@ export default function App() {
         circuitFailureThreshold: String(policy.circuitFailureThreshold), circuitRecoverySeconds: String(policy.circuitRecoverySeconds),
         costPerMillionUnits: policy.costPerMillionUnits == null ? "" : String(policy.costPerMillionUnits), costUnit: policy.costUnit,
       });
+      setTranslationConnectionResult(null);
       const reviews = await fetchTranslationReviews(nextToken, translationReviewStatus === "all" ? undefined : translationReviewStatus);
       setTranslationReviews(reviews.items);
       setTranslationTargetLocale(toTranslationLocale(policy.supportedTargetLocales.includes(translationTargetLocale) ? translationTargetLocale : policy.supportedTargetLocales[0]));
@@ -1261,6 +1265,40 @@ export default function App() {
       setMessage("번역 Provider 정책을 저장했습니다. 비밀키 원문은 다시 표시하지 않습니다.");
     } catch (error) {
       setTranslationError(error instanceof Error ? error.message : "번역 Provider 정책 저장 실패");
+    } finally {
+      setTranslationLoading(false);
+    }
+  }
+
+  function applyTranslationProviderSelection(provider: string) {
+    const option = translationPolicy?.providerOptions.find((item) => item.provider === provider);
+    setTranslationPolicyForm((current) => ({
+      ...current,
+      provider,
+      apiBaseUrl: option?.apiBaseUrl ?? "",
+      model: "",
+      apiKey: "",
+    }));
+    setTranslationConnectionResult(null);
+    setTranslationError("");
+  }
+
+  async function runTranslationProviderConnectionTest() {
+    if (!token) return;
+    setTranslationLoading(true);
+    setTranslationConnectionResult(null);
+    setTranslationError("");
+    try {
+      const result = await testTranslationProviderConnection(token, {
+        provider: translationPolicyForm.provider,
+        model: translationPolicyForm.model.trim(),
+        apiBaseUrl: translationPolicyForm.apiBaseUrl.trim(),
+        timeoutSeconds: Number(translationPolicyForm.timeoutSeconds),
+        ...(translationPolicyForm.apiKey ? { apiKey: translationPolicyForm.apiKey } : {}),
+      });
+      setTranslationConnectionResult(result);
+    } catch (error) {
+      setTranslationError(error instanceof Error ? error.message : "LLM Provider 연결 테스트 실패");
     } finally {
       setTranslationLoading(false);
     }
@@ -2089,6 +2127,7 @@ export default function App() {
   const showLoginPanel = initialized && (!token || !overview) && (Boolean(token) || publicUiContractState !== "pending");
   const hasStoredSessionButNoOverview = initialized && Boolean(token) && !overview;
   const supportedTranslationTargets = translationPolicy?.supportedTargetLocales?.length ? translationPolicy.supportedTargetLocales : (translationStatus?.supportedTargetLocales ?? ["en"]);
+  const translationUiVisible = translationStatus?.available === true;
   const selectedTranslationReview = translationReviews.find((item) => item.id === selectedTranslationReviewId) ?? null;
   const activeMenu = adminMenus.find((item) => item.key === activeAdminMenu) ?? adminMenus[0];
   const showAdminConsole = initialized && Boolean(token) && Boolean(overview);
@@ -2224,10 +2263,10 @@ export default function App() {
         <div className="ops-list-panel">
           <div className="ops-list-head"><strong>번역 Provider 운영</strong><span className="muted">API 키는 암호화 저장되며 저장 후 원문을 다시 표시하지 않습니다.</span></div>
           <form className="ops-toolbar-grid" onSubmit={saveTranslationProviderPolicy}>
-            <label className="compact-field"><span>Provider</span><select value={translationPolicyForm.provider} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, provider: event.target.value }))}><option value="disabled">disabled</option><option value="openai-compatible">OpenAI 호환 LLM</option><option value="deepl">DeepL</option></select></label>
+            <label className="compact-field"><span>LLM Provider</span><select value={translationPolicyForm.provider} onChange={(event) => applyTranslationProviderSelection(event.target.value)}><option value="disabled">선택 안 함</option>{translationPolicy?.providerOptions.map((item) => <option key={item.provider} value={item.provider}>{item.label}</option>)}</select></label>
             <label className="compact-field"><span>모델</span><input value={translationPolicyForm.model} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, model: event.target.value }))} placeholder="Provider 모델명" /></label>
-            <label className="compact-field compact-field-wide"><span>API Base URL</span><input value={translationPolicyForm.apiBaseUrl} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, apiBaseUrl: event.target.value }))} placeholder="https://.../v1 또는 https://api-free.deepl.com/v2" /></label>
-            <label className="compact-field"><span>API 키 {translationPolicy?.apiKeyConfigured ? "(설정됨)" : "(미설정)"}</span><input type="password" autoComplete="new-password" value={translationPolicyForm.apiKey} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, apiKey: event.target.value }))} placeholder={translationPolicy?.apiKeyConfigured ? "변경할 때만 입력" : "API 키 입력"} /></label>
+            <label className="compact-field compact-field-wide"><span>API Base URL</span><input value={translationPolicyForm.apiBaseUrl} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, apiBaseUrl: event.target.value }))} placeholder="Provider 선택 시 기본 주소가 입력됩니다." /></label>
+            <label className="compact-field"><span>API 키 {translationPolicy?.provider === translationPolicyForm.provider && translationPolicy.apiKeyConfigured ? "(설정됨)" : translationPolicy?.providerOptions.find((item) => item.provider === translationPolicyForm.provider)?.apiKeyRequired === false ? "(선택)" : "(미설정)"}</span><input type="password" autoComplete="new-password" value={translationPolicyForm.apiKey} onChange={(event) => { setTranslationPolicyForm((current) => ({ ...current, apiKey: event.target.value })); setTranslationConnectionResult(null); }} placeholder={translationPolicy?.provider === translationPolicyForm.provider && translationPolicy.apiKeyConfigured ? "변경할 때만 입력" : "API 키 입력"} /></label>
             <label className="compact-field"><span>Timeout(초)</span><input type="number" min="1" max="120" value={translationPolicyForm.timeoutSeconds} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, timeoutSeconds: event.target.value }))} /></label>
             <label className="compact-field"><span>재시도</span><input type="number" min="0" max="5" value={translationPolicyForm.maxRetries} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, maxRetries: event.target.value }))} /></label>
             <label className="compact-field"><span>분당 제한</span><input type="number" min="1" max="10000" value={translationPolicyForm.rateLimitPerMinute} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, rateLimitPerMinute: event.target.value }))} /></label>
@@ -2236,9 +2275,11 @@ export default function App() {
             <label className="compact-field"><span>백만 단위당 비용</span><input type="number" min="0" step="0.000001" value={translationPolicyForm.costPerMillionUnits} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, costPerMillionUnits: event.target.value }))} placeholder="계약 요율" /></label>
             <label className="compact-field"><span>비용 단위</span><select value={translationPolicyForm.costUnit} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, costUnit: event.target.value as "tokens" | "characters" }))}><option value="tokens">tokens</option><option value="characters">characters</option></select></label>
             <label className="permission-check"><input type="checkbox" checked={translationPolicyForm.cacheEnabled} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, cacheEnabled: event.target.checked }))} /><span>PostgreSQL 캐시 사용</span></label>
-            <div className="actions compact-actions"><button type="submit" disabled={translationLoading}>Provider 정책 저장</button><button type="button" className="secondary" disabled={translationLoading} onClick={() => void toggleTranslationPolicy(!(translationStatus?.enabled ?? false))}>{translationStatus?.enabled ? "번역 비활성화" : "번역 활성화"}</button></div>
+            <div className="actions compact-actions"><button type="button" className="secondary" disabled={translationLoading || translationPolicyForm.provider === "disabled" || !translationPolicyForm.model.trim() || !translationPolicyForm.apiBaseUrl.trim()} onClick={() => void runTranslationProviderConnectionTest()}>연결 테스트</button><button type="submit" disabled={translationLoading}>Provider 정책 저장</button><button type="button" className="secondary" disabled={translationLoading} onClick={() => void toggleTranslationPolicy(!(translationStatus?.enabled ?? false))}>{translationStatus?.enabled ? "번역 비활성화" : "번역 활성화"}</button></div>
+            {translationConnectionResult ? <p className={`notice ${translationConnectionResult.success ? "success" : "danger"}`}>{translationConnectionResult.message} ({translationConnectionResult.provider} / {translationConnectionResult.model})</p> : null}
           </form>
         </div>
+        {translationUiVisible ? (<>
         <div className="split-panel">
           <form className="ops-list-panel" onSubmit={runTranslationDemo}>
             <div className="ops-list-head"><strong>실제 번역</strong><span className="muted">자동 감지 또는 원문 언어를 직접 선택합니다.</span></div>
@@ -2256,6 +2297,7 @@ export default function App() {
           </div>
         </div>
         {selectedTranslationReview ? <div className="ops-list-panel"><div className="ops-list-head"><strong>원문·번역문 비교</strong><span className="muted">{selectedTranslationReview.provider} / {selectedTranslationReview.model || "기본 모델"} / {selectedTranslationReview.status}</span></div><div className="split-panel"><label><span>원문</span><textarea value={selectedTranslationReview.sourceText} readOnly /></label><label><span>번역문</span><textarea value={translationReviewDraft} onChange={(event) => setTranslationReviewDraft(event.target.value)} /></label></div><div className="actions compact-actions"><button type="button" onClick={() => void runTranslationReviewAction("edit")} disabled={translationLoading}>수정 저장</button><button type="button" onClick={() => void runTranslationReviewAction("approve")} disabled={translationLoading || selectedTranslationReview.status === "approved"}>승인</button><button type="button" className="secondary" onClick={() => void runTranslationReviewAction("retranslate")} disabled={translationLoading || !translationStatus?.available}>재번역</button></div></div> : null}
+        </>) : <p className="notice">LLM 설정과 활성화 후 번역 실행·검수 화면이 표시됩니다.</p>}
         {translationError ? <p className="notice danger">{translationError}</p> : null}
         <div className="management-list-toolbar" role="toolbar" aria-label="메시지 목록 작업">
           <label className="compact-field"><span>검색</span><input value={messageSearch} onChange={(event) => setMessageSearch(event.target.value)} placeholder="키 또는 분류" /></label>
@@ -3006,7 +3048,7 @@ export default function App() {
         <p className="lead">운영 콘솔은 사용자 관리 및 서비스 점검을 위한 단일 진입 화면입니다.</p>
       </section>
 
-      <section className="panel" hidden={!token || showAdminConsole || !initialized}>
+      <section className="panel" hidden={!token || showAdminConsole || !initialized || !translationUiVisible}>
         <div className="panel-head">
           <div>
             <h2>시스템 상태 요약</h2>
