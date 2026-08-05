@@ -43,6 +43,7 @@ type Props = {
   onComposeMail: (email: string) => void;
   onOpenWorkspaceSettings: (target: "mail" | "approval" | "calendar") => void;
   calendarSettingsRequestKey: number;
+  translationTool?: React.ReactNode;
 };
 
 const panelStyle = { borderRadius: 18, padding: 16, background: "#fff", border: "1px solid #dbe4ec", minHeight: 0, overflow: "auto" } as const;
@@ -63,7 +64,7 @@ function WorkspaceModal({ title, children, showScheduleError, error, onClose }: 
   return <div role="dialog" aria-modal="true" style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(15,23,42,.42)", display: "grid", placeItems: "center", padding: 24 }}><section style={{ width: "min(640px, 100%)", maxHeight: "min(760px, calc(100vh - 48px))", overflow: "auto", borderRadius: 18, padding: 20, background: "#fff", boxShadow: "0 24px 64px rgba(15,23,42,.28)" }}><header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}><h2 style={{ margin: 0, fontSize: 22 }}>{title}</h2><button type="button" onClick={onClose} style={buttonStyle}>{"\uB2EB\uAE30"}</button></header>{showScheduleError && error ? <div role="alert" style={{ marginBottom: 12, color: "#b91c1c", fontSize: 12 }}>{error}</div> : null}{children}</section></div>;
 }
 
-export function WorkspacePanels({ menu, token, locale, timezone, ownerUserId, initialSelectionId, onPreferencesSaved, onComposeMail, onOpenWorkspaceSettings, calendarSettingsRequestKey }: Props) {
+export function WorkspacePanels({ menu, token, locale, timezone, ownerUserId, initialSelectionId, onPreferencesSaved, onComposeMail, onOpenWorkspaceSettings, calendarSettingsRequestKey, translationTool }: Props) {
   const [schedules, setSchedules] = useState<WorkspaceSchedule[]>([]);
   const [calendarData, setCalendarData] = useState<WorkspaceCalendarData>({ owned: [], subscriptions: [], incomingRequests: [] });
   const [scheduleLoading, setScheduleLoading] = useState(false);
@@ -169,7 +170,7 @@ export function WorkspacePanels({ menu, token, locale, timezone, ownerUserId, in
   else if (menu === "contacts") view = <AddressBookPanel token={token} initialSelectionId={initialSelectionId} onComposeMail={onComposeMail} />;
   else if (menu === "org") view = <OrganizationPanel token={token} initialSelectionId={initialSelectionId} onComposeMail={onComposeMail} />;
   else if (menu === "files") view = <FilePanel token={token} currentUserId={ownerUserId} initialSelectionId={initialSelectionId} />;
-  else view = <SettingsHelpPanel mode={menu === "settings" ? "settings" : "help"} token={token} onPreferencesSaved={onPreferencesSaved} onOpenWorkspaceSettings={onOpenWorkspaceSettings} />;
+  else view = <SettingsHelpPanel mode={menu === "settings" ? "settings" : "help"} token={token} onPreferencesSaved={onPreferencesSaved} onOpenWorkspaceSettings={onOpenWorkspaceSettings} translationTool={translationTool} />;
 
   const modalTitle = modal === "contact" ? (selectedContact ? "연락처 수정" : "연락처 추가") : modal === "file" ? (fileEditingId ? "파일 이름 변경" : "파일 업로드") : "삭제 확인";
   return <section style={{ minHeight: 0, height: "100%", display: "grid", gridTemplateRows: "auto minmax(0,1fr)", gap: 8 }}>
