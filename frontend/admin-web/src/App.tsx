@@ -69,6 +69,7 @@ import {
   type MailDeliveryQueueResponse,
   type AdminMessengerRoom,
   type MailDeliveryStatusResponse,
+  type MailOperationsProvider,
   type MailOperationsOverview,
   type MailSendResponse,
   type Role,
@@ -717,6 +718,13 @@ function normalizeLoginIdInput(value: string): string {
 
 function buildCompanyLoginEmail(loginId: string, companyDomain: string): string {
   return `${normalizeLoginIdInput(loginId)}@${companyDomain.trim().toLowerCase()}`;
+}
+
+function formatMailProviderDkimStatus(provider: MailOperationsProvider): string {
+  if (provider.providerKey === "oci_email_delivery") {
+    return provider.dkimDomain && provider.dkimSelector ? `${provider.dkimSelector} OCI 관리` : "미설정";
+  }
+  return provider.dkimPrivateKeyConfigured ? `${provider.dkimSelector ?? "-"} 설정` : "미설정";
 }
 
 export default function App() {
@@ -2882,7 +2890,7 @@ export default function App() {
               </div>
               <div className="ops-list-panel">
                 <div className="ops-list-head"><strong>Provider 상태</strong><span className="muted">비밀값은 화면과 API 응답에 노출하지 않습니다.</span></div>
-                <div className="table-wrap"><table className="data-table"><thead><tr><th>Provider</th><th>활성</th><th>발송 잠금</th><th>연결 검증</th><th>DKIM</th></tr></thead><tbody>{(mailOperations?.providers ?? []).map((provider) => <tr key={provider.providerId}><td>{provider.providerKey}</td><td>{provider.active ? "활성" : "대기"}</td><td>{provider.deliveryEnabled ? "해제" : "잠김"}</td><td>{provider.lastTestStatus}</td><td>{provider.dkimPrivateKeyConfigured ? `${provider.dkimSelector ?? "-"} 설정` : "미설정"}</td></tr>)}{(mailOperations?.providers.length ?? 0) === 0 ? <tr><td colSpan={5}>Provider 설정이 없습니다.</td></tr> : null}</tbody></table></div>
+                <div className="table-wrap"><table className="data-table"><thead><tr><th>Provider</th><th>활성</th><th>발송 잠금</th><th>연결 검증</th><th>DKIM</th></tr></thead><tbody>{(mailOperations?.providers ?? []).map((provider) => <tr key={provider.providerId}><td>{provider.providerKey}</td><td>{provider.active ? "활성" : "대기"}</td><td>{provider.deliveryEnabled ? "해제" : "잠김"}</td><td>{provider.lastTestStatus}</td><td>{formatMailProviderDkimStatus(provider)}</td></tr>)}{(mailOperations?.providers.length ?? 0) === 0 ? <tr><td colSpan={5}>Provider 설정이 없습니다.</td></tr> : null}</tbody></table></div>
               </div>
               <div className="ops-list-panel"><div className="ops-list-head"><strong>최근 전달 이력</strong></div><div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>수신자</th><th>제목</th><th>상태</th><th>재시도</th></tr></thead><tbody>{(mailDeliveryQueue?.queue ?? []).map((item) => <tr key={item.queueId} onDoubleClick={() => { setOperationDetail({ title: "전달 상세", lines: [item.recipient, item.subject, item.status, `재시도 ${item.attemptCount}`, item.lastError ?? "오류 없음"] }); setOperationsDialog("audit"); }}><td>{item.recipient}</td><td>{item.subject}</td><td>{item.status}</td><td>{item.attemptCount}</td></tr>)}{(mailDeliveryQueue?.queue?.length ?? 0) === 0 ? <tr><td colSpan={4}>전달 이력이 없습니다.</td></tr> : null}</tbody></table></div></div>
             </div>
