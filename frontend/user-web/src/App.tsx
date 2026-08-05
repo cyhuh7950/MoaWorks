@@ -5824,6 +5824,63 @@ export default function App() {
                 ))}
               </div>
             </article>
+            {translationUiVisible ? (
+              <article
+                data-testid="user-translation-tool"
+                style={{ gridColumn: "1 / -1", borderRadius: 24, padding: 22, border: "1px solid #dbe4ec", background: "#fff" }}
+              >
+                <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>번역 보조 도구</div>
+                <h2 style={{ margin: "10px 0 0" }}>업무 문장 번역</h2>
+                <p style={{ color: "#475569", lineHeight: 1.65 }}>
+                  번역 기능은 핵심 업무를 막지 않는 보조 도구입니다. 관리자가 LLM Provider를 활성화한 경우에만 표시됩니다.
+                </p>
+                <form onSubmit={runTranslationDemo} style={{ display: "grid", gap: 10, marginTop: 14 }}>
+                  <textarea
+                    aria-label="번역 원문"
+                    value={translationSource}
+                    onChange={(event) => setTranslationSource(event.target.value)}
+                    placeholder="번역할 원문을 입력하세요."
+                    style={{ minHeight: 110, borderRadius: 16, border: "1px solid #cbd5e1", padding: 14, font: "inherit", resize: "vertical" }}
+                  />
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    <select
+                      aria-label="번역 언어"
+                      value={translationTargetLocale}
+                      onChange={(event) => setTranslationTargetLocale(event.target.value)}
+                      style={{ height: 44, borderRadius: 14, border: "1px solid #cbd5e1", padding: "0 12px", background: "#fff" }}
+                    >
+                      <option value="en">영어</option>
+                      <option value="ko">한국어</option>
+                      <option value="ja">일본어</option>
+                      <option value="zh-cn">중국어(간체)</option>
+                      <option value="es">스페인어</option>
+                      <option value="fr">프랑스어</option>
+                      <option value="de">독일어</option>
+                    </select>
+                    <button
+                      type="submit"
+                      disabled={translationLoading}
+                      style={{ height: 44, borderRadius: 14, border: "1px solid #cbd5e1", background: "#fff", padding: "0 14px", fontWeight: 700, cursor: translationLoading ? "wait" : "pointer" }}
+                    >
+                      {translationLoading ? "번역 중..." : "번역"}
+                    </button>
+                    <span style={{ color: "#64748b", fontSize: 12 }}>Provider: {translationStatus.provider}</span>
+                  </div>
+                  {translationError ? <div role="alert" style={{ color: "#b91c1c" }}>{translationError}</div> : null}
+                  {translationResult.length > 0 ? (
+                    <div style={{ display: "grid", gap: 10 }}>
+                      {translationResult.map((item) => (
+                        <div key={`${item.sourceLocale}-${item.targetLocale}-${item.originalText}`} style={{ padding: 14, borderRadius: 16, background: "#f8fafc", border: "1px solid #dbe4ec" }}>
+                          <div style={{ fontSize: 12, color: "#475569" }}>{item.sourceLocale} → {item.targetLocale}</div>
+                          <div style={{ marginTop: 8, color: "#334155" }}>{item.originalText}</div>
+                          <div style={{ marginTop: 8, color: "#0f766e", fontWeight: 700 }}>{item.translatedText}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </form>
+              </article>
+            ) : null}
           </section>
         );
       }
