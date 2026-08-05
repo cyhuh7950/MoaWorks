@@ -1032,8 +1032,10 @@ export async function requestTranslation(payload: TranslationRequest, token: str
   });
 }
 
-export async function fetchTranslationStatus(): Promise<{ available: boolean; enabled: boolean; provider: string }> {
-  return request<{ available: boolean; enabled: boolean; provider: string }>("/translation/status");
+export async function fetchTranslationStatus(token: string): Promise<{ available: boolean; enabled: boolean; provider: string }> {
+  return request<{ available: boolean; enabled: boolean; provider: string }>("/translation/status", {
+    headers: authHeaders(token),
+  });
 }
 
 export async function fetchUiContract(): Promise<UiContract> {

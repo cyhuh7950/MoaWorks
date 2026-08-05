@@ -33,9 +33,9 @@ def translate(payload: TranslationRequest, user: AuthUserSummary = Depends(get_c
 
 
 @router.get("/status", response_model=TranslationStatus)
-def translation_status() -> TranslationStatus:
+def translation_status(user: AuthUserSummary = Depends(get_current_user)) -> TranslationStatus:
     service = TranslationService()
-    return service.get_status()
+    return service.get_status(user)
 
 
 @admin_router.get("/admin/status", response_model=TranslationStatus)

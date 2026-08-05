@@ -1893,7 +1893,7 @@ export default function App() {
 
   async function loadTranslationState() {
     try {
-      const status = await fetchTranslationStatus();
+      const status = await fetchTranslationStatus(token);
       setTranslationStatus(status as { provider: string; enabled: boolean; available: boolean });
     } catch {
       setTranslationStatus(null);
