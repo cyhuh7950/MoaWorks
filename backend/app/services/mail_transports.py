@@ -239,7 +239,9 @@ class MailProviderRoutingAdapter:
         sender_domain = sender_email.rsplit("@", 1)[-1] if "@" in sender_email else "localhost"
         queue_id = str(envelope.get("queue_id") or "").strip()
         bounce_domain = str(provider.get("dkim_domain") or sender_domain).strip().lower()
-        envelope_from = f"bounce+{queue_id}@{bounce_domain}" if queue_id else sender_email
+        envelope_from = sender_email
+        if provider_type != "oci_email_delivery" and queue_id:
+            envelope_from = f"bounce+{queue_id}@{bounce_domain}"
         message = OutboundMessage(
             sender_email=sender_email,
             recipient_email=recipient_email,

@@ -33,6 +33,7 @@ class FakeLegacyRelayAdapter:
 
 def envelope() -> dict:
     return {
+        "queue_id": "queue-1",
         "sender_email": "admin@moaworks.sinsan.kr",
         "recipient_email": "person@example.net",
         "subject": "제목",
@@ -71,6 +72,8 @@ class MailDeliveryRoutingTest(unittest.TestCase):
 
         self.assertEqual(len(self.self_transport.calls), 1)
         self.assertEqual(len(self.oci_transport.calls), 0)
+        message, _, _, _ = self.self_transport.calls[0]
+        self.assertEqual(message.envelope_from, "bounce+queue-1@moaworks.sinsan.kr")
         self.assertIn("provider=self_hosted", detail)
 
     def test_legacy_self_hosted_key_remains_compatible(self) -> None:
@@ -83,7 +86,8 @@ class MailDeliveryRoutingTest(unittest.TestCase):
         detail = self.adapter.send(envelope(), provider("oci_email_delivery"))
 
         self.assertEqual(len(self.oci_transport.calls), 1)
-        _, config = self.oci_transport.calls[0]
+        message, config = self.oci_transport.calls[0]
+        self.assertEqual(message.envelope_from, "admin@moaworks.sinsan.kr")
         self.assertEqual(config.password, "plain-secret")
         self.assertNotIn("plain-secret", detail)
 
