@@ -4,6 +4,7 @@ import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
 const app = fs.readFileSync(path.join(root, "src", "App.tsx"), "utf8");
+const api = fs.readFileSync(path.join(root, "src", "api.ts"), "utf8");
 const workspacePanels = fs.readFileSync(path.join(root, "src", "WorkspacePanels.tsx"), "utf8");
 const settingsHelpPanel = fs.readFileSync(path.join(root, "src", "SettingsHelpPanel.tsx"), "utf8");
 
@@ -29,5 +30,12 @@ assert.ok(
     settingsHelpPanel.includes("{settingsDetail}{translationTool}"),
   "configured translation tool must be reachable from the current user settings route",
 );
+assert.ok(
+  api.includes("fetchTranslationStatus(token: string)") &&
+    api.includes('request<{ available: boolean; enabled: boolean; provider: string }>("/translation/status", {') &&
+    api.includes("headers: authHeaders(token)") &&
+    app.includes("fetchTranslationStatus(token)"),
+  "user translation status must use the authenticated tenant policy",
+);
 
-console.log("PASS stage03 user translation visibility contract (4 assertions)");
+console.log("PASS stage03 user translation visibility contract (5 assertions)");

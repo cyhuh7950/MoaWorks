@@ -188,6 +188,14 @@ class Stage03SchemaContractTest(unittest.TestCase):
         self.assertNotIn('@router.post("/test-connection"', route)
         self.assertNotIn('@router.post("/models"', route)
 
+    def test_user_translation_status_is_authenticated_and_tenant_scoped(self) -> None:
+        route = (ROOT / "app" / "api" / "routes" / "translation.py").read_text(encoding="utf-8")
+        self.assertIn(
+            "def translation_status(user: AuthUserSummary = Depends(get_current_user))",
+            route,
+        )
+        self.assertIn("return service.get_status(user)", route)
+
     def test_admin_policy_accepts_masked_provider_configuration(self) -> None:
         from app.schemas.translation import TranslationPolicyRequest
 
