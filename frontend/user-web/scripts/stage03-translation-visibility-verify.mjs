@@ -37,5 +37,10 @@ assert.ok(
     app.includes("fetchTranslationStatus(token)"),
   "user translation status must use the authenticated tenant policy",
 );
+assert.ok(
+  app.includes('data-testid="translation-fallback-status"') &&
+    app.includes("원문을 유지했습니다."),
+  "user translation fallback must explain the safe original-text recovery",
+);
 
-console.log("PASS stage03 user translation visibility contract (5 assertions)");
+console.log("PASS stage03 user translation visibility contract (6 assertions)");

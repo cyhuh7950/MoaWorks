@@ -46,6 +46,7 @@ const translationDemoBlock = app.slice(
   app.indexOf("\n  useEffect(() =>", app.indexOf("async function runTranslationDemo")),
 );
 check(translationDemoBlock.includes("fetchTranslationReviews"), "successful translation must refresh the review list immediately");
+check(app.includes('data-testid="translation-fallback-status"'), "actual translation fallback must show a safe recovery status");
 check(!app.includes("window.localStorage.setItem(\"translation"), "translation operations must not persist to localStorage");
 
 console.log(`PASS stage03 translation operations contract (${assertions} assertions)`);
