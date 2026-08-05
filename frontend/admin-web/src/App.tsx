@@ -1387,6 +1387,8 @@ export default function App() {
       };
       const response: TranslationResponse = await requestTranslation(payload, token);
       setTranslationResult(response.items);
+      const reviews = await fetchTranslationReviews(token, translationReviewStatus === "all" ? undefined : translationReviewStatus);
+      setTranslationReviews(reviews.items);
       if (!response.fallbackUsed && response.providerAvailable) {
         setMessage("번역 호출 성공");
       }
