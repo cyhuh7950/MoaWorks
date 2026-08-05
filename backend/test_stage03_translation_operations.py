@@ -39,6 +39,18 @@ class Stage03TranslationMigrationTest(unittest.TestCase):
 
 
 class Stage03ProviderContractTest(unittest.TestCase):
+    def test_supported_llm_provider_catalog_is_exact_and_excludes_deepl(self) -> None:
+        from app.services.translation_provider import PROVIDER_PROFILES
+
+        self.assertEqual(
+            set(PROVIDER_PROFILES),
+            {"cerebras", "groq", "mistral", "openai", "upstage", "gemini", "openrouter", "anthropic", "ollama"},
+        )
+        self.assertEqual(PROVIDER_PROFILES["openai"]["apiBaseUrl"], "https://api.openai.com/v1")
+        self.assertEqual(PROVIDER_PROFILES["gemini"]["apiBaseUrl"], "https://generativelanguage.googleapis.com/v1beta/openai")
+        self.assertFalse(PROVIDER_PROFILES["ollama"]["apiKeyRequired"])
+        self.assertNotIn("deepl", PROVIDER_PROFILES)
+
     def test_openai_compatible_provider_uses_chat_completion_contract(self) -> None:
         from app.services.translation_provider import OpenAICompatibleProvider
 
@@ -85,8 +97,75 @@ class Stage03ProviderContractTest(unittest.TestCase):
         self.assertEqual(transport.calls[0]["url"], "https://api-free.deepl.com/v2/translate")
         self.assertEqual(transport.calls[0]["headers"]["Authorization"], "DeepL-Auth-Key deepl-secret")
 
+    def test_anthropic_provider_uses_messages_contract_without_exposing_key(self) -> None:
+        from app.services.translation_provider import AnthropicProvider
+
+        transport = _RecordingTransport({"content": [{"type": "text", "text": "Hello"}], "usage": {"input_tokens": 4, "output_tokens": 1}})
+        provider = AnthropicProvider(
+            api_key="anthropic-secret", api_base_url="https://api.anthropic.com/v1",
+            model="claude-test", transport=transport, timeout_seconds=5,
+        )
+
+        result = provider.translate("안녕하세요", "auto", "en")
+
+        self.assertEqual(result.translated_text, "Hello")
+        self.assertEqual(transport.calls[0]["url"], "https://api.anthropic.com/v1/messages")
+        self.assertEqual(transport.calls[0]["headers"]["x-api-key"], "anthropic-secret")
+        self.assertEqual(transport.calls[0]["headers"]["anthropic-version"], "2023-06-01")
+        self.assertNotIn("anthropic-secret", json.dumps(result.metadata))
+
+    def test_ollama_provider_allows_optional_key_and_omits_authorization(self) -> None:
+        from app.services.translation_provider import resolve_translation_provider
+
+        transport = _RecordingTransport({"choices": [{"message": {"content": "Hello"}}], "usage": {"total_tokens": 3}})
+        provider = resolve_translation_provider(
+            "ollama", api_base_url="http://ollama:11434/v1", model="qwen3:8b", transport=transport,
+        )
+
+        self.assertTrue(provider.available)
+        self.assertEqual(provider.name, "ollama")
+        provider.translate("안녕하세요", "auto", "en")
+        self.assertNotIn("Authorization", transport.calls[0]["headers"])
+
 
 class Stage03SchemaContractTest(unittest.TestCase):
+    def test_connection_test_accepts_llm_draft_and_protects_api_key(self) -> None:
+        from app.schemas.translation import TranslationConnectionTestRequest
+
+        request = TranslationConnectionTestRequest(
+            provider="groq", model="llama-test", apiBaseUrl="https://api.groq.com/openai/v1", apiKey="secret-value",
+        )
+        self.assertEqual(request.provider, "groq")
+        self.assertEqual(request.apiKey.get_secret_value(), "secret-value")
+        self.assertNotIn("secret-value", str(request))
+
+        ollama = TranslationConnectionTestRequest(
+            provider="ollama", model="qwen3:8b", apiBaseUrl="http://ollama:11434/v1",
+        )
+        self.assertIsNone(ollama.apiKey)
+
+    def test_connection_test_can_reuse_saved_key_for_same_provider(self) -> None:
+        from app.schemas.translation import TranslationConnectionTestRequest
+
+        request = TranslationConnectionTestRequest(
+            provider="openai", model="gpt-test", apiBaseUrl="https://api.openai.com/v1",
+        )
+
+        self.assertIsNone(request.apiKey)
+
+    def test_non_ollama_provider_rejects_internal_or_plain_http_url(self) -> None:
+        from pydantic import ValidationError
+        from app.schemas.translation import TranslationConnectionTestRequest
+
+        for unsafe in ("http://api.example.test/v1", "https://127.0.0.1/v1", "https://10.0.0.5/v1"):
+            with self.assertRaises(ValidationError):
+                TranslationConnectionTestRequest(provider="openai", model="model", apiBaseUrl=unsafe, apiKey="key")
+
+    def test_translation_route_exposes_admin_connection_test_only(self) -> None:
+        route = (ROOT / "app" / "api" / "routes" / "translation.py").read_text(encoding="utf-8")
+        self.assertIn('@admin_router.post("/admin/test-connection"', route)
+        self.assertNotIn('@router.post("/test-connection"', route)
+
     def test_admin_policy_accepts_masked_provider_configuration(self) -> None:
         from app.schemas.translation import TranslationPolicyRequest
 

@@ -5,6 +5,7 @@ import path from "node:path";
 const root = path.resolve(import.meta.dirname, "..");
 const api = fs.readFileSync(path.join(root, "src", "api.ts"), "utf8");
 const app = fs.readFileSync(path.join(root, "src", "App.tsx"), "utf8");
+const providerSource = fs.readFileSync(path.resolve(root, "..", "..", "backend", "app", "services", "translation_provider.py"), "utf8");
 let assertions = 0;
 const check = (condition, message) => { assert.ok(condition, message); assertions += 1; };
 
@@ -15,12 +16,21 @@ check(api.includes('const defaultApiBase = "/api/v1";'), "translation browser AP
 check(!/https?:\/\/(?:server|localhost|127\.0\.0\.1)(?::\d+)?/i.test(api), "translation browser API must not expose internal absolute URLs");
 
 for (const token of [
-  "번역 Provider 운영", "OpenAI 호환 LLM", "DeepL", "자동 감지", "PostgreSQL 캐시 사용",
+  "번역 Provider 운영", "자동 감지", "PostgreSQL 캐시 사용",
   "번역 검수", "원문·번역문 비교", "수정 저장", "승인", "재번역", "API 키는 암호화 저장",
 ]) {
   check(app.includes(token), `missing actual translation operations UI: ${token}`);
 }
+for (const provider of ["CEREBRAS", "GROQ", "MISTRAL", "OPENAI", "UPSTAGE", "GEMINI", "OPENROUTER", "ANTHROPIC", "OLLAMA"]) {
+  check(providerSource.includes(`\"label\": \"${provider}\"`), `missing supported LLM provider profile: ${provider}`);
+}
 check(app.includes("saveTranslationProviderPolicy"), "provider policy save handler must be wired");
+check(app.includes("testTranslationProviderConnection"), "provider connection test handler must be wired");
+check(app.includes("연결 테스트"), "provider connection test button must be visible");
+check(!app.includes('<option value="deepl">DeepL</option>'), "DeepL must not be exposed as an operating provider");
+check(app.includes("const translationUiVisible = translationStatus?.available === true;"), "translation UI visibility must follow server availability");
+check(app.includes("translationUiVisible ? ("), "actual translation and review panels must be conditional");
+check(app.includes("LLM 설정과 활성화 후 번역 실행·검수 화면이 표시됩니다."), "admin must explain the hidden translation UI state");
 check(app.includes("runTranslationReviewAction"), "review action handler must be wired");
 check(
   app.includes('<button type="button" disabled={translationLoading || !translationStatus?.enabled} onClick={() => void runTranslationDemo()}>번역 실행</button>'),
