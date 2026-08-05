@@ -15,6 +15,16 @@ test("WSL 테스트 배포는 기존 local-postgres 및 고정 서비스 이름�
   assert.match(compose, /container_name:\s*moaworks-admin-web/);
   assert.match(compose, /container_name:\s*moaworks-user-web/);
   assert.match(compose, /container_name:\s*moaworks-mail-gateway/);
+  assert.equal(
+    (compose.match(/image:\s*moaworks-server-runtime:local/g) ?? []).length,
+    5,
+    "API와 메일 작업자는 하나의 서버 런타임 이미지를 공유해야 한다",
+  );
+  assert.equal(
+    (compose.match(/dockerfile:\s*deploy\/server\.Dockerfile/g) ?? []).length,
+    1,
+    "서버 런타임 이미지는 한 번만 빌드해야 한다",
+  );
   assert.match(compose, /"25:25"/);
   assert.doesNotMatch(compose, /5432:5432/);
 });

@@ -1,6 +1,7 @@
 services:
   server:
     container_name: moaworks-server
+    image: moaworks-server-runtime:local
     build:
       context: ..
       dockerfile: deploy/server.Dockerfile
@@ -111,9 +112,7 @@ services:
 
   mail-layer:
     container_name: moaworks-mail-layer
-    build:
-      context: ..
-      dockerfile: deploy/server.Dockerfile
+    image: moaworks-server-runtime:local
     command: ["python", "-m", "app.workers.mail_delivery_worker"]
     env_file:
       - ../.env
@@ -132,9 +131,7 @@ services:
 
   mail-external-worker:
     container_name: moaworks-mail-external-worker
-    build:
-      context: ..
-      dockerfile: deploy/server.Dockerfile
+    image: moaworks-server-runtime:local
     command: ["python", "-m", "app.workers.mail_external_worker"]
     env_file:
       - ../.env
@@ -148,9 +145,7 @@ services:
 
   mail-backup-worker:
     container_name: moaworks-mail-backup-worker
-    build:
-      context: ..
-      dockerfile: deploy/server.Dockerfile
+    image: moaworks-server-runtime:local
     command: ["python", "-m", "app.workers.mail_backup_worker"]
     env_file:
       - ../.env
@@ -164,9 +159,7 @@ services:
 
   mail-retention-worker:
     container_name: moaworks-mail-retention-worker
-    build:
-      context: ..
-      dockerfile: deploy/server.Dockerfile
+    image: moaworks-server-runtime:local
     command: ["python", "-m", "app.workers.mail_retention_worker"]
     env_file:
       - ../.env
