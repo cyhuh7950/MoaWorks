@@ -13,11 +13,23 @@ case "$tls_mode" in
     disabled)
         ;;
     certificate)
+        : "${SMTP_TLS_CERT_NAME:?SMTP_TLS_CERT_NAME is required when SMTP_TLS_MODE=certificate}"
         : "${SMTP_TLS_CERT_FILE:?SMTP_TLS_CERT_FILE is required when SMTP_TLS_MODE=certificate}"
         : "${SMTP_TLS_KEY_FILE:?SMTP_TLS_KEY_FILE is required when SMTP_TLS_MODE=certificate}"
+        tls_ca_file="${SMTP_TLS_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}"
+
+        case "$SMTP_TLS_CERT_NAME" in
+            ''|*[!A-Za-z0-9._-]*|.*|*.) echo "SMTP_TLS_CERT_NAME is invalid" >&2; exit 1 ;;
+        esac
 
         if [ ! -d "$tls_root" ]; then
             echo "SMTP TLS certificate root is not a directory" >&2
+            exit 1
+        fi
+        tls_live_dir="$tls_root/live/$SMTP_TLS_CERT_NAME"
+        tls_archive_dir="$tls_root/archive/$SMTP_TLS_CERT_NAME"
+        if [ ! -d "$tls_live_dir" ] || [ ! -d "$tls_archive_dir" ]; then
+            echo "SMTP TLS selected live and archive directories must both be mounted" >&2
             exit 1
         fi
         if [ ! -f "$SMTP_TLS_CERT_FILE" ]; then
@@ -28,17 +40,31 @@ case "$tls_mode" in
             echo "SMTP TLS private key file does not exist" >&2
             exit 1
         fi
+        if [ ! -f "$tls_ca_file" ]; then
+            echo "SMTP TLS CA file does not exist" >&2
+            exit 1
+        fi
 
-        tls_root_real="$(readlink -f "$tls_root")"
+        case "$SMTP_TLS_CERT_FILE" in
+            "$tls_live_dir"/*) ;;
+            *) echo "SMTP TLS certificate path must be inside the selected live directory" >&2; exit 1 ;;
+        esac
+        case "$SMTP_TLS_KEY_FILE" in
+            "$tls_live_dir"/*) ;;
+            *) echo "SMTP TLS private key path must be inside the selected live directory" >&2; exit 1 ;;
+        esac
+
+        tls_live_real="$(readlink -f "$tls_live_dir")"
+        tls_archive_real="$(readlink -f "$tls_archive_dir")"
         tls_cert_real="$(readlink -f "$SMTP_TLS_CERT_FILE")"
         tls_key_real="$(readlink -f "$SMTP_TLS_KEY_FILE")"
         case "$tls_cert_real" in
-            "$tls_root_real"/*) ;;
-            *) echo "SMTP TLS certificate must be inside SMTP_TLS_CERT_ROOT" >&2; exit 1 ;;
+            "$tls_live_real"/*|"$tls_archive_real"/*) ;;
+            *) echo "SMTP TLS certificate and private key must resolve inside the mounted certificate directories" >&2; exit 1 ;;
         esac
         case "$tls_key_real" in
-            "$tls_root_real"/*) ;;
-            *) echo "SMTP TLS private key must be inside SMTP_TLS_CERT_ROOT" >&2; exit 1 ;;
+            "$tls_live_real"/*|"$tls_archive_real"/*) ;;
+            *) echo "SMTP TLS certificate and private key must resolve inside the mounted certificate directories" >&2; exit 1 ;;
         esac
 
         if ! openssl x509 -in "$tls_cert_real" -noout >/dev/null 2>&1; then
@@ -51,6 +77,11 @@ case "$tls_mode" in
         fi
         if ! openssl x509 -in "$tls_cert_real" -noout -checkhost "$MAIL_HOSTNAME" >/dev/null 2>&1; then
             echo "SMTP TLS certificate does not match MAIL_HOSTNAME" >&2
+            exit 1
+        fi
+        if ! openssl verify -purpose sslserver -CAfile "$tls_ca_file" \
+            -untrusted "$tls_cert_real" "$tls_cert_real" >/dev/null 2>&1; then
+            echo "SMTP TLS certificate trust or validity check failed" >&2
             exit 1
         fi
 
@@ -74,8 +105,8 @@ case "$tls_mode" in
         trap - EXIT HUP INT TERM
 
         smtpd_tls_security_level="may"
-        smtpd_tls_cert_file="$tls_cert_real"
-        smtpd_tls_key_file="$tls_key_real"
+        smtpd_tls_cert_file="$SMTP_TLS_CERT_FILE"
+        smtpd_tls_key_file="$SMTP_TLS_KEY_FILE"
         ;;
     *)
         echo "SMTP_TLS_MODE must be disabled or certificate" >&2
