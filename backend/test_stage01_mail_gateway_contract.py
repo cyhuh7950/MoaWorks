@@ -60,21 +60,46 @@ class MailGatewayContractTest(unittest.TestCase):
     def test_relay_recipient_verification_is_scoped_to_configured_relay_domains(self) -> None:
         main_cf = (ROOT / "deploy" / "mail-gateway" / "main.cf").read_text(encoding="utf-8")
         entrypoint = (ROOT / "deploy" / "mail-gateway" / "entrypoint.sh").read_text(encoding="utf-8")
+        parent_domain_features = (
+            "debug_peer_list, fast_flush_domains, mynetworks, permit_mx_backup_networks, "
+            "qmqpd_authorized_clients, postscreen_access_list, smtpd_client_event_limit_exceptions"
+        )
+        parent_domain_setting = next(
+            line for line in main_cf.splitlines() if line.startswith("parent_domain_matches_subdomains = ")
+        )
+        restriction_classes_setting = next(
+            line for line in main_cf.splitlines() if line.startswith("smtpd_restriction_classes = ")
+        )
 
         self.assertIn(
             "reject_unauth_destination, check_recipient_access hash:/etc/postfix/relay-recipient-verification",
             main_cf,
         )
+        self.assertEqual("smtpd_restriction_classes = verify_relay_recipient", restriction_classes_setting)
         self.assertIn("verify_relay_recipient = reject_unverified_recipient", main_cf)
+        self.assertEqual(
+            f"parent_domain_matches_subdomains = {parent_domain_features}",
+            parent_domain_setting,
+        )
+        self.assertNotIn("relay_domains", parent_domain_setting)
+        self.assertNotIn("transport_maps", parent_domain_setting)
+        self.assertNotIn("smtpd_access_maps", parent_domain_setting)
         self.assertIn("unverified_recipient_reject_code = 550", main_cf)
         self.assertIn("unverified_recipient_defer_code = 450", main_cf)
         self.assertIn("unverified_recipient_tempfail_action = defer", main_cf)
         self.assertIn("unverified_recipient_reject_reason = Recipient address verification failed", main_cf)
-        self.assertIn(": > /etc/postfix/relay-recipient-verification", entrypoint)
+        map_create_index = entrypoint.index(": > /etc/postfix/relay-recipient-verification")
+        relay_domain_loop_index = entrypoint.index("if [ -n \"$relay_domains\" ]; then")
+        map_compile_index = entrypoint.index("postmap /etc/postfix/relay-recipient-verification")
+        self.assertLess(map_create_index, relay_domain_loop_index)
+        self.assertGreater(map_compile_index, relay_domain_loop_index)
         self.assertIn(
             "printf '%s verify_relay_recipient\\n' \"$relay_domain\" >> /etc/postfix/relay-recipient-verification",
             entrypoint,
         )
+        self.assertNotIn("sub.$relay_domain", entrypoint)
+        self.assertNotIn(".$relay_domain verify_relay_recipient", entrypoint)
+        self.assertNotIn("@$relay_domain verify_relay_recipient", entrypoint)
         self.assertIn("postmap /etc/postfix/relay-recipient-verification", entrypoint)
         self.assertIn(
             "/etc/postfix/relay-recipient-verification /etc/postfix/relay-recipient-verification.db",
