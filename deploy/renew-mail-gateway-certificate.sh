@@ -7,6 +7,7 @@ gateway_container="${MAIL_RENEW_GATEWAY_CONTAINER:-moaworks-mail-gateway}"
 cert_path="${MAIL_RENEW_CERT_PATH:-/etc/letsencrypt/live/moaworks-mail-dev/fullchain.pem}"
 certbot_config="${MAIL_RENEW_CERTBOT_CONFIG:-/etc/letsencrypt.ini}"
 lock_dir="${MAIL_RENEW_LOCK_DIR:-/run/lock/moaworks-mail-certificate-renew.lock}"
+stabilization_seconds="${MAIL_RENEW_STABILIZATION_SECONDS:-5}"
 dry_run=false
 
 usage() {
@@ -18,6 +19,7 @@ Usage: renew-mail-gateway-certificate.sh [options]
   --cert-path ABSOLUTE_PATH
   --certbot-config ABSOLUTE_PATH
   --lock-dir ABSOLUTE_PATH
+  --stabilization-seconds SECONDS
   --dry-run
 EOF
 }
@@ -67,6 +69,11 @@ while [ "$#" -gt 0 ]; do
             lock_dir="$2"
             shift 2
             ;;
+        --stabilization-seconds)
+            require_value "$@"
+            stabilization_seconds="$2"
+            shift 2
+            ;;
         --dry-run)
             dry_run=true
             shift
@@ -104,6 +111,12 @@ validate_name "gateway container" "$gateway_container"
 validate_absolute_path "certificate path" "$cert_path"
 validate_absolute_path "certbot config" "$certbot_config"
 validate_absolute_path "lock directory" "$lock_dir"
+case "$stabilization_seconds" in
+    ''|*[!0-9]*) fail "stabilization seconds is invalid" ;;
+esac
+[ "$stabilization_seconds" -le 300 ] || fail "stabilization seconds must not exceed 300"
+expected_cert_path="/etc/letsencrypt/live/$cert_name/fullchain.pem"
+[ "$cert_path" = "$expected_cert_path" ] || fail "certificate path must match certificate name"
 
 command -v docker >/dev/null 2>&1 || fail "docker command is not available"
 
@@ -161,13 +174,29 @@ if ! docker restart "$gateway_container" >/dev/null; then
     fail "mail gateway restart failed"
 fi
 
-gateway_state="$(docker inspect -f '{{.State.Status}} {{.RestartCount}}' "$gateway_container" 2>/dev/null)" || \
-    fail "mail gateway state verification failed"
-set -- $gateway_state
-[ "${1:-}" = "running" ] || fail "mail gateway is not running after restart"
-case "${2:-}" in
+first_gateway_state="$(docker inspect -f '{{.State.Status}} {{.RestartCount}}' "$gateway_container" 2>/dev/null)" || \
+    fail "initial mail gateway state verification failed"
+set -- $first_gateway_state
+first_gateway_status="${1:-}"
+first_restart_count="${2:-}"
+[ "$first_gateway_status" = "running" ] || fail "mail gateway is not running after restart"
+case "$first_restart_count" in
     ''|*[!0-9]*) fail "mail gateway restart count is invalid" ;;
 esac
+
+sleep "$stabilization_seconds"
+
+second_gateway_state="$(docker inspect -f '{{.State.Status}} {{.RestartCount}}' "$gateway_container" 2>/dev/null)" || \
+    fail "mail gateway state verification failed after stabilization"
+set -- $second_gateway_state
+second_gateway_status="${1:-}"
+second_restart_count="${2:-}"
+[ "$second_gateway_status" = "running" ] || fail "mail gateway is not running after stabilization"
+case "$second_restart_count" in
+    ''|*[!0-9]*) fail "mail gateway restart count is invalid after stabilization" ;;
+esac
+[ "$second_restart_count" = "$first_restart_count" ] || \
+    fail "mail gateway restart count changed during stabilization"
 
 if ! docker exec "$gateway_container" postfix check; then
     fail "postfix check failed after certificate renewal"

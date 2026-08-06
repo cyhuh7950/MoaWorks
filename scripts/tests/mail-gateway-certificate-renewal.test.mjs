@@ -37,7 +37,20 @@ case "$1:$2" in
       printf 'false\\n'
     else
       case "$3" in
-        *RestartCount*) printf 'running 0\\n' ;;
+        *RestartCount*)
+          status_count_file="$FAKE_STATE/status-inspect-count"
+          status_count=0
+          [ ! -f "$status_count_file" ] || status_count="$(cat "$status_count_file")"
+          status_count=$((status_count + 1))
+          printf '%s\\n' "$status_count" > "$status_count_file"
+          if [ "$status_count" -ge 2 ] && [ "\${FAKE_SECOND_STATE_STOPPED:-0}" = 1 ]; then
+            printf 'exited 5\\n'
+          elif [ "$status_count" -ge 2 ] && [ "\${FAKE_SECOND_COUNT_INCREASE:-0}" = 1 ]; then
+            printf 'running 6\\n'
+          else
+            printf 'running 5\\n'
+          fi
+          ;;
         *) printf 'true\\n' ;;
       esac
     fi
@@ -91,6 +104,7 @@ esac
     MAIL_RENEW_CERT_PATH: "/etc/letsencrypt/live/moaworks-mail-dev/fullchain.pem",
     MAIL_RENEW_CERTBOT_CONFIG: "/etc/letsencrypt.ini",
     MAIL_RENEW_LOCK_DIR: lockDirectory,
+    MAIL_RENEW_STABILIZATION_SECONDS: "0",
     ...overrides,
   };
   return { env, hostLockDirectory, state };
@@ -128,7 +142,7 @@ test("명시적 인증서 인수와 dry-run을 Certbot 호출에 반영한다", 
     "--cert-name",
     "alternate-cert",
     "--cert-path",
-    "/custom/live/alternate-cert/fullchain.pem",
+    "/etc/letsencrypt/live/alternate-cert/fullchain.pem",
     "--certbot-config",
     "/custom/letsencrypt.ini",
     "--dry-run",
@@ -148,7 +162,29 @@ test("인증서 해시가 바뀌면 gateway를 재시작하고 Postfix를 검증
   assert.equal(result.status, 0, result.stderr);
   assert.match(log, /restart moaworks-mail-gateway/);
   assert.match(log, /exec moaworks-mail-gateway postfix check/);
-  assert.match(log, /inspect -f .*RestartCount.* moaworks-mail-gateway/);
+  assert.equal((log.match(/inspect -f .*RestartCount.* moaworks-mail-gateway/g) ?? []).length, 2);
+});
+
+test("안정화 중 restart count가 증가하면 실패한다", () => {
+  const { result, state } = runRenewal({
+    FAKE_CERT_CHANGED: "1",
+    FAKE_SECOND_COUNT_INCREASE: "1",
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /restart count changed during stabilization/i);
+  assert.doesNotMatch(commands(state), /postfix check/);
+});
+
+test("안정화 후 gateway가 stopped이면 실패한다", () => {
+  const { result, state } = runRenewal({
+    FAKE_CERT_CHANGED: "1",
+    FAKE_SECOND_STATE_STOPPED: "1",
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /not running after stabilization/i);
+  assert.doesNotMatch(commands(state), /postfix check/);
 });
 
 test("Certbot 갱신 실패는 비정상 종료하고 gateway를 건드리지 않는다", () => {
@@ -210,6 +246,35 @@ test("Docker 옵션처럼 보이는 컨테이너 이름은 실행 전에 거부�
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /NPM container is invalid/i);
+  assert.equal(existsSync(join(fixture.state, "commands.log")), false);
+});
+
+test("안정화 대기 시간에 숫자가 아닌 값은 실행 전에 거부한다", () => {
+  const fixture = createFixture({ MAIL_RENEW_STABILIZATION_SECONDS: "0;echo-forged" });
+  const result = spawnSync(bash, [script], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: fixture.env,
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /stabilization seconds is invalid/i);
+  assert.equal(existsSync(join(fixture.state, "commands.log")), false);
+});
+
+test("인증서 이름과 fullchain 경로가 다르면 실행 전에 거부한다", () => {
+  const fixture = createFixture({
+    MAIL_RENEW_CERT_NAME: "moaworks-mail-dev",
+    MAIL_RENEW_CERT_PATH: "/etc/letsencrypt/live/another-cert/fullchain.pem",
+  });
+  const result = spawnSync(bash, [script], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: fixture.env,
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /certificate path must match certificate name/i);
   assert.equal(existsSync(join(fixture.state, "commands.log")), false);
 });
 
