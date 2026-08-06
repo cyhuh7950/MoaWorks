@@ -57,6 +57,14 @@ class MailGatewayContractTest(unittest.TestCase):
         self.assertNotIn("mynetworks = 0.0.0.0/0", main_cf)
         self.assertNotIn("permit_mynetworks", main_cf)
 
+    def test_sinsan_relay_overlay_routes_only_dev_mail_to_wsl(self) -> None:
+        overlay = (ROOT / "deploy" / "docker-compose.sinsan-relay.yml").read_text(encoding="utf-8")
+
+        self.assertIn("SMTP_RELAY_DOMAINS: dev.moaworks.sinsan.kr", overlay)
+        self.assertIn("SMTP_RELAY_TRANSPORT_HOST: 210.217.186.151", overlay)
+        self.assertIn("SMTP_RELAY_TRANSPORT_PORT: 2525", overlay)
+        self.assertNotIn("moaworks.sinsan.kr,", overlay)
+
 
 if __name__ == "__main__":
     unittest.main()
