@@ -76,10 +76,15 @@ services:
       SMTP_RELAY_DOMAINS: ${SMTP_RELAY_DOMAINS:-}
       SMTP_RELAY_TRANSPORT_HOST: ${SMTP_RELAY_TRANSPORT_HOST:-}
       SMTP_RELAY_TRANSPORT_PORT: ${SMTP_RELAY_TRANSPORT_PORT:-25}
+      SMTP_TLS_MODE: ${SMTP_TLS_MODE:-disabled}
+      SMTP_TLS_CERT_ROOT: /run/moaworks-mail-tls
+      SMTP_TLS_CERT_FILE: ${SMTP_TLS_CERT_FILE:-}
+      SMTP_TLS_KEY_FILE: ${SMTP_TLS_KEY_FILE:-}
     ports:
       - "25:25"
     volumes:
       - mail-spool:/var/spool/postfix
+      - ${SMTP_TLS_CERT_DIR:-/etc/ssl/certs}:/run/moaworks-mail-tls:ro
     depends_on:
       server:
         condition: service_started

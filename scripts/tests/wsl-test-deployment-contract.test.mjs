@@ -81,3 +81,34 @@ test("WSL 운영 안내서는 DNS, NPM, SMTP 및 분리 검증 절차를 포함�
     assert.ok(runbook.includes(required), `runbook must include: ${required}`);
   }
 });
+
+test("메일 게이트웨이는 TLS 모드와 읽기 전용 인증서 루트 계약을 공통 적용한다", () => {
+  for (const composePath of ["deploy/docker-compose.oracle.yml", "deploy/docker-compose.wsl.yml"]) {
+    const compose = read(composePath);
+
+    assert.match(compose, /SMTP_TLS_MODE:\s*\$\{SMTP_TLS_MODE:-disabled\}/);
+    assert.match(compose, /SMTP_TLS_CERT_ROOT:\s*\/run\/moaworks-mail-tls/);
+    assert.match(compose, /SMTP_TLS_CERT_FILE:\s*\$\{SMTP_TLS_CERT_FILE:-\}/);
+    assert.match(compose, /SMTP_TLS_KEY_FILE:\s*\$\{SMTP_TLS_KEY_FILE:-\}/);
+    assert.match(
+      compose,
+      /\$\{SMTP_TLS_CERT_DIR:-\/etc\/ssl\/certs\}:\/run\/moaworks-mail-tls:ro/,
+      `${composePath} must mount the certificate root read-only`,
+    );
+  }
+
+  const dockerfile = read("deploy/mail-gateway/Dockerfile");
+  assert.match(dockerfile, /\bopenssl\b/);
+
+  const runbook = read("docs/runbooks/moaworks-wsl-test-environment.md");
+  for (const required of [
+    "SMTP_TLS_MODE=disabled",
+    "SMTP_TLS_MODE=certificate",
+    "SMTP_TLS_CERT_DIR",
+    "SMTP_TLS_CERT_FILE",
+    "SMTP_TLS_KEY_FILE",
+    "TLS 1.2",
+  ]) {
+    assert.ok(runbook.includes(required), `runbook must include: ${required}`);
+  }
+});

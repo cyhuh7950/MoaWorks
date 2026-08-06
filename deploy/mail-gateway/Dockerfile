@@ -2,7 +2,7 @@ FROM debian:12-slim
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-       ca-certificates curl gettext-base postfix postfix-pgsql \
+       ca-certificates curl gettext-base openssl postfix postfix-pgsql \
     && rm -rf /var/lib/apt/lists/*
 
 COPY deploy/mail-gateway/main.cf /etc/postfix/main.cf.template
