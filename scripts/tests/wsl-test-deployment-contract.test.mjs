@@ -52,6 +52,19 @@ test("Windows 포트 전달 스크립트는 현재 WSL IP를 조회하고 80, 44
   assert.doesNotMatch(portproxy, /interface portproxy reset/);
 });
 
+test("WSL DB 프로비저닝은 전용 역할을 만들고 비밀값을 출력하지 않는다", () => {
+  const provision = read("deploy/provision-wsl-database.sh");
+
+  assert.match(provision, /DB_CONTAINER:-local-postgres/);
+  assert.match(provision, /POSTGRES_DB:-moaworks/);
+  assert.match(provision, /POSTGRES_USER:-moaworks/);
+  assert.match(provision, /CREATE ROLE \$db_user LOGIN/);
+  assert.match(provision, /ALTER DATABASE \$db_name OWNER TO \$db_user/);
+  assert.match(provision, /\*\[!a-z0-9_\]\*/);
+  assert.match(provision, /openssl rand -hex 32/);
+  assert.doesNotMatch(provision, /set -x/);
+});
+
 test("WSL 운영 안내서는 DNS, NPM, SMTP 및 분리 검증 절차를 포함한다", () => {
   const runbook = read("docs/runbooks/moaworks-wsl-test-environment.md");
 
