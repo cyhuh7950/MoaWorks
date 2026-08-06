@@ -12,6 +12,8 @@ fi
 
 umask 077
 : "${POSTGRES_PASSWORD:?local-postgres의 POSTGRES_PASSWORD를 환경변수로 제공해야 합니다.}"
+db_name="${POSTGRES_DB:-moaworks}"
+db_user="${POSTGRES_USER:-moaworks}"
 mail_ingest_token="$(openssl rand -hex 32)"
 admin_access_token="$(openssl rand -hex 32)"
 setup_secret="$(openssl rand -hex 32)"
@@ -23,8 +25,8 @@ FRONTEND_PORT=3510
 USER_WEB_PORT=3520
 POSTGRES_HOST=postgres
 POSTGRES_PORT=5432
-POSTGRES_DB=moaworks_dev
-POSTGRES_USER=moaworks_dev
+POSTGRES_DB=$db_name
+POSTGRES_USER=$db_user
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 MAIL_HOSTNAME=mail.dev.moaworks.sinsan.kr
 MAIL_INGEST_TOKEN=$mail_ingest_token
@@ -39,5 +41,5 @@ TRANSLATION_ENABLED=false
 EOF
 
 chmod 600 "$env_file"
-unset POSTGRES_PASSWORD mail_ingest_token admin_access_token setup_secret
+unset POSTGRES_PASSWORD db_name db_user mail_ingest_token admin_access_token setup_secret
 echo "WSL 테스트용 .env를 생성했습니다. 비밀값은 출력하지 않았습니다."

@@ -36,6 +36,8 @@ test("WSL 환경 초기화는 비밀값을 출력하지 않고 기존 환경 파
   assert.match(init, /openssl rand -hex 32/);
   assert.match(init, /if \[ -e "\.env" \]/);
   assert.match(init, /APP_ENV=wsl-test/);
+  assert.match(init, /db_name="\$\{POSTGRES_DB:-moaworks\}"/);
+  assert.match(init, /db_user="\$\{POSTGRES_USER:-moaworks\}"/);
   assert.match(init, /MAIL_HOSTNAME=mail\.dev\.moaworks\.sinsan\.kr/);
   assert.doesNotMatch(init, /set -x/);
 });
