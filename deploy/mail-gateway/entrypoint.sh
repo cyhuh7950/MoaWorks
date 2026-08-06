@@ -29,6 +29,7 @@ if [ "$relay_port" -lt 1 ] || [ "$relay_port" -gt 65535 ]; then
 fi
 
 : > /etc/postfix/transport
+: > /etc/postfix/relay-recipient-verification
 if [ -n "$relay_domains" ]; then
     case "$relay_host" in
         *[!A-Za-z0-9.-]*|.*|*.) echo "SMTP_RELAY_TRANSPORT_HOST is invalid" >&2; exit 1 ;;
@@ -41,6 +42,7 @@ if [ -n "$relay_domains" ]; then
             ''|*[!a-z0-9.-]*|.*|*.) echo "SMTP_RELAY_DOMAINS contains an invalid domain" >&2; exit 1 ;;
         esac
         printf '%s smtp:[%s]:%s\n' "$relay_domain" "$relay_host" "$relay_port" >> /etc/postfix/transport
+        printf '%s verify_relay_recipient\n' "$relay_domain" >> /etc/postfix/relay-recipient-verification
     done
     IFS="$previous_ifs"
 fi
@@ -53,7 +55,8 @@ envsubst < /etc/postfix/pgsql-virtual-recipients.cf.template > /etc/postfix/pgsq
 chown root:postfix /etc/postfix/pgsql-virtual-domains.cf /etc/postfix/pgsql-virtual-recipients.cf
 chmod 0640 /etc/postfix/pgsql-virtual-domains.cf /etc/postfix/pgsql-virtual-recipients.cf
 postmap /etc/postfix/transport
-chown root:root /etc/postfix/transport /etc/postfix/transport.db
-chmod 0644 /etc/postfix/transport /etc/postfix/transport.db
+postmap /etc/postfix/relay-recipient-verification
+chown root:root /etc/postfix/transport /etc/postfix/transport.db /etc/postfix/relay-recipient-verification /etc/postfix/relay-recipient-verification.db
+chmod 0644 /etc/postfix/transport /etc/postfix/transport.db /etc/postfix/relay-recipient-verification /etc/postfix/relay-recipient-verification.db
 postfix check
 exec postfix start-fg

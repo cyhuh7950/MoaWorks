@@ -57,6 +57,34 @@ class MailGatewayContractTest(unittest.TestCase):
         self.assertNotIn("mynetworks = 0.0.0.0/0", main_cf)
         self.assertNotIn("permit_mynetworks", main_cf)
 
+    def test_relay_recipient_verification_is_scoped_to_configured_relay_domains(self) -> None:
+        main_cf = (ROOT / "deploy" / "mail-gateway" / "main.cf").read_text(encoding="utf-8")
+        entrypoint = (ROOT / "deploy" / "mail-gateway" / "entrypoint.sh").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "reject_unauth_destination, check_recipient_access hash:/etc/postfix/relay-recipient-verification",
+            main_cf,
+        )
+        self.assertIn("verify_relay_recipient = reject_unverified_recipient", main_cf)
+        self.assertIn("unverified_recipient_reject_code = 550", main_cf)
+        self.assertIn("unverified_recipient_defer_code = 450", main_cf)
+        self.assertIn("unverified_recipient_tempfail_action = defer", main_cf)
+        self.assertIn("unverified_recipient_reject_reason = Recipient address verification failed", main_cf)
+        self.assertIn(": > /etc/postfix/relay-recipient-verification", entrypoint)
+        self.assertIn(
+            "printf '%s verify_relay_recipient\\n' \"$relay_domain\" >> /etc/postfix/relay-recipient-verification",
+            entrypoint,
+        )
+        self.assertIn("postmap /etc/postfix/relay-recipient-verification", entrypoint)
+        self.assertIn(
+            "/etc/postfix/relay-recipient-verification /etc/postfix/relay-recipient-verification.db",
+            entrypoint,
+        )
+        self.assertRegex(
+            entrypoint,
+            r"chmod 0644 [^\n]*/etc/postfix/relay-recipient-verification [^\n]*/etc/postfix/relay-recipient-verification\.db",
+        )
+
     def test_sinsan_relay_overlay_routes_only_dev_mail_to_wsl(self) -> None:
         overlay = (ROOT / "deploy" / "docker-compose.sinsan-relay.yml").read_text(encoding="utf-8")
 
