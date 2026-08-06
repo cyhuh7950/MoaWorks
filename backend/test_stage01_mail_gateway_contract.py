@@ -41,6 +41,22 @@ class MailGatewayContractTest(unittest.TestCase):
         self.assertIn("chown root:postfix", entrypoint)
         self.assertIn("chmod 0640", entrypoint)
 
+    def test_oracle_gateway_can_relay_only_explicit_test_domains(self) -> None:
+        compose = (ROOT / "deploy" / "docker-compose.oracle.yml").read_text(encoding="utf-8")
+        main_cf = (ROOT / "deploy" / "mail-gateway" / "main.cf").read_text(encoding="utf-8")
+        entrypoint = (ROOT / "deploy" / "mail-gateway" / "entrypoint.sh").read_text(encoding="utf-8")
+
+        self.assertIn("SMTP_RELAY_DOMAINS: ${SMTP_RELAY_DOMAINS:-}", compose)
+        self.assertIn("SMTP_RELAY_TRANSPORT_HOST: ${SMTP_RELAY_TRANSPORT_HOST:-}", compose)
+        self.assertIn("SMTP_RELAY_TRANSPORT_PORT: ${SMTP_RELAY_TRANSPORT_PORT:-25}", compose)
+        self.assertIn("relay_domains = ${SMTP_RELAY_DOMAINS}", main_cf)
+        self.assertIn("transport_maps = hash:/etc/postfix/transport", main_cf)
+        self.assertIn("envsubst '${MAIL_HOSTNAME} ${SMTP_RELAY_DOMAINS}'", entrypoint)
+        self.assertIn("postmap /etc/postfix/transport", entrypoint)
+        self.assertIn("SMTP_RELAY_TRANSPORT_HOST and SMTP_RELAY_DOMAINS must be configured together", entrypoint)
+        self.assertNotIn("mynetworks = 0.0.0.0/0", main_cf)
+        self.assertNotIn("permit_mynetworks", main_cf)
+
 
 if __name__ == "__main__":
     unittest.main()
