@@ -62,7 +62,9 @@ case "$1:$2" in
       case "$1" in
         test) exit 0 ;;
         sha256sum)
-          if [ -f "$FAKE_STATE/renewed" ] && [ "\${FAKE_CERT_CHANGED:-0}" = 1 ]; then
+          if [ "\${FAKE_CURRENT_HASH:-a}" = b ]; then
+            printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  %s\\n' "$2"
+          elif [ -f "$FAKE_STATE/renewed" ] && [ "\${FAKE_CERT_CHANGED:-0}" = 1 ]; then
             printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  %s\\n' "$2"
           else
             printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  %s\\n' "$2"
@@ -94,6 +96,10 @@ esac
   const lockDirectory = hostLockDirectory
     .replaceAll("\\", "/")
     .replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`);
+  const hostLoadedStateFile = join(state, "loaded.sha256");
+  const loadedStateFile = hostLoadedStateFile
+    .replaceAll("\\", "/")
+    .replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`);
   const env = {
     ...process.env,
     PATH: `${fakeBin}:${process.env.PATH}`,
@@ -105,9 +111,17 @@ esac
     MAIL_RENEW_CERTBOT_CONFIG: "/etc/letsencrypt.ini",
     MAIL_RENEW_LOCK_DIR: lockDirectory,
     MAIL_RENEW_STABILIZATION_SECONDS: "0",
+    MAIL_RENEW_STATE_FILE: loadedStateFile,
     ...overrides,
   };
-  return { env, hostLockDirectory, state };
+  if (overrides.FAKE_NO_LOADED_STATE !== "1") {
+    writeFileSync(
+      hostLoadedStateFile,
+      `${overrides.FAKE_LOADED_HASH ?? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}\n`,
+      "utf8",
+    );
+  }
+  return { env, hostLoadedStateFile, hostLockDirectory, state };
 }
 
 function runRenewal(overrides = {}, args = []) {
@@ -156,17 +170,44 @@ test("명시적 인증서 인수와 dry-run을 Certbot 호출에 반영한다", 
 });
 
 test("인증서 해시가 바뀌면 gateway를 재시작하고 Postfix를 검증한다", () => {
-  const { result, state } = runRenewal({ FAKE_CERT_CHANGED: "1" });
+  const { hostLoadedStateFile, result, state } = runRenewal({ FAKE_CERT_CHANGED: "1" });
   const log = commands(state);
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(log, /restart moaworks-mail-gateway/);
   assert.match(log, /exec moaworks-mail-gateway postfix check/);
   assert.equal((log.match(/inspect -f .*RestartCount.* moaworks-mail-gateway/g) ?? []).length, 2);
+  assert.equal(
+    readFileSync(hostLoadedStateFile, "utf8").trim(),
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  );
+});
+
+test("NPM이 미리 갱신한 인증서는 Certbot 전후 해시가 같아도 gateway에 반영한다", () => {
+  const { hostLoadedStateFile, result, state } = runRenewal({ FAKE_CURRENT_HASH: "b" });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(commands(state), /restart moaworks-mail-gateway/);
+  assert.equal(
+    readFileSync(hostLoadedStateFile, "utf8").trim(),
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  );
+});
+
+test("최초 state가 없으면 gateway를 검증한 뒤 현재 해시를 저장한다", () => {
+  const { hostLoadedStateFile, result, state } = runRenewal({ FAKE_NO_LOADED_STATE: "1" });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(commands(state), /restart moaworks-mail-gateway/);
+  assert.equal(
+    readFileSync(hostLoadedStateFile, "utf8").trim(),
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  );
 });
 
 test("안정화 중 restart count가 증가하면 실패한다", () => {
-  const { result, state } = runRenewal({
+  const { hostLoadedStateFile, result, state } = runRenewal({
+    FAKE_CURRENT_HASH: "b",
     FAKE_CERT_CHANGED: "1",
     FAKE_SECOND_COUNT_INCREASE: "1",
   });
@@ -174,10 +215,12 @@ test("안정화 중 restart count가 증가하면 실패한다", () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /restart count changed during stabilization/i);
   assert.doesNotMatch(commands(state), /postfix check/);
+  assert.match(readFileSync(hostLoadedStateFile, "utf8"), /^a{64}/);
 });
 
 test("안정화 후 gateway가 stopped이면 실패한다", () => {
-  const { result, state } = runRenewal({
+  const { hostLoadedStateFile, result, state } = runRenewal({
+    FAKE_CURRENT_HASH: "b",
     FAKE_CERT_CHANGED: "1",
     FAKE_SECOND_STATE_STOPPED: "1",
   });
@@ -185,6 +228,7 @@ test("안정화 후 gateway가 stopped이면 실패한다", () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /not running after stabilization/i);
   assert.doesNotMatch(commands(state), /postfix check/);
+  assert.match(readFileSync(hostLoadedStateFile, "utf8"), /^a{64}/);
 });
 
 test("Certbot 갱신 실패는 비정상 종료하고 gateway를 건드리지 않는다", () => {
@@ -196,17 +240,19 @@ test("Certbot 갱신 실패는 비정상 종료하고 gateway를 건드리지 �
 });
 
 test("gateway restart 실패를 성공으로 처리하지 않는다", () => {
-  const { result } = runRenewal({ FAKE_CERT_CHANGED: "1", FAKE_RESTART_FAIL: "1" });
+  const { hostLoadedStateFile, result } = runRenewal({ FAKE_CURRENT_HASH: "b", FAKE_RESTART_FAIL: "1" });
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /gateway restart failed/i);
+  assert.match(readFileSync(hostLoadedStateFile, "utf8"), /^a{64}/);
 });
 
 test("Postfix 검증 실패를 성공으로 처리하지 않는다", () => {
-  const { result } = runRenewal({ FAKE_CERT_CHANGED: "1", FAKE_POSTFIX_FAIL: "1" });
+  const { hostLoadedStateFile, result } = runRenewal({ FAKE_CURRENT_HASH: "b", FAKE_POSTFIX_FAIL: "1" });
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /postfix check failed/i);
+  assert.match(readFileSync(hostLoadedStateFile, "utf8"), /^a{64}/);
 });
 
 test("이미 갱신 작업이 실행 중이면 Docker 명령 전에 종료한다", () => {
@@ -278,9 +324,19 @@ test("인증서 이름과 fullchain 경로가 다르면 실행 전에 거부한�
   assert.equal(existsSync(join(fixture.state, "commands.log")), false);
 });
 
+test("형식이 잘못된 loaded state는 fail-closed 처리한다", () => {
+  const { result, state } = runRenewal({ FAKE_LOADED_HASH: "invalid-state" });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /loaded certificate state is invalid/i);
+  assert.doesNotMatch(commands(state), /restart moaworks-mail-gateway/);
+});
+
 test("systemd timer는 WSL 실행 조건과 일 2회 수준의 영구 스케줄을 명시한다", () => {
   const service = readFileSync("deploy/systemd/moaworks-mail-certificate-renew.service", "utf8");
   const timer = readFileSync("deploy/systemd/moaworks-mail-certificate-renew.timer", "utf8");
+  const serverService = readFileSync("deploy/systemd/moaworks-mail-certificate-renew-server.service", "utf8");
+  const serverTimer = readFileSync("deploy/systemd/moaworks-mail-certificate-renew-server.timer", "utf8");
 
   assert.match(service, /ConditionVirtualization=wsl/);
   assert.match(service, /EnvironmentFile=\/etc\/moaworks\/mail-certificate-renew.env/);
@@ -288,4 +344,9 @@ test("systemd timer는 WSL 실행 조건과 일 2회 수준의 영구 스케줄�
   assert.match(timer, /OnCalendar=\*-\*-\* 00,12:00:00/);
   assert.match(timer, /RandomizedDelaySec=/);
   assert.match(timer, /Persistent=true/);
+  assert.doesNotMatch(serverService, /ConditionVirtualization=wsl/);
+  assert.match(serverService, /EnvironmentFile=\/etc\/moaworks\/mail-certificate-renew-server\.env/);
+  assert.match(serverTimer, /OnCalendar=\*-\*-\* 00,12:00:00/);
+  assert.match(serverTimer, /RandomizedDelaySec=/);
+  assert.match(serverTimer, /Persistent=true/);
 });

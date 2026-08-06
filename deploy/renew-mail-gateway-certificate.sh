@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+umask 077
 
 cert_name="${MAIL_RENEW_CERT_NAME:-moaworks-mail-dev}"
 npm_container="${MAIL_RENEW_NPM_CONTAINER:-npm}"
@@ -8,6 +9,7 @@ cert_path="${MAIL_RENEW_CERT_PATH:-/etc/letsencrypt/live/moaworks-mail-dev/fullc
 certbot_config="${MAIL_RENEW_CERTBOT_CONFIG:-/etc/letsencrypt.ini}"
 lock_dir="${MAIL_RENEW_LOCK_DIR:-/run/lock/moaworks-mail-certificate-renew.lock}"
 stabilization_seconds="${MAIL_RENEW_STABILIZATION_SECONDS:-5}"
+state_file="${MAIL_RENEW_STATE_FILE:-/var/lib/moaworks/mail-certificate-renew/loaded.sha256}"
 dry_run=false
 
 usage() {
@@ -20,6 +22,7 @@ Usage: renew-mail-gateway-certificate.sh [options]
   --certbot-config ABSOLUTE_PATH
   --lock-dir ABSOLUTE_PATH
   --stabilization-seconds SECONDS
+  --state-file ABSOLUTE_PATH
   --dry-run
 EOF
 }
@@ -74,6 +77,11 @@ while [ "$#" -gt 0 ]; do
             stabilization_seconds="$2"
             shift 2
             ;;
+        --state-file)
+            require_value "$@"
+            state_file="$2"
+            shift 2
+            ;;
         --dry-run)
             dry_run=true
             shift
@@ -111,6 +119,7 @@ validate_name "gateway container" "$gateway_container"
 validate_absolute_path "certificate path" "$cert_path"
 validate_absolute_path "certbot config" "$certbot_config"
 validate_absolute_path "lock directory" "$lock_dir"
+validate_absolute_path "state file" "$state_file"
 case "$stabilization_seconds" in
     ''|*[!0-9]*) fail "stabilization seconds is invalid" ;;
 esac
@@ -123,7 +132,9 @@ command -v docker >/dev/null 2>&1 || fail "docker command is not available"
 if ! mkdir "$lock_dir" 2>/dev/null; then
     fail "certificate renewal is already running"
 fi
+state_tmp=""
 cleanup() {
+    [ -z "$state_tmp" ] || rm -f "$state_tmp"
     rmdir "$lock_dir" 2>/dev/null || true
 }
 trap cleanup EXIT HUP INT TERM
@@ -139,6 +150,16 @@ if ! docker exec "$npm_container" test -f "$cert_path" >/dev/null 2>&1; then
     fail "certificate file does not exist in NPM container"
 fi
 
+state_dir="${state_file%/*}"
+[ -n "$state_dir" ] || state_dir="/"
+if [ -L "$state_dir" ]; then
+    fail "certificate state directory must not be a symlink"
+fi
+if [ ! -d "$state_dir" ]; then
+    mkdir -p "$state_dir" || fail "failed to create certificate state directory"
+fi
+chmod 700 "$state_dir" || fail "failed to secure certificate state directory"
+
 certificate_hash() {
     hash_output="$(docker exec "$npm_container" sha256sum "$cert_path" 2>/dev/null)" || return 1
     set -- $hash_output
@@ -149,8 +170,6 @@ certificate_hash() {
     esac
     printf '%s\n' "$cert_hash"
 }
-
-before_hash="$(certificate_hash)" || fail "failed to hash certificate before renewal"
 
 set -- docker exec "$npm_container" certbot renew \
     --config "$certbot_config" \
@@ -164,8 +183,19 @@ if ! "$@"; then
     fail "certbot renewal failed"
 fi
 
-after_hash="$(certificate_hash)" || fail "failed to hash certificate after renewal"
-if [ "$before_hash" = "$after_hash" ]; then
+current_hash="$(certificate_hash)" || fail "failed to hash current certificate after renewal"
+loaded_hash=""
+if [ -e "$state_file" ] || [ -L "$state_file" ]; then
+    [ ! -L "$state_file" ] || fail "certificate state file must not be a symlink"
+    [ -f "$state_file" ] || fail "certificate state path is not a regular file"
+    loaded_hash="$(cat "$state_file")" || fail "failed to read loaded certificate state"
+    [ "${#loaded_hash}" -eq 64 ] || fail "loaded certificate state is invalid"
+    case "$loaded_hash" in
+        *[!0-9A-Fa-f]*) fail "loaded certificate state is invalid" ;;
+    esac
+fi
+
+if [ "$loaded_hash" = "$current_hash" ]; then
     log "certificate unchanged; mail gateway restart skipped"
     exit 0
 fi
@@ -201,5 +231,13 @@ esac
 if ! docker exec "$gateway_container" postfix check; then
     fail "postfix check failed after certificate renewal"
 fi
+
+state_tmp="${state_file}.tmp.$$"
+if ! printf '%s\n' "$current_hash" > "$state_tmp"; then
+    fail "failed to write loaded certificate state"
+fi
+chmod 600 "$state_tmp" || fail "failed to secure loaded certificate state"
+mv -f "$state_tmp" "$state_file" || fail "failed to commit loaded certificate state"
+state_tmp=""
 
 log "certificate changed; mail gateway restarted and verified"
