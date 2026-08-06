@@ -37,7 +37,7 @@ class MailGatewayContractTest(unittest.TestCase):
         self.assertIn("rewrite   unix  -       -       n       -       -       trivial-rewrite", master_cf)
         self.assertIn("/etc/postfix/main.cf.template", dockerfile)
         self.assertIn("chmod 0644 /etc/postfix/main.cf.template", dockerfile)
-        self.assertIn("envsubst '${MAIL_HOSTNAME}'", entrypoint)
+        self.assertIn("envsubst '${MAIL_HOSTNAME} ${SMTP_RELAY_DOMAINS}'", entrypoint)
         self.assertIn("chown root:postfix", entrypoint)
         self.assertIn("chmod 0640", entrypoint)
 

@@ -62,6 +62,9 @@ services:
       MAIL_HOSTNAME: ${MAIL_HOSTNAME:-mail.moaworks.local}
       MAIL_INGEST_URL: http://server:8000/api/v1/internal/mail/ingest
       MAIL_INGEST_TOKEN: ${MAIL_INGEST_TOKEN:-local-inbound-change-me}
+      SMTP_RELAY_DOMAINS: ${SMTP_RELAY_DOMAINS:-}
+      SMTP_RELAY_TRANSPORT_HOST: ${SMTP_RELAY_TRANSPORT_HOST:-}
+      SMTP_RELAY_TRANSPORT_PORT: ${SMTP_RELAY_TRANSPORT_PORT:-25}
     ports:
       - "${MAIL_SMTP_PORT:-2525}:25"
     volumes:
