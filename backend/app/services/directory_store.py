@@ -100,6 +100,28 @@ class DirectoryStore:
                 admin_count = int(cursor.fetchone()["count"])
         return company_count > 0 and admin_count > 0
 
+    def get_public_company_identity(self) -> dict[str, str] | None:
+        """Return the installed company identity used by public login screens."""
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT name, domain
+                    FROM companies
+                    WHERE status = 'active'
+                    ORDER BY created_at ASC
+                    LIMIT 1
+                    """
+                )
+                row = cursor.fetchone()
+        if row is None:
+            return None
+        return {
+            "name": str(row["name"]).strip(),
+            "domain": str(row["domain"]).strip().lower(),
+        }
+
     def initialize_installation(self, payload: SetupInitializeRequest) -> None:
         self.db.ensure_migrations_applied(payload.dbConfig)
         with self.db.connect(payload.dbConfig) as connection:
