@@ -62,7 +62,10 @@ case "$1:$2" in
       case "$1" in
         test) exit 0 ;;
         sha256sum)
-          if [ "\${FAKE_CURRENT_HASH:-a}" = b ]; then
+          if [ -f "$FAKE_STATE/restarted" ] && [ -n "\${FAKE_POST_RESTART_HASH:-}" ]; then
+            post_restart_hash="$(printf '%064d' 0 | tr 0 "\${FAKE_POST_RESTART_HASH}")"
+            printf '%s  %s\\n' "$post_restart_hash" "$2"
+          elif [ "\${FAKE_CURRENT_HASH:-a}" = b ]; then
             printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  %s\\n' "$2"
           elif [ -f "$FAKE_STATE/renewed" ] && [ "\${FAKE_CERT_CHANGED:-0}" = 1 ]; then
             printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  %s\\n' "$2"

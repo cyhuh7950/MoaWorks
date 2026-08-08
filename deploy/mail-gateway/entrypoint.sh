@@ -75,7 +75,8 @@ case "$tls_mode" in
             echo "SMTP TLS private key is invalid" >&2
             exit 1
         fi
-        if ! openssl x509 -in "$tls_cert_real" -noout -checkhost "$MAIL_HOSTNAME" >/dev/null 2>&1; then
+        if ! openssl verify -no_check_time -partial_chain -trusted "$tls_cert_real" \
+            -verify_hostname "$MAIL_HOSTNAME" "$tls_cert_real" >/dev/null 2>&1; then
             echo "SMTP TLS certificate does not match MAIL_HOSTNAME" >&2
             exit 1
         fi

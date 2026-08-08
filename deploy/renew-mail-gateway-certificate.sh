@@ -146,17 +146,6 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-container_is_running() {
-    [ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null || true)" = "true" ]
-}
-
-container_is_running "$npm_container" || fail "NPM container is not running"
-container_is_running "$gateway_container" || fail "mail gateway container is not running"
-
-if ! docker exec "$npm_container" test -f "$cert_path" >/dev/null 2>&1; then
-    fail "certificate file does not exist in NPM container"
-fi
-
 if [ -L "$state_dir" ]; then
     fail "certificate state directory must not be a symlink"
 fi
@@ -175,6 +164,17 @@ if [ ! -d "$state_dir" ]; then
 fi
 state_dir_metadata="$(stat -c '%u:%g:%a' "$state_dir" 2>/dev/null || true)"
 [ "$state_dir_metadata" = "0:0:700" ] || fail "certificate state directory must be root-owned with mode 0700"
+
+container_is_running() {
+    [ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null || true)" = "true" ]
+}
+
+container_is_running "$npm_container" || fail "NPM container is not running"
+container_is_running "$gateway_container" || fail "mail gateway container is not running"
+
+if ! docker exec "$npm_container" test -f "$cert_path" >/dev/null 2>&1; then
+    fail "certificate file does not exist in NPM container"
+fi
 
 certificate_hash() {
     hash_output="$(docker exec "$npm_container" sha256sum "$cert_path" 2>/dev/null)" || return 1
