@@ -249,6 +249,31 @@ class MailAdminOperationsContractTest(unittest.TestCase):
                 MailOperationsProviderUpdateRequest(dkimDomain="mail.example.net", dkimSelector="selector1"),
             )
 
+    def test_self_hosted_update_canonicalizes_legacy_smtp_provider(self) -> None:
+        current = {
+            "id": "provider-self", "provider_type": "smtp", "relay_host": "mail-layer",
+            "relay_port": 587, "tls_mode": "starttls", "username": "", "encrypted_password": None,
+            "active": True, "delivery_enabled": True, "last_test_status": "success",
+            "dkim_domain": None, "dkim_selector": None, "encrypted_dkim_private_key": None,
+        }
+        updated = {
+            **current,
+            "provider_type": "self_hosted",
+            "delivery_enabled": False,
+            "last_test_status": "untested",
+        }
+        cursor = RecordingCursor(one_rows=[current, updated])
+
+        result = MailAdminOperations(db=FakeDb(cursor)).update_provider(
+            actor(), "self_hosted", MailOperationsProviderUpdateRequest()
+        )
+
+        update_sql, update_params = cursor.statements[1]
+        self.assertIn("provider_type=%s", update_sql)
+        self.assertIn("self_hosted", update_params)
+        self.assertFalse(result["deliveryEnabled"])
+        self.assertEqual(result["lastTestStatus"], "untested")
+
     def test_missing_provider_is_created_locked_without_plaintext_secret(self) -> None:
         created = {
             "id": "provider-self", "provider_type": "self_hosted", "relay_host": "localhost",
@@ -343,6 +368,37 @@ class MailAdminOperationsContractTest(unittest.TestCase):
         self.assertEqual(adapter.calls[0][0]["recipient_email"], "external@example.net")
         self.assertEqual(adapter.calls[0][1]["password"], "smtp-password")
         self.assertNotIn("smtp-password", str(result))
+
+    def test_self_hosted_test_persists_canonical_provider_type_for_queue_worker(self) -> None:
+        provider = {
+            "id": "provider-self", "provider_type": "smtp", "relay_host": "mail-layer",
+            "relay_port": 587, "tls_mode": "starttls", "from_address": None,
+            "username": "", "encrypted_password": None, "active": True,
+            "delivery_enabled": False, "last_test_status": "untested",
+            "encrypted_dkim_private_key": None,
+        }
+        updated = {
+            **provider,
+            "provider_type": "self_hosted",
+            "delivery_enabled": True,
+            "last_test_status": "success",
+        }
+        cursor = RecordingCursor(one_rows=[provider, {"mail_domain": "dev.example.net", "mail_host": "mx.dev.example.net"}, updated])
+
+        class Adapter:
+            def send(self, envelope, config):
+                assert config["provider_type"] == "self_hosted"
+                return "provider=self_hosted;endpoint=smtp://mx.example.net:25;remote_smtp_accepted=true"
+
+        result = MailAdminOperations(db=FakeDb(cursor), delivery_adapter=Adapter()).test_provider(
+            actor(), "self_hosted", "external@example.net"
+        )
+
+        update_sql, update_params = cursor.statements[2]
+        self.assertIn("provider_type=%s", update_sql)
+        self.assertIn("self_hosted", update_params)
+        self.assertEqual(result["providerKey"], "self_hosted")
+        self.assertTrue(result["deliveryEnabled"])
 
     def test_api_routes_use_authenticated_admin_and_map_validation_errors(self) -> None:
         client = TestClient(app)
