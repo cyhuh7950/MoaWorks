@@ -92,14 +92,41 @@ esac
     "utf8",
   );
   chmodSync(docker, 0o755);
+  const stat = join(fakeBin, "stat");
+  writeFileSync(
+    stat,
+    `#!/bin/sh
+set -eu
+if [ "$3" = "$MAIL_RENEW_STATE_DIR" ]; then
+  printf '%s\\n' "\${FAKE_STATE_DIR_METADATA:-0:0:700}"
+  exit 0
+fi
+exec /usr/bin/stat "$@"
+`,
+    "utf8",
+  );
+  chmodSync(stat, 0o755);
+  const chown = join(fakeBin, "chown");
+  writeFileSync(
+    chown,
+    `#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "$FAKE_STATE/chown.log"
+[ "\${FAKE_CHOWN_FAIL:-0}" = 0 ] || exit 45
+`,
+    "utf8",
+  );
+  chmodSync(chown, 0o755);
   const hostLockDirectory = join(root, "renew.lock");
   const lockDirectory = hostLockDirectory
     .replaceAll("\\", "/")
     .replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`);
-  const hostLoadedStateFile = join(state, "loaded.sha256");
-  const loadedStateFile = hostLoadedStateFile
+  const hostStateDirectory = join(state, "certificate-state");
+  mkdirSync(hostStateDirectory);
+  const stateDirectory = hostStateDirectory
     .replaceAll("\\", "/")
     .replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`);
+  const hostLoadedStateFile = join(hostStateDirectory, "loaded.sha256");
   const env = {
     ...process.env,
     PATH: `${fakeBin}:${process.env.PATH}`,
@@ -111,7 +138,7 @@ esac
     MAIL_RENEW_CERTBOT_CONFIG: "/etc/letsencrypt.ini",
     MAIL_RENEW_LOCK_DIR: lockDirectory,
     MAIL_RENEW_STABILIZATION_SECONDS: "0",
-    MAIL_RENEW_STATE_FILE: loadedStateFile,
+    MAIL_RENEW_STATE_DIR: stateDirectory,
     ...overrides,
   };
   if (overrides.FAKE_NO_LOADED_STATE !== "1") {
@@ -121,7 +148,7 @@ esac
       "utf8",
     );
   }
-  return { env, hostLoadedStateFile, hostLockDirectory, state };
+  return { env, hostLoadedStateFile, hostLockDirectory, hostStateDirectory, state };
 }
 
 function runRenewal(overrides = {}, args = []) {
@@ -330,6 +357,77 @@ test("형식이 잘못된 loaded state는 fail-closed 처리한다", () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /loaded certificate state is invalid/i);
   assert.doesNotMatch(commands(state), /restart moaworks-mail-gateway/);
+});
+
+test("보호된 시스템 상태 경로는 Docker 실행 전에 거부한다", () => {
+  const fixture = createFixture({ MAIL_RENEW_STATE_DIR: "/var/lib" });
+  const result = spawnSync(bash, [script], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: fixture.env,
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /state directory is not a dedicated directory/i);
+  assert.equal(existsSync(join(fixture.state, "commands.log")), false);
+});
+
+test("기존 상태 디렉터리의 root 소유자 또는 0700 권한이 아니면 fail-closed 처리한다", () => {
+  const { result, state } = runRenewal({ FAKE_STATE_DIR_METADATA: "1000:1000:755" });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /state directory must be root-owned with mode 0700/i);
+  assert.equal(existsSync(join(state, "commands.log")), false);
+});
+
+test("없는 전용 상태 디렉터리만 root 0700으로 생성한다", () => {
+  const fixture = createFixture();
+  rmSync(fixture.hostStateDirectory, { force: true, recursive: true });
+  const result = spawnSync(bash, [script], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: fixture.env,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(existsSync(fixture.hostStateDirectory), true);
+  assert.match(readFileSync(join(fixture.state, "chown.log"), "utf8"), /0:0/);
+});
+
+test("재시작 이후 인증서 해시가 바뀌면 상태 파일을 쓰지 않고 fail-closed 처리한다", () => {
+  const { hostLoadedStateFile, result, state } = runRenewal({
+    FAKE_CURRENT_HASH: "b",
+    FAKE_CERT_CHANGED: "1",
+    FAKE_POST_RESTART_HASH: "c",
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /certificate changed during gateway restart/i);
+  assert.match(commands(state), /restart moaworks-mail-gateway/);
+  assert.match(commands(state), /exec moaworks-mail-gateway postfix check/);
+  assert.match(readFileSync(hostLoadedStateFile, "utf8"), /^a{64}/);
+});
+
+test("기존 MAIL_RENEW_STATE_FILE 또는 --state-file 인수는 실행 전에 거부한다", () => {
+  const environmentFixture = createFixture({ MAIL_RENEW_STATE_FILE: "/tmp/unsafe-state" });
+  const environmentResult = spawnSync(bash, [script], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: environmentFixture.env,
+  });
+  const argumentFixture = createFixture();
+  const argumentResult = spawnSync(bash, [script, "--state-file", "/tmp/unsafe-state"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: argumentFixture.env,
+  });
+
+  assert.notEqual(environmentResult.status, 0);
+  assert.match(environmentResult.stderr, /MAIL_RENEW_STATE_FILE is no longer supported/i);
+  assert.equal(existsSync(join(environmentFixture.state, "commands.log")), false);
+  assert.notEqual(argumentResult.status, 0);
+  assert.match(argumentResult.stderr, /state-file is no longer supported/i);
+  assert.equal(existsSync(join(argumentFixture.state, "commands.log")), false);
 });
 
 test("systemd timer는 WSL 실행 조건과 일 2회 수준의 영구 스케줄을 명시한다", () => {

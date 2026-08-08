@@ -9,7 +9,7 @@ cert_path="${MAIL_RENEW_CERT_PATH:-/etc/letsencrypt/live/moaworks-mail-dev/fullc
 certbot_config="${MAIL_RENEW_CERTBOT_CONFIG:-/etc/letsencrypt.ini}"
 lock_dir="${MAIL_RENEW_LOCK_DIR:-/run/lock/moaworks-mail-certificate-renew.lock}"
 stabilization_seconds="${MAIL_RENEW_STABILIZATION_SECONDS:-5}"
-state_file="${MAIL_RENEW_STATE_FILE:-/var/lib/moaworks/mail-certificate-renew/loaded.sha256}"
+state_dir="${MAIL_RENEW_STATE_DIR:-/var/lib/moaworks/mail-certificate-renew}"
 dry_run=false
 
 usage() {
@@ -22,7 +22,6 @@ Usage: renew-mail-gateway-certificate.sh [options]
   --certbot-config ABSOLUTE_PATH
   --lock-dir ABSOLUTE_PATH
   --stabilization-seconds SECONDS
-  --state-file ABSOLUTE_PATH
   --dry-run
 EOF
 }
@@ -78,9 +77,7 @@ while [ "$#" -gt 0 ]; do
             shift 2
             ;;
         --state-file)
-            require_value "$@"
-            state_file="$2"
-            shift 2
+            fail "--state-file is no longer supported; use MAIL_RENEW_STATE_DIR"
             ;;
         --dry-run)
             dry_run=true
@@ -119,13 +116,23 @@ validate_name "gateway container" "$gateway_container"
 validate_absolute_path "certificate path" "$cert_path"
 validate_absolute_path "certbot config" "$certbot_config"
 validate_absolute_path "lock directory" "$lock_dir"
-validate_absolute_path "state file" "$state_file"
+validate_absolute_path "state directory" "$state_dir"
+[ "${MAIL_RENEW_STATE_FILE+x}" != x ] || fail "MAIL_RENEW_STATE_FILE is no longer supported; use MAIL_RENEW_STATE_DIR"
+case "$state_dir" in
+    /|/var|/var/|/var/lib|/var/lib/|/var/lib/moaworks|/var/lib/moaworks/)
+        fail "state directory is not a dedicated directory"
+        ;;
+esac
+case "$state_dir" in
+    */) fail "state directory must not end with a slash" ;;
+esac
 case "$stabilization_seconds" in
     ''|*[!0-9]*) fail "stabilization seconds is invalid" ;;
 esac
 [ "$stabilization_seconds" -le 300 ] || fail "stabilization seconds must not exceed 300"
 expected_cert_path="/etc/letsencrypt/live/$cert_name/fullchain.pem"
 [ "$cert_path" = "$expected_cert_path" ] || fail "certificate path must match certificate name"
+state_file="$state_dir/loaded.sha256"
 
 command -v docker >/dev/null 2>&1 || fail "docker command is not available"
 
@@ -150,15 +157,24 @@ if ! docker exec "$npm_container" test -f "$cert_path" >/dev/null 2>&1; then
     fail "certificate file does not exist in NPM container"
 fi
 
-state_dir="${state_file%/*}"
-[ -n "$state_dir" ] || state_dir="/"
 if [ -L "$state_dir" ]; then
     fail "certificate state directory must not be a symlink"
 fi
 if [ ! -d "$state_dir" ]; then
-    mkdir -p "$state_dir" || fail "failed to create certificate state directory"
+    [ ! -e "$state_dir" ] || fail "certificate state path is not a directory"
+    state_parent="${state_dir%/*}"
+    [ -n "$state_parent" ] || state_parent="/"
+    [ -d "$state_parent" ] || fail "certificate state directory parent does not exist"
+    [ ! -L "$state_parent" ] || fail "certificate state directory parent must not be a symlink"
+    mkdir -m 700 "$state_dir" || fail "failed to create certificate state directory"
+    if ! chown 0:0 "$state_dir"; then
+        rmdir "$state_dir" 2>/dev/null || true
+        fail "failed to set certificate state directory owner"
+    fi
+    chmod 700 "$state_dir" || fail "failed to secure certificate state directory"
 fi
-chmod 700 "$state_dir" || fail "failed to secure certificate state directory"
+state_dir_metadata="$(stat -c '%u:%g:%a' "$state_dir" 2>/dev/null || true)"
+[ "$state_dir_metadata" = "0:0:700" ] || fail "certificate state directory must be root-owned with mode 0700"
 
 certificate_hash() {
     hash_output="$(docker exec "$npm_container" sha256sum "$cert_path" 2>/dev/null)" || return 1
@@ -231,6 +247,9 @@ esac
 if ! docker exec "$gateway_container" postfix check; then
     fail "postfix check failed after certificate renewal"
 fi
+
+final_hash="$(certificate_hash)" || fail "failed to hash certificate after gateway restart"
+[ "$final_hash" = "$current_hash" ] || fail "certificate changed during gateway restart; state was not written"
 
 state_tmp="${state_file}.tmp.$$"
 if ! printf '%s\n' "$current_hash" > "$state_tmp"; then
