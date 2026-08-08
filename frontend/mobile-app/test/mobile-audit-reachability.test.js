@@ -27,3 +27,21 @@ test("unknown and direct advisories are never silently classified build-only", (
   assert.equal(classified.find((item) => item.package === "unknown").reachability, "unclassified");
   assert.equal(classified.find((item) => item.package === "direct").reachability, "runtime");
 });
+
+test("current Metro and CLI parser advisories are build-only while unknown packages stay blocked", () => {
+  const { classifyAudit, summarizeAudit } = require("../scripts/mobile-audit-reachability.js");
+  const audit = { vulnerabilities: {
+    "image-size": { severity: "high", isDirect: false, via: [], effects: ["metro"] },
+    "js-yaml": { severity: "high", isDirect: false, via: [], effects: [] },
+    metro: { severity: "high", isDirect: false, via: ["image-size", "metro-config", "metro-transform-worker"], effects: [] },
+    "metro-config": { severity: "high", isDirect: false, via: ["metro"], effects: [] },
+    "metro-transform-worker": { severity: "high", isDirect: false, via: ["metro"], effects: [] },
+    "future-unknown": { severity: "critical", isDirect: false, via: [], effects: [] },
+  } };
+  const classified = classifyAudit(audit);
+  for (const packageName of ["image-size", "js-yaml", "metro", "metro-config", "metro-transform-worker"]) {
+    assert.equal(classified.find((item) => item.package === packageName).reachability, "build-only");
+  }
+  assert.equal(classified.find((item) => item.package === "future-unknown").reachability, "unclassified");
+  assert.deepEqual(summarizeAudit(classified), { runtime: 0, buildOnly: 5, unclassified: 1, total: 6 });
+});
