@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-05T12:22:28.180Z",
+  "generatedAt": "2026-08-08T15:13:18.888Z",
   "source": "npm-audit-omit-dev",
   "policy": {
     "approach": "conservative-explicit-allowlist",
@@ -24,7 +24,12 @@
       "chromium-edge-launcher",
       "fast-xml-parser",
       "glob",
+      "image-size",
+      "js-yaml",
       "jscodeshift",
+      "metro",
+      "metro-config",
+      "metro-transform-worker",
       "minimatch",
       "node-dir",
       "rimraf",
@@ -36,10 +41,10 @@
     "vulnerabilities": {
       "info": 0,
       "low": 0,
-      "moderate": 7,
-      "high": 0,
+      "moderate": 6,
+      "high": 7,
       "critical": 0,
-      "total": 7
+      "total": 13
     },
     "dependencies": {
       "prod": 554,
@@ -52,9 +57,9 @@
   },
   "summary": {
     "runtime": 0,
-    "buildOnly": 7,
+    "buildOnly": 13,
     "unclassified": 0,
-    "total": 7
+    "total": 13
   },
   "packages": [
     {
@@ -67,7 +72,7 @@
       ],
       "directAdvisories": [],
       "effects": [],
-      "range": "12.0.0-alpha.0 - 15.1.0",
+      "range": "13.2.0 - 20.1.1",
       "nodes": [
         "node_modules/@react-native-community/cli"
       ],
@@ -167,6 +172,30 @@
       "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
     },
     {
+      "package": "@react-native/community-cli-plugin",
+      "severity": "high",
+      "isDirect": false,
+      "reachability": "build-only",
+      "viaPackages": [
+        "metro",
+        "metro-config"
+      ],
+      "directAdvisories": [],
+      "effects": [
+        "react-native"
+      ],
+      "range": "*",
+      "nodes": [
+        "node_modules/@react-native/community-cli-plugin"
+      ],
+      "fixAvailable": {
+        "name": "react-native",
+        "version": "0.86.2",
+        "isSemVerMajor": true
+      },
+      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
+    },
+    {
       "package": "fast-xml-parser",
       "severity": "moderate",
       "isDirect": false,
@@ -197,18 +226,160 @@
       "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
     },
     {
+      "package": "image-size",
+      "severity": "high",
+      "isDirect": false,
+      "reachability": "build-only",
+      "viaPackages": [],
+      "directAdvisories": [
+        {
+          "source": 1138808,
+          "name": "image-size",
+          "title": "image-size: ICNS parser allows denial of service through an infinite loop",
+          "url": "https://github.com/advisories/GHSA-w3rx-r6r6-pgpr",
+          "severity": "high"
+        },
+        {
+          "source": 1138809,
+          "name": "image-size",
+          "title": "image-size: JXL and HEIF parsers allow denial of service through infinite loops",
+          "url": "https://github.com/advisories/GHSA-5p2g-fcmc-qvqq",
+          "severity": "high"
+        }
+      ],
+      "effects": [
+        "metro"
+      ],
+      "range": "*",
+      "nodes": [
+        "node_modules/image-size"
+      ],
+      "fixAvailable": {
+        "name": "react-native",
+        "version": "0.86.2",
+        "isSemVerMajor": true
+      },
+      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
+    },
+    {
+      "package": "js-yaml",
+      "severity": "high",
+      "isDirect": false,
+      "reachability": "build-only",
+      "viaPackages": [],
+      "directAdvisories": [
+        {
+          "source": 1138114,
+          "name": "js-yaml",
+          "title": "JS-YAML: Quadratic CPU consumption in !!omap resolution (3.x and 4.x) — CVE-2026-59870 fix not backported",
+          "url": "https://github.com/advisories/GHSA-5p4m-2wfm-xmqj",
+          "severity": "high"
+        },
+        {
+          "source": 1138115,
+          "name": "js-yaml",
+          "title": "JS-YAML: Quadratic CPU consumption in !!omap resolution (3.x and 4.x) — CVE-2026-59870 fix not backported",
+          "url": "https://github.com/advisories/GHSA-5p4m-2wfm-xmqj",
+          "severity": "high"
+        }
+      ],
+      "effects": [],
+      "range": "3.0.0 - 3.15.0 || 4.0.0 - 4.3.0",
+      "nodes": [
+        "node_modules/@react-native-community/cli-config/node_modules/js-yaml",
+        "node_modules/js-yaml"
+      ],
+      "fixAvailable": true,
+      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
+    },
+    {
+      "package": "metro",
+      "severity": "high",
+      "isDirect": false,
+      "reachability": "build-only",
+      "viaPackages": [
+        "image-size",
+        "metro-config",
+        "metro-transform-worker"
+      ],
+      "directAdvisories": [],
+      "effects": [
+        "@react-native/community-cli-plugin",
+        "metro-config",
+        "metro-transform-worker"
+      ],
+      "range": ">=0.22.1",
+      "nodes": [
+        "node_modules/metro"
+      ],
+      "fixAvailable": {
+        "name": "react-native",
+        "version": "0.86.2",
+        "isSemVerMajor": true
+      },
+      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
+    },
+    {
+      "package": "metro-config",
+      "severity": "high",
+      "isDirect": false,
+      "reachability": "build-only",
+      "viaPackages": [
+        "metro"
+      ],
+      "directAdvisories": [],
+      "effects": [
+        "@react-native/community-cli-plugin",
+        "metro"
+      ],
+      "range": "*",
+      "nodes": [
+        "node_modules/metro-config"
+      ],
+      "fixAvailable": {
+        "name": "react-native",
+        "version": "0.86.2",
+        "isSemVerMajor": true
+      },
+      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
+    },
+    {
+      "package": "metro-transform-worker",
+      "severity": "high",
+      "isDirect": false,
+      "reachability": "build-only",
+      "viaPackages": [
+        "metro"
+      ],
+      "directAdvisories": [],
+      "effects": [
+        "metro"
+      ],
+      "range": ">=0.60.0",
+      "nodes": [
+        "node_modules/metro-transform-worker"
+      ],
+      "fixAvailable": {
+        "name": "react-native",
+        "version": "0.86.2",
+        "isSemVerMajor": true
+      },
+      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
+    },
+    {
       "package": "react-native",
-      "severity": "moderate",
+      "severity": "high",
       "isDirect": true,
       "reachability": "build-only-carrier",
       "viaPackages": [
         "@react-native-community/cli",
         "@react-native-community/cli-platform-android",
-        "@react-native-community/cli-platform-ios"
+        "@react-native-community/cli-platform-ios",
+        "@react-native/community-cli-plugin"
       ],
       "directAdvisories": [],
       "effects": [],
-      "range": "0.73.0-nightly-20230506-1af868c52 - 0.76.0-rc.6 || >=0.87.0-nightly-20260507-ba204faa7",
+      "range": ">=0.73.0-nightly-20230506-1af868c52",
       "nodes": [
         "node_modules/react-native"
       ],

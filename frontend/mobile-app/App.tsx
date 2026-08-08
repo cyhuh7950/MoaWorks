@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, AppState, Button, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
 type AuthUser = {
   userId: string;
@@ -112,8 +112,18 @@ type MessengerMessage = {
   readState: string;
 };
 
+type WorkspaceFile = {
+  id: string;
+  file_name: string;
+  content_type: string;
+  size_bytes: number;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
 type AppLocale = "ko-KR" | "en-US" | "ja-JP" | "zh-CN" | "es-ES" | "fr-FR" | "de-DE";
-type MobileTab = "home" | "mail" | "approval" | "chat";
+type MobileTab = "home" | "mail" | "approval" | "chat" | "files";
 
 const supportedLocales: AppLocale[] = ["ko-KR", "en-US", "ja-JP", "zh-CN", "es-ES", "fr-FR", "de-DE"];
 const supportedTimezones = ["Asia/Seoul", "Asia/Tokyo", "America/New_York", "America/Chicago", "Europe/Paris", "Europe/Berlin"];
@@ -213,7 +223,9 @@ export default function App() {
   const [roomMessages, setRoomMessages] = useState<MessengerMessage[]>([]);
   const [chatDraft, setChatDraft] = useState("");
   const [chatError, setChatError] = useState("");
-  const activeTabError = activeTab === "mail" ? mailError : activeTab === "chat" ? chatError : "";
+  const [files, setFiles] = useState<WorkspaceFile[]>([]);
+  const [fileError, setFileError] = useState("");
+  const activeTabError = activeTab === "files" ? fileError : activeTab === "mail" ? mailError : activeTab === "chat" ? chatError : "";
 
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${apiBase}${path}`, {
@@ -300,6 +312,7 @@ export default function App() {
       await loadNotifications(login.accessToken);
       await loadMail(login.accessToken);
       await loadRooms(login.accessToken);
+      await loadFiles(login.accessToken);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "로그인 실패");
     }
@@ -407,6 +420,31 @@ export default function App() {
     }
   }
 
+  async function loadFiles(activeToken: string = token) {
+    if (!activeToken) return;
+    try {
+      const body = await request<{ items: WorkspaceFile[] }>("/workspace/files?scope=mine", {
+        headers: { Authorization: `Bearer ${activeToken}` },
+      });
+      setFiles(body.items ?? []);
+      setFileError("");
+    } catch (error) {
+      setFileError(error instanceof Error ? error.message : "파일 조회 실패");
+    }
+  }
+
+  async function refreshAuthenticatedData(activeToken: string) {
+    await Promise.all([
+      loadApprovals(activeToken),
+      withRetry(() => loadNotifications(activeToken)).catch((error) => {
+        setNotificationError(error instanceof Error ? error.message : "알림 조회 실패");
+      }),
+      loadMail(activeToken),
+      loadRooms(activeToken),
+      loadFiles(activeToken),
+    ]);
+  }
+
   async function openRoom(roomId: string, activeToken: string = token) {
     if (!activeToken) return;
     try {
@@ -454,6 +492,10 @@ export default function App() {
     }
     if (nextTab === "chat") {
       void loadRooms(token);
+      return;
+    }
+    if (nextTab === "files") {
+      void loadFiles(token);
     }
   }
 
@@ -541,10 +583,18 @@ export default function App() {
 
   useEffect(() => {
     if (token) {
-      void loadApprovals();
-      void loadMail();
-      void loadRooms();
+      void refreshAuthenticatedData(token);
     }
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active") {
+        void refreshAuthenticatedData(token);
+      }
+    });
+    return () => subscription.remove();
   }, [token]);
 
   useEffect(() => {
@@ -666,6 +716,7 @@ export default function App() {
                   { id: "mail", label: "메일" },
                   { id: "approval", label: "결재" },
                   { id: "chat", label: "메신저" },
+                  { id: "files", label: "파일" },
                 ].map((item) => (
                   <Text
                     key={item.id}
@@ -837,6 +888,28 @@ export default function App() {
               </View>
             ) : null}
 
+            {activeTab === "files" ? (
+              <View style={styles.surfaceCard}>
+                <Text style={styles.surfaceKicker}>파일</Text>
+                <Text style={styles.surfaceTitle}>내 파일 / 최근 수정</Text>
+                <View style={styles.quickGrid}>
+                  <View style={[styles.quickCard, styles.quickTeal]}>
+                    <Text style={styles.quickCardTitle}>내 파일</Text>
+                    <Text style={styles.quickCardNote}>{files.length}개</Text>
+                  </View>
+                </View>
+                {files.length === 0 ? <Text style={styles.emptyState}>표시할 파일이 없습니다.</Text> : null}
+                {files.slice(0, 20).map((item) => (
+                  <View key={item.id} style={styles.listCard}>
+                    <Text style={styles.listKicker}>{item.status}</Text>
+                    <Text style={styles.listTitle}>{item.file_name}</Text>
+                    <Text style={styles.listBody}>{`${item.content_type} · ${item.size_bytes.toLocaleString()} B · ${formatStamp(item.updated_at)}`}</Text>
+                  </View>
+                ))}
+                {fileError ? <Text style={styles.error}>{fileError}</Text> : null}
+              </View>
+            ) : null}
+
             <View style={styles.surfaceCard}>
               <Text style={styles.surfaceKicker}>알림</Text>
               <Text style={styles.surfaceTitle}>빠른 확인과 폴백</Text>
@@ -904,6 +977,8 @@ export default function App() {
                     setSelectedMailDetail(null);
                     setSelectedRoom(null);
                     setSelectedRoomMessages([]);
+                    setFiles([]);
+                    setFileError("");
                   }}
                 />
               </View>

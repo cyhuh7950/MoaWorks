@@ -14,21 +14,21 @@
   "minified": true,
   "artifact": {
     "fileName": "MoaWorks-Mobile-0.1.0-android-internal-release.apk",
-    "size": 59155673,
-    "sha256": "86035b8e033b1b3e06cb2db883189a3af4789e7cefb59d2b07358b7e4fcc9092"
+    "size": 59156927,
+    "sha256": "e647eff4d6bb8a91ee6e068ec87d1cb3b39d5bbf1d23fac09abc42cd70e266a1"
   },
   "bundle": {
     "fileName": "MoaWorks-Mobile-0.1.0-android-production.bundle",
-    "size": 923317,
-    "sha256": "c8e27afc0bbfc3680be9056055fbcbfba6ea55d100922dcea644d0a516bde464"
+    "size": 925404,
+    "sha256": "86c2fa1c705677c4e841449d26a42241c06c5e82c1f609fdb1c2a27b676e04e5"
   },
   "auditReachability": {
     "fileName": "MoaWorks-Mobile-0.1.0-android-internal-release.audit-reachability.json",
     "summary": {
       "runtime": 0,
-      "buildOnly": 7,
+      "buildOnly": 13,
       "unclassified": 0,
-      "total": 7
+      "total": 13
     }
   },
   "apkVerification": {
@@ -46,10 +46,10 @@
     }
   },
   "installVerification": {
-    "status": "GAP",
-    "code": "NO_CONNECTED_ANDROID_DEVICE",
-    "devices": 0
+    "status": "AVAILABLE",
+    "code": null,
+    "devices": 1
   },
   "status": "success",
-  "generatedAt": "2026-08-05T12:22:31.247Z"
+  "generatedAt": "2026-08-08T15:13:22.945Z"
 }
