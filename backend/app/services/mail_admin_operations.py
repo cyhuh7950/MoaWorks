@@ -130,12 +130,14 @@ class MailAdminOperations:
                     if any(merged_dkim) and not all(merged_dkim):
                         raise ValueError("자체 메일 엔진의 DKIM 도메인, selector, 개인키는 함께 설정해야 합니다.")
                 updates: dict[str, object] = {}
+                connection_changed = row.get("provider_type") != provider_key
+                if connection_changed:
+                    updates["provider_type"] = provider_key
                 mapping = {
                     "relayHost": "relay_host", "relayPort": "relay_port", "tlsMode": "tls_mode",
                     "senderAddress": "from_address", "username": "username", "dkimDomain": "dkim_domain",
                     "dkimSelector": "dkim_selector",
                 }
-                connection_changed = False
                 for api_name, column in mapping.items():
                     if api_name in values:
                         updates[column] = values[api_name]
@@ -212,9 +214,9 @@ class MailAdminOperations:
                 except Exception as exc:
                     test_status, response, error = "failed", "", mask_delivery_error(str(exc))
                 cursor.execute(
-                    """UPDATE mail_provider_configs SET last_test_status=%s,delivery_enabled=%s,last_test_message=%s,last_connection_at=%s,
+                    """UPDATE mail_provider_configs SET provider_type=%s,last_test_status=%s,delivery_enabled=%s,last_test_message=%s,last_connection_at=%s,
                     last_connection_error=%s,updated_at=%s WHERE id=%s AND company_id=%s RETURNING *""",
-                    (test_status, test_status == "success", response or "실제 외부 SMTP 연결 테스트 실패", now, error, now, provider["id"], actor.companyId),
+                    (provider_key, test_status, test_status == "success", response or "실제 외부 SMTP 연결 테스트 실패", now, error, now, provider["id"], actor.companyId),
                 )
                 updated = cursor.fetchone()
                 self._audit(cursor, actor, "mail_provider_config", provider["id"], "mail.provider.tested", test_status)
