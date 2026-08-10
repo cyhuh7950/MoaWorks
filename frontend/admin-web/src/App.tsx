@@ -31,6 +31,7 @@ import {
   fetchAdminMessengerRooms,
   fetchMailDeliveryStatus,
   fetchMailOperations,
+  generateSelfHostedDkim,
   fetchMonitoringEvents,
   fetchMonitoringAlerts,
   fetchMonitoringOverview,
@@ -2218,6 +2219,27 @@ export default function App() {
     }
   }
 
+  async function handleGenerateSelfHostedDkim() {
+    if (!token || mailProviderOperationsForm.providerKey !== "self_hosted") return;
+    if (!window.confirm("DKIM 키를 생성하면 자체 엔진 발송이 잠기며, DNS 등록 후 연결 테스트를 다시 실행해야 합니다. 계속할까요?")) return;
+    setLoading(true);
+    setErrors([]);
+    try {
+      const result = await generateSelfHostedDkim(token);
+      await refreshMailDelivery();
+      setOperationDetail({
+        title: "DKIM DNS 등록값",
+        lines: ["호스트: " + result.dnsHost, "TXT 값: " + result.dnsValue, "DNS 등록 후 제공자 연결 테스트를 실행하세요."],
+      });
+      setOperationsDialog("audit");
+      setMessage("DKIM 키를 안전하게 생성했습니다. 공개 DNS 값만 화면에 표시합니다.");
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "DKIM 키 생성 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handleMailProviderSwitch(targetProvider: "self_hosted" | "oci_email_delivery") {
     if (!token) return;
     setLoading(true);
@@ -3727,6 +3749,7 @@ export default function App() {
                         <label>DKIM 도메인<input value={mailProviderOperationsForm.dkimDomain} onChange={(event) => setMailProviderOperationsForm((current) => ({ ...current, dkimDomain: event.target.value }))} /></label>
                         <label>DKIM selector<input value={mailProviderOperationsForm.dkimSelector} onChange={(event) => setMailProviderOperationsForm((current) => ({ ...current, dkimSelector: event.target.value }))} /></label>
                         <label>DKIM 개인키<textarea value={mailProviderOperationsForm.dkimPrivateKey} onChange={(event) => setMailProviderOperationsForm((current) => ({ ...current, dkimPrivateKey: event.target.value }))} placeholder="변경할 때만 입력하며 저장 후 다시 표시하지 않습니다." /></label>
+                        <button type="button" className="secondary" disabled={loading || mailProviderOperationsForm.providerKey !== "self_hosted" || Boolean(mailOperations?.providers.find((item) => item.providerKey === "self_hosted")?.dkimPrivateKeyConfigured)} onClick={() => void handleGenerateSelfHostedDkim()}>DKIM 키 자동 생성</button>
                         <button type="submit" disabled={loading}>Provider 설정 저장</button>
                       </form>
                     </div>

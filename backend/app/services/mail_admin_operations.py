@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import base64
+import re
+
 from datetime import UTC, datetime
 from uuid import uuid4
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 from app.services.mail_operations_policy import build_mail_domain_contract
 from app.services.mail_operations_service import MailOperationsService
@@ -16,6 +22,21 @@ _PROVIDER_TYPES = {
     "self_hosted": ("self_hosted", "self_hosted_smtp", "smtp"),
     "oci_email_delivery": ("oci_email_delivery", "oci_smtp"),
 }
+def generate_dkim_keypair() -> tuple[str, str]:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("ascii")
+    public_der = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    dns_value = "v=DKIM1; k=rsa; p=" + base64.b64encode(public_der).decode("ascii")
+    return private_pem, dns_value
+
+
 
 
 class MailAdminOperations:
@@ -166,6 +187,46 @@ class MailAdminOperations:
                     self._audit(cursor, actor, "mail_provider_config", row["id"], "mail.provider.updated", provider_key)
             connection.commit()
         return self._provider_view(dict(row))
+    def generate_self_hosted_dkim(self, actor, selector: str | None = None) -> dict:
+        normalized_selector = (selector or datetime.now(UTC).strftime("mw%Y%m")).strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", normalized_selector):
+            raise ValueError("DKIM selector 형식이 올바르지 않습니다.")
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT mail_domain FROM mail_domain_settings WHERE company_id=%s", (actor.companyId,))
+                domain = cursor.fetchone()
+                if domain is None:
+                    raise ValueError("먼저 메일 도메인 설정을 저장해야 합니다.")
+                provider = self._find_provider(cursor, actor.companyId, "self_hosted")
+                if provider is None:
+                    raise ValueError("자체 메일 엔진 Provider 설정이 없습니다.")
+                if provider.get("encrypted_dkim_private_key"):
+                    raise ValueError("DKIM 키가 이미 설정되어 있어 자동으로 덮어쓸 수 없습니다.")
+                private_pem, dns_value = generate_dkim_keypair()
+                encrypted_private_key = self.security.encrypt_secret(private_pem)
+                now = datetime.now(UTC)
+                cursor.execute(
+                    """UPDATE mail_provider_configs
+                    SET dkim_domain=%s,dkim_selector=%s,encrypted_dkim_private_key=%s,
+                        delivery_enabled=FALSE,last_test_status='untested',
+                        last_test_message=%s,updated_at=%s
+                    WHERE id=%s AND company_id=%s RETURNING *""",
+                    (
+                        domain["mail_domain"], normalized_selector, encrypted_private_key,
+                        "DKIM 키 생성 후 공인 DNS 등록과 연결 테스트가 필요합니다.",
+                        now, provider["id"], actor.companyId,
+                    ),
+                )
+                updated = cursor.fetchone()
+                self._audit(cursor, actor, "mail_provider_config", provider["id"], "mail.dkim.generated", normalized_selector)
+            connection.commit()
+        return {
+            "provider": self._provider_view(dict(updated)),
+            "dnsHost": f"{normalized_selector}._domainkey.{domain['mail_domain']}",
+            "dnsValue": dns_value,
+        }
+
 
     def switch_provider(self, actor, target_provider: str) -> dict:
         with self.db.connect() as connection:

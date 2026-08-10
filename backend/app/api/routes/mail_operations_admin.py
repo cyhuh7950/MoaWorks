@@ -49,6 +49,14 @@ def update_mail_provider(provider_key: str, payload: MailOperationsProviderUpdat
     except Exception as exc:
         _raise_operation_error(exc)
 
+@router.post("/providers/self_hosted/dkim/generate")
+def generate_self_hosted_dkim(actor: AuthUserSummary = Depends(require_admin)):
+    try:
+        return _service().generate_self_hosted_dkim(actor)
+    except Exception as exc:
+        _raise_operation_error(exc)
+
+
 
 @router.post("/providers/switch")
 def switch_mail_provider(payload: MailOperationsProviderSwitchRequest, actor: AuthUserSummary = Depends(require_admin)):

@@ -1,13 +1,15 @@
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from cryptography.hazmat.primitives import serialization
 from fastapi.testclient import TestClient
 
 from app.api.dependencies import require_admin
 from app.main import app
 from app.schemas.mail_operations import MailOperationsDomainUpdateRequest, MailOperationsProviderUpdateRequest
-from app.services.mail_admin_operations import MailAdminOperations
+from app.services.mail_admin_operations import MailAdminOperations, generate_dkim_keypair
 from app.services.mail_operations_policy import ProviderSwitchPlan, build_mail_domain_contract
 from app.services.oci_email_operations import OciEmailGateway, OciEmailOperations
 
@@ -115,6 +117,7 @@ class MailAdminOperationsContractTest(unittest.TestCase):
             "/api/v1/admin/mail-operations/providers/switch": "post",
             "/api/v1/admin/mail-operations/providers/rollback": "post",
             "/api/v1/admin/mail-operations/oci/suppressions/sync": "post",
+            "/api/v1/admin/mail-operations/providers/self_hosted/dkim/generate": "post",
         }
         for path, method in expected.items():
             with self.subTest(path=path):
@@ -248,6 +251,14 @@ class MailAdminOperationsContractTest(unittest.TestCase):
                 "self_hosted",
                 MailOperationsProviderUpdateRequest(dkimDomain="mail.example.net", dkimSelector="selector1"),
             )
+    def test_generated_dkim_keypair_is_rsa_2048_and_never_embeds_private_material_in_dns(self) -> None:
+        private_pem, dns_value = generate_dkim_keypair()
+
+        private_key = serialization.load_pem_private_key(private_pem.encode("ascii"), password=None)
+        self.assertEqual(private_key.key_size, 2048)
+        self.assertTrue(dns_value.startswith("v=DKIM1; k=rsa; p="))
+        self.assertNotIn("PRIVATE KEY", dns_value)
+
 
     def test_self_hosted_update_canonicalizes_legacy_smtp_provider(self) -> None:
         current = {
@@ -273,6 +284,56 @@ class MailAdminOperationsContractTest(unittest.TestCase):
         self.assertIn("self_hosted", update_params)
         self.assertFalse(result["deliveryEnabled"])
         self.assertEqual(result["lastTestStatus"], "untested")
+
+    @patch("app.services.mail_admin_operations.generate_dkim_keypair", return_value=("PRIVATE-PEM", "v=DKIM1; k=rsa; p=PUBLIC"))
+    def test_generate_self_hosted_dkim_stores_encrypted_key_and_returns_public_dns_only(self, _generate) -> None:
+        current = {
+            "id": "provider-self", "provider_type": "self_hosted", "active": True,
+            "delivery_enabled": True, "last_test_status": "success",
+            "encrypted_dkim_private_key": None,
+        }
+        updated = {
+            **current,
+            "delivery_enabled": False,
+            "last_test_status": "untested",
+            "dkim_domain": "dev.moaworks.sinsan.kr",
+            "dkim_selector": "mw202608",
+            "encrypted_dkim_private_key": "cipher-dkim",
+        }
+        cursor = RecordingCursor(one_rows=[
+            {"mail_domain": "dev.moaworks.sinsan.kr"},
+            current,
+            updated,
+        ])
+        operation = MailAdminOperations(db=FakeDb(cursor))
+        with patch.object(operation.security, "encrypt_secret", return_value="cipher-dkim"):
+            result = operation.generate_self_hosted_dkim(actor(), selector="mw202608")
+
+        self.assertEqual(result["dnsHost"], "mw202608._domainkey.dev.moaworks.sinsan.kr")
+        self.assertEqual(result["dnsValue"], "v=DKIM1; k=rsa; p=PUBLIC")
+        self.assertFalse(result["provider"]["deliveryEnabled"])
+        self.assertNotIn("PRIVATE-PEM", str(result))
+        self.assertNotIn("cipher-dkim", str(result))
+        update_sql, update_params = cursor.statements[2]
+        self.assertIn("encrypted_dkim_private_key=%s", update_sql)
+        self.assertIn("cipher-dkim", update_params)
+
+    def test_generate_self_hosted_dkim_refuses_to_overwrite_existing_key(self) -> None:
+        current = {
+            "id": "provider-self", "provider_type": "self_hosted", "active": True,
+            "delivery_enabled": True, "last_test_status": "success",
+            "encrypted_dkim_private_key": "cipher-existing",
+        }
+        cursor = RecordingCursor(one_rows=[
+            {"mail_domain": "dev.moaworks.sinsan.kr"},
+            current,
+        ])
+        operation = MailAdminOperations(db=FakeDb(cursor))
+
+        with self.assertRaisesRegex(ValueError, "이미"):
+            operation.generate_self_hosted_dkim(actor(), selector="mw202608")
+
+        self.assertEqual(len(cursor.statements), 2)
 
     def test_missing_provider_is_created_locked_without_plaintext_secret(self) -> None:
         created = {
@@ -428,6 +489,16 @@ class MailAdminOperationsContractTest(unittest.TestCase):
                 self.assertEqual(client.get("/api/v1/admin/mail-operations").status_code, 400)
         finally:
             app.dependency_overrides.clear()
+    def test_admin_ui_exposes_screen_based_self_hosted_dkim_generation(self) -> None:
+        root = Path(__file__).resolve().parent.parent
+        api_source = (root / "frontend" / "admin-web" / "src" / "api.ts").read_text(encoding="utf-8")
+        app_source = (root / "frontend" / "admin-web" / "src" / "App.tsx").read_text(encoding="utf-8")
+
+        self.assertIn('"/admin/mail-operations/providers/self_hosted/dkim/generate"', api_source)
+        self.assertIn("generateSelfHostedDkim", api_source)
+        self.assertIn("generateSelfHostedDkim", app_source)
+        self.assertIn("DKIM 키 자동 생성", app_source)
+
 
 
 if __name__ == "__main__":

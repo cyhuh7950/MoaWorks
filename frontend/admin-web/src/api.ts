@@ -425,6 +425,12 @@ export type MailOperationsProvider = {
   lastConnectionAt: string | null;
   lastConnectionError: string | null;
 };
+export type SelfHostedDkimGenerationResponse = {
+  provider: MailOperationsProvider;
+  dnsHost: string;
+  dnsValue: string;
+};
+
 
 export type MailOperationsOverview = {
   domain: null | {
@@ -874,6 +880,13 @@ export async function updateMailOperationsProvider(token: string, providerKey: "
     method: "PUT", headers: authHeaders(token), body: JSON.stringify(payload),
   });
 }
+export async function generateSelfHostedDkim(token: string): Promise<SelfHostedDkimGenerationResponse> {
+  return request<SelfHostedDkimGenerationResponse>("/admin/mail-operations/providers/self_hosted/dkim/generate", {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+}
+
 
 export async function switchMailOperationsProvider(token: string, targetProvider: "self_hosted" | "oci_email_delivery") {
   return request<{ previousProvider: string; activeProvider: string; pinnedQueueCount: number }>("/admin/mail-operations/providers/switch", {

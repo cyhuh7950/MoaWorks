@@ -49,15 +49,24 @@ class DomainService:
         self.store = store
         self.resolver = resolver or DnsPythonResolver()
 
-    def verify(self, domain: str) -> DomainVerifyResponse:
+    def verify(
+        self,
+        domain: str,
+        *,
+        managed_domain: str | None = None,
+        mail_host: str | None = None,
+        dkim_selector: str | None = None,
+    ) -> DomainVerifyResponse:
         normalized = domain.strip().lower().rstrip(".")
         if "." not in normalized:
             raise ValueError("도메인 형식이 올바르지 않습니다.")
 
         company = self.store.get_overview().company
-        matches_company = normalized == company.domain.lower().rstrip(".")
-        mail_host = f"mail.{normalized}"
-        dkim_host = f"selector1._domainkey.{normalized}"
+        expected_domain = (managed_domain or company.domain).strip().lower().rstrip(".")
+        matches_company = normalized == expected_domain
+        mail_host = (mail_host or f"mail.{normalized}").strip().lower().rstrip(".")
+        selector = (dkim_selector or "selector1").strip().lower().rstrip(".")
+        dkim_host = f"{selector}._domainkey.{normalized}"
         dmarc_host = f"_dmarc.{normalized}"
 
         a_values, a_error = self._lookup(mail_host, "A")

@@ -22,6 +22,7 @@ from app.schemas.directory import (
     UserView,
 )
 from app.services.directory_store import DirectoryStore, DirectoryUserEmailConflictError
+from app.services.mail_admin_operations import MailAdminOperations
 from app.services.domain_service import DomainService
 from app.services.org_import_service import OrgImportService
 from app.services.relay_service import RelayService
@@ -128,9 +129,25 @@ def delete_user(
 @router.post("/domains/verify", response_model=DomainVerifyResponse)
 def verify_domain(
     payload: DomainVerifyRequest,
-    _: AuthUserSummary = Depends(require_admin),
+    actor: AuthUserSummary = Depends(require_admin),
 ) -> DomainVerifyResponse:
-    return DomainService(DirectoryStore()).verify(payload.domain)
+    operations = MailAdminOperations().get_overview(actor)
+    domain = operations.get("domain") or {}
+    active_provider_key = domain.get("activeOutboundProvider")
+    providers = operations.get("providers") or []
+    active_provider = next(
+        (provider for provider in providers if provider.get("providerKey") == active_provider_key),
+        None,
+    ) or next(
+        (provider for provider in providers if provider.get("active")),
+        {},
+    )
+    return DomainService(DirectoryStore()).verify(
+        payload.domain,
+        managed_domain=domain.get("mailDomain") or payload.domain,
+        mail_host=domain.get("mailHost"),
+        dkim_selector=active_provider.get("dkimSelector"),
+    )
 
 
 @router.post("/relay/test", response_model=RelayTestResponse)
