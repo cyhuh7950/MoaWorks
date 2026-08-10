@@ -126,11 +126,6 @@ printf '%s\\n' "$*" >> "$FAKE_STATE/chown.log"
     "utf8",
   );
   chmodSync(chown, 0o755);
-  const fixturePath = `${toGitBashPath(fakeBin)}:/usr/local/bin:/usr/bin:/bin`;
-  const hostBashEnvironment = join(root, "bash-env");
-  writeFileSync(hostBashEnvironment, `PATH="${fixturePath}"
-export PATH
-`, "utf8");
   const hostLockDirectory = join(root, "renew.lock");
   const lockDirectory = toGitBashPath(hostLockDirectory);
   const hostStateDirectory = join(state, "certificate-state");
@@ -139,9 +134,8 @@ export PATH
   const hostLoadedStateFile = join(hostStateDirectory, "loaded.sha256");
   const env = {
     ...process.env,
-    PATH: fixturePath,
     FAKE_STATE: toGitBashPath(state),
-    BASH_ENV: toGitBashPath(hostBashEnvironment),
+    MOAWORKS_TEST_FIXTURE_BIN: toGitBashPath(fakeBin),
     MAIL_RENEW_CERT_NAME: "moaworks-mail-dev",
     MAIL_RENEW_NPM_CONTAINER: "npm",
     MAIL_RENEW_GATEWAY_CONTAINER: "moaworks-mail-gateway",
@@ -162,13 +156,26 @@ export PATH
   return { env, hostLoadedStateFile, hostLockDirectory, hostStateDirectory, state };
 }
 
+function runFixtureScript(fixture, args) {
+  return spawnSync(
+    bash,
+    [
+      "-c",
+      'PATH="$MOAWORKS_TEST_FIXTURE_BIN:/usr/local/bin:/usr/bin:/bin"; export PATH; exec "$@"',
+      "moaworks-tls-fixture",
+      ...args,
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: fixture.env,
+    },
+  );
+}
+
 function runRenewal(overrides = {}, args = []) {
   const fixture = createFixture(overrides);
-  const result = spawnSync(bash, [script, ...args], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: fixture.env,
-  });
+  const result = runFixtureScript(fixture, [script, ...args]);
   return { ...fixture, result };
 }
 
@@ -187,6 +194,43 @@ test("인증서 해시가 같으면 gateway를 재시작하지 않는다", () =>
     /certbot renew --config \/etc\/letsencrypt\.ini --cert-name moaworks-mail-dev --non-interactive --no-random-sleep-on-renew/,
   );
   assert.doesNotMatch(log, /restart moaworks-mail-gateway/);
+});
+
+test("셸 메타문자가 있는 임시 경로에서도 fake 명령 격리를 유지한다", () => {
+  const hostileTemporaryRoot = mkdtempSync(
+    join(tmpdir(), 'moaworks-tls-$(printf${IFS}substitution)-`printf${IFS}backtick` path-'),
+  );
+  temporaryDirectories.push(hostileTemporaryRoot);
+  const safeShellPathRoot = mkdtempSync(join(tmpdir(), "moaworks-tls-safe-path-"));
+  temporaryDirectories.push(safeShellPathRoot);
+  const safeLockDirectory = toGitBashPath(join(safeShellPathRoot, "renew.lock"));
+  const safeStateDirectory = toGitBashPath(join(safeShellPathRoot, "certificate-state"));
+  const originalTemporaryEnvironment = Object.fromEntries(
+    ["TMP", "TEMP", "TMPDIR"].map((name) => [name, process.env[name]]),
+  );
+  Object.assign(process.env, {
+    TMP: hostileTemporaryRoot,
+    TEMP: hostileTemporaryRoot,
+    TMPDIR: hostileTemporaryRoot,
+  });
+
+  try {
+    const { result, state } = runRenewal({
+      MAIL_RENEW_LOCK_DIR: safeLockDirectory,
+      MAIL_RENEW_STATE_DIR: safeStateDirectory,
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(commands(state), /inspect -f/);
+  } finally {
+    for (const [name, value] of Object.entries(originalTemporaryEnvironment)) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+  }
 });
 
 test("명시적 인증서 인수와 dry-run을 Certbot 호출에 반영한다", () => {
@@ -296,11 +340,7 @@ test("Postfix 검증 실패를 성공으로 처리하지 않는다", () => {
 test("이미 갱신 작업이 실행 중이면 Docker 명령 전에 종료한다", () => {
   const fixture = createFixture();
   mkdirSync(fixture.hostLockDirectory);
-  const result = spawnSync(bash, [script], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: fixture.env,
-  });
+  const result = runFixtureScript(fixture, [script]);
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /renewal is already running/i);
@@ -309,11 +349,7 @@ test("이미 갱신 작업이 실행 중이면 Docker 명령 전에 종료한다
 
 test("제어 문자가 포함된 경로 인수는 Docker 실행 전에 거부한다", () => {
   const fixture = createFixture({ MAIL_RENEW_CERT_PATH: "/etc/letsencrypt/live/cert\nforged" });
-  const result = spawnSync(bash, [script], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: fixture.env,
-  });
+  const result = runFixtureScript(fixture, [script]);
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /certificate path contains an invalid character/i);
@@ -322,11 +358,7 @@ test("제어 문자가 포함된 경로 인수는 Docker 실행 전에 거부한
 
 test("Docker 옵션처럼 보이는 컨테이너 이름은 실행 전에 거부한다", () => {
   const fixture = createFixture({ MAIL_RENEW_NPM_CONTAINER: "--privileged" });
-  const result = spawnSync(bash, [script], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: fixture.env,
-  });
+  const result = runFixtureScript(fixture, [script]);
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /NPM container is invalid/i);
@@ -335,11 +367,7 @@ test("Docker 옵션처럼 보이는 컨테이너 이름은 실행 전에 거부�
 
 test("안정화 대기 시간에 숫자가 아닌 값은 실행 전에 거부한다", () => {
   const fixture = createFixture({ MAIL_RENEW_STABILIZATION_SECONDS: "0;echo-forged" });
-  const result = spawnSync(bash, [script], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: fixture.env,
-  });
+  const result = runFixtureScript(fixture, [script]);
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /stabilization seconds is invalid/i);
@@ -351,11 +379,7 @@ test("인증서 이름과 fullchain 경로가 다르면 실행 전에 거부한�
     MAIL_RENEW_CERT_NAME: "moaworks-mail-dev",
     MAIL_RENEW_CERT_PATH: "/etc/letsencrypt/live/another-cert/fullchain.pem",
   });
-  const result = spawnSync(bash, [script], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: fixture.env,
-  });
+  const result = runFixtureScript(fixture, [script]);
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /certificate path must match certificate name/i);
@@ -372,11 +396,7 @@ test("형식이 잘못된 loaded state는 fail-closed 처리한다", () => {
 
 test("보호된 시스템 상태 경로는 Docker 실행 전에 거부한다", () => {
   const fixture = createFixture({ MAIL_RENEW_STATE_DIR: "/var/lib" });
-  const result = spawnSync(bash, [script], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: fixture.env,
-  });
+  const result = runFixtureScript(fixture, [script]);
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /state directory is not a dedicated directory/i);
@@ -394,11 +414,7 @@ test("기존 상태 디렉터리의 root 소유자 또는 0700 권한이 아니�
 test("없는 전용 상태 디렉터리만 root 0700으로 생성한다", () => {
   const fixture = createFixture();
   rmSync(fixture.hostStateDirectory, { force: true, recursive: true });
-  const result = spawnSync(bash, [script], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: fixture.env,
-  });
+  const result = runFixtureScript(fixture, [script]);
 
   assert.equal(result.status, 0, result.stderr);
   assert.equal(existsSync(fixture.hostStateDirectory), true);
@@ -421,17 +437,9 @@ test("재시작 이후 인증서 해시가 바뀌면 상태 파일을 쓰지 않
 
 test("기존 MAIL_RENEW_STATE_FILE 또는 --state-file 인수는 실행 전에 거부한다", () => {
   const environmentFixture = createFixture({ MAIL_RENEW_STATE_FILE: "/tmp/unsafe-state" });
-  const environmentResult = spawnSync(bash, [script], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: environmentFixture.env,
-  });
+  const environmentResult = runFixtureScript(environmentFixture, [script]);
   const argumentFixture = createFixture();
-  const argumentResult = spawnSync(bash, [script, "--state-file", "/tmp/unsafe-state"], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: argumentFixture.env,
-  });
+  const argumentResult = runFixtureScript(argumentFixture, [script, "--state-file", "/tmp/unsafe-state"]);
 
   assert.notEqual(environmentResult.status, 0);
   assert.match(environmentResult.stderr, /MAIL_RENEW_STATE_FILE is no longer supported/i);
