@@ -9,6 +9,12 @@ const bash = existsSync("/bin/bash") ? "/bin/bash" : "C:\\Program Files\\Git\\bi
 const script = "deploy/renew-mail-gateway-certificate.sh";
 const temporaryDirectories = [];
 
+function toGitBashPath(hostPath) {
+  return hostPath
+    .replaceAll("\\", "/")
+    .replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`);
+}
+
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { force: true, recursive: true });
@@ -120,20 +126,22 @@ printf '%s\\n' "$*" >> "$FAKE_STATE/chown.log"
     "utf8",
   );
   chmodSync(chown, 0o755);
+  const fixturePath = `${toGitBashPath(fakeBin)}:/usr/local/bin:/usr/bin:/bin`;
+  const hostBashEnvironment = join(root, "bash-env");
+  writeFileSync(hostBashEnvironment, `PATH="${fixturePath}"
+export PATH
+`, "utf8");
   const hostLockDirectory = join(root, "renew.lock");
-  const lockDirectory = hostLockDirectory
-    .replaceAll("\\", "/")
-    .replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`);
+  const lockDirectory = toGitBashPath(hostLockDirectory);
   const hostStateDirectory = join(state, "certificate-state");
   mkdirSync(hostStateDirectory);
-  const stateDirectory = hostStateDirectory
-    .replaceAll("\\", "/")
-    .replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`);
+  const stateDirectory = toGitBashPath(hostStateDirectory);
   const hostLoadedStateFile = join(hostStateDirectory, "loaded.sha256");
   const env = {
     ...process.env,
-    PATH: `${fakeBin}:${process.env.PATH}`,
-    FAKE_STATE: state,
+    PATH: fixturePath,
+    FAKE_STATE: toGitBashPath(state),
+    BASH_ENV: toGitBashPath(hostBashEnvironment),
     MAIL_RENEW_CERT_NAME: "moaworks-mail-dev",
     MAIL_RENEW_NPM_CONTAINER: "npm",
     MAIL_RENEW_GATEWAY_CONTAINER: "moaworks-mail-gateway",
