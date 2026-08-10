@@ -439,6 +439,7 @@ export type MailOperationsOverview = {
     userHost: string;
     adminHost: string;
     mailHost: string;
+    inboundMxHost: string;
     adminAccessMode: "public" | "restricted" | "private";
     adminAllowedCidrs: string[];
     activeOutboundProvider: "self_hosted" | "oci_email_delivery";
@@ -867,6 +868,7 @@ export async function fetchMailOperations(token: string): Promise<MailOperations
 export async function updateMailOperationsDomain(token: string, payload: {
   registeredDomain: string;
   mailDomain: string;
+  inboundMxHost: string;
   adminAccessMode: "public" | "restricted" | "private";
   adminAllowedCidrs: string[];
 }): Promise<MailOperationsOverview> {

@@ -18,6 +18,7 @@ class MailDomainContract:
     user_host: str
     admin_host: str
     mail_host: str
+    inbound_mx_host: str
     admin_access_mode: str
     admin_allowed_cidrs: tuple[str, ...]
 
@@ -40,6 +41,7 @@ def build_mail_domain_contract(
     *,
     registered_domain: str,
     mail_domain: str,
+    inbound_mx_host: str | None = None,
     admin_access_mode: str,
     admin_allowed_cidrs: Sequence[str] | None = None,
 ) -> MailDomainContract:
@@ -49,6 +51,11 @@ def build_mail_domain_contract(
         f".{normalized_registered}"
     ):
         raise ValueError("메일 도메인은 등록 도메인과 같거나 그 하위 도메인이어야 합니다.")
+
+    outbound_mail_host = f"mail.{normalized_mail}"
+    normalized_inbound_mx = _normalize_domain(inbound_mx_host or outbound_mail_host)
+    if normalized_inbound_mx != normalized_mail and not normalized_inbound_mx.endswith(f".{normalized_mail}"):
+        raise ValueError("수신 MX 호스트는 메일 도메인 또는 그 하위 호스트여야 합니다.")
 
     normalized_mode = admin_access_mode.strip().lower()
     if normalized_mode not in _ADMIN_ACCESS_MODES:
@@ -70,7 +77,8 @@ def build_mail_domain_contract(
         mail_domain=normalized_mail,
         user_host=f"user.{normalized_mail}",
         admin_host=f"admin.{normalized_mail}",
-        mail_host=f"mail.{normalized_mail}",
+        mail_host=outbound_mail_host,
+        inbound_mx_host=normalized_inbound_mx,
         admin_access_mode=normalized_mode,
         admin_allowed_cidrs=normalized_cidrs,
     )

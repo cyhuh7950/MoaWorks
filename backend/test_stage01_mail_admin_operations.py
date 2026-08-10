@@ -362,6 +362,26 @@ class MailAdminOperationsContractTest(unittest.TestCase):
             )
         self.assertEqual(save.call_args.kwargs["active_provider"], "oci_email_delivery")
 
+    def test_domain_update_passes_explicit_inbound_mx_host(self) -> None:
+        cursor = RecordingCursor(one_rows=[{"active_outbound_provider_key": "self_hosted"}])
+        operation = MailAdminOperations(db=FakeDb(cursor))
+
+        with patch.object(operation.policy, "save_domain_contract") as save, patch.object(
+            operation, "get_overview", return_value={"ok": True}
+        ):
+            operation.update_domain(
+                actor(),
+                MailOperationsDomainUpdateRequest(
+                    registeredDomain="sinsan.kr",
+                    mailDomain="dev.moaworks.sinsan.kr",
+                    inboundMxHost="mx.dev.moaworks.sinsan.kr",
+                    adminAccessMode="restricted",
+                    adminAllowedCidrs=["203.0.113.0/24"],
+                ),
+            )
+
+        self.assertEqual(save.call_args.kwargs["contract"].inbound_mx_host, "mx.dev.moaworks.sinsan.kr")
+
     def test_domain_update_and_provider_switch_preserve_transaction_contract(self) -> None:
         domain_cursor = RecordingCursor(one_rows=[{"active_outbound_provider_key": "self_hosted"}])
         operation = MailAdminOperations(db=FakeDb(domain_cursor))

@@ -90,25 +90,29 @@ class DomainDnsVerificationTest(unittest.TestCase):
         self.assertIn(("moaworks.sinsan.kr", "MX"), resolver.calls)
         self.assertIn(("168.107.4.6", "PTR"), resolver.calls)
 
-    def test_verification_uses_configured_mail_host_domain_and_dkim_selector(self) -> None:
+    def test_verification_separates_inbound_mx_from_outbound_mail_identity(self) -> None:
         resolver = FakeDnsResolver({
+            ("mail.dev.moaworks.sinsan.kr", "A"): ["210.217.186.151"],
             ("mx.dev.moaworks.sinsan.kr", "A"): ["168.107.4.6"],
             ("dev.moaworks.sinsan.kr", "MX"): ["10 mx.dev.moaworks.sinsan.kr"],
-            ("dev.moaworks.sinsan.kr", "TXT"): ["v=spf1 ip4:168.107.4.6 ~all"],
+            ("dev.moaworks.sinsan.kr", "TXT"): ["v=spf1 ip4:210.217.186.151 ~all"],
             ("mw202608._domainkey.dev.moaworks.sinsan.kr", "TXT"): ["v=DKIM1; k=rsa; p=PUBLIC"],
             ("_dmarc.dev.moaworks.sinsan.kr", "TXT"): ["v=DMARC1; p=none"],
-            ("168.107.4.6", "PTR"): ["mx.dev.moaworks.sinsan.kr"],
+            ("210.217.186.151", "PTR"): ["mail.dev.moaworks.sinsan.kr"],
         })
 
         result = DomainService(FakeStore(), resolver=resolver).verify(
             "dev.moaworks.sinsan.kr",
             managed_domain="dev.moaworks.sinsan.kr",
-            mail_host="mx.dev.moaworks.sinsan.kr",
+            mail_host="mail.dev.moaworks.sinsan.kr",
+            inbound_mx_host="mx.dev.moaworks.sinsan.kr",
             dkim_selector="mw202608",
         )
 
         self.assertEqual(result.overallStatus, "pass")
+        self.assertIn(("mail.dev.moaworks.sinsan.kr", "A"), resolver.calls)
         self.assertIn(("mx.dev.moaworks.sinsan.kr", "A"), resolver.calls)
+        self.assertIn(("210.217.186.151", "PTR"), resolver.calls)
         self.assertIn(("mw202608._domainkey.dev.moaworks.sinsan.kr", "TXT"), resolver.calls)
 
     @patch("app.api.routes.admin.MailAdminOperations")
@@ -117,7 +121,8 @@ class DomainDnsVerificationTest(unittest.TestCase):
         operations.return_value.get_overview.return_value = {
             "domain": {
                 "mailDomain": "dev.moaworks.sinsan.kr",
-                "mailHost": "mx.dev.moaworks.sinsan.kr",
+                "mailHost": "mail.dev.moaworks.sinsan.kr",
+                "inboundMxHost": "mx.dev.moaworks.sinsan.kr",
                 "activeOutboundProvider": "self_hosted",
             },
             "providers": [
@@ -145,7 +150,8 @@ class DomainDnsVerificationTest(unittest.TestCase):
         domain_service.return_value.verify.assert_called_once_with(
             "dev.moaworks.sinsan.kr",
             managed_domain="dev.moaworks.sinsan.kr",
-            mail_host="mx.dev.moaworks.sinsan.kr",
+            mail_host="mail.dev.moaworks.sinsan.kr",
+            inbound_mx_host="mx.dev.moaworks.sinsan.kr",
             dkim_selector="mw202608",
         )
 

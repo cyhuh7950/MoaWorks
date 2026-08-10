@@ -94,6 +94,7 @@ class MailAdminOperations:
                 "userHost": domain["user_host"],
                 "adminHost": domain["admin_host"],
                 "mailHost": domain["mail_host"],
+                "inboundMxHost": domain.get("inbound_mx_host") or domain["mail_host"],
                 "adminAccessMode": domain["admin_access_mode"],
                 "adminAllowedCidrs": list(domain.get("admin_allowed_cidrs") or []),
                 "activeOutboundProvider": domain["active_outbound_provider_key"],
@@ -112,6 +113,7 @@ class MailAdminOperations:
         contract = build_mail_domain_contract(
             registered_domain=payload.registeredDomain,
             mail_domain=payload.mailDomain,
+            inbound_mx_host=payload.inboundMxHost,
             admin_access_mode=payload.adminAccessMode,
             admin_allowed_cidrs=payload.adminAllowedCidrs,
         )

@@ -30,17 +30,18 @@ class MailOperationsService:
             """
             INSERT INTO mail_domain_settings (
                 company_id, registered_domain, mail_domain, user_host, admin_host,
-                mail_host, admin_access_mode, admin_allowed_cidrs,
+                mail_host, inbound_mx_host, admin_access_mode, admin_allowed_cidrs,
                 active_outbound_provider_key, previous_outbound_provider_key,
                 provider_switched_at, created_at, updated_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, NULL, NULL, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, NULL, NULL, %s, %s)
             ON CONFLICT (company_id) DO UPDATE
             SET registered_domain = EXCLUDED.registered_domain,
                 mail_domain = EXCLUDED.mail_domain,
                 user_host = EXCLUDED.user_host,
                 admin_host = EXCLUDED.admin_host,
                 mail_host = EXCLUDED.mail_host,
+                inbound_mx_host = EXCLUDED.inbound_mx_host,
                 admin_access_mode = EXCLUDED.admin_access_mode,
                 admin_allowed_cidrs = EXCLUDED.admin_allowed_cidrs,
                 active_outbound_provider_key = EXCLUDED.active_outbound_provider_key,
@@ -53,6 +54,7 @@ class MailOperationsService:
                 contract.user_host,
                 contract.admin_host,
                 contract.mail_host,
+                contract.inbound_mx_host,
                 contract.admin_access_mode,
                 json.dumps(contract.admin_allowed_cidrs),
                 validated_provider,

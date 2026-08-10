@@ -8,6 +8,7 @@ from pydantic import BaseModel, EmailStr, Field, SecretStr, field_validator, mod
 class MailOperationsDomainUpdateRequest(BaseModel):
     registeredDomain: str = Field(min_length=3, max_length=253)
     mailDomain: str = Field(min_length=3, max_length=253)
+    inboundMxHost: str | None = Field(default=None, min_length=3, max_length=253)
     adminAccessMode: Literal["public", "restricted", "private"]
     adminAllowedCidrs: list[str] = Field(default_factory=list, max_length=100)
 

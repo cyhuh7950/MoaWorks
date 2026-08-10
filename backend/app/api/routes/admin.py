@@ -146,6 +146,7 @@ def verify_domain(
         payload.domain,
         managed_domain=domain.get("mailDomain") or payload.domain,
         mail_host=domain.get("mailHost"),
+        inbound_mx_host=domain.get("inboundMxHost"),
         dkim_selector=active_provider.get("dkimSelector"),
     )
 

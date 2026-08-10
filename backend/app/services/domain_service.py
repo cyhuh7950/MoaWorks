@@ -55,6 +55,7 @@ class DomainService:
         *,
         managed_domain: str | None = None,
         mail_host: str | None = None,
+        inbound_mx_host: str | None = None,
         dkim_selector: str | None = None,
     ) -> DomainVerifyResponse:
         normalized = domain.strip().lower().rstrip(".")
@@ -65,11 +66,16 @@ class DomainService:
         expected_domain = (managed_domain or company.domain).strip().lower().rstrip(".")
         matches_company = normalized == expected_domain
         mail_host = (mail_host or f"mail.{normalized}").strip().lower().rstrip(".")
+        inbound_mx_host = (inbound_mx_host or mail_host).strip().lower().rstrip(".")
         selector = (dkim_selector or "selector1").strip().lower().rstrip(".")
         dkim_host = f"{selector}._domainkey.{normalized}"
         dmarc_host = f"_dmarc.{normalized}"
 
         a_values, a_error = self._lookup(mail_host, "A")
+        if inbound_mx_host == mail_host:
+            inbound_a_values, inbound_a_error = a_values, a_error
+        else:
+            inbound_a_values, inbound_a_error = self._lookup(inbound_mx_host, "A")
         mx_values, mx_error = self._lookup(normalized, "MX")
         root_txt, root_txt_error = self._lookup(normalized, "TXT")
         dkim_values, dkim_error = self._lookup(dkim_host, "TXT")
@@ -78,8 +84,8 @@ class DomainService:
         checks = [
             self._check("A", mail_host, "공인 IPv4 주소", a_values, bool(a_values), a_error),
             self._check(
-                "MX", normalized, f"10 {mail_host}", mx_values,
-                any(value.split(maxsplit=1)[-1].rstrip(".").lower() == mail_host for value in mx_values), mx_error,
+                "MX", normalized, f"10 {inbound_mx_host}", mx_values,
+                any(value.split(maxsplit=1)[-1].rstrip(".").lower() == inbound_mx_host for value in mx_values), mx_error,
             ),
             self._check(
                 "SPF", normalized, "v=spf1 <self-hosted IP and/or OCI include> ~all", root_txt,
@@ -94,6 +100,13 @@ class DomainService:
                 any(value.lower().startswith("v=dmarc1") for value in dmarc_values), dmarc_error,
             ),
         ]
+
+        if inbound_mx_host != mail_host:
+            checks.insert(
+                1,
+                self._check("MX-A", inbound_mx_host, "공인 IPv4 주소", inbound_a_values,
+                            bool(inbound_a_values), inbound_a_error),
+            )
 
         ptr_values: list[str] = []
         ptr_error: str | None = None

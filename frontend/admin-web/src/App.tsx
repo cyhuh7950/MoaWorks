@@ -146,6 +146,7 @@ type LoginForm = {
 type MailDomainOperationsForm = {
   registeredDomain: string;
   mailDomain: string;
+  inboundMxHost: string;
   adminAccessMode: "public" | "restricted" | "private";
   adminAllowedCidrs: string;
 };
@@ -749,7 +750,7 @@ export default function App() {
   const [adminMessengerStatus, setAdminMessengerStatus] = useState<"active" | "deleted" | "all">("all");
   const [messengerDeleteTarget, setMessengerDeleteTarget] = useState<AdminMessengerRoom | null>(null);
   const [mailOperations, setMailOperations] = useState<MailOperationsOverview | null>(null);
-  const [mailDomainOperationsForm, setMailDomainOperationsForm] = useState<MailDomainOperationsForm>({ registeredDomain: "", mailDomain: "", adminAccessMode: "restricted", adminAllowedCidrs: "" });
+  const [mailDomainOperationsForm, setMailDomainOperationsForm] = useState<MailDomainOperationsForm>({ registeredDomain: "", mailDomain: "", inboundMxHost: "", adminAccessMode: "restricted", adminAllowedCidrs: "" });
   const [mailProviderOperationsForm, setMailProviderOperationsForm] = useState<MailProviderOperationsForm>({ providerKey: "self_hosted", relayHost: "", relayPort: "25", tlsMode: "none", senderAddress: "", username: "", password: "", dkimDomain: "", dkimSelector: "", dkimPrivateKey: "" });
   const [translationStatus, setTranslationStatus] = useState<TranslationStatus | null>(null);
   const [translationPolicy, setTranslationPolicy] = useState<TranslationPolicy | null>(null);
@@ -1040,6 +1041,7 @@ export default function App() {
       setMailDomainOperationsForm({
         registeredDomain: operations.domain.registeredDomain,
         mailDomain: operations.domain.mailDomain,
+        inboundMxHost: operations.domain.inboundMxHost,
         adminAccessMode: operations.domain.adminAccessMode,
         adminAllowedCidrs: operations.domain.adminAllowedCidrs.join("\n"),
       });
@@ -2180,6 +2182,7 @@ export default function App() {
       await updateMailOperationsDomain(token, {
         registeredDomain: mailDomainOperationsForm.registeredDomain,
         mailDomain: mailDomainOperationsForm.mailDomain,
+        inboundMxHost: mailDomainOperationsForm.inboundMxHost,
         adminAccessMode: mailDomainOperationsForm.adminAccessMode,
         adminAllowedCidrs: mailDomainOperationsForm.adminAllowedCidrs.split(/[\n,]/).map((item) => item.trim()).filter(Boolean),
       });
@@ -3729,6 +3732,7 @@ export default function App() {
                         <strong>도메인·관리자 접근 정책</strong>
                         <label>등록 도메인<input value={mailDomainOperationsForm.registeredDomain} onChange={(event) => setMailDomainOperationsForm((current) => ({ ...current, registeredDomain: event.target.value }))} required /></label>
                         <label>외부 메일 도메인<input value={mailDomainOperationsForm.mailDomain} onChange={(event) => setMailDomainOperationsForm((current) => ({ ...current, mailDomain: event.target.value }))} required /></label>
+                        <label>수신 MX 호스트 <InlineHint label="외부 메일을 받는 공개 SMTP 호스트입니다. 발신 호스트와 같거나 별도로 지정할 수 있습니다." /><input value={mailDomainOperationsForm.inboundMxHost} onChange={(event) => setMailDomainOperationsForm((current) => ({ ...current, inboundMxHost: event.target.value }))} placeholder="mx.example.com" required /></label>
                         <label>관리자 접근 모드<select value={mailDomainOperationsForm.adminAccessMode} onChange={(event) => setMailDomainOperationsForm((current) => ({ ...current, adminAccessMode: event.target.value as MailDomainOperationsForm["adminAccessMode"] }))}><option value="public">public - 외부 공개</option><option value="restricted">restricted - 허용 IP/CIDR만</option><option value="private">private - 사설망/VPN만</option></select></label>
                         <label>허용 IP/CIDR<textarea value={mailDomainOperationsForm.adminAllowedCidrs} onChange={(event) => setMailDomainOperationsForm((current) => ({ ...current, adminAllowedCidrs: event.target.value }))} placeholder="203.0.113.0/24&#10;2001:db8::/64" /></label>
                         <button type="submit" disabled={loading}>도메인·접근 정책 저장</button>

@@ -58,6 +58,37 @@ class MailOperationsPersistenceTest(unittest.TestCase):
         self.assertNotIn("UPDATE users", statements)
         self.assertNotIn("UPDATE mail_accounts", statements)
 
+    def test_split_inbound_mx_host_is_persisted_without_overwriting_mail_host(self) -> None:
+        cursor = RecordingCursor()
+        contract = build_mail_domain_contract(
+            registered_domain="sinsan.kr",
+            mail_domain="dev.moaworks.sinsan.kr",
+            inbound_mx_host="mx.dev.moaworks.sinsan.kr",
+            admin_access_mode="restricted",
+        )
+
+        self.service.save_domain_contract(
+            cursor=cursor,
+            company_id="cmp-default",
+            contract=contract,
+            active_provider="self_hosted",
+        )
+
+        query, params = cursor.statements[0]
+        self.assertIn("inbound_mx_host", query)
+        self.assertIn("mail.dev.moaworks.sinsan.kr", params)
+        self.assertIn("mx.dev.moaworks.sinsan.kr", params)
+
+    def test_migration_adds_backward_compatible_inbound_mx_host(self) -> None:
+        migration = Path(__file__).parent / "migrations" / "055_mail_inbound_mx_host.sql"
+
+        sql = migration.read_text(encoding="utf-8")
+
+        self.assertIn("ADD COLUMN IF NOT EXISTS inbound_mx_host", sql)
+        self.assertIn("SET inbound_mx_host = mail_host", sql)
+        self.assertIn("SET NOT NULL", sql)
+        self.assertNotIn("DROP TABLE", sql.upper())
+
     def test_provider_switch_pins_existing_queue_without_updating_queue_rows(self) -> None:
         cursor = RecordingCursor(
             queued_rows=[
