@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -447,6 +447,21 @@ test("기존 MAIL_RENEW_STATE_FILE 또는 --state-file 인수는 실행 전에 �
   assert.notEqual(argumentResult.status, 0);
   assert.match(argumentResult.stderr, /state-file is no longer supported/i);
   assert.equal(existsSync(join(argumentFixture.state, "commands.log")), false);
+});
+
+test("TLS 갱신 스크립트는 Linux 배포에서 실행 가능한 Git 모드로 추적한다", () => {
+  if (process.platform === "win32") {
+    const mode = spawnSync("git", ["ls-files", "--stage", "--", script], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    assert.equal(mode.status, 0, mode.stderr);
+    assert.match(mode.stdout, /^100755 /u);
+    return;
+  }
+
+  assert.notEqual(statSync(script).mode & 0o111, 0);
 });
 
 test("systemd timer는 WSL 실행 조건과 일 2회 수준의 영구 스케줄을 명시한다", () => {
