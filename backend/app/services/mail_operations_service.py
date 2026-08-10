@@ -132,7 +132,7 @@ class MailOperationsService:
             FROM users AS owner
             WHERE account.user_id = owner.id
               AND owner.company_id = %s
-              AND account.status = 'active'
+              AND account.status <> 'deleted'
             """,
             (target["id"], now, company_id),
         )

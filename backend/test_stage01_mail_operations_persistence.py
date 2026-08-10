@@ -112,6 +112,7 @@ class MailOperationsPersistenceTest(unittest.TestCase):
         self.assertIn("UPDATE mail_domain_settings", statements)
         self.assertIn("UPDATE mail_provider_configs", statements)
         self.assertIn("UPDATE mail_accounts", statements)
+        self.assertIn("account.status <> 'deleted'", statements)
         self.assertIn("INSERT INTO audit_logs", statements)
         self.assertNotIn("UPDATE mail_delivery_queue", statements)
 
