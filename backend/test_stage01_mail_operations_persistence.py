@@ -111,8 +111,16 @@ class MailOperationsPersistenceTest(unittest.TestCase):
         self.assertEqual(plan.pinned_queue_providers["q-1"], "oci_email_delivery")
         self.assertIn("UPDATE mail_domain_settings", statements)
         self.assertIn("UPDATE mail_provider_configs", statements)
+        self.assertIn("UPDATE mail_accounts", statements)
         self.assertIn("INSERT INTO audit_logs", statements)
         self.assertNotIn("UPDATE mail_delivery_queue", statements)
+
+        account_update = next(
+            (params for query, params in cursor.statements if "UPDATE mail_accounts" in query),
+            None,
+        )
+        self.assertEqual(account_update[0], "provider-self")
+        self.assertEqual(account_update[2], "cmp-default")
 
     def test_provider_rollback_restores_previous_provider_without_rewriting_queue(self) -> None:
         cursor = RecordingCursor(

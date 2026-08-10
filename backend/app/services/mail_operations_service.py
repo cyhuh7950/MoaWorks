@@ -126,6 +126,18 @@ class MailOperationsService:
         )
         cursor.execute(
             """
+            UPDATE mail_accounts AS account
+            SET provider_config_id = %s,
+                updated_at = %s
+            FROM users AS owner
+            WHERE account.user_id = owner.id
+              AND owner.company_id = %s
+              AND account.status = 'active'
+            """,
+            (target["id"], now, company_id),
+        )
+        cursor.execute(
+            """
             UPDATE mail_domain_settings
             SET previous_outbound_provider_key = active_outbound_provider_key,
                 active_outbound_provider_key = %s,
