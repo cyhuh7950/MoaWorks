@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "verifiedAt": "2026-08-11T09:42:36.793078+00:00",
+  "status": "PASS",
+  "totalPages": 57,
+  "threshold": 0.007,
+  "manuals": [
+    {
+      "manual": "moaworks-admin-operator-manual-v2.0",
+      "pageCount": 9,
+      "expectedPageCount": 9,
+      "minimumDarkRatio": 0.010647454031117397,
+      "possibleBlankPages": []
+    },
+    {
+      "manual": "moaworks-end-user-manual-v2.0",
+      "pageCount": 25,
+      "expectedPageCount": 25,
+      "minimumDarkRatio": 0.0075894625176803395,
+      "possibleBlankPages": []
+    },
+    {
+      "manual": "moaworks-incident-backup-recovery-manual-v2.0",
+      "pageCount": 10,
+      "expectedPageCount": 10,
+      "minimumDarkRatio": 0.011325318246110326,
+      "possibleBlankPages": []
+    },
+    {
+      "manual": "moaworks-install-deploy-manual-v2.0",
+      "pageCount": 13,
+      "expectedPageCount": 13,
+      "minimumDarkRatio": 0.012779702970297029,
+      "possibleBlankPages": []
+    }
+  ],
+  "failures": []
+}
