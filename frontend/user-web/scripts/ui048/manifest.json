@@ -4,10 +4,10 @@
   "runId": "UI048_20260731T084647_preflight",
   "runIdPattern": "^UI048_[0-9]{8}T[0-9]{6}_run[12]$",
   "git": {
-    "branch": "feature/ui-048-final-browser-deployment-candidate",
+    "branch": "feature/stage04-release-operations",
     "candidateBaselineRevision": "712c7033b12adca6886bdeca00911df5c9e00c9c",
     "ui047ClosureRevision": "6750b5383eec85aef367f22c80aa577baec61f85",
-    "productRevision": "6cb3c994922646b5ac2f5b10a193cc8ab43bb979",
+    "productRevision": "f4c69c4b2797140d8d20fa8867331320cc20e230",
     "productPathExclusions": ["frontend/user-web/scripts/ui048/**"]
   },
   "environment": {
@@ -32,8 +32,8 @@
     }
   },
   "browserRuns": [
-    { "id": "run1", "executionOwner": "OWOUL1", "status": "WAIT_NETWORK_STATUS_EVIDENCE" },
-    { "id": "run2", "executionOwner": "OWOUL1", "status": "WAIT_NETWORK_STATUS_EVIDENCE" }
+    { "id": "run1", "executionOwner": "OWOUL1", "status": "PASS" },
+    { "id": "run2", "executionOwner": "OWOUL1", "status": "PASS" }
   ],
   "dataPolicy": {
     "defaultMode": "READ_ONLY",
