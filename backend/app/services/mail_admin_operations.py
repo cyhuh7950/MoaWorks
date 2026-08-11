@@ -82,7 +82,17 @@ class MailAdminOperations:
                 providers = cursor.fetchall()
                 cursor.execute("SELECT status,COUNT(*) AS count FROM mail_delivery_queue WHERE company_id=%s GROUP BY status", (actor.companyId,))
                 queue = {row["status"]: int(row["count"]) for row in cursor.fetchall()}
-                cursor.execute("SELECT COUNT(*) AS count,MAX(last_seen_at) AS last_seen_at FROM mail_oci_suppressions WHERE company_id=%s AND active=TRUE", (actor.companyId,))
+                cursor.execute(
+                    """SELECT COUNT(*) AS count,
+                    COALESCE(
+                        MAX(s.last_seen_at),
+                        (SELECT MAX(a.created_at) FROM audit_logs a
+                         WHERE a.company_id=%s AND a.event='mail.oci_suppression.synced')
+                    ) AS last_seen_at
+                    FROM mail_oci_suppressions s
+                    WHERE s.company_id=%s AND s.active=TRUE""",
+                    (actor.companyId, actor.companyId),
+                )
                 suppression = cursor.fetchone() or {"count": 0, "last_seen_at": None}
                 cursor.execute("SELECT COUNT(*) AS count FROM mail_delivery_feedback f JOIN mail_delivery_queue q ON q.id=f.queue_id WHERE q.company_id=%s", (actor.companyId,))
                 feedback = cursor.fetchone() or {"count": 0}

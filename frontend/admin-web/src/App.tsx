@@ -2905,7 +2905,7 @@ export default function App() {
                 <article className="status-card"><strong>활성 Provider</strong><span className="mini-stat">{mailOperations?.domain?.activeOutboundProvider ?? mailDeliveryStatus?.provider.providerKey ?? "미설정"}</span></article>
                 <article className="status-card"><strong>관리자 접근</strong><span className="mini-stat">{mailOperations?.domain?.adminAccessMode ?? "미설정"}</span></article>
                 <article className="status-card"><strong>외부 메일 도메인</strong><span className="mini-stat">{mailOperations?.domain?.mailDomain ?? "미설정"}</span></article>
-                <article className="status-card"><strong>반송 / OCI suppression</strong><span className="mini-stat">{mailOperations?.feedbackCount ?? 0} / {mailOperations?.ociSuppression.activeCount ?? 0}</span></article>
+                <article className="status-card"><strong>반송 / OCI suppression</strong><span className="mini-stat">{mailOperations?.feedbackCount ?? 0} / {mailOperations?.ociSuppression.activeCount ?? 0}</span><small className="muted">마지막 동기화: {contentDate(mailOperations?.ociSuppression.lastSeenAt)}</small></article>
               </div>
               <div className="actions compact-actions">
                 <button type="button" disabled={loading || mailOperations?.domain?.activeOutboundProvider === "self_hosted"} onClick={() => void handleMailProviderSwitch("self_hosted")}>자체 엔진으로 전환</button>

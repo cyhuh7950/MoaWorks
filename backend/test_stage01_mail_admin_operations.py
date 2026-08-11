@@ -197,6 +197,9 @@ class MailAdminOperationsContractTest(unittest.TestCase):
         self.assertEqual(result["queue"]["queued"], 4)
         self.assertEqual(result["ociSuppression"]["activeCount"], 2)
         self.assertEqual(result["feedbackCount"], 3)
+        suppression_query, suppression_params = cursor.statements[3]
+        self.assertIn("mail.oci_suppression.synced", suppression_query)
+        self.assertEqual(suppression_params, ("company-1", "company-1"))
 
     def test_update_provider_encrypts_secrets_and_locks_changed_connection(self) -> None:
         current = {
@@ -523,6 +526,8 @@ class MailAdminOperationsContractTest(unittest.TestCase):
         self.assertIn("generateSelfHostedDkim", api_source)
         self.assertIn("generateSelfHostedDkim", app_source)
         self.assertIn("DKIM 키 자동 생성", app_source)
+        self.assertIn("mailOperations?.ociSuppression.lastSeenAt", app_source)
+        self.assertIn("마지막 동기화", app_source)
 
 
 
