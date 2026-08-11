@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-08T15:13:18.888Z",
+  "generatedAt": "2026-08-11T06:11:31.724Z",
   "source": "npm-audit-omit-dev",
   "policy": {
     "approach": "conservative-explicit-allowlist",
