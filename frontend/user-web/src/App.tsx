@@ -3412,7 +3412,6 @@ export default function App() {
     if (current) {
       setToken(current);
     }
-    void loadTranslationState();
     void refreshUiContract().catch(() => setUiContract(defaultUiContract));
   }, []);
 
