@@ -45,7 +45,9 @@ class OciEmailGateway:
         page = None
         while True:
             response = call(*args, page=page, limit=1000, **kwargs) if page else call(*args, limit=1000, **kwargs)
-            items.extend(list(response.data or []))
+            response_data = response.data
+            collection_items = getattr(response_data, "items", None)
+            items.extend(list(collection_items if collection_items is not None else response_data or []))
             page = (response.headers or {}).get("opc-next-page")
             if not page:
                 return items

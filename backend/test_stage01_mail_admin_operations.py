@@ -84,7 +84,12 @@ class PagingClient:
         return SimpleNamespace(data=[SimpleNamespace(email_address="noreply@moaworks.sinsan.kr", lifecycle_state="ACTIVE")], headers={})
 
     def list_email_domains(self, _compartment_id: str, **_kwargs):
-        return SimpleNamespace(data=[SimpleNamespace(name="moaworks.sinsan.kr", lifecycle_state="ACTIVE")], headers={})
+        return SimpleNamespace(
+            data=SimpleNamespace(
+                items=[SimpleNamespace(name="moaworks.sinsan.kr", lifecycle_state="ACTIVE")]
+            ),
+            headers={},
+        )
 
 
 class MailAdminOperationsContractTest(unittest.TestCase):
