@@ -95,6 +95,11 @@ await check("approval compose and mail translation comparison opt into CommonPop
   assert.match(translationPopup[0], /\bmaximizable\b/);
 });
 
+await check("common popups escape transformed compose ancestors through a body portal", () => {
+  assert.match(popup, /import\s+\{[^}]*createPortal[^}]*\}\s+from\s+[\"']react-dom[\"']/s);
+  assert.match(popup, /createPortal\(popupContent,\s*document\.body\)/);
+});
+
 await check("mail translation comparison opens as a wide two-column workspace", async () => {
   assert.match(rule(".common-popup.user-mail-translation-popup"), /width:\s*min\(1100px,\s*calc\(100vw\s*-\s*48px\)\)/);
   assert.match(rule(".user-mail-translation-comparison"), /grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)/);

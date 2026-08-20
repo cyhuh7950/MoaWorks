@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type MutableRefObject, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 
 type Mode = "normal" | "minimized" | "maximized";
 type Bounds = { left: number; top: number; width: number; height: number };
@@ -108,7 +109,7 @@ export function CommonPopup({ title, children, open, onClose, dirty = false, err
     ? { left: 24, top: 72, right: "auto", bottom: "auto", width: "calc(100vw - 48px)", height: "calc(100vh - 96px)" }
     : bounds ? { left: bounds.left, top: bounds.top, right: "auto", bottom: "auto", width: bounds.width, height: bounds.height } : { right: 24, bottom: 24 };
 
-  return <div className={`common-popup-backdrop ${floating ? "is-floating" : ""}`}><div ref={panel} role={kind} aria-modal={floating ? undefined : true} aria-labelledby={titleId} aria-describedby={descriptionId} className={`common-popup ${className} ${floating ? "is-floating" : ""} is-${mode}`} style={style} onMouseUp={saveBounds}>
+  const popupContent = <div className={`common-popup-backdrop ${floating ? "is-floating" : ""}`}><div ref={panel} role={kind} aria-modal={floating ? undefined : true} aria-labelledby={titleId} aria-describedby={descriptionId} className={`common-popup ${className} ${floating ? "is-floating" : ""} is-${mode}`} style={style} onMouseUp={saveBounds}>
     <div className="common-popup-header" onMouseDown={drag}><h2 id={titleId}>{title}</h2><div>
       {floating ? <button type="button" aria-label="최소화" onClick={minimize}>—</button> : null}
       {floating || maximizable ? <button type="button" aria-label={expanded ? "복원" : "확대"} onClick={maximize}>{expanded ? "↙" : "↗"}</button> : null}
@@ -119,6 +120,7 @@ export function CommonPopup({ title, children, open, onClose, dirty = false, err
     {saving ? <div role="status" className="common-popup-saving">저장 중입니다.</div> : null}
     {confirm ? <div ref={confirmPanel} role="alertdialog" aria-modal="true" aria-labelledby={confirmTitleId} aria-describedby={confirmDescriptionId} className="common-popup-confirm" onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); cancelConfirm(); } }}><strong id={confirmTitleId}>변경사항을 닫을까요?</strong><span id={confirmDescriptionId}>저장하지 않은 입력은 사라집니다.</span><div><button ref={continueButton} type="button" onClick={cancelConfirm}>계속 작성</button><button type="button" onClick={onClose}>닫기</button></div></div> : null}
   </div></div>;
+  return typeof document === "undefined" ? popupContent : createPortal(popupContent, document.body);
 }
 
 export function PopupSystemDemo() {
