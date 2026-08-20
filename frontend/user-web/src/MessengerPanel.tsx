@@ -277,9 +277,13 @@ export function MessengerPanel({ token }: { token: string }) {
   function roomGroup(title: string, items: MessengerRoomSummary[]) {
     return <section className="ui040-room-group"><h3>{title}</h3>{items.map((item) => <article className={selectedId === item.roomId ? "is-selected" : ""} key={item.roomId}>
       <button className="ui040-room-select" type="button" onClick={() => void selectRoom(item.roomId)}>
-        <strong>{item.roomName}</strong><small>{item.lastMessage || "메시지 없음"}</small><span>{formatTime(item.lastMessageAt)} · {item.participantCount}명</span>{item.unreadCount ? <b>{item.unreadCount}</b> : null}
+        <strong className="ui040-room-name">{item.roomName}</strong>
+        <small className="ui040-room-preview">{item.lastMessage || "메시지 없음"}</small>
+        <span className="ui040-room-meta">{formatTime(item.lastMessageAt)} · {item.participantCount}명</span>
+        {item.unreadCount ? <b>{item.unreadCount}</b> : null}
       </button>
       <button className="ui040-favorite" type="button" aria-label={`${item.roomName} ${item.isFavorite ? "즐겨찾기 해제" : "즐겨찾기"}`} aria-pressed={item.isFavorite} onClick={() => void toggleFavorite(item)}>{item.isFavorite ? "★" : "☆"}</button>
+      <button className="ui040-room-more" type="button" aria-label={`${item.roomName} 대화방 정보 열기`} onClick={() => { setDrawerTab("participants"); void selectRoom(item.roomId); }}>⋮</button>
     </article>)}</section>;
   }
 

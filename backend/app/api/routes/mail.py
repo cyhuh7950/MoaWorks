@@ -39,6 +39,8 @@ from app.schemas.mail_messenger import (
     MailMailboxSettingsResponse,
     MailSendRequest,
     MailSendResponse,
+    MailScheduledUpdateRequest,
+    MailScheduledActionResponse,
     MailUserDeliveryStatusResponse,
     MailStorageResponse,
     MailStatusResponse,
@@ -377,6 +379,15 @@ def list_inbox(query: MailListQuery = Depends(), user: AuthUserSummary = Depends
 def list_sent(query: MailListQuery = Depends(), user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailListResponse:
     try:
         return _service().list_sent(user, query)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.get("/scheduled", response_model=MailListResponse)
+def list_scheduled(query: MailListQuery = Depends(), user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailListResponse:
+    try:
+        return _service().list_scheduled(user, query)
     except Exception as exc:
         _handle_error(exc)
         raise
@@ -966,6 +977,42 @@ def send_mail(payload: MailSendRequest, user: AuthUserSummary = Depends(permissi
 def save_draft(payload: MailDraftRequest, user: AuthUserSummary = Depends(permission_required("mail:send"))) -> MailSendResponse:
     try:
         return _service().save_draft(user, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.put("/{mail_id}/scheduled", response_model=MailDetailResponse)
+def update_scheduled(mail_id: str, payload: MailScheduledUpdateRequest, user: AuthUserSummary = Depends(permission_required("mail:send"))) -> MailDetailResponse:
+    try:
+        return _service().update_scheduled_mail(user, mail_id, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.delete("/{mail_id}/scheduled", response_model=MailScheduledActionResponse)
+def cancel_scheduled(mail_id: str, user: AuthUserSummary = Depends(permission_required("mail:send"))) -> MailScheduledActionResponse:
+    try:
+        return _service().cancel_scheduled_mail(user, mail_id)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.post("/{mail_id}/scheduled/send-now", response_model=MailScheduledActionResponse)
+def send_scheduled_now(mail_id: str, user: AuthUserSummary = Depends(permission_required("mail:send"))) -> MailScheduledActionResponse:
+    try:
+        return _service().send_scheduled_mail_now(user, mail_id)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.post("/{mail_id}/scheduled/retry", response_model=MailScheduledActionResponse)
+def retry_scheduled(mail_id: str, user: AuthUserSummary = Depends(permission_required("mail:send"))) -> MailScheduledActionResponse:
+    try:
+        return _service().retry_scheduled_mail(user, mail_id)
     except Exception as exc:
         _handle_error(exc)
         raise

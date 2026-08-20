@@ -601,7 +601,7 @@ export type MailSendResponse = {
 
 export type MailExternalDeliveryStatus = {
   recipientEmail: string; recipientKind: string; status: string; attemptCount: number;
-  nextAttemptAt: string | null; sentAt: string | null;
+  nextAttemptAt: string | null; sentAt: string | null; lastError: string | null;
 };
 
 export type MessengerParticipant = {
@@ -1102,6 +1102,32 @@ export async function fetchInbox(token: string, options?: MailListQuery): Promis
   return fetchMailList(token, "inbox", options);
 }
 
+export async function fetchScheduledMail(token: string, options?: MailListQuery): Promise<MailListResponse> {
+  const query = new URLSearchParams();
+  if (options?.q?.trim()) query.set("q", options.q.trim());
+  if (options?.sort) query.set("sort", options.sort);
+  if (options?.limit !== undefined) query.set("limit", String(options.limit));
+  if (options?.offset !== undefined) query.set("offset", String(options.offset));
+  const suffix = query.toString();
+  return request<MailListResponse>(`/mail/scheduled${suffix ? `?${suffix}` : ""}`, { headers: authHeaders(token) });
+}
+
+export async function updateScheduledMail(token: string, mailId: string, payload: MailComposePayload): Promise<MailDetail> {
+  return request<MailDetail>(`/mail/${mailId}/scheduled`, { method: "PUT", headers: { ...authHeaders(token), "Content-Type": "application/json" }, body: JSON.stringify({ ...payload, confirmed: true }) });
+}
+
+export async function cancelScheduledMail(token: string, mailId: string): Promise<{ mailId: string; status: string }> {
+  return request(`/mail/${mailId}/scheduled`, { method: "DELETE", headers: authHeaders(token) });
+}
+
+export async function sendScheduledMailNow(token: string, mailId: string): Promise<{ mailId: string; status: string }> {
+  return request(`/mail/${mailId}/scheduled/send-now`, { method: "POST", headers: authHeaders(token) });
+}
+
+export async function retryScheduledMail(token: string, mailId: string): Promise<{ mailId: string; status: string }> {
+  return request(`/mail/${mailId}/scheduled/retry`, { method: "POST", headers: authHeaders(token) });
+}
+
 export async function fetchMailStorage(token: string): Promise<MailStorageResponse> {
   return request<MailStorageResponse>("/mail/storage", {
     headers: authHeaders(token),
@@ -1334,6 +1360,8 @@ export type MailBasicPreferences = {
   senderDisplayName: string;
   replyToEmail: string | null;
   vcardEnabled: boolean;
+  translationTargetLocale: string;
+  translationComposeMode: "preview" | "apply";
   version: number;
   updatedAt: string;
 };

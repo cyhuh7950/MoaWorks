@@ -13,7 +13,7 @@ const checks = [
   ["전체 shell 항목", labels.every((label) => app.includes(label))],
   ["기존 안 읽은 메일 유지", app.includes("안 읽은 메일")],
   ["136px compact", css.includes("grid-template-columns: 136px minmax(0, 1fr)")],
-  ["미지원 aria-disabled", app.includes('aria-disabled="true"')],
+  ["예약메일함 활성 진입", app.includes('openMailFolder("scheduled")') && app.includes("scheduledMails.length")],
   ["툴팁 hover와 focus", css.includes("[data-tooltip]:hover::after") && css.includes("[data-tooltip]:focus-visible::after")],
   ["독립 용량 오류", app.includes("mailStorageError") && app.includes("mailStorageLoading")],
   ["빠른 검색 mail 필터", app.includes('setSearchFilter("mail")') && app.includes("searchInputRef.current?.focus()")],

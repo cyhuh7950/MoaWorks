@@ -1802,7 +1802,7 @@ textarea {
 .ui037-calendar-source label { display: flex; align-items: center; gap: 7px; min-height: 30px; }
 .ui037-calendar-source p { margin: 0; color: #94a3b8; font-size: 10px; }
 .ui037-primary { min-height: 34px; border: 0; border-radius: 9px; background: #0f766e; color: #fff; font-weight: 800; cursor: pointer; }
-.ui037-calendar-main { display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+.ui037-calendar-main { position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
 .ui037-toolbar { display: grid; grid-template-columns: auto minmax(180px, 1fr) auto; align-items: center; gap: 10px; padding: 10px; border-bottom: 1px solid #e2e8f0; }
 .ui037-toolbar h2 { margin: 0; overflow: hidden; font-size: 16px; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
 .ui037-navigation, .ui037-tools, .ui037-segments { display: flex; align-items: center; gap: 5px; }
@@ -1847,6 +1847,7 @@ textarea {
 .ui037-calendar-detail dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .ui037-detail-empty { height: 100%; display: grid; place-items: center; color: #64748b; }
 .ui037-state { min-height: 0; display: grid; place-items: center; align-content: center; gap: 8px; padding: 20px; color: #64748b; }
+.ui037-state.is-calendar-empty { position: absolute; z-index: 3; top: 54px; left: 50%; min-height: auto; transform: translateX(-50%); padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 10px; background: rgba(255,255,255,.96); box-shadow: 0 4px 12px rgba(15,23,42,.08); }
 .ui037-state.is-error { color: #991b1b; background: #fff7f7; }
 .ui037-skeleton { min-height: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding: 10px; }
 .ui037-skeleton i { min-height: 88px; border-radius: 8px; background: linear-gradient(90deg, #f1f5f9, #e2e8f0, #f1f5f9); }
@@ -3040,13 +3041,17 @@ textarea {
 .ui040-room-scroll, .ui040-message-scroll, .ui040-drawer > section { min-height: 0; overflow: auto; }
 .ui040-room-group { padding: 10px 8px 2px; }
 .ui040-room-group > h3 { padding: 0 6px 6px; color: #475569; }
-.ui040-room-group > article { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 32px; gap: 4px; margin-bottom: 5px; border: 1px solid transparent; border-radius: 10px; }
+.ui040-room-group > article { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 28px 28px; gap: 4px; margin-bottom: 5px; border: 1px solid transparent; border-radius: 10px; }
 .ui040-room-group > article.is-selected { border-color: #5eead4; background: #ecfdf5; }
-.ui040-room-select { min-width: 0; height: auto; padding: 8px; display: grid; gap: 3px; text-align: left; border: 0 !important; background: transparent !important; }
-.ui040-room-select strong, .ui040-room-select small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui040-room-select { min-width: 0; height: auto; padding: 8px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 8px; text-align: left; border: 0 !important; background: transparent !important; }
+.ui040-room-name, .ui040-room-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui040-room-name, .ui040-room-preview { grid-column: 1 / -1; }
+.ui040-room-meta { grid-column: 1 / -1; color: #64748b; font-size: 10px; }
 .ui040-room-select small, .ui040-room-select span { color: #64748b; font-size: 10px; }
 .ui040-room-select b { position: absolute; right: 38px; bottom: 7px; min-width: 18px; padding: 2px 5px; border-radius: 999px; color: #fff; background: #b91c1c; text-align: center; font-size: 9px; }
-.ui040-favorite { align-self: center; border: 0 !important; background: transparent !important; color: #a16207; font-size: 16px !important; }
+.ui040-favorite, .ui040-room-more { align-self: center; width: 28px; min-height: 28px !important; padding: 0; border: 0 !important; background: transparent !important; }
+.ui040-favorite { border: 0 !important; color: #a16207; font-size: 16px !important; }
+.ui040-room-more { color: #475569; font-size: 16px !important; }
 .ui040-timeline { grid-template-rows: auto minmax(0, 1fr) auto auto; }
 .ui040-timeline > header small { color: #64748b; font-size: 10px; }
 .ui040-timeline > header > div:last-child { display: flex; gap: 6px; }

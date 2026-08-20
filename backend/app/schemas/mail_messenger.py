@@ -26,6 +26,8 @@ class MailBasicPreferencesBase(BaseModel):
     senderDisplayName: str = Field(default="", max_length=100)
     replyToEmail: str | None = Field(default=None, max_length=254)
     vcardEnabled: bool = False
+    translationTargetLocale: str = Field(default="ko", min_length=2, max_length=20)
+    translationComposeMode: Literal["preview", "apply"] = "preview"
 
     @field_validator("senderDisplayName")
     @classmethod
@@ -240,6 +242,22 @@ class MailSendRequest(BaseModel):
         if self.composeAction != "forward" and self.copiedAttachmentIds:
             raise ValueError("원문 첨부는 전달에서만 복제할 수 있습니다.")
         return self
+
+
+class MailScheduledUpdateRequest(MailSendRequest):
+    scheduledAt: datetime
+    attachments: list[MailAttachmentMeta] = Field(default_factory=list, max_length=0)
+    sourceMailId: None = None
+    copiedAttachmentIds: list[str] = Field(default_factory=list, max_length=0)
+    confirmed: bool = True
+
+
+class MailScheduledActionResponse(BaseModel):
+    mailId: str
+    status: Literal["scheduled", "draft", "sent"]
+    scheduledAt: datetime | None = None
+    sentAt: datetime | None = None
+
 
 
 class MailDraftRequest(MailSendRequest):
@@ -1257,6 +1275,7 @@ class ExternalDeliveryView(BaseModel):
     attemptCount: int = 0
     nextAttemptAt: datetime | None = None
     sentAt: datetime | None = None
+    lastError: str | None = None
 
 class MailDeliveryProviderUpdateRequest(BaseModel):
     deliveryEnabled: bool | None = None

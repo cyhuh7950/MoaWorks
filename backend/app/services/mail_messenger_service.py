@@ -172,7 +172,7 @@ class MailMessengerService:
                     FROM mail_messages m
                     WHERE m.company_id = %s
                       AND m.sender_user_id = %s
-                      AND m.status IN ('sent', 'scheduled')
+                      AND m.status = 'sent'
                       AND m.sender_deleted_at IS NULL
                       AND m.sender_purged_at IS NULL
                       AND m.sender_copy_saved = TRUE
@@ -182,6 +182,89 @@ class MailMessengerService:
                 )
                 mails = [self._to_mail_summary(row) for row in cursor.fetchall()]
                 return MailListResponse(mails=mails, total=len(mails), limit=50, offset=0, hasMore=False)
+
+    def list_scheduled(self, actor: AuthUserSummary, query: MailListQuery | None = None) -> MailListResponse:
+        return self._list_sender_query(actor, query or MailListQuery(), mailbox="scheduled")
+
+    def update_scheduled_mail(self, actor: AuthUserSummary, mail_id: str, payload) -> MailDetailResponse:
+        if not payload.to and not payload.cc and not payload.bcc:
+            raise ValueError("수신자를 1명 이상 입력해야 합니다.")
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            message = self._fetch_owned_scheduled_mail(cursor, actor, mail_id)
+            cursor.execute("SELECT LOWER(email) AS email, id FROM users WHERE company_id = %s AND status = 'active'", (actor.companyId,))
+            active_users = {row["email"]: row["id"] for row in cursor.fetchall()}
+            cursor.execute("DELETE FROM mail_recipients WHERE message_id = %s", (mail_id,))
+            for kind, email in [("to", item) for item in payload.to] + [("cc", item) for item in payload.cc] + [("bcc", item) for item in payload.bcc]:
+                cursor.execute(
+                    """INSERT INTO mail_recipients (id,message_id,recipient_user_id,recipient_email,recipient_kind,is_read,is_starred,received_at,is_spam,spam_marked_at,delivery_source)
+                    VALUES (%s,%s,%s,%s,%s,FALSE,FALSE,NULL,FALSE,NULL,'direct')""",
+                    (self._new_id("rcpt"), mail_id, active_users.get(email), email, kind),
+                )
+            cursor.execute(
+                """UPDATE mail_messages SET subject=%s,body_text=%s,body_html=%s,scheduled_at=%s,updated_at=%s
+                WHERE id=%s RETURNING *""",
+                (payload.subject.strip(), payload.bodyText, payload.bodyHtml, payload.scheduledAt, now, mail_id),
+            )
+            updated = cursor.fetchone()
+            self._write_mail_event_audit(cursor, company_id=actor.companyId, actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id, event="mail.scheduled.updated", status_before="scheduled", status_after="scheduled", now=now, reason="scheduled mail user update")
+            connection.commit()
+        return self.get_mail(actor, mail_id, "scheduled")
+
+    def cancel_scheduled_mail(self, actor: AuthUserSummary, mail_id: str):
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            self._fetch_owned_scheduled_mail(cursor, actor, mail_id)
+            cursor.execute("UPDATE mail_messages SET status='draft',scheduled_at=NULL,updated_at=%s WHERE id=%s", (now, mail_id))
+            self._write_mail_event_audit(cursor, company_id=actor.companyId, actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id, event="mail.scheduled.cancelled", status_before="scheduled", status_after="draft", now=now, reason="scheduled mail user cancel")
+            connection.commit()
+        from app.schemas.mail_messenger import MailScheduledActionResponse
+        return MailScheduledActionResponse(mailId=mail_id, status="draft")
+
+    def send_scheduled_mail_now(self, actor: AuthUserSummary, mail_id: str):
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            self._fetch_owned_scheduled_mail(cursor, actor, mail_id)
+            cursor.execute("UPDATE mail_messages SET scheduled_at=%s,updated_at=%s WHERE id=%s", (now, now, mail_id))
+            connection.commit()
+        self.dispatch_scheduled_mail(limit=100)
+        detail = self.get_mail(actor, mail_id, "sent")
+        from app.schemas.mail_messenger import MailScheduledActionResponse
+        return MailScheduledActionResponse(mailId=mail_id, status="sent", sentAt=detail.sentAt)
+
+    def retry_scheduled_mail(self, actor: AuthUserSummary, mail_id: str):
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT id,status FROM mail_messages WHERE id=%s AND company_id=%s AND sender_user_id=%s AND sender_deleted_at IS NULL FOR UPDATE", (mail_id, actor.companyId, actor.userId))
+            message = cursor.fetchone()
+            if message is None:
+                raise ResourceNotFoundError("메일을 찾을 수 없습니다.")
+            if message["status"] == "scheduled":
+                connection.rollback()
+                return self.send_scheduled_mail_now(actor, mail_id)
+            if message["status"] != "sent":
+                raise ResourceStateError("발송 실패 메일만 재시도할 수 있습니다.")
+            cursor.execute("""UPDATE mail_delivery_queue q SET status='queued',next_attempt_at=%s,lease_expires_at=NULL,worker_id=NULL,last_error=NULL,updated_at=%s
+                FROM mail_provider_configs p WHERE q.provider_config_id=p.id AND q.mail_id=%s AND q.status IN ('failed','blocked')
+                AND p.delivery_enabled=TRUE AND p.last_test_status='success' RETURNING q.id""", (now, now, mail_id))
+            changed = cursor.fetchall()
+            if not changed:
+                raise ResourceStateError("재시도할 외부 전달 실패가 없거나 Provider가 준비되지 않았습니다.")
+            self._write_mail_event_audit(cursor, company_id=actor.companyId, actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id, event="mail.delivery.retry.requested", status_before="failed", status_after="queued", now=now, reason="scheduled delivery user retry")
+            connection.commit()
+        from app.schemas.mail_messenger import MailScheduledActionResponse
+        return MailScheduledActionResponse(mailId=mail_id, status="sent", sentAt=now)
+
+    def _fetch_owned_scheduled_mail(self, cursor, actor: AuthUserSummary, mail_id: str) -> dict:
+        cursor.execute("SELECT * FROM mail_messages WHERE id=%s AND company_id=%s AND sender_user_id=%s AND status='scheduled' AND sender_deleted_at IS NULL FOR UPDATE", (mail_id, actor.companyId, actor.userId))
+        row = cursor.fetchone()
+        if row is None:
+            raise ResourceNotFoundError("예약 메일을 찾을 수 없습니다.")
+        return row
 
     def list_drafts(self, actor: AuthUserSummary, query: MailListQuery | None = None) -> MailListResponse:
         if query is not None:
@@ -294,7 +377,7 @@ class MailMessengerService:
 
     def _list_sender_query(self, actor: AuthUserSummary, query: MailListQuery, *, mailbox: str) -> MailListResponse:
         self.db.ensure_migrations_applied()
-        status_condition = "m.status = 'draft'" if mailbox == "draft" else "m.status IN ('sent', 'scheduled')"
+        status_condition = "m.status = 'draft'" if mailbox == "draft" else "m.status = 'scheduled'" if mailbox == "scheduled" else "m.status = 'sent'"
         conditions = [
             "m.company_id = %s",
             "m.sender_user_id = %s",
@@ -643,11 +726,13 @@ class MailMessengerService:
             "editorMode": "editor_mode", "composeMode": "compose_mode", "messageEncoding": "message_encoding",
             "draftReminderEnabled": "draft_reminder_enabled", "senderDisplayName": "sender_display_name",
             "replyToEmail": "reply_to_email", "vcardEnabled": "vcard_enabled",
+            "translationTargetLocale": "translation_target_locale", "translationComposeMode": "translation_compose_mode",
         }
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
                 before = self._ensure_basic_preferences(cursor, actor)
-                changed = [key for key, column in columns.items() if before[column] != values[key]]
+                legacy_defaults = {"translation_target_locale": "ko", "translation_compose_mode": "preview"}
+                changed = [key for key, column in columns.items() if before.get(column, legacy_defaults.get(column)) != values[key]]
                 assignments = ", ".join(f"{column} = %s" for column in columns.values())
                 cursor.execute(
                     f"""UPDATE user_mail_basic_preferences SET {assignments}, version = version + 1, updated_at = %s
@@ -674,7 +759,7 @@ class MailMessengerService:
                     recipient_input_mode = 'autocomplete', confirm_before_send = TRUE, save_sent_copy = TRUE,
                     read_receipt_enabled = TRUE, editor_mode = 'html', compose_mode = 'normal',
                     message_encoding = 'utf-8', draft_reminder_enabled = FALSE, sender_display_name = '',
-                    reply_to_email = NULL, vcard_enabled = FALSE, version = version + 1, updated_at = %s
+                    reply_to_email = NULL, vcard_enabled = FALSE, translation_target_locale = 'ko', translation_compose_mode = 'preview', version = version + 1, updated_at = %s
                     WHERE company_id = %s AND owner_user_id = %s RETURNING *""",
                     (now, actor.companyId, actor.userId),
                 )
@@ -710,7 +795,7 @@ class MailMessengerService:
             recipientInputMode=row["recipient_input_mode"], confirmBeforeSend=row["confirm_before_send"], saveSentCopy=row["save_sent_copy"],
             readReceiptEnabled=row["read_receipt_enabled"], editorMode=row["editor_mode"], composeMode=row["compose_mode"], messageEncoding=row["message_encoding"],
             draftReminderEnabled=row["draft_reminder_enabled"], senderDisplayName=row["sender_display_name"], replyToEmail=row["reply_to_email"],
-            vcardEnabled=row["vcard_enabled"], version=row["version"], updatedAt=row["updated_at"],
+            vcardEnabled=row["vcard_enabled"], translationTargetLocale=row.get("translation_target_locale", "ko"), translationComposeMode=row.get("translation_compose_mode", "preview"), version=row["version"], updatedAt=row["updated_at"],
         )
 
     def _write_preference_audit(self, cursor, actor: AuthUserSummary, event: str, changed_fields: list[str], now: datetime) -> None:
@@ -2710,10 +2795,11 @@ class MailMessengerService:
         return row
 
     def _fetch_accessible_mail(self, cursor, actor: AuthUserSummary, mail_id: str, *, view: str = "inbox") -> dict:
-        allowed_views = {"inbox", "folder", "tag", "spam", "trash", "sent", "draft"}
+        allowed_views = {"inbox", "folder", "tag", "spam", "trash", "sent", "draft", "scheduled"}
         if view not in allowed_views:
             raise ValueError("지원하지 않는 메일 상세 문맥입니다.")
         sender_state = "m.sender_deleted_at IS NOT NULL AND m.sender_purged_at IS NULL" if view == "trash" else "m.sender_deleted_at IS NULL AND m.sender_purged_at IS NULL"
+        view_status = " AND m.status = 'scheduled'" if view == "scheduled" else ""
         if view == "trash":
             recipient_state = "r.deleted_at IS NOT NULL AND r.purged_at IS NULL"
         elif view == "spam":
@@ -2732,7 +2818,7 @@ class MailMessengerService:
                 (m.sender_user_id = %s AND {sender_state}) AS is_sender_view
             FROM mail_messages m
             LEFT JOIN mail_recipients r ON r.message_id = m.id
-            WHERE m.id = %s AND m.company_id = %s
+            WHERE m.id = %s AND m.company_id = %s{view_status}
               AND (
                 (m.sender_user_id = %s AND {sender_state})
                 OR (
@@ -2822,7 +2908,7 @@ class MailMessengerService:
             ExternalDeliveryView(
                 recipientEmail=row["recipient_email"], recipientKind=row["recipient_kind"],
                 status=row["status"], attemptCount=row["attempt_count"],
-                nextAttemptAt=row["next_attempt_at"], sentAt=row["sent_at"],
+                nextAttemptAt=row["next_attempt_at"], sentAt=row["sent_at"], lastError=("메일 Provider 운영 설정이 필요합니다." if row["status"] == "blocked" else "외부 메일 서버 전달에 실패했습니다." if row["status"] == "failed" else None),
             )
             for row in cursor.fetchall()
         ]
