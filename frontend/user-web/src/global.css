@@ -2894,6 +2894,8 @@ textarea {
 .ui032-timeline i { display: grid; place-items: center; flex: 0 0 24px; height: 24px; border-radius: 50%; background: #ccfbf1; color: #115e59; font-style: normal; font-weight: 800; }
 .ui032-timeline article div, .ui032-comments article, .ui032-history article { display: grid; gap: 3px; }
 .ui032-timeline span, .ui032-comments small, .ui032-history span, .ui032-attachments span { color: #64748b; font-size: 10px; }
+.ui032-line-opinion { margin: 4px 0 0; padding: 7px 9px; display: grid; gap: 2px; border-radius: 8px; background: #f8fafc; color: #475569; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ui032-line-opinion b { color: #334155; font-size: 10px; }
 .ui032-comments article, .ui032-history article, .ui032-attachments article { padding: 9px 0; border-top: 1px solid #f1f5f9; }
 .ui032-comments p { margin: 3px 0; }
 .ui032-attachments article { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
@@ -3118,8 +3120,10 @@ textarea {
 .ui042-members { grid-template-rows: auto auto minmax(0, 1fr); gap: 8px; }
 .ui042-members > label, .ui042-popup > label { display: grid; gap: 4px; color: #475569; font-size: 10px; }
 .ui042-members input, .ui042-popup input, .ui042-popup select { min-height: 32px; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0 9px; color: #172033; font-size: 12px; }
-.ui042-member { min-width: 0; height: auto; padding: 8px 9px; display: grid; gap: 2px; text-align: left; }
-.ui042-member span, .ui042-member small { overflow: hidden; color: #64748b; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.ui042-member { min-width: 0; min-height: 34px; height: auto; padding: 5px 9px; display: grid; grid-template-columns: minmax(90px, .7fr) minmax(100px, .8fr) minmax(90px, .7fr) minmax(150px, 1.3fr); align-items: center; gap: 8px; text-align: left; }
+.ui042-member > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui042-member__name { color: #172033; font-weight: 800; }
+.ui042-member__department, .ui042-member__role, .ui042-member__email { color: #64748b; font-size: 10px; }
 .ui042-detail { grid-template-rows: auto minmax(0, 1fr); gap: 8px; }
 .ui042-profile { min-height: 0; overflow: auto; display: grid; align-content: start; justify-items: center; gap: 10px; padding-top: 18px; }
 .ui042-profile > div { width: 54px; height: 54px; display: grid; place-items: center; border-radius: 50%; color: #fff; background: #0f766e; font-size: 16px; font-weight: 800; }

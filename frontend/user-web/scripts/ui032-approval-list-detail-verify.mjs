@@ -29,9 +29,9 @@ await check("detail helper exists and fixture contracts pass", async () => {
   assert.equal(helper.approvalStatusLabel("withdrawn"), "회수");
 });
 
-await check("approval uses common split view and persisted 40/60 ratio", () => {
-  assert.match(app, /<SplitView[\s\S]*moaworks\.user\.approval\.split-ratio\.v1/);
-  assert.match(app, /defaultRatio=\{40\}/);
+await check("approval uses common split view and a fresh persisted 50/50 ratio", () => {
+  assert.match(app, /<SplitView[\s\S]*moaworks\.user\.approval\.split-ratio\.v2/);
+  assert.match(app, /defaultRatio=\{50\}/);
   assert.match(app, /minRatio=\{28\}/);
   assert.match(app, /maxRatio=\{65\}/);
   assert.match(app, /approvalDetailMaximized/);
@@ -49,8 +49,15 @@ await check("detail and audit expose independent loading error and retry", () =>
 });
 
 await check("fixed detail sections and current selection semantics exist", () => {
-  for (const token of ["ui032-detail__header", "ui032-detail__content", "ui032-timeline", "ui032-comments", "ui032-attachments", "ui032-history", 'aria-current={isSelected ? "true" : undefined}']) assert.ok(app.includes(token), token);
+  for (const token of ["ui032-detail__header", "ui032-detail__content", "ui032-timeline", "ui032-attachments", "ui032-history", 'aria-current={isSelected ? "true" : undefined}']) assert.ok(app.includes(token), token);
   assert.doesNotMatch(app, /dangerouslySetInnerHTML/);
+});
+
+await check("processing opinions belong to individual approval lines", () => {
+  assert.doesNotMatch(app, /<section className="ui032-comments">/);
+  assert.match(app, /selectedDocument\.lines\.map[\s\S]*line\.comment/);
+  assert.match(app, /line\.decidedByUserName\s*\?\?\s*line\.approverUserName/);
+  assert.match(app, /처리 의견 없음/);
 });
 
 await check("same-origin attachment download client exists", () => {

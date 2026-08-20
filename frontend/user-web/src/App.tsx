@@ -5583,10 +5583,6 @@ export default function App() {
         const filteredDocuments = filterApprovalDocuments(menuDocuments, approvalStatusFilter, approvalSearch);
         const effectiveSelectionId = resolveApprovalSelection(selectedApprovalId, filteredDocuments);
         const selectedDocument = selectedApprovalDetail?.id === effectiveSelectionId ? selectedApprovalDetail : null;
-        const approvalComments = selectedDocument ? [
-          ...selectedDocument.lines.filter((line) => line.comment?.trim()).map((line) => ({ key: `line-${line.id}`, actor: line.decidedByUserName ?? line.approverUserName, action: approvalLineStatusLabel(line.status), text: line.comment!.trim(), at: line.decidedAt })),
-          ...approvalLogs.filter((log) => log.reason?.trim() && !selectedDocument.lines.some((line) => line.comment?.trim() === log.reason?.trim())).map((log) => ({ key: `log-${log.id}`, actor: log.actorUserName, action: log.event, text: log.reason!.trim(), at: log.createdAt })),
-        ] : [];
         const selectedApprovers = createForm.approverUserIds
           .map((userId) => approvalApprovers.find((user) => user.userId === userId))
           .filter((user): user is ApprovalApprover => Boolean(user));
@@ -5657,8 +5653,8 @@ export default function App() {
             <div className="ui031-shell__body ui032-approval-split">
               <SplitView
                 ariaLabel="결재 목록과 상세 크기 조절"
-                storageKey="moaworks.user.approval.split-ratio.v1"
-                defaultRatio={40}
+                storageKey="moaworks.user.approval.split-ratio.v2"
+                defaultRatio={50}
                 minRatio={28}
                 maxRatio={65}
                 secondaryMaximized={approvalDetailMaximized}
@@ -5691,7 +5687,6 @@ export default function App() {
                   <header className="ui032-detail__header"><div><span>선택 문서</span><h2>{selectedDocument.title}</h2><p>기안 {selectedDocument.creatorUserName} · 작성 {formatDateLabel(selectedDocument.createdAt)} · 상신 {selectedDocument.submittedAt ? formatDateLabel(selectedDocument.submittedAt) : "-"} · 갱신 {formatDateLabel(selectedDocument.updatedAt)}</p></div><span className={`ui032-status is-${selectedDocument.status}`}>{approvalStatusLabel(selectedDocument.status)}</span></header>
                   <section className="ui032-detail__content"><h3>본문</h3><p>{selectedDocument.content}</p></section>
                   <div className="ui032-detail-links"><button type="button" onClick={() => setApprovalLineModalOpen(true)}>결재선 보기</button><button type="button" onClick={() => setApprovalHistoryModalOpen(true)}>처리 이력 보기</button></div>
-                  <section className="ui032-comments"><h3>처리 의견</h3>{approvalComments.length ? approvalComments.map((comment) => <article key={comment.key}><strong>{comment.actor} · {comment.action}</strong><p>{comment.text}</p><small>{comment.at ? formatDateLabel(comment.at) : "시각 없음"}</small></article>) : <div className="ui032-empty">등록된 처리 의견이 없습니다.</div>}</section>
                   <section className="ui032-attachments"><h3>첨부</h3>{approvalAttachmentError ? <div className="ui032-attachment-error" role="alert">{approvalAttachmentError}</div> : null}{selectedDocument.attachments.length ? selectedDocument.attachments.map((attachment) => <article key={attachment.attachmentId}>{attachment.previewUrl && approvalAttachmentPreviewUrls[attachment.attachmentId] ? <img className={`ui035-attachment-preview is-${approvalPreferences?.attachmentImageDisplay ?? "filename"}`} src={approvalAttachmentPreviewUrls[attachment.attachmentId]} alt={attachment.fileName} /> : null}<div><strong>{attachment.fileName}</strong><span>{attachment.contentType} · {formatFileSize(attachment.sizeBytes)} · {formatDateLabel(attachment.createdAt)}</span></div><button type="button" onClick={() => void handleApprovalAttachmentDownload(attachment.attachmentId, attachment.fileName)}>다운로드</button></article>) : <div className="ui032-empty">첨부 파일이 없습니다.</div>}</section>
                   <div className="ui032-actions" aria-label="결재 처리 도구">
                     {selectedDocument.creatorUserId === me?.userId && selectedDocument.status === "draft" && canAct.create ? <button type="button" onClick={() => void openApprovalEditor("edit", selectedDocument)}>수정</button> : null}
@@ -5770,7 +5765,7 @@ export default function App() {
             )}
             </main>
             <CommonPopup title="결재선" open={approvalLineModalOpen} onClose={() => setApprovalLineModalOpen(false)} className="ui032-approval-line-modal">
-              <section className="ui032-timeline">{selectedDocument?.lines.length ? selectedDocument.lines.map((line) => <article key={line.id}><i>{line.sequence}</i><div><strong>{line.approverUserName}{line.delegationId && line.decidedByUserName ? ` · 대결 ${line.decidedByUserName}` : ""}</strong><span>{approvalLineStatusLabel(line.status)} · {line.decidedAt ? formatDateLabel(line.decidedAt) : "결정 대기"}</span></div>{line.hasSignature && line.signatureUrl && approvalLineSignatureUrls[line.id] ? <img className="ui035-line-signature" src={approvalLineSignatureUrls[line.id]} alt={`${line.approverUserName} 승인 서명`} /> : null}</article>) : <div className="ui032-empty">등록된 결재선이 없습니다.</div>}</section>
+              <section className="ui032-timeline">{selectedDocument?.lines.length ? selectedDocument.lines.map((line) => <article key={line.id}><i>{line.sequence}</i><div><strong>{line.approverUserName}{line.delegationId && line.decidedByUserName ? ` · 대결 ${line.decidedByUserName}` : ""}</strong><span>{approvalLineStatusLabel(line.status)} · {line.decidedAt ? formatDateLabel(line.decidedAt) : "결정 대기"}</span><p className="ui032-line-opinion"><b>{line.decidedByUserName ?? line.approverUserName} 의견</b>{line.comment?.trim() || "처리 의견 없음"}</p></div>{line.hasSignature && line.signatureUrl && approvalLineSignatureUrls[line.id] ? <img className="ui035-line-signature" src={approvalLineSignatureUrls[line.id]} alt={`${line.approverUserName} 승인 서명`} /> : null}</article>) : <div className="ui032-empty">등록된 결재선이 없습니다.</div>}</section>
             </CommonPopup>
             <CommonPopup title="처리 이력" open={approvalHistoryModalOpen} onClose={() => setApprovalHistoryModalOpen(false)} className="ui032-history-modal">
               <section className="ui032-history">{approvalLogsLoading ? <div className="ui032-state" role="status">처리 이력을 불러오는 중입니다.</div> : approvalLogsError ? <div className="ui032-state is-error" role="alert">{approvalLogsError}<button type="button" onClick={retryApprovalLogs}>이력 다시 시도</button></div> : approvalLogs.length ? approvalLogs.map((log) => <article key={log.id}><strong>{log.event}</strong><span>{log.actorUserName} · {log.statusBefore ?? "-"} → {log.statusAfter ?? "-"} · {formatDateLabel(log.createdAt)}</span></article>) : <div className="ui032-empty">처리 이력이 없습니다.</div>}</section>
