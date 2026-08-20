@@ -1891,9 +1891,9 @@ export default function App() {
     return normalized.split("-")[0];
   }
 
-  async function loadTranslationState() {
+  async function loadTranslationState(targetToken = token) {
     try {
-      const status = await fetchTranslationStatus(token);
+      const status = await fetchTranslationStatus(targetToken);
       setTranslationStatus(status as { provider: string; enabled: boolean; available: boolean });
     } catch {
       setTranslationStatus(null);
@@ -3515,7 +3515,7 @@ export default function App() {
         return;
       }
       setMessage(`${response.user.userName}님, 업무 포털에 접속했습니다.`);
-      await loadTranslationState();
+      await loadTranslationState(response.accessToken);
       await refreshMailDeliveryState(response.accessToken);
       await reload();
     } catch (error) {

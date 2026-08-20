@@ -34,7 +34,7 @@ assert.ok(
   api.includes("fetchTranslationStatus(token: string)") &&
     api.includes('request<{ available: boolean; enabled: boolean; provider: string }>("/translation/status", {') &&
     api.includes("headers: authHeaders(token)") &&
-    app.includes("fetchTranslationStatus(token)"),
+    app.includes("fetchTranslationStatus(targetToken)"),
   "user translation status must use the authenticated tenant policy",
 );
 assert.ok(
