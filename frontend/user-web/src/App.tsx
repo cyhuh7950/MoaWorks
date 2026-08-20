@@ -5077,9 +5077,10 @@ export default function App() {
                     >
                       <input type="checkbox" aria-label={`메일 선택: ${item.subject}`} checked={selectedMailIds.includes(item.selectionKey)} onClick={(event) => event.stopPropagation()} onChange={(event) => setSelectedMailIds((current) => event.target.checked ? [...current, item.selectionKey] : current.filter((selectionKey) => selectionKey !== item.selectionKey))} />
                       <button className="user-mail-row__main" type="button" onClick={() => { setMailDetailExpanded(false); const mailbox = inferMailboxFromMailId(item.mailId); void selectMail(token, item.mailId, mailbox, { markRead: mailbox === "inbox" && activeMailFolder !== "trash", folder: activeMailFolder }); }}>
-                        <div><strong>{item.sender}</strong><span>{item.time}</span></div>
-                        <div><span>{item.important ? "★" : ""}{item.attachment ? " 첨부" : ""}</span><strong>{item.subject}</strong></div>
-                        <p>{item.preview}</p>
+                        <span className="user-mail-row__status" aria-label={[item.unread ? "안 읽음" : "읽음", item.important ? "중요" : "", item.attachment ? "첨부 있음" : ""].filter(Boolean).join(", ")}>{item.unread ? "●" : "○"}{item.important ? "★" : ""}{item.attachment ? "📎" : ""}</span>
+                        <strong className="user-mail-row__sender" title={item.sender}>{item.sender}</strong>
+                        <span className="user-mail-row__content"><strong className="user-mail-row__subject">{item.subject}</strong><span className="user-mail-row__preview">{item.preview}</span></span>
+                        <time className="user-mail-row__date">{item.time}</time>
                       </button>
                     </article>
                   ))}

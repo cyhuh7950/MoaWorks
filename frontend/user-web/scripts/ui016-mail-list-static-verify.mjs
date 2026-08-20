@@ -38,9 +38,18 @@ requireText(app, "mailBulkReloadError", "bulk 저장 성공 후 재조회 실패
 requireText(app, "<ConfirmModal", "삭제 확인 modal을 재사용하지 않습니다.");
 requireText(app, 'className="user-mail-toolbar"', "compact 목록 toolbar가 없습니다.");
 requireText(app, 'className="user-mail-row"', "메일 목록 행 구조가 없습니다.");
+requireText(app, 'className="user-mail-row__status"', "메일 상태 표시 열이 없습니다.");
+requireText(app, 'className="user-mail-row__sender"', "보낸 사람 열이 없습니다.");
+requireText(app, 'className="user-mail-row__content"', "제목과 미리보기 통합 열이 없습니다.");
+requireText(app, 'className="user-mail-row__date"', "날짜 열이 없습니다.");
+requireText(app, '<strong className="user-mail-row__subject">{item.subject}</strong><span className="user-mail-row__preview">{item.preview}</span>', "제목과 미리보기가 한 줄에 배치되지 않았습니다.");
 
 requireText(css, ".user-mail-toolbar", "메일 목록 toolbar CSS가 없습니다.");
 requireText(css, ".user-mail-row", "메일 목록 행 CSS가 없습니다.");
+requireText(css, "grid-template-columns: 28px minmax(0, 1fr)", "메일 선택 열과 내용 열 배치가 없습니다.");
+requireText(css, "grid-template-columns: 48px minmax(120px, 180px) minmax(0, 1fr) 92px", "상태, 보낸 사람, 제목/미리보기, 날짜 열 배치가 없습니다.");
+requireText(css, ".user-mail-row__content", "제목/미리보기 통합 열 CSS가 없습니다.");
+requireText(css, ".user-mail-row__date", "날짜 고정 열 CSS가 없습니다.");
 const compactCss = css.slice(css.indexOf(".user-mail-toolbar"), css.indexOf(".user-mail-row") + 200);
 requireText(compactCss, "font-size: 12px", "메일 목록 toolbar 12px 기준이 없습니다.");
 requireText(css, "overflow: auto", "메일 목록 내부 스크롤 계약이 없습니다.");
@@ -55,4 +64,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(JSON.stringify({ result: "PASS", checks: 31 }, null, 2));
+console.log(JSON.stringify({ result: "PASS", checks: 40 }, null, 2));
