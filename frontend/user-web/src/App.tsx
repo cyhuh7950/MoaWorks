@@ -2070,7 +2070,14 @@ export default function App() {
     try {
       const targetLocale = toTranslationLocale(locale);
       const response = await requestTranslation({ texts: [{ text: selectedMailDetail.bodyText || selectedMailDetail.subject, sourceLocale: "auto", targetLocale }], includeSource: true, useCache: true }, token);
-      const body = response.items[0]?.translatedText || selectedMailDetail.bodyText;
+      const item = response.items[0];
+      if (!item || response.fallbackUsed || item.source === "fallback" || !item.translatedText.trim()) {
+        setMailTranslationPreview(null);
+        setShowTranslatedMail(false);
+        setTranslationError("메일 번역에 실패했습니다. 잠시 후 다시 시도해 주세요.");
+        return;
+      }
+      const body = item.translatedText;
       setMailTranslationPreview({ subject: selectedMailDetail.subject, body, mailId: translatingMailId });
       setShowTranslatedMail(true);
     } catch (error) { setTranslationError(normalizeClientError(error, "메일 번역 실패")); }
@@ -3110,22 +3117,43 @@ export default function App() {
     if (!recipientSuggestions.length) await loadRecipientSuggestions();
   }
 
-  async function confirmRecipientInput(target: RecipientPickerTarget) {
-    const raw = mailComposeForm[target].trim();
-    if (!raw || /[;,\n]/u.test(raw) || /^[^\s@]+@[^\s@]+$/u.test(raw) || /<\s*[^<>\s]+@[^<>\s]+\s*>$/u.test(raw)) return;
+  async function resolveRecipientInput(target: RecipientPickerTarget, rawValue = mailComposeForm[target]): Promise<{ ok: true; value: string } | { ok: false }> {
+    const raw = rawValue.trim();
+    if (!raw) return { ok: true, value: "" };
     const suggestions = recipientSuggestions.length ? recipientSuggestions : await loadRecipientSuggestions();
-    const matches = suggestions.filter((item) => item.source === "contact" && item.name.trim().localeCompare(raw, undefined, { sensitivity: "accent" }) === 0 && item.email.trim());
-    if (matches.length === 1) {
-      setMailComposeForm((current) => ({ ...current, [target]: formatConfirmedRecipient(matches[0]) }));
-      setMailError("");
-      return;
+    const resolved: string[] = [];
+    for (const token of raw.split(/[;,\n]/u).map((item) => item.trim()).filter(Boolean)) {
+      if (/^[^\s@]+@[^\s@]+$/u.test(token) || /<\s*[^<>\s]+@[^<>\s]+\s*>$/u.test(token)) {
+        resolved.push(token);
+        continue;
+      }
+      const matches = suggestions.filter((item) => item.name.trim().localeCompare(token, undefined, { sensitivity: "base" }) === 0 && item.email.trim());
+      const uniqueByEmail = new Map(matches.map((item) => [item.email.trim().toLowerCase(), item]));
+      if (uniqueByEmail.size === 1) {
+        resolved.push(formatConfirmedRecipient([...uniqueByEmail.values()][0]));
+        continue;
+      }
+      const preferredSource: RecipientPickerSource = matches.some((item) => item.source === "contact")
+        ? "contact"
+        : matches.some((item) => item.source === "directory")
+          ? "directory"
+          : matches.some((item) => item.source === "recent")
+            ? "recent"
+            : "contact";
+      await openRecipientPicker(target, token, preferredSource);
+      setMailError(uniqueByEmail.size > 1
+        ? `동일한 이름 '${token}'에 여러 이메일이 있습니다. 정확한 주소를 선택해 주세요.`
+        : `주소록에서 이메일이 등록된 이름 '${token}'을 찾지 못했습니다.`);
+      return { ok: false };
     }
-    if (matches.length > 1) {
-      await openRecipientPicker(target, raw, "contact");
-      setMailError("동일한 이름의 주소록 항목이 여러 개입니다. 정확한 이메일을 선택해 주세요.");
-      return;
-    }
-    setMailError("주소록에서 이메일이 등록된 정확한 이름을 찾지 못했습니다.");
+    return { ok: true, value: resolved.join(", ") };
+  }
+
+  async function confirmRecipientInput(target: RecipientPickerTarget) {
+    const result = await resolveRecipientInput(target);
+    if (!result.ok) return;
+    setMailComposeForm((current) => ({ ...current, [target]: result.value }));
+    setMailError("");
   }
 
   function addRecipientSuggestion(suggestion: RecipientSuggestion) {
@@ -3188,9 +3216,21 @@ export default function App() {
 
   async function submitMailCompose(action: "draft" | "send" | "schedule") {
     if (!token) return;
-    const to = normalizeMailRecipients(mailComposeForm.to, uiContract.company.domain);
-    const cc = normalizeMailRecipients(mailComposeForm.cc, uiContract.company.domain);
-    const bcc = normalizeMailRecipients(mailComposeForm.bcc, uiContract.company.domain);
+    let resolvedForm = mailComposeForm;
+    if (action !== "draft") {
+      const resolvedTo = await resolveRecipientInput("to", mailComposeForm.to);
+      if (!resolvedTo.ok) return;
+      const resolvedCc = await resolveRecipientInput("cc", mailComposeForm.cc);
+      if (!resolvedCc.ok) return;
+      const resolvedBcc = await resolveRecipientInput("bcc", mailComposeForm.bcc);
+      if (!resolvedBcc.ok) return;
+      resolvedForm = { ...mailComposeForm, to: resolvedTo.value, cc: resolvedCc.value, bcc: resolvedBcc.value };
+      setMailComposeForm(resolvedForm);
+      setMailError("");
+    }
+    const to = normalizeMailRecipients(resolvedForm.to, uiContract.company.domain);
+    const cc = normalizeMailRecipients(resolvedForm.cc, uiContract.company.domain);
+    const bcc = normalizeMailRecipients(resolvedForm.bcc, uiContract.company.domain);
     const recipients = [...new Set([...to, ...cc, ...bcc])];
     const subject = mailComposeForm.subject.trim();
     const bodyText = mailComposeForm.bodyText.trim();

@@ -3102,6 +3102,11 @@ textarea {
 .ui040-popup form > label { display: grid; gap: 4px; }
 .ui040-popup fieldset { max-height: 300px; overflow: auto; display: grid; gap: 6px; margin: 0; border: 1px solid #dbe4ec; border-radius: 10px; padding: 10px; }
 .ui040-popup fieldset label { display: flex; align-items: center; gap: 7px; }
+.ui040-participant-option { min-width: 0; min-height: 30px; display: grid !important; grid-template-columns: 16px minmax(0, 1fr); align-items: center; gap: 8px; padding: 3px 5px; }
+.ui040-participant-option input[type="checkbox"] { width: 14px; height: 14px; min-width: 14px !important; min-height: 14px !important; margin: 0; padding: 0; }
+.ui040-participant-option > span { min-width: 0; display: flex; align-items: baseline; gap: 5px; overflow: hidden; white-space: nowrap; }
+.ui040-participant-option strong, .ui040-participant-option small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui040-participant-option small { color: #64748b; font-size: 10px; }
 .ui040-popup footer { display: flex; justify-content: flex-end; gap: 7px; }
 .ui040-popup button { min-height: 32px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; font: inherit; }
 @media (max-width: 1180px) { .ui040-messenger { grid-template-columns: 250px minmax(420px, 1fr); } .ui040-drawer { display: none; } }

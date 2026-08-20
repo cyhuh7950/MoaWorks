@@ -179,6 +179,14 @@ class OpenAICompatibleProvider(TranslationProvider):
                 {"role": "user", "content": f"SOURCE_LOCALE={source_locale}\nTARGET_LOCALE={target_locale}\nEMAIL_CONTENT_START\n{text}\nEMAIL_CONTENT_END"},
             ],
         }
+        if self.name == "groq" and self.model.lower() == "qwen/qwen3.6-27b":
+            payload.update(
+                {
+                    "reasoning_effort": "none",
+                    "reasoning_format": "hidden",
+                    "max_completion_tokens": 8192,
+                }
+            )
         response = self.transport.post_json(
             url=f"{self.api_base_url}/chat/completions",
             headers={"Authorization": f"Bearer {self.api_key}"} if self.api_key else {},

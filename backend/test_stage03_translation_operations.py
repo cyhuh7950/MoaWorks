@@ -118,6 +118,32 @@ class Stage03ProviderContractTest(unittest.TestCase):
         self.assertIn("<translation>", system_prompt)
         self.assertNotIn("mail translation engine", system_prompt)
 
+    def test_groq_qwen_translation_disables_reasoning_and_allows_long_mail_output(self) -> None:
+        from app.services.translation_provider import OpenAICompatibleProvider
+
+        translated = "안녕하세요.\n\n서버 유지보수 일정을 안내드립니다." * 200
+        transport = _RecordingTransport(
+            {
+                "choices": [{"message": {"content": f"<translation>{translated}</translation>"}}],
+                "usage": {"prompt_tokens": 2000, "completion_tokens": 5000},
+            }
+        )
+        provider = OpenAICompatibleProvider(
+            api_key="secret-value",
+            api_base_url="https://api.groq.com/openai/v1",
+            model="qwen/qwen3.6-27b",
+            provider_name="groq",
+            transport=transport,
+        )
+
+        result = provider.translate("Server maintenance notice " * 400, "auto", "ko")
+        payload = transport.calls[0]["payload"]
+
+        self.assertEqual(result.translated_text, translated)
+        self.assertEqual(payload["reasoning_effort"], "none")
+        self.assertEqual(payload["reasoning_format"], "hidden")
+        self.assertGreaterEqual(payload["max_completion_tokens"], 8192)
+
     def test_unclosed_reasoning_is_hidden_when_tagged_translation_exists(self) -> None:
         from app.services.translation_provider import sanitize_translation_output
 
