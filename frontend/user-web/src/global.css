@@ -3249,3 +3249,38 @@ textarea {
 .ui033-compose__options label { display: inline-flex; grid-template-columns: auto auto; align-items: center; gap: 6px; }
 .ui033-compose__options input { width: 16px; height: 16px; }
 .ui032-actions .is-destructive { border-color: #be123c; color: #be123c; }
+
+/* CR-037 compose translation workspace */
+.user-mail-compose-titlebar { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.user-mail-compose-titlebar h2 { margin:5px 0 0; font-size:16px; }
+.user-mail-compose-eyebrow { color:var(--mw-primary,#0f766e); font-size:10px; font-weight:800; letter-spacing:.06em; }
+.user-mail-compose-window-actions { display:flex; gap:6px; }
+.user-mail-compose-window-actions button { display:inline-flex; align-items:center; justify-content:center; gap:5px; min-height:34px; border:1px solid #cbd5e1; border-radius:9px; padding:0 11px; background:#fff; color:#334155; font-size:11px; font-weight:700; transition:border-color .15s ease,background .15s ease,color .15s ease; }
+.user-mail-compose-window-actions button:hover { border-color:var(--mw-primary,#0f766e); background:#f0fdfa; color:#0f766e; }
+.user-mail-compose-translation-toolbar { display:flex; align-items:center; gap:10px; min-height:50px; border:1px solid #d5e3e1; border-radius:12px; padding:8px 10px; background:#f6fbfa; }
+.user-mail-compose-translation-toolbar > div { display:grid; gap:2px; margin-right:auto; }
+.user-mail-compose-translation-toolbar small { color:#64748b; font-size:9px; }
+.user-mail-compose-translation-toolbar label { display:flex; align-items:center; gap:7px; color:#475569; font-size:10px; font-weight:700; }
+.user-mail-compose-translation-toolbar select { min-width:130px; min-height:34px; border:1px solid #cbd5e1; border-radius:9px; padding:0 30px 0 10px; background:#fff; color:#0f172a; font:inherit; }
+.user-mail-compose-translation-toolbar button,.user-mail-translation-workspace button { min-height:34px; border:1px solid #b8c9d6; border-radius:9px; padding:0 13px; background:#fff; color:#334155; font-size:11px; font-weight:800; cursor:pointer; }
+.user-mail-compose-translation-toolbar button.is-primary,.user-mail-translation-workspace button.is-primary { border-color:var(--mw-primary,#0f766e); background:var(--mw-primary,#0f766e); color:#fff; box-shadow:0 5px 12px rgba(15,118,110,.16); }
+.user-mail-compose-translation-toolbar button:disabled,.user-mail-translation-workspace button:disabled { cursor:not-allowed; opacity:.48; box-shadow:none; }
+.common-popup.user-mail-translation-popup { width:min(1100px,calc(100vw - 48px)); max-height:min(820px,calc(100vh - 48px)); overflow:hidden; }
+.user-mail-translation-popup.is-maximized { width:calc(100vw - 48px) !important; height:calc(100vh - 96px); }
+.user-mail-translation-popup > .common-popup-description { display:none; }
+.user-mail-translation-popup > .common-popup-body { min-height:0; max-height:calc(100vh - 112px); overflow:auto; padding:14px; }
+.user-mail-translation-workspace { display:grid; gap:12px; min-height:0; }
+.user-mail-translation-workspace > header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.user-mail-translation-workspace > header > div { display:grid; gap:3px; }
+.user-mail-translation-workspace > header small { color:#64748b; font-size:9px; }
+.user-mail-translation-workspace > header label { display:flex; align-items:center; gap:8px; color:#475569; font-size:10px; font-weight:700; }
+.user-mail-translation-workspace select { min-width:150px; min-height:36px; border:1px solid #cbd5e1; border-radius:9px; padding:0 10px; background:#fff; font:inherit; }
+.user-mail-translation-comparison { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:12px; min-height:430px; }
+.user-mail-translation-comparison article { display:grid; grid-template-rows:auto auto minmax(0,1fr); gap:9px; min-width:0; border:1px solid #dbe4ec; border-radius:12px; padding:14px; background:#fff; }
+.user-mail-translation-comparison article:last-child { border-color:#b7ddd8; background:#f6fbfa; }
+.user-mail-translation-comparison h3 { margin:0; color:#0f766e; font-size:14px; }
+.user-mail-translation-comparison article > strong { min-height:38px; border-bottom:1px solid #e2e8f0; padding-bottom:9px; font-size:13px; }
+.user-mail-translation-comparison pre { min-width:0; margin:0; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; color:#1e293b; font-family:inherit; font-size:12px; line-height:1.65; }
+.user-mail-translation-loading,.user-mail-translation-empty { display:grid; place-items:center; min-height:260px; border:1px dashed #b8c9d6; border-radius:10px; color:#64748b; text-align:center; }
+.user-mail-translation-workspace > footer { display:flex; justify-content:flex-end; gap:8px; border-top:1px solid #e2e8f0; padding-top:12px; }
+@media(max-width:900px){.user-mail-translation-comparison{grid-template-columns:1fr;min-height:0}.user-mail-translation-comparison article{min-height:300px}.user-mail-compose-translation-toolbar{align-items:stretch;flex-wrap:wrap}.user-mail-compose-translation-toolbar>div{width:100%}.user-mail-compose-window-actions button span{display:none}}

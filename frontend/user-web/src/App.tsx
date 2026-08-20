@@ -200,6 +200,12 @@ import { NotificationCenter } from "./NotificationCenter";
 import { UserHome } from "./UserHome";
 import { CompactWarning, ConfirmModal, FeedbackState, ToastViewport, useFeedbackQueue } from "./components/FeedbackSystem";
 import { CommonPopup } from "./components/CommonPopup";
+import {
+  applyOutgoingTranslationPreview,
+  buildOutgoingTranslationTexts,
+  normalizeOutgoingTranslationLocale,
+  OUTGOING_TRANSLATION_LOCALES,
+} from "./mailOutgoingTranslation";
 
 type MessengerRoomLifecycleAction = "none" | "transfer" | "leave" | "delete";
 import {
@@ -1511,6 +1517,8 @@ export default function App() {
   const [translationError, setTranslationError] = useState("");
   const [mailTranslationKind, setMailTranslationKind] = useState<"incoming" | "outgoing" | null>(null);
   const [mailTranslationPreview, setMailTranslationPreview] = useState<{ subject: string; body: string; mailId?: string } | null>(null);
+  const [outgoingTranslationTargetLocale, setOutgoingTranslationTargetLocale] = useState("en");
+  const [outgoingTranslationOpen, setOutgoingTranslationOpen] = useState(false);
   const [showTranslatedMail, setShowTranslatedMail] = useState(false);
   const translationUiVisible = translationStatus?.available === true;
   const [me, setMe] = useState<AuthUser | null>(null);
@@ -2087,11 +2095,14 @@ export default function App() {
   async function translateOutgoingMail() {
     if (!token || !translationUiVisible) return;
     const subject = mailComposeForm.subject.trim(); const body = mailComposeForm.bodyText.trim();
-    if (!subject && !body) { setTranslationError("번역할 제목 또는 본문을 입력하세요."); return; }
-    setTranslationLoading(true); setTranslationError(""); setMailTranslationKind("outgoing");
+    const texts = buildOutgoingTranslationTexts(mailComposeForm, outgoingTranslationTargetLocale);
+    setOutgoingTranslationOpen(true);
+    setMailTranslationPreview(null);
+    setMailTranslationKind("outgoing");
+    if (!texts.length) { setTranslationError("번역할 제목 또는 본문을 입력하세요."); return; }
+    setTranslationLoading(true); setTranslationError("");
     try {
-      const targetLocale = toTranslationLocale(mailPreferences?.translationTargetLocale || "en");
-      const response = await requestTranslation({ texts: [subject, body].filter(Boolean).map((value) => ({ text: value, sourceLocale: "auto", targetLocale })), includeSource: true, useCache: true }, token);
+      const response = await requestTranslation({ texts, includeSource: true, useCache: true }, token);
       let index = 0;
       const translatedSubject = subject ? response.items[index++]?.translatedText || subject : "";
       const translatedBody = body ? response.items[index]?.translatedText || body : "";
@@ -2102,8 +2113,14 @@ export default function App() {
 
   function applyOutgoingTranslation() {
     if (!mailTranslationPreview || mailTranslationKind !== "outgoing") return;
-    setMailComposeForm((current) => ({ ...current, subject: mailTranslationPreview.subject, bodyText: mailTranslationPreview.body }));
-    setMailTranslationPreview(null); setTranslationError("");
+    setMailComposeForm((current) => applyOutgoingTranslationPreview(current, mailTranslationPreview));
+    setOutgoingTranslationOpen(false); setMailTranslationPreview(null); setTranslationError("");
+  }
+
+  function closeOutgoingTranslation() {
+    setOutgoingTranslationOpen(false);
+    setMailTranslationPreview(null);
+    if (mailTranslationKind === "outgoing") setTranslationError("");
   }
 
   async function runScheduledAction(action: "cancel" | "send" | "retry") {
@@ -2560,6 +2577,12 @@ export default function App() {
     window.addEventListener("moaworks:open-recent-mail", handler);
     return () => window.removeEventListener("moaworks:open-recent-mail", handler);
   }, [token]);
+
+  useEffect(() => {
+    setOutgoingTranslationTargetLocale(
+      normalizeOutgoingTranslationLocale(mailPreferences?.translationTargetLocale),
+    );
+  }, [mailPreferences?.translationTargetLocale]);
 
   async function saveExternalAccount(item: MailExternalAccount | null, form: MailExternalAccountPayload): Promise<string | null> {
     if (!token || externalAccountsBusy) return "처리 중입니다.";
@@ -3327,6 +3350,8 @@ export default function App() {
       setMailComposeSourceDetail(null);
       setEditingScheduledMailId("");
       setSelectedForwardAttachmentIds([]);
+      setOutgoingTranslationOpen(false);
+      setMailTranslationPreview(null);
       setQuickComposeMode("none");
       const nextMailbox: MailboxType = action === "draft" ? "inbox" : "sent";
       setMailFolder(action === "draft" ? "draft" : action === "schedule" ? "scheduled" : "sent");
@@ -3384,6 +3409,9 @@ export default function App() {
     setRecipientPickerTarget(null);
     setRecipientPickerQuery("");
     setComposeWindow("normal");
+    setOutgoingTranslationOpen(false);
+    setMailTranslationPreview(null);
+    setTranslationError("");
     setQuickComposeMode("none");
     setMailComposeCloseConfirmOpen(false);
   }
@@ -5357,12 +5385,12 @@ export default function App() {
             <article className="user-mail-detail-panel">
               {quickComposeMode === "mail" ? (
                 <form className={`user-mail-compose-popup is-${composeWindow}`} onSubmit={(event) => event.preventDefault()} style={composeWindow === "normal" && mailComposePosition ? { left: mailComposePosition.left, top: mailComposePosition.top, transform: "none" } : undefined}>
-                  <div className="user-mail-compose-titlebar" onMouseDown={startMailComposeDrag} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                  <div className="user-mail-compose-titlebar" onMouseDown={startMailComposeDrag}>
                     <div>
-                      <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>메일 작성</div>
-                      <h2 style={{ margin: "10px 0 0", fontSize: 16 }}>{mailComposeContext === "reply" ? "답장" : mailComposeContext === "reply_all" ? "전체답장" : mailComposeContext === "forward" ? "전달" : "새 메일"}</h2>
+                      <div className="user-mail-compose-eyebrow">메일 작성</div>
+                      <h2>{mailComposeContext === "reply" ? "답장" : mailComposeContext === "reply_all" ? "전체답장" : mailComposeContext === "forward" ? "전달" : "새 메일"}</h2>
                     </div>
-                    <div style={{ display: "flex", gap: 6 }}><button type="button" onClick={() => setComposeWindow((current) => current === "minimized" ? "normal" : "minimized")} style={{ height: 34 }}>최소화</button><button type="button" onClick={() => setComposeWindow((current) => current === "maximized" ? "normal" : "maximized")} style={{ height: 34 }}>{composeWindow === "maximized" ? "원래 크기" : "확대"}</button><button type="button" onClick={closeMailCompose} style={{ height: 34 }}>닫기</button></div>
+                    <div className="user-mail-compose-window-actions"><button type="button" aria-label="메일 작성창 최소화" onClick={() => setComposeWindow((current) => current === "minimized" ? "normal" : "minimized")}>— <span>최소화</span></button><button type="button" aria-label={composeWindow === "maximized" ? "메일 작성창 원래 크기" : "메일 작성창 확대"} onClick={() => setComposeWindow((current) => current === "maximized" ? "normal" : "maximized")}>{composeWindow === "maximized" ? "↙" : "↗"} <span>{composeWindow === "maximized" ? "원래 크기" : "확대"}</span></button><button type="button" aria-label="메일 작성창 닫기" onClick={closeMailCompose}>× <span>닫기</span></button></div>
                   </div>
                   <div className="user-mail-compose-body">
                   <div className="user-mail-compose-recipients">
@@ -5388,12 +5416,24 @@ export default function App() {
                     <span>본문</span>
                     <textarea aria-label="mail-compose-body" value={mailComposeForm.bodyText} onChange={(event) => setMailComposeForm((current) => ({ ...current, bodyText: event.target.value }))} placeholder="본문 입력" />
                   </label>
-                  {translationUiVisible ? <section className="user-mail-compose-translation" aria-label="발신 메일 번역">
-                    <div><strong>발신 메일 번역</strong><small>{mailPreferences?.translationTargetLocale || "ko"} · Provider {translationStatus?.provider}</small></div>
-                    <button type="button" disabled={translationLoading} onClick={() => void translateOutgoingMail()}>번역 미리보기</button>
-                    {mailTranslationKind === "outgoing" && mailTranslationPreview ? <div role="status"><strong>{mailTranslationPreview.subject}</strong><pre>{mailTranslationPreview.body}</pre><button type="button" onClick={applyOutgoingTranslation}>번역 적용</button><button type="button" onClick={() => setMailTranslationPreview(null)}>원문 유지</button></div> : null}
-                    {mailTranslationKind === "outgoing" && translationError ? <small role="alert">{translationError}</small> : null}
+                  {translationUiVisible ? <section className="user-mail-compose-translation-toolbar" aria-label="발신 메일 번역">
+                    <div><strong>발신 메일 번역</strong><small>Provider {translationStatus?.provider}</small></div>
+                    <label><span>번역 언어</span><select aria-label="발신 메일 번역 언어" value={outgoingTranslationTargetLocale} onChange={(event) => { setOutgoingTranslationTargetLocale(event.target.value); setMailTranslationPreview(null); setTranslationError(""); }}>{OUTGOING_TRANSLATION_LOCALES.map((locale) => <option key={locale.value} value={locale.value}>{locale.label}</option>)}</select></label>
+                    <button className="is-primary" type="button" disabled={translationLoading} onClick={() => void translateOutgoingMail()}>번역 미리보기</button>
                   </section> : null}
+                  <CommonPopup title="메일 번역 미리보기" open={outgoingTranslationOpen} onClose={closeOutgoingTranslation} maximizable className="user-mail-translation-popup" error={mailTranslationKind === "outgoing" ? translationError : ""}>
+                    <section className="user-mail-translation-workspace" aria-label="원문과 번역문 비교">
+                      <header>
+                        <div><strong>{OUTGOING_TRANSLATION_LOCALES.find((locale) => locale.value === outgoingTranslationTargetLocale)?.label ?? "영어"} 번역</strong><small>원문은 적용 버튼을 누르기 전까지 변경되지 않습니다.</small></div>
+                        <label><span>번역 언어</span><select aria-label="번역 미리보기 언어" value={outgoingTranslationTargetLocale} onChange={(event) => { setOutgoingTranslationTargetLocale(event.target.value); setMailTranslationPreview(null); setTranslationError(""); }}>{OUTGOING_TRANSLATION_LOCALES.map((locale) => <option key={locale.value} value={locale.value}>{locale.label}</option>)}</select></label>
+                      </header>
+                      <div className="user-mail-translation-comparison">
+                        <article><h3>원문</h3><strong>{mailComposeForm.subject || "제목 없음"}</strong><pre>{mailComposeForm.bodyText || "본문 없음"}</pre></article>
+                        <article><h3>번역 결과</h3>{translationLoading ? <div role="status" className="user-mail-translation-loading">번역 결과를 준비하고 있습니다.</div> : mailTranslationPreview && mailTranslationKind === "outgoing" ? <><strong>{mailTranslationPreview.subject || "제목 없음"}</strong><pre>{mailTranslationPreview.body || "본문 없음"}</pre></> : <div className="user-mail-translation-empty">목표 언어를 확인한 뒤 번역을 실행하세요.</div>}</article>
+                      </div>
+                      <footer><button type="button" onClick={closeOutgoingTranslation}>원문 유지</button><button type="button" disabled={translationLoading} onClick={() => void translateOutgoingMail()}>다시 번역</button><button className="is-primary" type="button" disabled={translationLoading || !mailTranslationPreview || mailTranslationKind !== "outgoing"} onClick={applyOutgoingTranslation}>번역 적용</button></footer>
+                    </section>
+                  </CommonPopup>
                   {activeMailSignature ? <section className="user-mail-compose-signature-preview" aria-label="기본 서명 미리보기">
                     <div><strong>기본 서명 · {activeMailSignature.name}</strong><small>{mailSignatures?.position === "body_top" ? "본문 상단" : "본문 하단"}에 서버가 저장 시 적용</small></div>
                     <pre>{activeMailSignature.contentText}</pre>
