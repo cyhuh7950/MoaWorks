@@ -2,7 +2,7 @@ import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { CommonPopup } from "./components/CommonPopup";
 import type { WorkspaceCalendar, WorkspaceDirectory } from "./api";
-import { scheduleDraftPayload, type ScheduleDraft } from "./scheduleForm";
+import { moveScheduleStart, scheduleDraftPayload, type ScheduleDraft } from "./scheduleForm";
 
 type Props = {
   open: boolean;
@@ -53,7 +53,7 @@ export function ScheduleComposePopup({ open, draft, users, ownerUserId, ownedCal
     <form className="ui038-schedule-form" onSubmit={submit}>
       <label className="is-wide"><span>캘린더</span><select required value={form.calendarId} onChange={(event) => update("calendarId", event.target.value)}>{ownedCalendars.map((calendar) => <option key={calendar.id} value={calendar.id}>{calendar.name}{calendar.isDefault ? " (기본)" : ""}</option>)}</select></label>
       <label className="is-wide"><span>제목</span><input ref={initialFocusRef} required maxLength={160} value={form.title} onChange={(event) => update("title", event.target.value)} /></label>
-      <label><span>시작</span><input required type="datetime-local" value={form.startsAt} onChange={(event) => update("startsAt", event.target.value)} /></label>
+      <label><span>시작</span><input required type="datetime-local" value={form.startsAt} onChange={(event) => setForm((current) => moveScheduleStart(current, event.target.value))} /></label>
       <label><span>종료</span><input required type="datetime-local" value={form.endsAt} onChange={(event) => update("endsAt", event.target.value)} /></label>
       <label className="is-wide"><span>위치</span><input maxLength={500} value={form.location} onChange={(event) => update("location", event.target.value)} /></label>
       <fieldset className="is-wide"><legend>참석자</legend><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="이름, 이메일, 부서 검색" aria-label="참석자 검색"/><div className="ui038-attendee-list">{candidates.map((user) => <label key={user.id}><input type="checkbox" checked={form.attendeeUserIds.includes(user.id)} onChange={() => toggleAttendee(user.id)} /><span><strong>{user.name}</strong>{user.email} · {user.department_name || "부서 없음"}</span></label>)}</div><small>{form.attendeeUserIds.length}/50명 선택</small></fieldset>
