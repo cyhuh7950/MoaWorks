@@ -358,7 +358,7 @@ export type MailAttachmentView = {
 
 export type MailSummary = {
   mailId: string;
-  accountId: string;
+  accountId: string | null;
   senderEmail: string;
   senderDisplayName: string;
   subject: string;
@@ -530,8 +530,8 @@ export type MailExternalAccountPayload = {
 
 export type MailDetail = {
   mailId: string;
-  accountId: string;
-  senderUserId: string;
+  accountId: string | null;
+  senderUserId: string | null;
   senderEmail: string;
   senderDisplayName: string;
   subject: string;

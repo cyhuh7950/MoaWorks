@@ -1035,7 +1035,7 @@ class MailRecipientView(BaseModel):
 
 class MailSummary(BaseModel):
     mailId: str
-    accountId: str
+    accountId: str | None
     senderEmail: str
     senderDisplayName: str = ""
     subject: str
@@ -1071,8 +1071,8 @@ MailMailboxSettingsResponse.model_rebuild()
 
 class MailDetailResponse(BaseModel):
     mailId: str
-    accountId: str
-    senderUserId: str
+    accountId: str | None
+    senderUserId: str | None
     senderEmail: str
     senderDisplayName: str = ""
     subject: str

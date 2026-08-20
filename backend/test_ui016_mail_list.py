@@ -253,6 +253,33 @@ class MailListOperationsTest(unittest.TestCase):
         self.assertEqual(count_params[-4:], (False, True, "social", "%분기%"))
         self.assertEqual(page_params[-2:], (1, 1))
 
+    def test_external_smtp_inbox_summary_allows_missing_internal_account(self):
+        row = {
+            "mail_id": "mail-external-1",
+            "account_id": None,
+            "sender_email": "outside@example.test",
+            "sender_display_name": "외부 발신자",
+            "subject": "외부 수신 메일",
+            "preview_text": "외부 SMTP 본문",
+            "status": "sent",
+            "sent_at": None,
+            "scheduled_at": None,
+            "retention_expires_at": None,
+            "attachment_count": 0,
+            "is_read": False,
+            "is_starred": False,
+            "received_at": None,
+            "category": "primary",
+        }
+        service = MailMessengerService()
+        service.db = FakeDb(fetchone=[{"total": 1}], fetchall=[[row]])
+
+        response = service.list_inbox(self.actor(), MailListQuery())
+
+        self.assertEqual(response.total, 1)
+        self.assertEqual(response.mails[0].mailId, "mail-external-1")
+        self.assertIsNone(response.mails[0].accountId)
+
     def test_sent_and_draft_queries_exclude_only_sender_deleted_rows(self):
         source = (self.root / "app" / "services" / "mail_messenger_service.py").read_text(encoding="utf-8")
         sent = source[source.index("def list_sent"):source.index("def list_drafts")]
