@@ -92,6 +92,28 @@ class Stage03ProviderContractTest(unittest.TestCase):
         self.assertFalse(transport.calls[0]["payload"]["stream"])
         self.assertNotIn("secret-value", json.dumps(result.metadata))
 
+    def test_openai_compatible_provider_returns_only_translation_without_reasoning(self) -> None:
+        from app.services.translation_provider import OpenAICompatibleProvider
+
+        transport = _RecordingTransport(
+            {
+                "choices": [{"message": {"content": "<think>internal reasoning</think>\n<think>more reasoning</think>\nHi, send me the order form."}}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 18},
+            }
+        )
+        provider = OpenAICompatibleProvider(
+            api_key="secret-value",
+            api_base_url="https://llm.example.test/v1",
+            model="reasoning-model",
+            transport=transport,
+        )
+
+        result = provider.translate("주문서를 보내줘", "auto", "en")
+
+        self.assertEqual(result.translated_text, "Hi, send me the order form.")
+        system_prompt = transport.calls[0]["payload"]["messages"][0]["content"]
+        self.assertIn("Never reveal reasoning", system_prompt)
+        self.assertIn("Return exactly and only", system_prompt)
     def test_deepl_provider_uses_professional_translation_contract(self) -> None:
         from app.services.translation_provider import DeepLProvider
 
@@ -352,6 +374,54 @@ class Stage03ResilienceTest(unittest.TestCase):
 
         self.assertEqual(response.items[0].estimatedCost, 0.00007)
 
+    def test_cached_translation_hides_legacy_reasoning_blocks(self) -> None:
+        import hashlib
+        from app.schemas.translation import TranslationRequest
+        from app.services.translation_service import TranslationService
+
+        store = _FixtureStore(self.policy())
+        source_text = "주문서를 보내줘"
+        source_hash = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
+        store.cache[("company-a", source_hash, "ko", "en", "fixture-provider", "fixture-model")] = {
+            "translated_text": "<think>legacy cached reasoning</think>\nHi, send me the order form.",
+            "estimated_cost": 0.0001,
+        }
+        provider = _FixtureProvider()
+        service = TranslationService(store=store)
+        service._resolve_provider = lambda _: provider
+
+        response = service.translate(
+            TranslationRequest(texts=[{"text": source_text, "sourceLocale": "ko", "targetLocale": "en"}]),
+            self.actor(),
+        )
+
+        self.assertEqual(response.items[0].translatedText, "Hi, send me the order form.")
+        self.assertTrue(response.items[0].cacheHit)
+        self.assertEqual(provider.calls, 0)
+    def test_reasoning_only_cache_is_ignored_and_refreshed_from_provider(self) -> None:
+        import hashlib
+        from app.schemas.translation import TranslationRequest
+        from app.services.translation_service import TranslationService
+
+        store = _FixtureStore(self.policy())
+        source_text = "주문서를 보내줘"
+        source_hash = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
+        store.cache[("company-a", source_hash, "ko", "en", "fixture-provider", "fixture-model")] = {
+            "translated_text": "<think>legacy cached reasoning only</think>",
+            "estimated_cost": 0.0001,
+        }
+        provider = _FixtureProvider()
+        service = TranslationService(store=store)
+        service._resolve_provider = lambda _: provider
+
+        response = service.translate(
+            TranslationRequest(texts=[{"text": source_text, "sourceLocale": "ko", "targetLocale": "en"}]),
+            self.actor(),
+        )
+
+        self.assertEqual(response.items[0].translatedText, "Hello")
+        self.assertFalse(response.items[0].cacheHit)
+        self.assertEqual(provider.calls, 1)
     def test_open_circuit_falls_back_to_source_without_extra_provider_call(self) -> None:
         from app.schemas.translation import TranslationRequest
         from app.services.translation_service import TranslationService

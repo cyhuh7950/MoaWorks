@@ -16,6 +16,7 @@ from app.schemas.mail_messenger import (
     MessengerRoomFavoriteRequest,
     MessengerRoomListResponse,
     MessengerRoomParticipantsRequest,
+    MessengerRoomTranslationRequest,
     MessengerRoomDeleteResponse,
     MessengerRoomLeaveResponse,
     MessengerRoomOwnerTransferRequest,
@@ -124,6 +125,18 @@ def update_room_favorite(
         _handle_error(exc)
         raise
 
+
+@router.patch("/rooms/{room_id}/translation", response_model=MessengerRoomDetailResponse)
+def update_room_translation(
+    room_id: str,
+    payload: MessengerRoomTranslationRequest,
+    user: AuthUserSummary = Depends(permission_required("messenger:write")),
+) -> MessengerRoomDetailResponse:
+    try:
+        return _service().update_room_translation(user, room_id, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
 
 @router.patch("/rooms/{room_id}/participants", response_model=MessengerRoomDetailResponse)
 def update_room_participants(

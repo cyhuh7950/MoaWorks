@@ -63,6 +63,7 @@ from app.schemas.mail_messenger import (
     MessengerRoomFavoriteRequest,
     MessengerRoomListResponse,
     MessengerRoomParticipantsRequest,
+    MessengerRoomTranslationRequest,
     MessengerRoomDeleteResponse,
     MessengerRoomLeaveResponse,
     MessengerRoomOwnerTransferRequest,
@@ -1883,7 +1884,7 @@ class MailMessengerService:
         with self.db.connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT room.id AS room_id, room.room_type, room.room_name, room.created_by_user_id,
+                SELECT room.id AS room_id, room.room_type, room.room_name, room.translation_locale, room.created_by_user_id,
                        room.created_at, room.updated_at, room.retention_expires_at,
                        self_member.is_favorite,
                        COALESCE(member_ids.participant_ids, '[]'::jsonb) AS participant_ids,
@@ -1986,9 +1987,9 @@ class MailMessengerService:
                 raise ValueError("같은 회사의 활성 사용자만 참여할 수 있습니다.")
             cursor.execute(
                 """INSERT INTO messenger_rooms
-                (id,company_id,room_type,room_name,created_by_user_id,created_at,updated_at,retention_expires_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
-                (room_id, actor.companyId, payload.roomType, payload.roomName, actor.userId, now, now, now + timedelta(days=14)),
+                (id,company_id,room_type,room_name,translation_locale,created_by_user_id,created_at,updated_at,retention_expires_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (room_id, actor.companyId, payload.roomType, payload.roomName, payload.translationLocale, actor.userId, now, now, now + timedelta(days=14)),
             )
             for user_id in participant_ids:
                 cursor.execute(
@@ -2023,6 +2024,34 @@ class MailMessengerService:
                     (payload.isFavorite, room_id, actor.userId),
                 )
                 self._write_messenger_audit(cursor, actor, room_id, "messenger.room.favorite_changed", str(before).lower(), str(payload.isFavorite).lower(), None, now)
+            connection.commit()
+        return self.get_room(actor, room_id)
+
+    def update_room_translation(self, actor: AuthUserSummary, room_id: str, payload: MessengerRoomTranslationRequest) -> MessengerRoomDetailResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM messenger_rooms WHERE id=%s AND company_id=%s AND status='active' FOR UPDATE",
+                (room_id, actor.companyId),
+            )
+            room = cursor.fetchone()
+            if room is None:
+                raise ResourceNotFoundError("대화방을 찾을 수 없습니다.")
+            if room["created_by_user_id"] != actor.userId:
+                raise PermissionError("방 생성자만 대화방 언어를 변경할 수 있습니다.")
+            if room["updated_at"] != payload.expectedUpdatedAt:
+                raise MessengerConflictError("대화방이 변경되었습니다. 새로고침 후 다시 시도하세요.")
+            before = room.get("translation_locale") or "ko"
+            if before != payload.translationLocale:
+                cursor.execute(
+                    "UPDATE messenger_rooms SET translation_locale=%s,updated_at=%s WHERE id=%s",
+                    (payload.translationLocale, now, room_id),
+                )
+                self._write_messenger_audit(
+                    cursor, actor, room_id, "messenger.room.translation_locale_changed", before,
+                    payload.translationLocale, None, now,
+                )
             connection.commit()
         return self.get_room(actor, room_id)
 
@@ -3000,6 +3029,7 @@ class MailMessengerService:
             """
             SELECT
                 room.created_by_user_id,
+                room.translation_locale,
                 self_member.is_favorite,
                 COALESCE(member_ids.participant_ids, '[]'::jsonb) AS participant_ids,
                 COALESCE(member_ids.participant_count, 0) AS participant_count,
@@ -3110,6 +3140,7 @@ class MailMessengerService:
             roomId=row["room_id"],
             roomType=row["room_type"],
             roomName=row["room_name"],
+            translationLocale=row.get("translation_locale") or "ko",
             participantIds=[str(item) for item in (participant_ids or [])],
             lastMessage=row["last_message"],
             lastMessageAt=row["last_message_at"],

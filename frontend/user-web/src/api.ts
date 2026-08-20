@@ -626,6 +626,7 @@ export type MessengerRoomSummary = {
   roomId: string;
   roomType: string;
   roomName: string;
+  translationLocale: "ko" | "en" | "ja" | "zh-cn" | "es" | "fr" | "de";
   participantIds: string[];
   lastMessage: string | null;
   lastMessageAt: string | null;
@@ -1708,11 +1709,11 @@ export async function fetchMessengerRooms(token: string): Promise<MessengerRoomL
   });
 }
 
-export async function createMessengerRoom(token: string, payload: { roomName: string; roomType?: string; participantUserIds: string[] }) {
+export async function createMessengerRoom(token: string, payload: { roomName: string; roomType?: string; participantUserIds: string[]; translationLocale: MessengerRoomSummary["translationLocale"] }) {
   return request<MessengerRoomDetail>("/messenger/rooms", {
     method: "POST",
     headers: authHeaders(token),
-    body: JSON.stringify({ roomName: payload.roomName, roomType: payload.roomType ?? "group", participantUserIds: payload.participantUserIds }),
+    body: JSON.stringify({ roomName: payload.roomName, roomType: payload.roomType ?? "group", participantUserIds: payload.participantUserIds, translationLocale: payload.translationLocale }),
   });
 }
 
@@ -1721,6 +1722,14 @@ export async function favoriteMessengerRoom(token: string, roomId: string, isFav
     method: "PATCH",
     headers: authHeaders(token),
     body: JSON.stringify({ isFavorite }),
+  });
+}
+
+export async function updateMessengerRoomTranslation(token: string, roomId: string, translationLocale: MessengerRoomSummary["translationLocale"], expectedUpdatedAt: string) {
+  return request<MessengerRoomDetail>(`/messenger/rooms/${roomId}/translation`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+    body: JSON.stringify({ translationLocale, expectedUpdatedAt }),
   });
 }
 

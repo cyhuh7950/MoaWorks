@@ -5239,7 +5239,7 @@ export default function App() {
                       <div style={{ fontSize: 12, color: uiContract.brand.primary, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>메일 작성</div>
                       <h2 style={{ margin: "10px 0 0", fontSize: 16 }}>{mailComposeContext === "reply" ? "답장" : mailComposeContext === "reply_all" ? "전체답장" : mailComposeContext === "forward" ? "전달" : "새 메일"}</h2>
                     </div>
-                    <div style={{ display: "flex", gap: 6 }}><button type="button" onClick={() => setComposeWindow((current) => current === "minimized" ? "normal" : "minimized")} style={{ height: 34 }}>최소화</button><button type="button" onClick={() => setComposeWindow((current) => current === "maximized" ? "normal" : "maximized")} style={{ height: 34 }}>확대</button><button type="button" onClick={closeMailCompose} style={{ height: 34 }}>닫기</button></div>
+                    <div style={{ display: "flex", gap: 6 }}><button type="button" onClick={() => setComposeWindow((current) => current === "minimized" ? "normal" : "minimized")} style={{ height: 34 }}>최소화</button><button type="button" onClick={() => setComposeWindow((current) => current === "maximized" ? "normal" : "maximized")} style={{ height: 34 }}>{composeWindow === "maximized" ? "원래 크기" : "확대"}</button><button type="button" onClick={closeMailCompose} style={{ height: 34 }}>닫기</button></div>
                   </div>
                   <div className="user-mail-compose-body">
                   <div className="user-mail-compose-recipients">

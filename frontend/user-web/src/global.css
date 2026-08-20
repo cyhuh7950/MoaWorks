@@ -3068,6 +3068,12 @@ textarea {
 .ui040-message-block > article > header { display: flex; justify-content: space-between; gap: 12px; }
 .ui040-message-block time, .ui040-read-state { color: #64748b; font-size: 9px; }
 .ui040-message-block p { margin: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ui040-message-original, .ui040-message-translation { display: grid; gap: 4px; }
+.ui040-message-original > small, .ui040-message-translation > small { color: #64748b; font-size: 9px; font-weight: 800; }
+.ui040-message-translation { margin-top: 8px !important; padding-top: 8px; border-top: 1px solid #cbd5e1; color: #0f4c46; }
+.ui040-translation-notice { margin: 0; padding: 4px 10px; color: #475569; background: #f8fafc; font-size: 10px; }
+.ui040-room-management > label { display: grid; gap: 4px; margin-bottom: 6px; font-size: 10px; font-weight: 800; }
+.ui040-room-management select { min-height: 32px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0 8px; background: #fff; font-size: 12px; }
 .ui040-file, .ui040-shared-file { width: 100%; display: flex; justify-content: space-between; gap: 8px; margin-top: 5px; padding: 6px 8px; text-align: left; }
 .ui040-file small, .ui040-shared-file small { color: #64748b; font-size: 9px; }
 .ui040-read-state { display: block; margin-top: 5px; text-align: right; }

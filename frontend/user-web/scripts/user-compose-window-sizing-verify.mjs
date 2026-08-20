@@ -70,6 +70,10 @@ await check("mail compose minimizes to a compact bottom-right titlebar", () => {
   assert.match(rule(".user-mail-compose-popup.is-minimized .user-mail-compose-body"), /display:\s*none/);
 });
 
+await check("mail compose maximize control exposes restore action in maximized state", () => {
+  assert.match(app, /setComposeWindow\(\(current\) => current === "maximized" \? "normal" : "maximized"\)/);
+  assert.match(app, /composeWindow === "maximized" \? "원래 크기" : "확대"/);
+});
 await check("mail compose body receives remaining vertical space", () => {
   assert.match(rule(".user-mail-compose-popup"), /grid-template-rows:\s*auto\s+minmax\(0,\s*1fr\)/);
   assert.match(rule(".user-mail-compose-body"), /overflow:\s*auto/);

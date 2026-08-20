@@ -1114,6 +1114,7 @@ class MessengerRoomCreateRequest(BaseModel):
     roomName: str = Field(min_length=1, max_length=80)
     roomType: Literal["direct", "group"] = Field(default="group")
     participantUserIds: list[str] = Field(default_factory=list, max_length=100)
+    translationLocale: Literal["ko", "en", "ja", "zh-cn", "es", "fr", "de"] = Field(default="ko")
 
     @field_validator("roomName")
     @classmethod
@@ -1122,6 +1123,11 @@ class MessengerRoomCreateRequest(BaseModel):
         if not normalized:
             raise ValueError("대화방 이름을 입력하세요.")
         return normalized
+
+    @field_validator("translationLocale", mode="before")
+    @classmethod
+    def normalize_translation_locale(cls, value: str) -> str:
+        return value.strip().replace("_", "-").lower()
 
 
 class MessengerAttachmentMeta(BaseModel):
@@ -1144,6 +1150,16 @@ class MessengerAttachmentView(BaseModel):
 
 class MessengerRoomFavoriteRequest(BaseModel):
     isFavorite: bool
+
+
+class MessengerRoomTranslationRequest(BaseModel):
+    translationLocale: Literal["ko", "en", "ja", "zh-cn", "es", "fr", "de"]
+    expectedUpdatedAt: datetime
+
+    @field_validator("translationLocale", mode="before")
+    @classmethod
+    def normalize_translation_locale(cls, value: str) -> str:
+        return value.strip().replace("_", "-").lower()
 
 
 class MessengerRoomParticipantsRequest(BaseModel):
@@ -1188,6 +1204,7 @@ class MessengerRoomSummary(BaseModel):
     roomId: str
     roomType: str
     roomName: str
+    translationLocale: str = "ko"
     participantIds: list[str]
     lastMessage: str | None = None
     lastMessageAt: datetime | None = None

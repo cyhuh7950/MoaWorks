@@ -17,7 +17,7 @@ from app.core.config import settings
 from app.schemas.directory import AuthUserSummary
 from app.schemas.translation import TranslationConnectionTestRequest, TranslationConnectionTestResponse, TranslationItem, TranslationModelListRequest, TranslationModelListResponse, TranslationPolicyRequest, TranslationRequest, TranslationResponse, TranslationStatus
 from app.services.translation_operations_store import DEFAULT_POLICY, TranslationOperationsStore
-from app.services.translation_provider import PROVIDER_PROFILES, ProviderResult, TranslationProvider, fetch_translation_models, resolve_translation_provider
+from app.services.translation_provider import PROVIDER_PROFILES, ProviderResult, TranslationProvider, fetch_translation_models, resolve_translation_provider, sanitize_translation_output
 
 logger = logging.getLogger(__name__)
 
@@ -283,9 +283,23 @@ class TranslationService:
     def _read_cache(self, actor: AuthUserSummary | None, source_hash: str, source_text: str, source_locale: str, target_locale: str, provider: str, model: str) -> dict[str, object] | None:
         if actor is not None:
             row = self._operations_store().read_cache(actor.companyId, source_hash=source_hash, source_locale=source_locale, target_locale=target_locale, provider=provider, model=model)
-            return {"translatedText": row["translated_text"], "estimatedCost": float(row["estimated_cost"]) if row and row.get("estimated_cost") is not None else None} if row else None
+            if not row:
+                return None
+            try:
+                translated_text = sanitize_translation_output(str(row["translated_text"]))
+            except ValueError:
+                return None
+            return {
+                "translatedText": translated_text,
+                "estimatedCost": float(row["estimated_cost"]) if row.get("estimated_cost") is not None else None,
+            }
         value = self._read_legacy_cache(self._legacy_cache_key(source_text, source_locale, target_locale, provider))
-        return {"translatedText": value} if value is not None else None
+        if value is None:
+            return None
+        try:
+            return {"translatedText": sanitize_translation_output(value)}
+        except ValueError:
+            return None
 
     def _write_cache(self, actor: AuthUserSummary | None, source_hash: str, source_text: str, source_locale: str, target_locale: str, provider: str, result: ProviderResult) -> None:
         if actor is not None:

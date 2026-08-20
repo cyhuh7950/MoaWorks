@@ -36,4 +36,10 @@ assert.match(css, /\.ui040-[^{]+\{[^}]*overflow:\s*(?:auto|hidden)/s);
 assert.doesNotMatch(panel, /dangerouslySetInnerHTML|style=\{\{/);
 assert.doesNotMatch(panel + api, /https?:\/\/(?:localhost|127\.0\.0\.1)|host\.docker\.internal|NEXT_PUBLIC_API_BASE_URL/);
 
-console.log("UI-040 messenger verifier: 18/18 passed");
+assert.ok(panel.includes("대화방 언어") && panel.includes("원문") && panel.includes("번역"), "room language and bilingual labels missing");
+assert.ok(panel.includes("requestTranslation") && panel.includes("fetchTranslationStatus"), "LLM translation API wiring missing");
+assert.ok(panel.includes("messageTranslations[item.messageId]") && panel.includes("item.body"), "original and translated message rendering missing");
+assert.ok(api.includes("translationLocale") && api.includes("updateMessengerRoomTranslation"), "room translation locale API contract missing");
+assert.match(css, /\.ui040-message-translation\s*\{[^}]*border-top:/s);
+
+console.log("UI-040 messenger verifier: 23/23 passed");
