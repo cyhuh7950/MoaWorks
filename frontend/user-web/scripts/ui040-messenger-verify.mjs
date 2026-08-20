@@ -28,8 +28,9 @@ assert.ok(panel.includes("loading") && panel.includes("error") && panel.includes
 assert.ok(app.includes("<MessengerPanel token={token}"), "existing messenger menu entry must remain wired");
 assert.match(css, /\.ui040-messenger\s*\{[^}]*font-size:\s*12px[^}]*height:\s*100%/s);
 assert.match(css, /#root \.ui040-messenger h2\s*\{[^}]*font-size:\s*16px\s*!important/s);
-assert.match(css, /\.ui040-room-group\s*>\s*article\s*\{[^}]*min-height:\s*64px/s);
-assert.match(css, /\.ui040-room-select\s*\{[^}]*grid-template-rows:\s*repeat\(3,\s*minmax\(0,\s*auto\)\)/s);
+assert.match(css, /\.ui040-room-group\s*>\s*article\s*\{[^}]*min-height:\s*76px[^}]*overflow:\s*visible/s);
+assert.match(css, /\.ui040-room-select\s*\{[^}]*height:\s*auto[^}]*min-height:\s*72px[^}]*overflow:\s*visible/s);
+assert.match(css, /\.ui040-room-select\s*\{[^}]*grid-template-rows:\s*repeat\(3,\s*minmax\(16px,\s*auto\)\)/s);
 assert.match(css, /\.ui040-room-(?:name|preview|meta)[^{]*\{[^}]*min-width:\s*0/s);
 assert.match(css, /\.ui040-[^{]+\{[^}]*overflow:\s*(?:auto|hidden)/s);
 assert.doesNotMatch(panel, /dangerouslySetInnerHTML|style=\{\{/);
