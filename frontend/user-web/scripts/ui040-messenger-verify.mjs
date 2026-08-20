@@ -39,9 +39,12 @@ assert.doesNotMatch(panel + api, /https?:\/\/(?:localhost|127\.0\.0\.1)|host\.do
 assert.ok(panel.includes("대화방 언어") && panel.includes("원문") && panel.includes("번역"), "room language and bilingual labels missing");
 assert.ok(panel.includes("requestTranslation") && panel.includes("fetchTranslationStatus"), "LLM translation API wiring missing");
 assert.ok(panel.includes("messageTranslations[item.messageId]") && panel.includes("item.body"), "original and translated message rendering missing");
-assert.ok(panel.includes("messageNeedsTranslation") && panel.includes("filter((item) => messageNeedsTranslation(item.body, locale))"), "same-language messages must be excluded before LLM translation");
+assert.ok(panel.includes("messageNeedsTranslation") && panel.includes("messageNeedsTranslation(item.senderLocale, locale)"), "translation must compare the sender configured locale with the room locale");
+assert.ok(panel.includes("normalizeLanguageCode") && panel.includes("normalizeLanguageCode(senderLocale) !== normalizeLanguageCode(targetLocale)"), "locale comparison must normalize ko-KR and ko without inspecting message text");
+assert.ok(panel.includes("sourceLocale: normalizeLanguageCode(item.senderLocale)") && !panel.includes('sourceLocale: "auto", targetLocale: locale'), "messenger translation must send the configured sender locale instead of auto-detecting content");
+assert.ok(!panel.includes("hangulCount") && !panel.includes("latinCount"), "message character heuristics must not decide translation");
 assert.ok(panel.includes("normalizeTranslationText") && panel.includes("normalizeTranslationText(translated.translatedText) !== normalizeTranslationText(original)"), "visually identical translations must not render");
 assert.ok(api.includes("translationLocale") && api.includes("updateMessengerRoomTranslation"), "room translation locale API contract missing");
 assert.match(css, /\.ui040-message-translation\s*\{[^}]*border-top:/s);
 
-console.log("UI-040 messenger verifier: 25/25 passed");
+console.log("UI-040 messenger verifier: 28/28 passed");

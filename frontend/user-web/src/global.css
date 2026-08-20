@@ -1725,13 +1725,17 @@ textarea {
   width: min(460px, calc(100vw - 48px));
   max-height: min(620px, calc(100vh - 48px));
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   gap: 10px;
   padding: 14px;
   border-radius: 14px;
   background: #fff;
   box-shadow: 0 20px 60px rgba(15, 23, 42, 0.3);
 }
+
+.user-mail-recipient-picker-tabs { display: flex; gap: 6px; }
+.user-mail-recipient-picker-tabs button { min-height: 32px; padding: 0 10px; }
+.user-mail-recipient-picker-tabs button[aria-pressed="true"] { border-color: #0f766e; background: #ecfdf5; color: #0f766e; font-weight: 800; }
 
 .user-mail-recipient-picker header {
   display: flex;
@@ -1753,16 +1757,17 @@ textarea {
 
 .user-mail-recipient-picker-list > button {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 3px 8px;
-  padding: 9px 10px;
+  grid-template-columns: minmax(90px, 0.8fr) minmax(160px, 1.2fr) minmax(100px, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 36px;
+  padding: 7px 10px;
   text-align: left;
 }
 
 .user-mail-recipient-picker-list > button strong,
-.user-mail-recipient-picker-list > button small {
-  grid-column: 1 / -1;
-}
+.user-mail-recipient-picker-list > button span,
+.user-mail-recipient-picker-list > button small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .user-mail-recipient-picker-list span,
 .user-mail-recipient-picker-list small {
@@ -2890,6 +2895,8 @@ textarea {
 .ui032-detail__header p, .ui032-detail__content p { margin: 0; color: #475569; line-height: 1.6; }
 .ui032-detail__content, .ui032-timeline, .ui032-comments, .ui032-attachments, .ui032-history { margin-top: 14px; padding-top: 14px; border-top: 1px solid #e2e8f0; }
 .ui032-detail__content p, .ui032-comments p { white-space: pre-wrap; overflow-wrap: anywhere; }
+[data-testid="approval-document-body"] { min-height: 160px; white-space: pre-wrap; overflow-wrap: anywhere; }
+[data-testid="approval-document-body"] p { color: #0f172a; font-size: 12px; line-height: 1.7; }
 .ui032-timeline article { display: flex; gap: 10px; padding: 7px 0; }
 .ui032-timeline i { display: grid; place-items: center; flex: 0 0 24px; height: 24px; border-radius: 50%; background: #ccfbf1; color: #115e59; font-style: normal; font-weight: 800; }
 .ui032-timeline article div, .ui032-comments article, .ui032-history article { display: grid; gap: 3px; }
@@ -3197,7 +3204,24 @@ textarea {
 .ui044-settings-help__notification-grid fieldset{display:grid;gap:5px;border:1px solid #dbe4ec;border-radius:9px}
 .ui044-settings-help__notification-grid label{display:flex;gap:6px}
 .ui044-settings-help__times{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.ui044-settings-help__detail>.ui044-profile{max-width:980px}
+.ui044-profile__summary{display:grid;grid-template-columns:96px minmax(0,1fr);gap:18px;align-items:start;margin-top:18px;padding:14px;border:1px solid #dbe4ec;border-radius:12px;background:#f8fafc}
+.ui044-profile__summary dl{margin:0}
+.ui044-profile__avatar{width:88px;height:88px;display:grid;place-items:center;overflow:hidden;border:1px solid #cbd5e1;border-radius:50%;background:#e2e8f0;color:#0f766e;font-size:22px;font-weight:800}
+.ui044-profile__avatar img{width:100%;height:100%;object-fit:cover}
+.ui044-profile__form{display:grid;gap:14px;margin-top:16px}
+.ui044-profile__form fieldset{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0;border:1px solid #dbe4ec;border-radius:10px;padding:10px}
+.ui044-profile__form fieldset legend{padding:0 5px;font-weight:800}.ui044-profile__form fieldset span{font-size:10px;color:#64748b}
+.ui044-profile__form button{min-height:34px;border:1px solid #cbd5e1;border-radius:9px;background:#fff;padding:0 11px}
+.ui044-profile__grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px}
+.ui044-profile__grid label{display:grid;gap:5px}.ui044-profile__grid label.is-wide{grid-column:1/-1}
+.ui044-profile__grid input,.ui044-profile__grid textarea{box-sizing:border-box;width:100%;min-height:36px;border:1px solid #cbd5e1;border-radius:9px;background:#fff;padding:7px 9px;font:inherit}
+.ui044-profile__grid textarea{min-height:82px;resize:vertical}.ui044-profile__form footer{display:flex;justify-content:flex-end}
+.user-profile-entry{display:flex;align-items:center;gap:9px;min-width:0;border:0;background:transparent;padding:0;cursor:pointer;text-align:left;color:inherit}
+.user-profile-entry__avatar{width:34px;height:34px;flex:0 0 34px;display:grid;place-items:center;overflow:hidden;border:1px solid #cbd5e1;border-radius:50%;background:#e2e8f0;color:#0f766e;font-size:12px;font-weight:800}
+.user-profile-entry__avatar img{width:100%;height:100%;object-fit:cover}
 @media(max-width:900px){.ui044-settings-help{grid-template-columns:1fr}.ui044-settings-help__nav{max-height:280px}.ui044-settings-help__module-links{grid-template-columns:1fr}}
+@media(max-width:720px){.ui044-profile__summary{grid-template-columns:1fr}.ui044-profile__grid{grid-template-columns:1fr}.ui044-profile__grid label.is-wide{grid-column:auto}}
 
 /* Approval workspace completion */
 .ui032-list-columns { display: grid; grid-template-columns: 92px 64px minmax(160px, 1fr) 92px; gap: 8px; padding: 7px 10px; border-bottom: 1px solid #cbd5e1; color: #475569; font-size: 10px; font-weight: 800; }

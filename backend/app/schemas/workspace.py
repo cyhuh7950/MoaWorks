@@ -205,6 +205,32 @@ class PreferencePayload(BaseModel):
         return value
 
 
+class PersonalProfilePayload(BaseModel):
+    externalEmail: str = Field(default="", max_length=255)
+    mobilePhone: str = Field(default="", max_length=64)
+    officePhone: str = Field(default="", max_length=64)
+    introduction: str = Field(default="", max_length=2000)
+    postalCode: str = Field(default="", max_length=32)
+    addressLine1: str = Field(default="", max_length=500)
+    addressLine2: str = Field(default="", max_length=500)
+    memo: str = Field(default="", max_length=2000)
+    anniversary: date | None = None
+    expectedVersion: int = Field(ge=0)
+
+    @field_validator("externalEmail")
+    @classmethod
+    def normalize_external_email(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", normalized):
+            raise ValueError("올바른 외부 이메일 주소를 입력하세요.")
+        return normalized
+
+    @field_validator("mobilePhone", "officePhone", "introduction", "postalCode", "addressLine1", "addressLine2", "memo")
+    @classmethod
+    def trim_personal_profile_text(cls, value: str) -> str:
+        return value.strip()
+
+
 class FileRenamePayload(BaseModel):
     fileName: str = Field(min_length=1, max_length=255)
 

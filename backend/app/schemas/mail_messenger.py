@@ -1255,6 +1255,7 @@ class MessengerMessageView(BaseModel):
     roomId: str
     senderUserId: str
     senderUserName: str
+    senderLocale: str = "ko-KR"
     messageType: str
     body: str
     attachmentMeta: list[dict]

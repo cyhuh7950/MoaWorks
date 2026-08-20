@@ -247,6 +247,7 @@ class TranslationService:
         for attempt in range(attempts):
             try:
                 result = provider.translate(text, source_locale, target_locale)
+                result = replace(result, translated_text=sanitize_translation_output(result.translated_text, text))
                 self._failure_state[key] = (0, None)
                 return result
             except Exception as exc:
@@ -286,7 +287,7 @@ class TranslationService:
             if not row:
                 return None
             try:
-                translated_text = sanitize_translation_output(str(row["translated_text"]))
+                translated_text = sanitize_translation_output(str(row["translated_text"]), source_text)
             except ValueError:
                 return None
             return {
@@ -297,7 +298,7 @@ class TranslationService:
         if value is None:
             return None
         try:
-            return {"translatedText": sanitize_translation_output(value)}
+            return {"translatedText": sanitize_translation_output(value, source_text)}
         except ValueError:
             return None
 

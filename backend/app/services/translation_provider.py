@@ -26,20 +26,41 @@ PROVIDER_PROFILES: dict[str, dict[str, Any]] = {
 _REASONING_BLOCK_PATTERN = re.compile(r"<(?:think|analysis)\b[^>]*>.*?</(?:think|analysis)\s*>", re.IGNORECASE | re.DOTALL)
 _UNCLOSED_REASONING_PATTERN = re.compile(r"<(?:think|analysis)\b", re.IGNORECASE)
 _TRANSLATION_BLOCK_PATTERN = re.compile(r"<translation\b[^>]*>(.*?)</translation\s*>", re.IGNORECASE | re.DOTALL)
+_OPEN_TRANSLATION_PATTERN = re.compile(r"<translation\b[^>]*>", re.IGNORECASE)
 _FINAL_LABEL_PATTERN = re.compile(r"^\s*(?:final(?:\s+translation|\s+answer)?|translation)\s*:\s*", re.IGNORECASE)
+_REASONING_RESIDUE_PATTERN = re.compile(
+    r"(?:analy[sz]e user input|thinking process|output generation|self-correction|mental draft|final string\s*:|`\s*tags?\b)",
+    re.IGNORECASE,
+)
 
 
-def sanitize_translation_output(value: str) -> str:
+def _validate_translation_text(value: str, source_text: str | None) -> str:
+    cleaned = value.strip().strip("`").strip()
+    if not cleaned or _REASONING_RESIDUE_PATTERN.search(cleaned):
+        raise ValueError("translation provider response has no final translated text")
+    if source_text:
+        source_chars = re.sub(r"[\W_]+", "", source_text, flags=re.UNICODE)
+        translated_chars = re.sub(r"[\W_]+", "", cleaned, flags=re.UNICODE)
+        minimum = max(8, int(len(source_chars) * 0.08))
+        if len(source_chars) >= 80 and len(translated_chars) < minimum:
+            raise ValueError("translation provider response has no final translated text")
+    return cleaned
+
+
+def sanitize_translation_output(value: str, source_text: str | None = None) -> str:
     tagged_translations = [item.strip() for item in _TRANSLATION_BLOCK_PATTERN.findall(value) if item.strip()]
     if tagged_translations:
-        return tagged_translations[-1]
+        return _validate_translation_text(tagged_translations[-1], source_text)
+    opening_tags = list(_OPEN_TRANSLATION_PATTERN.finditer(value))
+    if opening_tags:
+        final_text = value[opening_tags[-1].end():]
+        final_text = re.sub(r"</translation\s*>.*$", "", final_text, flags=re.IGNORECASE | re.DOTALL)
+        return _validate_translation_text(final_text, source_text)
     cleaned = _REASONING_BLOCK_PATTERN.sub("", value).strip()
     if _UNCLOSED_REASONING_PATTERN.search(cleaned):
         raise ValueError("translation provider response has no final translated text")
     cleaned = _FINAL_LABEL_PATTERN.sub("", cleaned).strip()
-    if not cleaned:
-        raise ValueError("translation provider response has no final translated text")
-    return cleaned
+    return _validate_translation_text(cleaned, source_text)
 
 
 @dataclass(frozen=True)
@@ -177,7 +198,7 @@ class OpenAICompatibleProvider(TranslationProvider):
             prompt = usage.get("prompt_tokens", 0)
             completion = usage.get("completion_tokens", 0)
             billable_units = prompt + completion if isinstance(prompt, (int, float)) and isinstance(completion, (int, float)) else None
-        return ProviderResult(sanitize_translation_output(translated), source_locale, model=self.model, metadata={"usage": usage, "billableUnits": billable_units, "costUnit": "tokens"})
+        return ProviderResult(sanitize_translation_output(translated, text), source_locale, model=self.model, metadata={"usage": usage, "billableUnits": billable_units, "costUnit": "tokens"})
 
 
 class AnthropicProvider(TranslationProvider):
@@ -209,7 +230,7 @@ class AnthropicProvider(TranslationProvider):
         input_tokens = usage.get("input_tokens", 0)
         output_tokens = usage.get("output_tokens", 0)
         billable_units = input_tokens + output_tokens if isinstance(input_tokens, (int, float)) and isinstance(output_tokens, (int, float)) else None
-        return ProviderResult(sanitize_translation_output(translated), source_locale, model=self.model, metadata={"usage": usage, "billableUnits": billable_units, "costUnit": "tokens"})
+        return ProviderResult(sanitize_translation_output(translated, text), source_locale, model=self.model, metadata={"usage": usage, "billableUnits": billable_units, "costUnit": "tokens"})
 
 
 class DeepLProvider(TranslationProvider):

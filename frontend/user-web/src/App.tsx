@@ -101,6 +101,8 @@ import {
   fetchWorkspaceNotice,
   fetchWorkspaceNotices,
   fetchWorkspacePreferences,
+  fetchWorkspaceProfile,
+  fetchWorkspaceProfilePhoto,
   fetchTranslationStatus,
   fetchUiContract,
   getUserToken,
@@ -187,6 +189,7 @@ import {
   type TranslationResponse,
   type UiContract as ServerUiContract,
   type WorkspaceNotice,
+  type WorkspaceProfile,
   type WorkspaceSchedule,
 } from "./api";
 import { resolveLocale, supportedLocales, supportedTimezones, type AppLocale } from "./i18n";
@@ -449,6 +452,7 @@ type MailComposeFile = {
 };
 
 type RecipientPickerTarget = "to" | "cc" | "bcc";
+type RecipientPickerSource = "contact" | "directory" | "recent";
 
 type RecipientSuggestion = {
   email: string;
@@ -753,9 +757,20 @@ function normalizeMailRecipients(value: string, companyDomain: string): string[]
   const domain = companyDomain.trim().toLowerCase();
   return value
     .split(/[;,\n]/)
-    .map((item) => item.trim().toLowerCase())
+    .map((item) => item.trim())
     .filter(Boolean)
-    .map((item) => (item.includes("@") ? item : `${item}@${domain}`));
+    .map((item) => {
+      const angleAddress = item.match(/<\s*([^<>\s]+@[^<>\s]+)\s*>$/u)?.[1];
+      if (angleAddress) return angleAddress.toLowerCase();
+      if (/^[^\s@]+@[^\s@]+$/u.test(item)) return item.toLowerCase();
+      if (/^[a-z0-9._%+-]+$/iu.test(item)) return `${item.toLowerCase()}@${domain}`;
+      return "";
+    })
+    .filter(Boolean);
+}
+
+function formatConfirmedRecipient(suggestion: RecipientSuggestion): string {
+  return `${suggestion.name.trim() || suggestion.email} <${suggestion.email}>`;
 }
 
 const MAIL_SETTINGS_TABS = ["기본환경", "서명", "메일함", "스팸", "자동분류", "자동전달", "부재중응답", "외부메일", "최근보낸메일"] as const;
@@ -1495,10 +1510,13 @@ export default function App() {
   const [translationLoading, setTranslationLoading] = useState(false);
   const [translationError, setTranslationError] = useState("");
   const [mailTranslationKind, setMailTranslationKind] = useState<"incoming" | "outgoing" | null>(null);
-  const [mailTranslationPreview, setMailTranslationPreview] = useState<{ subject: string; body: string } | null>(null);
+  const [mailTranslationPreview, setMailTranslationPreview] = useState<{ subject: string; body: string; mailId?: string } | null>(null);
   const [showTranslatedMail, setShowTranslatedMail] = useState(false);
   const translationUiVisible = translationStatus?.available === true;
   const [me, setMe] = useState<AuthUser | null>(null);
+  const [headerProfile, setHeaderProfile] = useState<WorkspaceProfile | null>(null);
+  const [headerProfilePhotoUrl, setHeaderProfilePhotoUrl] = useState("");
+  const headerProfilePhotoUrlRef = useRef("");
   const [logsCount, setLogsCount] = useState(0);
   const [notificationMode, setNotificationMode] = useState<"polling" | "streaming" | "fallback">("polling");
   const [showNotificationPanel, setShowNotificationPanel] = useState(false);
@@ -1553,8 +1571,22 @@ export default function App() {
   const [selectedForwardAttachmentIds, setSelectedForwardAttachmentIds] = useState<string[]>([]);
   const [recipientPickerTarget, setRecipientPickerTarget] = useState<RecipientPickerTarget | null>(null);
   const [recipientSuggestions, setRecipientSuggestions] = useState<RecipientSuggestion[]>([]);
+  const [recipientPickerSource, setRecipientPickerSource] = useState<RecipientPickerSource>("contact");
   const [recipientPickerQuery, setRecipientPickerQuery] = useState("");
   const selectedForwardAttachments = mailComposeSourceDetail?.attachments.filter((item) => selectedForwardAttachmentIds.includes(item.attachmentId)) ?? [];
+
+  async function refreshHeaderProfile() {
+    if (!token || !me) return;
+    const profile = await fetchWorkspaceProfile(token);
+    let nextUrl = "";
+    if (profile.photoAvailable) {
+      const blob = await fetchWorkspaceProfilePhoto(token);
+      if (blob) nextUrl = URL.createObjectURL(blob);
+    }
+    if (headerProfilePhotoUrlRef.current) URL.revokeObjectURL(headerProfilePhotoUrlRef.current);
+    headerProfilePhotoUrlRef.current = nextUrl;
+    setHeaderProfile(profile); setHeaderProfilePhotoUrl(nextUrl);
+  }
   const mailComposeNewAttachmentBytes = mailComposeFiles.reduce((sum, item) => sum + item.file.size, 0);
   const mailComposeSourceAttachmentBytes = selectedForwardAttachments.reduce((sum, item) => sum + item.sizeBytes, 0);
   const mailComposeAttachmentBytes = mailComposeNewAttachmentBytes + mailComposeSourceAttachmentBytes;
@@ -2033,12 +2065,13 @@ export default function App() {
 
   async function translateIncomingMail() {
     if (!token || !selectedMailDetail || !translationUiVisible) return;
+    const translatingMailId = selectedMailDetail.mailId;
     setTranslationLoading(true); setTranslationError(""); setMailTranslationKind("incoming");
     try {
-      const targetLocale = toTranslationLocale(mailPreferences?.translationTargetLocale || locale || "ko");
+      const targetLocale = toTranslationLocale(locale);
       const response = await requestTranslation({ texts: [{ text: selectedMailDetail.bodyText || selectedMailDetail.subject, sourceLocale: "auto", targetLocale }], includeSource: true, useCache: true }, token);
       const body = response.items[0]?.translatedText || selectedMailDetail.bodyText;
-      setMailTranslationPreview({ subject: selectedMailDetail.subject, body });
+      setMailTranslationPreview({ subject: selectedMailDetail.subject, body, mailId: translatingMailId });
       setShowTranslatedMail(true);
     } catch (error) { setTranslationError(normalizeClientError(error, "메일 번역 실패")); }
     finally { setTranslationLoading(false); }
@@ -3026,10 +3059,8 @@ export default function App() {
     }
   }
 
-  async function openRecipientPicker(target: RecipientPickerTarget) {
-    if (!token) return;
-    setRecipientPickerTarget(target);
-    setRecipientPickerQuery("");
+  async function loadRecipientSuggestions(): Promise<RecipientSuggestion[]> {
+    if (!token) return [];
     setRecipientPickerLoading(true);
     setMailError("");
     try {
@@ -3041,17 +3072,18 @@ export default function App() {
       const merged = new Map<string, RecipientSuggestion>();
       const add = (email: string, name: string, detail: string, source: RecipientSuggestion["source"]) => {
         const normalized = email.trim().toLowerCase();
-        if (!normalized || merged.has(normalized)) return;
-        merged.set(normalized, { email: normalized, name, detail, source });
+        if (!normalized) return;
+        const key = `${source}:${normalized}`;
+        if (!merged.has(key)) merged.set(key, { email: normalized, name, detail, source });
       };
-      if (recent.status === "fulfilled") {
-        recent.value.recipients.forEach((item: MailRecentRecipient) => add(item.email, item.name || item.email, item.departmentName || "최근 수신자", "recent"));
+      if (contacts.status === "fulfilled") {
+        contacts.value.items.forEach((item: WorkspaceContact) => add(item.email, item.name, item.company_name || "개인 연락처", "contact"));
       }
       if (directory.status === "fulfilled") {
         directory.value.users.forEach((item: WorkspaceDirectory["users"][number]) => add(item.email, item.name, `${item.department_name} · ${item.role_name}`, "directory"));
       }
-      if (contacts.status === "fulfilled") {
-        contacts.value.items.forEach((item: WorkspaceContact) => add(item.email, item.name, item.company_name || "개인 연락처", "contact"));
+      if (recent.status === "fulfilled") {
+        recent.value.recipients.forEach((item: MailRecentRecipient) => add(item.email, item.name || item.email, item.departmentName || "최근 수신자", "recent"));
       }
       const failedSourceCount = [recent, directory, contacts].filter((result) => result.status === "rejected").length;
       if (failedSourceCount === 3) {
@@ -3060,20 +3092,48 @@ export default function App() {
       if (failedSourceCount > 0) {
         setMessage("일부 수신자 원본을 불러오지 못해 확인 가능한 목록만 표시합니다.");
       }
-      setRecipientSuggestions([...merged.values()]);
+      const suggestions = [...merged.values()];
+      setRecipientSuggestions(suggestions);
+      return suggestions;
     } catch (error) {
       setMailError(normalizeClientError(error, "수신자 목록 조회 실패"));
-      setRecipientPickerTarget(null);
+      return [];
     } finally {
       setRecipientPickerLoading(false);
     }
   }
 
+  async function openRecipientPicker(target: RecipientPickerTarget, query = "", source: RecipientPickerSource = "contact") {
+    setRecipientPickerTarget(target);
+    setRecipientPickerSource(source);
+    setRecipientPickerQuery(query);
+    if (!recipientSuggestions.length) await loadRecipientSuggestions();
+  }
+
+  async function confirmRecipientInput(target: RecipientPickerTarget) {
+    const raw = mailComposeForm[target].trim();
+    if (!raw || /[;,\n]/u.test(raw) || /^[^\s@]+@[^\s@]+$/u.test(raw) || /<\s*[^<>\s]+@[^<>\s]+\s*>$/u.test(raw)) return;
+    const suggestions = recipientSuggestions.length ? recipientSuggestions : await loadRecipientSuggestions();
+    const matches = suggestions.filter((item) => item.source === "contact" && item.name.trim().localeCompare(raw, undefined, { sensitivity: "accent" }) === 0 && item.email.trim());
+    if (matches.length === 1) {
+      setMailComposeForm((current) => ({ ...current, [target]: formatConfirmedRecipient(matches[0]) }));
+      setMailError("");
+      return;
+    }
+    if (matches.length > 1) {
+      await openRecipientPicker(target, raw, "contact");
+      setMailError("동일한 이름의 주소록 항목이 여러 개입니다. 정확한 이메일을 선택해 주세요.");
+      return;
+    }
+    setMailError("주소록에서 이메일이 등록된 정확한 이름을 찾지 못했습니다.");
+  }
+
   function addRecipientSuggestion(suggestion: RecipientSuggestion) {
     if (!recipientPickerTarget) return;
     setMailComposeForm((current) => {
-      const existing = normalizeMailRecipients(current[recipientPickerTarget], uiContract.company.domain);
-      const next = existing.includes(suggestion.email) ? existing : [...existing, suggestion.email];
+      const existingTokens = current[recipientPickerTarget].split(/[;,\n]/u).map((item) => item.trim()).filter(Boolean);
+      const existingEmails = normalizeMailRecipients(current[recipientPickerTarget], uiContract.company.domain);
+      const next = existingEmails.includes(suggestion.email) ? existingTokens : [...existingTokens, formatConfirmedRecipient(suggestion)];
       return { ...current, [recipientPickerTarget]: next.join(", ") };
     });
     setRecipientPickerTarget(null);
@@ -3594,6 +3654,9 @@ export default function App() {
     if (!token) {
       appliedPreferenceTokenRef.current = "";
       setMe(null);
+      setHeaderProfile(null);
+      if (headerProfilePhotoUrlRef.current) URL.revokeObjectURL(headerProfilePhotoUrlRef.current);
+      headerProfilePhotoUrlRef.current = ""; setHeaderProfilePhotoUrl("");
       setTranslationStatus(null);
       setTranslationResult([]);
       setTranslationError("");
@@ -3641,6 +3704,19 @@ export default function App() {
       })
       .catch(() => { appliedPreferenceTokenRef.current = ""; });
   }, [token, me?.userId, me?.mustChangePassword]);
+
+  useEffect(() => {
+    if (!token || !me || me.mustChangePassword) return;
+    void refreshHeaderProfile().catch(() => {
+      setHeaderProfile(null);
+      if (headerProfilePhotoUrlRef.current) URL.revokeObjectURL(headerProfilePhotoUrlRef.current);
+      headerProfilePhotoUrlRef.current = ""; setHeaderProfilePhotoUrl("");
+    });
+  }, [token, me?.userId, me?.mustChangePassword]);
+
+  useEffect(() => () => {
+    if (headerProfilePhotoUrlRef.current) URL.revokeObjectURL(headerProfilePhotoUrlRef.current);
+  }, []);
 
   async function handleLogin(event: FormEvent) {
     event.preventDefault();
@@ -4566,6 +4642,12 @@ export default function App() {
   useEffect(() => {
     setShowRemoteMailImages(false);
   }, [selectedMailDetail?.mailId]);
+  useEffect(() => {
+    setShowTranslatedMail(false);
+    setTranslationError("");
+    setMailTranslationPreview((current) => current?.mailId ? null : current);
+    setMailTranslationKind((current) => current === "incoming" ? null : current);
+  }, [selectedMailDetail?.mailId]);
 
   function handleHomeSurfaceCardClick(surfaceCardId: string) {
     if (surfaceCardId === "mail") {
@@ -4942,6 +5024,7 @@ export default function App() {
               saveLocale(resolveLocale(nextLocale));
               saveTimezone(nextTimezone);
             }}
+            onProfileSaved={() => void refreshHeaderProfile()}
             onComposeMail={openAddressBookMailCompose}
             onOpenWorkspaceSettings={onOpenWorkspaceSettings}
             calendarSettingsRequestKey={calendarSettingsRequestKey}
@@ -5245,15 +5328,15 @@ export default function App() {
                   <div className="user-mail-compose-recipients">
                     <label>
                       <span>받는 사람</span>
-                      <div><input ref={mailComposeToRef} aria-label="mail-compose-to" disabled={recipientInputLocked} value={mailComposeForm.to} onChange={(event) => setMailComposeForm((current) => ({ ...current, to: event.target.value }))} placeholder={recipientInputMode === "name_only" ? "이름 또는 계정" : `admin@${uiContract.company.domain}`} /><button type="button" title="조직·연락처에서 받는 사람 선택" onClick={() => void openRecipientPicker("to")}>선택</button></div>
+                      <div><input ref={mailComposeToRef} aria-label="mail-compose-to" disabled={recipientInputLocked} value={mailComposeForm.to} onChange={(event) => setMailComposeForm((current) => ({ ...current, to: event.target.value }))} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void confirmRecipientInput("to"); } }} placeholder={recipientInputMode === "name_only" ? "이름 또는 계정" : `admin@${uiContract.company.domain}`} /><button type="button" title="주소록에서 받는 사람 선택" onClick={() => void openRecipientPicker("to")}>선택</button></div>
                     </label>
                     <label>
                       <span>참조</span>
-                      <div><input aria-label="mail-compose-cc" disabled={recipientInputLocked} value={mailComposeForm.cc} onChange={(event) => setMailComposeForm((current) => ({ ...current, cc: event.target.value }))} placeholder={recipientInputMode === "name_only" ? "이름 또는 계정" : "참조 이메일"} /><button type="button" title="조직·연락처에서 참조 선택" onClick={() => void openRecipientPicker("cc")}>선택</button></div>
+                      <div><input aria-label="mail-compose-cc" disabled={recipientInputLocked} value={mailComposeForm.cc} onChange={(event) => setMailComposeForm((current) => ({ ...current, cc: event.target.value }))} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void confirmRecipientInput("cc"); } }} placeholder={recipientInputMode === "name_only" ? "이름 또는 계정" : "참조 이메일"} /><button type="button" title="주소록에서 참조 선택" onClick={() => void openRecipientPicker("cc")}>선택</button></div>
                     </label>
                     <label>
                       <span>숨은참조</span>
-                      <div><input aria-label="mail-compose-bcc" disabled={recipientInputLocked} value={mailComposeForm.bcc} onChange={(event) => setMailComposeForm((current) => ({ ...current, bcc: event.target.value }))} placeholder={recipientInputMode === "name_only" ? "이름 또는 계정" : "숨은참조 이메일"} /><button type="button" title="조직·연락처에서 숨은참조 선택" onClick={() => void openRecipientPicker("bcc")}>선택</button></div>
+                      <div><input aria-label="mail-compose-bcc" disabled={recipientInputLocked} value={mailComposeForm.bcc} onChange={(event) => setMailComposeForm((current) => ({ ...current, bcc: event.target.value }))} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void confirmRecipientInput("bcc"); } }} placeholder={recipientInputMode === "name_only" ? "이름 또는 계정" : "숨은참조 이메일"} /><button type="button" title="주소록에서 숨은참조 선택" onClick={() => void openRecipientPicker("bcc")}>선택</button></div>
                     </label>
                     <small className="user-mail-compose-recipient-hint" aria-live="polite">{recipientInputHint}</small>
                   </div>
@@ -5311,9 +5394,10 @@ export default function App() {
                     <div className="user-mail-recipient-picker-backdrop">
                       <section role="dialog" aria-modal="true" aria-label="메일 수신자 선택" className="user-mail-recipient-picker" onKeyDown={(event) => { if (event.key === "Escape") setRecipientPickerTarget(null); }}>
                         <header><strong>{recipientPickerTarget === "to" ? "받는 사람" : recipientPickerTarget === "cc" ? "참조" : "숨은참조"} 선택</strong><button type="button" onClick={() => setRecipientPickerTarget(null)}>닫기</button></header>
+                        <nav className="user-mail-recipient-picker-tabs" aria-label="수신자 원본"><button type="button" aria-pressed={recipientPickerSource === "contact"} onClick={() => setRecipientPickerSource("contact")}>주소록</button><button type="button" aria-pressed={recipientPickerSource === "directory"} onClick={() => setRecipientPickerSource("directory")}>조직도</button><button type="button" aria-pressed={recipientPickerSource === "recent"} onClick={() => setRecipientPickerSource("recent")}>최근 수신자</button></nav>
                         <input autoFocus aria-label="수신자 검색" value={recipientPickerQuery} onChange={(event) => setRecipientPickerQuery(event.target.value)} placeholder="이름, 부서, 이메일 검색" />
                         <div className="user-mail-recipient-picker-list">
-                          {recipientPickerLoading ? <span role="status">수신자를 불러오는 중입니다.</span> : recipientSuggestions.filter((item) => `${item.name} ${item.email} ${item.detail}`.toLowerCase().includes(recipientPickerQuery.trim().toLowerCase())).map((item) => <button type="button" key={item.email} onClick={() => addRecipientSuggestion(item)}><strong>{item.name}</strong><span>{item.email}</span><small>{item.detail} · {item.source === "recent" ? "최근" : item.source === "directory" ? "조직" : "연락처"}</small></button>)}
+                          {recipientPickerLoading ? <span role="status">수신자를 불러오는 중입니다.</span> : recipientSuggestions.filter((item) => item.source === recipientPickerSource && `${item.name} ${item.email} ${item.detail}`.toLowerCase().includes(recipientPickerQuery.trim().toLowerCase())).map((item) => <button type="button" key={`${item.source}:${item.email}`} onClick={() => addRecipientSuggestion(item)}><strong>{item.name}</strong><span>{item.email}</span><small>{item.detail}</small></button>)}
                         </div>
                       </section>
                     </div>
@@ -5344,7 +5428,7 @@ export default function App() {
                       </dl>
                       <div className="user-mail-detail-actions">
                         {translationUiVisible && isInboxDetail ? <button type="button" disabled={translationLoading} onClick={() => void translateIncomingMail()}>메일 번역</button> : null}
-                        {translationUiVisible && mailTranslationKind === "incoming" && mailTranslationPreview ? <button type="button" onClick={() => setShowTranslatedMail((current) => !current)}>{showTranslatedMail ? "원문 보기" : "번역문 보기"}</button> : null}
+                        {translationUiVisible && mailTranslationKind === "incoming" && mailTranslationPreview?.mailId === selectedMailDetail.mailId ? <button type="button" onClick={() => setShowTranslatedMail((current) => !current)}>{showTranslatedMail ? "원문 보기" : "번역문 보기"}</button> : null}
                         {activeMailFolder === "scheduled" ? <><button type="button" onClick={editScheduledMail}>예약 수정</button><button type="button" onClick={() => void runScheduledAction("send")}>지금 발송</button><button type="button" onClick={() => void runScheduledAction("cancel")}>예약 취소</button></> : null}
                         {activeMailFolder === "sent" && selectedMailDetail.externalDeliveries.some((item) => ["failed", "blocked"].includes(item.status)) ? <button type="button" onClick={() => void runScheduledAction("retry")}>재시도</button> : null}
                         {canReplyToSelectedMail ? <button type="button" onClick={() => openMailComposeFromDetail("reply")}>답장</button> : null}
@@ -5375,7 +5459,7 @@ export default function App() {
                           ))}</ul>
                         </section>
                       ) : null}
-                      {showTranslatedMail && mailTranslationKind === "incoming" && mailTranslationPreview ? (
+                      {showTranslatedMail && mailTranslationKind === "incoming" && mailTranslationPreview?.mailId === selectedMailDetail.mailId ? (
                         <div className="user-mail-detail-body" data-testid="translated-mail-body">{mailTranslationPreview.body}</div>
                       ) : selectedMailDetail.bodyHtml ? (
                         <section className="user-mail-detail-rich-body">
@@ -5685,7 +5769,7 @@ export default function App() {
                 {approvalDetailError ? <div className="ui032-state is-error" role="alert">{approvalDetailError}<button type="button" onClick={retryApprovalDetail}>상세 다시 시도</button></div> : null}
                 {!approvalDetailLoading && !approvalDetailError && selectedDocument ? <>
                   <header className="ui032-detail__header"><div><span>선택 문서</span><h2>{selectedDocument.title}</h2><p>기안 {selectedDocument.creatorUserName} · 작성 {formatDateLabel(selectedDocument.createdAt)} · 상신 {selectedDocument.submittedAt ? formatDateLabel(selectedDocument.submittedAt) : "-"} · 갱신 {formatDateLabel(selectedDocument.updatedAt)}</p></div><span className={`ui032-status is-${selectedDocument.status}`}>{approvalStatusLabel(selectedDocument.status)}</span></header>
-                  <section className="ui032-detail__content"><h3>본문</h3><p>{selectedDocument.content}</p></section>
+                  <section className="ui032-detail__content" data-testid="approval-document-body"><h3>본문</h3><p>{selectedDocument.content}</p></section>
                   <div className="ui032-detail-links"><button type="button" onClick={() => setApprovalLineModalOpen(true)}>결재선 보기</button><button type="button" onClick={() => setApprovalHistoryModalOpen(true)}>처리 이력 보기</button></div>
                   <section className="ui032-attachments"><h3>첨부</h3>{approvalAttachmentError ? <div className="ui032-attachment-error" role="alert">{approvalAttachmentError}</div> : null}{selectedDocument.attachments.length ? selectedDocument.attachments.map((attachment) => <article key={attachment.attachmentId}>{attachment.previewUrl && approvalAttachmentPreviewUrls[attachment.attachmentId] ? <img className={`ui035-attachment-preview is-${approvalPreferences?.attachmentImageDisplay ?? "filename"}`} src={approvalAttachmentPreviewUrls[attachment.attachmentId]} alt={attachment.fileName} /> : null}<div><strong>{attachment.fileName}</strong><span>{attachment.contentType} · {formatFileSize(attachment.sizeBytes)} · {formatDateLabel(attachment.createdAt)}</span></div><button type="button" onClick={() => void handleApprovalAttachmentDownload(attachment.attachmentId, attachment.fileName)}>다운로드</button></article>) : <div className="ui032-empty">첨부 파일이 없습니다.</div>}</section>
                   <div className="ui032-actions" aria-label="결재 처리 도구">
@@ -6233,10 +6317,13 @@ export default function App() {
                 ) : null}
                 <button type="button" onClick={refreshUiContract} style={{ height: 46, borderRadius: 14, border: "1px solid #d7e0e8", background: "#fff", padding: "0 14px", fontWeight: 700 }}>설정 반영</button>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 46, padding: "0 12px", borderRadius: 14, border: "1px solid #d7e0e8", background: "#fff" }}>
-                  <div style={{ display: "grid", gap: 2, lineHeight: 1.1 }}>
-                    <strong>{me.userName}</strong>
-                    <span style={{ color: "#64748b", fontSize: 11 }}>{me.roleName || "역할 미지정"} / {me.userEmail}</span>
-                  </div>
+                  <button type="button" className="user-profile-entry" aria-label="내 프로필 수정" onClick={() => setPortalMenu("settings")}>
+                    <span className="user-profile-entry__avatar">{headerProfilePhotoUrl ? <img src={headerProfilePhotoUrl} alt="" /> : <span aria-hidden="true">{(headerProfile?.name ?? me.userName).trim().slice(0, 1)}</span>}</span>
+                    <span style={{ display: "grid", gap: 2, lineHeight: 1.1 }}>
+                      <strong>{headerProfile?.name ?? me.userName}</strong>
+                      <span style={{ color: "#64748b", fontSize: 11 }}>{me.roleName || "역할 미지정"} / {me.userEmail}</span>
+                    </span>
+                  </button>
                   <button
                     type="button"
                     onClick={() => {

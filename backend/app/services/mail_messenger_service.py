@@ -2287,6 +2287,7 @@ class MailMessengerService:
             cursor.execute(
                 f"""
                 SELECT msg.id AS message_id,msg.room_id,msg.sender_user_id,u.name AS sender_user_name,
+                       COALESCE(sender_pref.locale,'ko-KR') AS sender_locale,
                        msg.message_type,msg.body,msg.attachment_meta,msg.created_at,msg.retention_expires_at,
                        COALESCE(reads.read_by,'[]'::jsonb) AS read_by,
                        COALESCE(members.recipient_count,0) AS recipient_count,
@@ -2294,6 +2295,8 @@ class MailMessengerService:
                        GREATEST(COALESCE(members.recipient_count,0)-COALESCE(reads.read_count,0),0) AS unread_count,
                        COALESCE(files.attachments,'[]'::jsonb) AS attachments
                 FROM messenger_messages msg JOIN users u ON u.id=msg.sender_user_id
+                LEFT JOIN user_workspace_preferences sender_pref
+                  ON sender_pref.owner_user_id=msg.sender_user_id AND sender_pref.company_id=u.company_id
                 LEFT JOIN LATERAL (
                     SELECT jsonb_agg(reads.user_id ORDER BY reads.read_at) FILTER (WHERE reads.user_id<>msg.sender_user_id) AS read_by,
                            COUNT(*) FILTER (WHERE reads.user_id<>msg.sender_user_id) AS read_count
@@ -3174,6 +3177,7 @@ class MailMessengerService:
             roomId=row["room_id"],
             senderUserId=row["sender_user_id"],
             senderUserName=row["sender_user_name"],
+            senderLocale=row.get("sender_locale") or "ko-KR",
             messageType=row["message_type"],
             body=row["body"],
             attachmentMeta=list(attachment_meta or []),

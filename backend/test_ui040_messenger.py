@@ -457,6 +457,16 @@ class Ui040MessengerTests(unittest.TestCase):
             self.assertIn(token, section)
         self.assertNotIn("storageKey", section)
 
+    def test_message_list_exposes_sender_configured_locale(self) -> None:
+        source = (ROOT / "app" / "services" / "mail_messenger_service.py").read_text(encoding="utf-8")
+        message_list_sql = source[source.index("def list_messages"):source.index("def stage_messenger_attachment")]
+        self.assertIn("user_workspace_preferences", message_list_sql)
+        self.assertIn("sender_locale", message_list_sql)
+        self.assertIn("senderLocale", source[source.index("def _to_message_view"):])
+        schema = (ROOT / "app" / "schemas" / "mail_messenger.py").read_text(encoding="utf-8")
+        message_schema = schema[schema.index("class MessengerMessageView"):schema.index("class MessengerMessageListResponse")]
+        self.assertIn("senderLocale", message_schema)
+
 
 if __name__ == "__main__":
     unittest.main()

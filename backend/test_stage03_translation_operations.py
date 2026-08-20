@@ -134,6 +134,29 @@ class Stage03ProviderContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no final translated text"):
             sanitize_translation_output("<think>unfinished private reasoning\nOutput draft only")
 
+    def test_unclosed_translation_tag_returns_only_its_final_text(self) -> None:
+        from app.services.translation_provider import sanitize_translation_output
+
+        source = "We believe that computing a ranked list of existing questions can help the user until another user provides an exact answer."
+        raw = "` tags.)*\nFinal string: `<translation>기존 질문의 순위 목록은 정확한 답변이 제공되기 전까지 사용자에게 유용할 수 있습니다."
+
+        self.assertEqual(
+            sanitize_translation_output(raw, source),
+            "기존 질문의 순위 목록은 정확한 답변이 제공되기 전까지 사용자에게 유용할 수 있습니다.",
+        )
+
+    def test_long_source_rejects_tiny_format_residue(self) -> None:
+        from app.services.translation_provider import sanitize_translation_output
+
+        source = "This is a deliberately long source message containing enough meaningful text to prove that a two-character provider response is not a valid translation result."
+        with self.assertRaisesRegex(ValueError, "no final translated text"):
+            sanitize_translation_output("` and `", source)
+
+    def test_short_source_still_allows_short_translation(self) -> None:
+        from app.services.translation_provider import sanitize_translation_output
+
+        self.assertEqual(sanitize_translation_output("and", "그리고"), "and")
+
     def test_deepl_provider_uses_professional_translation_contract(self) -> None:
         from app.services.translation_provider import DeepLProvider
 

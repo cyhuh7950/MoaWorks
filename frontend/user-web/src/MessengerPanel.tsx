@@ -51,17 +51,15 @@ function normalizeTranslationText(value: string) {
   return value.normalize("NFKC").replace(/\s+/gu, " ").trim();
 }
 
-function messageNeedsTranslation(value: string, targetLocale: RoomLanguage) {
-  const normalized = normalizeTranslationText(value);
-  if (!normalized) return false;
-  if (targetLocale === "ko") {
-    const hangulCount = (normalized.match(/[\u3131-\u318e\uac00-\ud7a3]/gu) || []).length;
-    const latinCount = (normalized.match(/[a-z]/giu) || []).length;
-    if (hangulCount > 0 && hangulCount >= latinCount) return false;
-  }
-  if (targetLocale === "ja" && /[\u3040-\u30ff]/u.test(normalized)) return false;
-  if (targetLocale === "zh-cn" && /[\u3400-\u9fff]/u.test(normalized) && !/[\u3040-\u30ff]/u.test(normalized)) return false;
-  return true;
+function normalizeLanguageCode(locale: string): RoomLanguage {
+  const normalized = locale.trim().replace(/_/gu, "-").toLowerCase();
+  if (normalized === "zh" || normalized.startsWith("zh-")) return "zh-cn";
+  const base = normalized.split("-")[0];
+  return ROOM_LANGUAGES.some((item) => item.value === base) ? base as RoomLanguage : "ko";
+}
+
+function messageNeedsTranslation(senderLocale: string, targetLocale: RoomLanguage) {
+  return normalizeLanguageCode(senderLocale) !== normalizeLanguageCode(targetLocale);
 }
 function errorText(error: unknown) {
   return error instanceof ApiRequestError ? error.message : error instanceof Error ? error.message : "요청 처리에 실패했습니다.";
@@ -116,7 +114,7 @@ export function MessengerPanel({ token }: { token: string }) {
 
   const loadMessageTranslations = useCallback(async (locale: RoomLanguage, items: MessengerMessage[], generation: number) => {
     const messageIds = items.filter((item) => item.body.trim()).map((item) => item.messageId);
-    const candidates = items.filter((item) => messageNeedsTranslation(item.body, locale));
+    const candidates = items.filter((item) => item.body.trim() && messageNeedsTranslation(item.senderLocale, locale));
     const replaceTranslations = (translatedByMessage: Record<string, string>) => {
       if (generation !== translationGenerationRef.current) return;
       setMessageTranslations((current) => {
@@ -141,7 +139,7 @@ export function MessengerPanel({ token }: { token: string }) {
       for (let offset = 0; offset < candidates.length; offset += 64) {
         const batch = candidates.slice(offset, offset + 64);
         const response = await requestTranslation({
-          texts: batch.map((item) => ({ text: item.body, sourceLocale: "auto", targetLocale: locale })),
+          texts: batch.map((item) => ({ text: item.body, sourceLocale: normalizeLanguageCode(item.senderLocale), targetLocale: locale })),
           includeSource: true,
           useCache: true,
         }, token);
