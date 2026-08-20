@@ -40,9 +40,11 @@ requireText(app, 'className="user-mail-toolbar"', "compact 목록 toolbar가 없
 requireText(app, 'className="user-mail-row"', "메일 목록 행 구조가 없습니다.");
 requireText(app, 'className="user-mail-row__status"', "메일 상태 표시 열이 없습니다.");
 requireText(app, 'className="user-mail-row__sender"', "보낸 사람 열이 없습니다.");
-requireText(app, 'className="user-mail-row__content"', "제목과 미리보기 통합 열이 없습니다.");
+requireText(app, 'className="user-mail-row__content"', "제목 열이 없습니다.");
 requireText(app, 'className="user-mail-row__date"', "날짜 열이 없습니다.");
-requireText(app, '<strong className="user-mail-row__subject">{item.subject}</strong><span className="user-mail-row__preview">{item.preview}</span>', "제목과 미리보기가 한 줄에 배치되지 않았습니다.");
+requireText(app, '<strong className="user-mail-row__subject">{item.subject}</strong>', "제목 열이 없습니다.");
+if (app.includes('className="user-mail-row__preview"')) failures.push("메일 목록에 본문 미리보기가 남아 있습니다.");
+if (app.includes("목록 본문 미리보기")) failures.push("제거 대상인 목록 본문 미리보기 설정이 남아 있습니다.");
 
 requireText(css, ".user-mail-toolbar", "메일 목록 toolbar CSS가 없습니다.");
 requireText(css, ".user-mail-row", "메일 목록 행 CSS가 없습니다.");

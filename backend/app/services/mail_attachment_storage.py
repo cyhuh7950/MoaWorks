@@ -106,9 +106,20 @@ class MailAttachmentStorage:
         self._metadata_path(upload_id).write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
 
     def stored_path(self, storage_key: str) -> Path:
-        upload_id = self._upload_id_from_storage_key(storage_key)
-        path = self._data_path(upload_id).resolve()
-        if self.upload_root.resolve() not in path.parents or not path.is_file():
+        upload_match = re.fullmatch(r"mail/uploads/([0-9a-f]{32})\.bin", storage_key or "")
+        inbound_match = re.fullmatch(
+            r"mail/inbound/([0-9a-f]{2})/([0-9a-f]{64})/attachment-([0-9]+)\.bin",
+            storage_key or "",
+        )
+        if upload_match:
+            path = self._data_path(upload_match.group(1)).resolve()
+            allowed_root = self.upload_root.resolve()
+        elif inbound_match and inbound_match.group(1) == inbound_match.group(2)[:2]:
+            path = (self.root / storage_key).resolve()
+            allowed_root = (self.root / "mail" / "inbound").resolve()
+        else:
+            raise ValueError("첨부 저장 식별자가 올바르지 않습니다.")
+        if allowed_root not in path.parents or not path.is_file():
             raise ValueError("첨부 파일을 찾을 수 없습니다.")
         return path
 

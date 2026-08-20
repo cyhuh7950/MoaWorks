@@ -9,12 +9,12 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class MailBasicPreferencesBase(BaseModel):
-    senderDisplayMode: Literal["name", "name_email"] = "name_email"
+    senderDisplayMode: Literal["name", "name_email"] = "name"
     blockRemoteImages: bool = True
     disableRiskyTags: bool = True
     showRouteCountry: bool = False
     includeSpamTrashInSearch: bool = False
-    showListPreview: bool = True
+    showListPreview: bool = False
     recipientInputMode: Literal["autocomplete", "name_only", "search"] = "autocomplete"
     confirmBeforeSend: bool = True
     saveSentCopy: bool = True

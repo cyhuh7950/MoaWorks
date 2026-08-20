@@ -1429,6 +1429,34 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.user-mail-detail-rich-body {
+  position: relative;
+  min-height: 420px;
+  border-top: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+  background: #fff;
+}
+
+.user-mail-detail-rich-body > button {
+  position: sticky;
+  z-index: 1;
+  top: 8px;
+  margin: 8px;
+  min-height: 32px;
+  border: 1px solid #0f766e;
+  border-radius: 8px;
+  background: #fff;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.user-mail-detail-rich-body iframe {
+  width: 100%;
+  min-height: 520px;
+  border: 0;
+  background: #fff;
+}
 .user-mail-detail-attachments {
   display: grid;
   gap: 6px;

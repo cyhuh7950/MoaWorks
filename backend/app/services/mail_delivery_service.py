@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 from email.headerregistry import Address
+from pathlib import Path
 import re
 import smtplib
 import ssl
@@ -95,6 +96,21 @@ class SmtpRelayAdapter:
         message.set_content(envelope["body_text"], charset=charset)
         if envelope.get("body_html"):
             message.add_alternative(envelope["body_html"], subtype="html", charset=charset)
+        for attachment in envelope.get("attachments") or []:
+            path = Path(str(attachment.get("path") or ""))
+            if not path.is_file():
+                raise RelayDeliveryError("첨부 파일을 찾을 수 없습니다.", transient=False)
+            content_type = str(attachment.get("content_type") or "application/octet-stream")
+            maintype, separator, subtype = content_type.partition("/")
+            if not separator or not maintype or not subtype:
+                maintype, subtype = "application", "octet-stream"
+            file_name = Path(str(attachment.get("file_name") or "attachment.bin").replace("\\", "/")).name[:255]
+            message.add_attachment(
+                path.read_bytes(),
+                maintype=maintype,
+                subtype=subtype,
+                filename=file_name,
+            )
         return message
 
     def send(self, envelope: dict, provider: dict) -> str:

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from email.policy import SMTP
 from email.utils import make_msgid
+from pathlib import Path
 import re
 import smtplib
 import ssl
@@ -68,6 +69,13 @@ class DkimPySigner:
 
 
 @dataclass(frozen=True, slots=True)
+class OutboundAttachment:
+    file_name: str
+    content_type: str
+    content: bytes
+
+
+@dataclass(frozen=True, slots=True)
 class OutboundMessage:
     sender_email: str
     recipient_email: str
@@ -76,6 +84,7 @@ class OutboundMessage:
     body_html: str | None
     message_id: str
     envelope_from: str | None = None
+    attachments: tuple[OutboundAttachment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,6 +251,18 @@ class MailProviderRoutingAdapter:
         envelope_from = sender_email
         if provider_type != "oci_email_delivery" and queue_id:
             envelope_from = f"bounce+{queue_id}@{bounce_domain}"
+        attachments: list[OutboundAttachment] = []
+        for item in envelope.get("attachments") or []:
+            path = Path(str(item.get("path") or ""))
+            if not path.is_file():
+                raise MailTransportFailure("첨부 파일을 찾을 수 없습니다.", transient=False)
+            attachments.append(
+                OutboundAttachment(
+                    file_name=Path(str(item.get("file_name") or "attachment.bin").replace("\\", "/")).name[:255],
+                    content_type=str(item.get("content_type") or "application/octet-stream"),
+                    content=path.read_bytes(),
+                )
+            )
         message = OutboundMessage(
             sender_email=sender_email,
             recipient_email=recipient_email,
@@ -250,6 +271,7 @@ class MailProviderRoutingAdapter:
             body_html=envelope.get("body_html"),
             message_id=str(envelope.get("message_id") or make_msgid(domain=sender_domain)),
             envelope_from=envelope_from,
+            attachments=tuple(attachments),
         )
 
         if provider_type == "self_hosted":
@@ -315,4 +337,14 @@ def _build_message(source: OutboundMessage) -> EmailMessage:
     message.set_content(source.body_text or "")
     if source.body_html:
         message.add_alternative(source.body_html, subtype="html")
+    for attachment in source.attachments:
+        maintype, separator, subtype = attachment.content_type.partition("/")
+        if not separator or not maintype or not subtype:
+            maintype, subtype = "application", "octet-stream"
+        message.add_attachment(
+            attachment.content,
+            maintype=maintype,
+            subtype=subtype,
+            filename=attachment.file_name,
+        )
     return message

@@ -669,8 +669,8 @@ class MailMessengerService:
                 self._ensure_basic_preferences(cursor, actor)
                 cursor.execute(
                     """UPDATE user_mail_basic_preferences SET
-                    sender_display_mode = 'name_email', block_remote_images = TRUE, disable_risky_tags = TRUE,
-                    show_route_country = FALSE, include_spam_trash_in_search = FALSE, show_list_preview = TRUE,
+                    sender_display_mode = 'name', block_remote_images = TRUE, disable_risky_tags = TRUE,
+                    show_route_country = FALSE, include_spam_trash_in_search = FALSE, show_list_preview = FALSE,
                     recipient_input_mode = 'autocomplete', confirm_before_send = TRUE, save_sent_copy = TRUE,
                     read_receipt_enabled = TRUE, editor_mode = 'html', compose_mode = 'normal',
                     message_encoding = 'utf-8', draft_reminder_enabled = FALSE, sender_display_name = '',

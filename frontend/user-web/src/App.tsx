@@ -561,6 +561,79 @@ function buildMailQuotedBody(detail: MailDetail): string {
   ].join("\n");
 }
 
+function escapeMailHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function sanitizeMailHtml(html: string, allowRemoteImages: boolean): string {
+  const documentNode = new DOMParser().parseFromString(html, "text/html");
+  documentNode.querySelectorAll("script,iframe,object,embed,form,input,button,meta,link,base,video,audio,source,svg,math").forEach((node) => node.remove());
+  documentNode.querySelectorAll("style").forEach((styleElement) => {
+    const css = styleElement.textContent || "";
+    if (/expression\s*\(|javascript:|behavior\s*:|-moz-binding|@import/i.test(css)) {
+      styleElement.remove();
+    } else if (!allowRemoteImages) {
+      styleElement.textContent = css.replace(/url\s*\([^)]*\)/gi, "none");
+    }
+  });
+  documentNode.querySelectorAll("*").forEach((element) => {
+    for (const attribute of [...element.attributes]) {
+      const name = attribute.name.toLowerCase();
+      if (name.startsWith("on") || name === "srcdoc" || name === "srcset") {
+        element.removeAttribute(attribute.name);
+      } else if (name === "style") {
+        const style = attribute.value;
+        if (/expression\s*\(|javascript:|behavior\s*:|-moz-binding/i.test(style)) {
+          element.removeAttribute("style");
+        } else if (!allowRemoteImages) {
+          element.setAttribute("style", style.replace(/url\s*\([^)]*\)/gi, "none"));
+        }
+      }
+    }
+    if (element instanceof HTMLAnchorElement) {
+      const href = element.getAttribute("href") || "";
+      if (!/^(https?:|mailto:)/i.test(href)) element.removeAttribute("href");
+      element.target = "_blank";
+      element.rel = "noopener noreferrer";
+    }
+    if (element instanceof HTMLImageElement) {
+      const source = element.getAttribute("src") || "";
+      if (!/^(https?:|data:image\/(?:png|gif|jpeg|webp);base64,)/i.test(source)) {
+        element.removeAttribute("src");
+      } else if (!allowRemoteImages && /^https?:/i.test(source)) {
+        element.dataset.remoteSrc = source;
+        element.removeAttribute("src");
+        element.alt = element.alt ? "[원격 이미지 차단됨] " + element.alt : "[원격 이미지 차단됨]";
+      }
+    }
+  });
+  return '<!doctype html><html><head><meta charset="utf-8"><style>' +
+    'body{margin:0;padding:12px;color:#0f172a;background:#fff;font:12px/1.6 Arial,sans-serif;overflow-wrap:anywhere}' +
+    'img{max-width:100%;height:auto}table{max-width:100%;border-collapse:collapse}a{color:#0f766e}' +
+    '</style></head><body>' + documentNode.body.innerHTML + '</body></html>';
+}
+
+function buildForwardMailHtml(detail: MailDetail, bodyText: string): string {
+  const note = bodyText.split("\n--- 원문 ---", 1)[0].trim();
+  const visibleRecipients = detail.recipients.filter((item) => item.recipientKind !== "bcc");
+  const to = visibleRecipients.filter((item) => item.recipientKind === "to").map((item) => item.recipientEmail).join(", ");
+  const cc = visibleRecipients.filter((item) => item.recipientKind === "cc").map((item) => item.recipientEmail).join(", ");
+  const original = detail.bodyHtml
+    ? sanitizeMailHtml(detail.bodyHtml, true).replace(/^.*?<body>/s, "").replace(/<\/body>.*$/s, "")
+    : "<pre>" + escapeMailHtml(detail.bodyText) + "</pre>";
+  return [
+    note ? "<p>" + escapeMailHtml(note).replace(/\n/g, "<br>") + "</p>" : "",
+    "<hr>",
+    "<p><strong>원문</strong><br>일시: " + escapeMailHtml(formatMailDate(detail.sentAt || detail.createdAt)) + "<br>",
+    "보낸 사람: " + escapeMailHtml(detail.senderEmail) + "<br>받는 사람: " + escapeMailHtml(to || "-") + "<br>",
+    "참조: " + escapeMailHtml(cc || "-") + "<br>제목: " + escapeMailHtml(detail.subject) + "</p>",
+    "<blockquote>" + original + "</blockquote>",
+  ].join("");
+}
 function formatFileSize(value: number) {
   if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
   if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
@@ -723,7 +796,6 @@ function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChan
         {toggle("disableRiskyTags", "위험 태그 비활성화", "향후 HTML 표시에서도 위험 요소를 차단합니다.")}
         {toggle("showRouteCountry", "전달 경로 국가 표시")}
         {toggle("includeSpamTrashInSearch", "검색에 스팸·휴지통 포함")}
-        {toggle("showListPreview", "목록 본문 미리보기")}
       </fieldset>
       <fieldset><legend>메일 쓰기 설정</legend>
         <label><span>수신자 입력 방식</span><select value={value.recipientInputMode} onChange={(event) => onChange({ recipientInputMode: event.target.value as MailBasicPreferences["recipientInputMode"] })}><option value="autocomplete">자동완성</option><option value="name_only">이름만 입력</option><option value="search">검색 선택</option></select></label>
@@ -1457,6 +1529,7 @@ export default function App() {
   const [mailComposePosition, setMailComposePosition] = useState<{ left: number; top: number } | null>(null);
   const [mailDetailExpanded, setMailDetailExpanded] = useState(false);
   const [selectedMailDetail, setSelectedMailDetail] = useState<MailDetail | null>(null);
+  const [showRemoteMailImages, setShowRemoteMailImages] = useState(false);
   const [mailReadReceiptOpen, setMailReadReceiptOpen] = useState(false);
   const [mailDetailLoading, setMailDetailLoading] = useState(false);
   const [mailDetailError, setMailDetailError] = useState("");
@@ -3053,7 +3126,11 @@ export default function App() {
     try {
       const attachments = await uploadComposeAttachments(token);
       const payload = {
-        to, cc, bcc, subject, bodyText, attachments, scheduledAt, confirmed,
+        to, cc, bcc, subject, bodyText,
+        bodyHtml: mailComposeContext === "forward" && mailComposeSourceDetail?.bodyHtml
+          ? buildForwardMailHtml(mailComposeSourceDetail, bodyText)
+          : null,
+        attachments, scheduledAt, confirmed,
         composeAction: mailComposeContext,
         sourceMailId: mailComposeSourceDetail?.mailId,
         copiedAttachmentIds: mailComposeContext === "forward"
@@ -4369,6 +4446,14 @@ export default function App() {
     selectedMailDetail && activeMailFolder === "sent" && selectedMailDetail.canViewReadReceipts,
   );
   const selectedMailReadReceiptSummary = selectedMailDetail ? summarizeMailReadReceipts(selectedMailDetail) : "확인 불가";
+  const hasRemoteMailImages = Boolean(selectedMailDetail?.bodyHtml && /<img\b[^>]*\bsrc\s*=\s*["']https?:/i.test(selectedMailDetail.bodyHtml));
+  const safeMailHtml = useMemo(
+    () => selectedMailDetail?.bodyHtml ? sanitizeMailHtml(selectedMailDetail.bodyHtml, showRemoteMailImages || mailPreferences?.blockRemoteImages === false) : "",
+    [selectedMailDetail?.bodyHtml, showRemoteMailImages, mailPreferences?.blockRemoteImages],
+  );
+  useEffect(() => {
+    setShowRemoteMailImages(false);
+  }, [selectedMailDetail?.mailId]);
 
   function handleHomeSurfaceCardClick(surfaceCardId: string) {
     if (surfaceCardId === "mail") {
@@ -4422,10 +4507,6 @@ export default function App() {
     selectionKey: mailSelectionKey(item, activeMailFolder),
     sender: mailPreferences?.senderDisplayMode === "name" && item.senderDisplayName ? item.senderDisplayName : item.senderDisplayName ? `${item.senderDisplayName} <${item.senderEmail}>` : item.senderEmail,
     subject: item.subject,
-    preview: mailPreferences?.showListPreview === false ? "" :
-      selectedMailId === item.mailId
-        ? summarizeMailPreview(selectedMailDetail, item.subject)
-        : item.previewText || item.subject,
     time: formatDateLabel(item.receivedAt || item.sentAt),
     unread: !item.isRead,
     important: item.isStarred,
@@ -5079,7 +5160,7 @@ export default function App() {
                       <button className="user-mail-row__main" type="button" onClick={() => { setMailDetailExpanded(false); const mailbox = inferMailboxFromMailId(item.mailId); void selectMail(token, item.mailId, mailbox, { markRead: mailbox === "inbox" && activeMailFolder !== "trash", folder: activeMailFolder }); }}>
                         <span className="user-mail-row__status" aria-label={[item.unread ? "안 읽음" : "읽음", item.important ? "중요" : "", item.attachment ? "첨부 있음" : ""].filter(Boolean).join(", ")}>{item.unread ? "●" : "○"}{item.important ? "★" : ""}{item.attachment ? "📎" : ""}</span>
                         <strong className="user-mail-row__sender" title={item.sender}>{item.sender}</strong>
-                        <span className="user-mail-row__content"><strong className="user-mail-row__subject">{item.subject}</strong><span className="user-mail-row__preview">{item.preview}</span></span>
+                        <span className="user-mail-row__content"><strong className="user-mail-row__subject">{item.subject}</strong></span>
                         <time className="user-mail-row__date">{item.time}</time>
                       </button>
                     </article>
@@ -5231,7 +5312,19 @@ export default function App() {
                           ))}</ul>
                         </section>
                       ) : null}
-                      <div className="user-mail-detail-body">{selectedMailDetail.bodyText || selectedMailDetail.subject}</div>
+                      {selectedMailDetail.bodyHtml ? (
+                        <section className="user-mail-detail-rich-body">
+                          {hasRemoteMailImages && mailPreferences?.blockRemoteImages !== false && !showRemoteMailImages ? <button type="button" onClick={() => setShowRemoteMailImages(true)}>외부 이미지 표시</button> : null}
+                          <iframe
+                            title="메일 HTML 본문"
+                            sandbox=""
+                            referrerPolicy="no-referrer"
+                            srcDoc={safeMailHtml}
+                          />
+                        </section>
+                      ) : (
+                        <div className="user-mail-detail-body">{selectedMailDetail.bodyText || selectedMailDetail.subject}</div>
+                      )}
                       {selectedMailDetail.attachments.length ? (
                         <section className="user-mail-detail-attachments" aria-label="첨부 파일">
                           <h3>첨부 {selectedMailDetail.attachments.length}개</h3>
@@ -6792,7 +6885,6 @@ export default function App() {
                           <div style={{ fontSize: 13, color: "#64748b" }}>{item.time}</div>
                         </div>
                         <div style={{ marginTop: 8, fontSize: 18, fontWeight: 800, color: "#0f172a" }}>{item.subject}</div>
-                        <div style={{ marginTop: 8, color: "#475569", lineHeight: 1.6 }}>{item.preview}</div>
                         <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
                           <span style={{ padding: "6px 10px", borderRadius: 999, background: item.unread ? "#dbeafe" : "#e2e8f0", color: item.unread ? "#1d4ed8" : "#475569", fontSize: 12, fontWeight: 800 }}>
                             {item.unread ? "안읽음" : "읽음"}

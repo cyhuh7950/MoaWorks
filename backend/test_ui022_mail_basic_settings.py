@@ -91,6 +91,8 @@ class Ui022MailBasicSettingsTests(unittest.TestCase):
 
     def test_preference_schema_defaults_and_header_injection(self):
         payload = MailBasicPreferencesUpdateRequest(expectedVersion=1)
+        self.assertEqual(payload.senderDisplayMode, "name")
+        self.assertFalse(payload.showListPreview)
         self.assertEqual(payload.messageEncoding, "utf-8")
         self.assertTrue(payload.confirmBeforeSend)
         self.assertTrue(payload.saveSentCopy)
@@ -155,6 +157,11 @@ class Ui022MailBasicSettingsTests(unittest.TestCase):
         with self.assertRaises(MailPreferenceConflictError):
             service.update_basic_preferences(actor, MailBasicPreferencesUpdateRequest(expectedVersion=1))
 
+    def test_latest_migration_changes_only_new_preference_defaults(self):
+        sql = (self.root / "migrations" / "057_mail_list_display_defaults.sql").read_text(encoding="utf-8").lower()
+        self.assertIn("alter column sender_display_mode set default 'name'", sql)
+        self.assertIn("alter column show_list_preview set default false", sql)
+        self.assertNotIn("update user_mail_basic_preferences", sql)
     def test_every_summary_query_selects_sender_display_name(self):
         source = (self.root / "app" / "services" / "mail_messenger_service.py").read_text(encoding="utf-8")
         selected_names = re.findall(r"m\.sender_email\s*,\s*m\.sender_display_name", source)

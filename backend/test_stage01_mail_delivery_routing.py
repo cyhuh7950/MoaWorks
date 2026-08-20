@@ -1,7 +1,9 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from app.services.mail_delivery_operations import MailDeliveryOperations
-from app.services.mail_transports import DeliveryReceipt, MailProviderRoutingAdapter
+from app.services.mail_transports import DeliveryReceipt, MailProviderRoutingAdapter, _build_message
 
 
 class FakeSelfHostedTransport:
@@ -39,6 +41,7 @@ def envelope() -> dict:
         "subject": "제목",
         "body_text": "본문",
         "body_html": None,
+        "attachments": [],
         "message_id": "<mail-1@moaworks.sinsan.kr>",
     }
 
@@ -91,6 +94,30 @@ class MailDeliveryRoutingTest(unittest.TestCase):
         self.assertEqual(config.password, "plain-secret")
         self.assertNotIn("plain-secret", detail)
 
+    def test_oci_provider_preserves_html_and_attachment_mime_parts(self) -> None:
+        with TemporaryDirectory() as directory:
+            attachment_path = Path(directory) / "report.txt"
+            attachment_path.write_bytes(b"attachment-body")
+            rich_envelope = {
+                **envelope(),
+                "body_html": "<p><strong>HTML body</strong></p>",
+                "attachments": [{
+                    "file_name": "report.txt",
+                    "content_type": "text/plain",
+                    "path": str(attachment_path),
+                }],
+            }
+
+            self.adapter.send(rich_envelope, provider("oci_email_delivery"))
+
+        message, _ = self.oci_transport.calls[0]
+        self.assertEqual(message.body_html, "<p><strong>HTML body</strong></p>")
+        self.assertEqual(len(message.attachments), 1)
+        self.assertEqual(message.attachments[0].file_name, "report.txt")
+        self.assertEqual(message.attachments[0].content, b"attachment-body")
+        mime_message = _build_message(message)
+        self.assertEqual(mime_message.get_body(preferencelist=("html",)).get_content().strip(), "<p><strong>HTML body</strong></p>")
+        self.assertEqual([part.get_filename() for part in mime_message.iter_attachments()], ["report.txt"])
     def test_unknown_provider_is_rejected_without_fallback(self) -> None:
         with self.assertRaisesRegex(ValueError, "지원하지 않는 발신 Provider"):
             self.adapter.send(envelope(), provider("unknown"))
