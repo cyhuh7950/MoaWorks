@@ -30,6 +30,13 @@ assert.match(nginxConfig, /add_header\s+Permissions-Policy\s+"[^"]+"\s+always\s*
 assert.doesNotMatch(nginxConfig, /script-src[^;"']*'unsafe-(?:inline|eval)'/i, "CSP script-src에서 unsafe-inline/unsafe-eval을 허용하면 안 됩니다.");
 assert.equal((nginxConfig.match(/add_header\s+Content-Security-Policy/g) ?? []).length, 3, "location의 add_header가 상위 보안 헤더를 가리지 않도록 HTML과 asset에도 CSP를 명시해야 합니다.");
 assert.equal((nginxConfig.match(/add_header\s+Strict-Transport-Security/g) ?? []).length, 3, "HTML과 asset 응답에도 HSTS가 유지되어야 합니다.");
+const cspValues = [...nginxConfig.matchAll(/add_header\s+Content-Security-Policy\s+"([^"]+)"\s+always\s*;/gi)].map((match) => match[1]);
+for (const csp of cspValues) {
+  const imageSources = csp.match(/(?:^|;)\s*img-src\s+([^;]+)/i)?.[1].trim().split(/\s+/) ?? [];
+  assert.ok(imageSources.includes("https:"), "사용자가 외부 이미지 표시를 허용하면 HTTPS 메일 이미지를 로드할 수 있어야 합니다.");
+  assert.ok(!imageSources.includes("*"), "메일 이미지 허용 범위를 모든 프로토콜과 출처로 확대하면 안 됩니다.");
+  assert.ok(!imageSources.includes("http:"), "평문 HTTP 메일 이미지를 직접 허용하면 안 됩니다.");
+}
 
 assert.match(serverDockerfile, /CMD\s*\[\s*"uvicorn"[\s\S]*"app\.main:app"/i, "운영 server는 Uvicorn으로 API를 실행해야 합니다.");
 assert.match(serverDockerfile, /CMD\s*\[[^\]]*"--no-access-log"[^\]]*\]/i, "운영 server는 원문 URL query를 남기는 Uvicorn access log를 비활성화해야 합니다.");
@@ -41,4 +48,4 @@ for (const [name, compose] of [["oracle", oracleCompose], ["local", localCompose
   assert.doesNotMatch(userWebService, /VITE_API_BASE_URL/, `${name} user-web에서 브라우저 API 절대 설정 의존성을 제거해야 합니다.`);
 }
 
-console.log("PASS user-web and server production runtime security contract (25 assertions)");
+console.log("PASS user-web and server production runtime security contract (34 assertions)");
