@@ -18,6 +18,7 @@ const checks = [
   ["독립 용량 오류", app.includes("mailStorageError") && app.includes("mailStorageLoading")],
   ["빠른 검색 mail 필터", app.includes('setSearchFilter("mail")') && app.includes("searchInputRef.current?.focus()")],
   ["환경설정 이동", app.includes("openMailBasicSettings") && app.includes("setMailSettingsOpen(true)")],
+  ["환경설정 닫기 문구와 미저장 보호", app.includes('<button type="button" onClick={onCancel} disabled={loading}>닫기</button>') && app.includes('저장하지 않은 변경을 취소하고 메일함으로 돌아갈까요?')],
   ["same-origin storage", api.includes('request<MailStorageResponse>("/mail/storage"')],
   ["금지 절대주소 없음", !/request<MailStorageResponse>\(\s*[`"]https?:\/\//.test(api)],
   ["정적 라우트 우선", route.indexOf('@router.get("/storage"') < route.indexOf('@router.get("/{mail_id}"')],

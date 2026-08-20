@@ -809,7 +809,7 @@ function MailBasicSettingsPanel({ value, saved, loading, error, conflict, onChan
         {toggle("vcardEnabled", "vCard 첨부")}
       </fieldset>
     </div>
-    <footer><button type="button" onClick={onReset} disabled={loading}>기본값 적용</button><span /><button type="button" onClick={onCancel} disabled={loading}>취소</button><button type="button" onClick={onSave} disabled={loading || !dirty}>저장</button></footer>
+    <footer><button type="button" onClick={onReset} disabled={loading}>기본값 적용</button><span /><button type="button" onClick={onCancel} disabled={loading}>닫기</button><button type="button" onClick={onSave} disabled={loading || !dirty}>저장</button></footer>
   </section>;
 }
 
@@ -887,7 +887,7 @@ function MailSignatureSettingsPanel({
         </article>)}
       </fieldset>
     </div>
-    <footer><span /><button type="button" onClick={onCancel} disabled={loading}>취소</button><button type="button" onClick={() => void onSavePreferences()} disabled={loading || !dirty || (value.enabled && !value.defaultSignatureId)}>저장</button></footer>
+    <footer><span /><button type="button" onClick={onCancel} disabled={loading}>닫기</button><button type="button" onClick={() => void onSavePreferences()} disabled={loading || !dirty || (value.enabled && !value.defaultSignatureId)}>저장</button></footer>
     <CommonPopup title={editor ? "서명 수정" : "서명 추가"} open={editor !== false} onClose={() => setEditor(false)} dirty={isMailSignatureEditorDirty(editorInitialForm, editorForm)} error={error} saving={loading} closeRequestRef={editorCloseRequestRef}>
       <div className="user-mail-signature-editor">
         <label><span>이름</span><input autoFocus maxLength={50} value={editorForm.name} onChange={(event) => setEditorForm((current) => ({ ...current, name: event.target.value }))} /></label>
