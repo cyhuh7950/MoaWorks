@@ -50,7 +50,10 @@ export function moveApprovalApprover(ids: string[], userId: string, direction: -
 }
 
 export function buildApprovalComposeSnapshot(
-  form: { title: string; content: string; approverUserIds: string[] },
+  form: {
+    title: string; content: string; approverUserIds: string[];
+    referenceUserIds: string[]; viewerUserIds: string[]; urgent: boolean; shareWithDepartment: boolean;
+  },
   retainedAttachmentIds: string[],
   pendingFiles: FileSummary[],
 ): string {
@@ -58,6 +61,10 @@ export function buildApprovalComposeSnapshot(
     title: form.title,
     content: form.content,
     approverUserIds: form.approverUserIds,
+    referenceUserIds: form.referenceUserIds,
+    viewerUserIds: form.viewerUserIds,
+    urgent: form.urgent,
+    shareWithDepartment: form.shareWithDepartment,
     retainedAttachmentIds,
     pendingFiles: pendingFiles.map((file) => [file.name, file.size]),
   });

@@ -18,6 +18,7 @@ from app.schemas.directory import (
     ApprovalDocumentUpdateRequest,
     ApprovalLineActionRequest,
     ApprovalListResponse,
+    ApprovalTrashActionResponse,
     AuthUserSummary,
     AuditLogListResponse,
 )
@@ -225,6 +226,38 @@ def download_approval_attachment(
 ) -> FileResponse:
     item = DirectoryStore().get_approval_attachment(user.userId, document_id, attachment_id)
     return FileResponse(path=item["path"], media_type=item["contentType"], filename=item["fileName"])
+
+
+@router.post("/{document_id}/read", response_model=ApprovalDocumentDetailResponse)
+def mark_approval_read(
+    document_id: str,
+    user: AuthUserSummary = Depends(permission_required("approval:read")),
+) -> ApprovalDocumentDetailResponse:
+    return DirectoryStore().mark_approval_document_read(user.userId, document_id)
+
+
+@router.delete("/{document_id}", response_model=ApprovalTrashActionResponse)
+def delete_approval_document(
+    document_id: str,
+    user: AuthUserSummary = Depends(permission_required("approval:read")),
+) -> ApprovalTrashActionResponse:
+    return DirectoryStore().delete_approval_document_for_actor(user.userId, document_id)
+
+
+@router.post("/{document_id}/restore", response_model=ApprovalTrashActionResponse)
+def restore_approval_document(
+    document_id: str,
+    user: AuthUserSummary = Depends(permission_required("approval:read")),
+) -> ApprovalTrashActionResponse:
+    return DirectoryStore().restore_approval_document_for_actor(user.userId, document_id)
+
+
+@router.delete("/{document_id}/permanent", response_model=ApprovalTrashActionResponse)
+def permanently_delete_approval_document(
+    document_id: str,
+    user: AuthUserSummary = Depends(permission_required("approval:read")),
+) -> ApprovalTrashActionResponse:
+    return DirectoryStore().permanently_delete_approval_document_for_actor(user.userId, document_id)
 
 
 @router.get("/{document_id}", response_model=ApprovalDocumentDetailResponse)

@@ -108,6 +108,8 @@ class AuthUserSummary(BaseModel):
     userType: str
     status: str
     permissions: list[str]
+    departmentId: str | None = None
+    departmentName: str | None = None
 
 
 class ApprovalStatus(str, Enum):
@@ -189,6 +191,10 @@ class ApprovalDocumentCreateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     content: str = Field(min_length=1, max_length=20000)
     approverUserIds: list[str] = Field(default_factory=list, max_length=20)
+    referenceUserIds: list[str] = Field(default_factory=list, max_length=50)
+    viewerUserIds: list[str] = Field(default_factory=list, max_length=50)
+    urgent: bool = False
+    shareWithDepartment: bool = False
     attachments: list[ApprovalAttachmentMeta] = Field(default_factory=list, max_length=10)
 
     @field_validator("title", "content")
@@ -198,12 +204,19 @@ class ApprovalDocumentCreateRequest(BaseModel):
             raise ValueError("공백만 입력할 수 없습니다.")
         return value
 
-    @field_validator("approverUserIds")
+    @field_validator("approverUserIds", "referenceUserIds", "viewerUserIds")
     @classmethod
     def reject_duplicate_approvers(cls, values: list[str]) -> list[str]:
         if len(values) != len(set(values)):
-            raise ValueError("결재선 사용자를 중복 지정할 수 없습니다.")
+            raise ValueError("동일 역할에 사용자를 중복 지정할 수 없습니다.")
         return values
+
+    @model_validator(mode="after")
+    def reject_overlapping_recipients(self) -> "ApprovalDocumentCreateRequest":
+        groups = [set(self.approverUserIds), set(self.referenceUserIds), set(self.viewerUserIds)]
+        if groups[0] & groups[1] or groups[0] & groups[2] or groups[1] & groups[2]:
+            raise ValueError("결재자·참조자·열람자는 서로 중복 지정할 수 없습니다.")
+        return self
 
 
 class ApprovalDocumentUpdateRequest(ApprovalDocumentCreateRequest):
@@ -230,6 +243,11 @@ class ApprovalCreateResponse(BaseModel):
     documentId: str
 
 
+class ApprovalTrashActionResponse(BaseModel):
+    documentId: str
+    state: Literal["deleted", "restored", "permanently_deleted"]
+
+
 class ApprovalLineActionRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
@@ -240,13 +258,24 @@ class ApprovalDocumentResponse(BaseModel):
     content: str
     creatorUserId: str
     creatorUserName: str
+    creatorDepartmentId: str | None = None
+    creatorDepartmentName: str | None = None
     status: str
+    urgent: bool = False
     createdAt: datetime
     updatedAt: datetime
     submittedByUserId: str | None = None
     submittedAt: datetime | None = None
     currentLineIndex: int | None = None
     canCurrentUserAct: bool = False
+    referenceUserIds: list[str] = Field(default_factory=list)
+    viewerUserIds: list[str] = Field(default_factory=list)
+    currentUserAudienceType: Literal["reference", "viewer"] | None = None
+    currentUserReadAt: datetime | None = None
+    sharedWithDepartment: bool = False
+    currentUserDepartmentMember: bool = False
+    deletedForCurrentUser: bool = False
+    permanentlyDeletedForCurrentUser: bool = False
     lines: list[ApprovalLineRecord]
 
 

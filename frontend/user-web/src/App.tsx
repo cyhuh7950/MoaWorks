@@ -51,6 +51,10 @@ import {
   deleteAutoForwardExceptions,
   deleteAutoForwardTargets,
   deleteApprovalDelegation,
+  deleteApprovalDocument,
+  restoreApprovalDocument,
+  permanentlyDeleteApprovalDocument,
+  markApprovalRead,
   fetchApprovalApprovers,
   fetchApprovalBasicPreferences,
   fetchApprovalDelegations,
@@ -235,7 +239,7 @@ const MAIL_CATEGORIES = [
   ["forums", "포럼"],
 ] as const;
 
-type ApprovalShellMenuKey = ApprovalActualMenuKey | "reference" | "department" | "settings";
+type ApprovalShellMenuKey = ApprovalActualMenuKey | "settings";
 
 function seoulDateInputValue(): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -259,22 +263,11 @@ type ApprovalShellMenuItem = {
 const APPROVAL_SHELL_MENU_ITEMS: ApprovalShellMenuItem[] = [
   { key: "pending", label: "결재 대기", description: "지금 내가 처리할 순번인 문서", group: "work" },
   { key: "received", label: "수신", description: "내 결재 처리가 끝난 문서", group: "work" },
-  {
-    key: "reference",
-    label: "참조·열람 대기",
-    description: "참조 또는 열람을 기다리는 문서",
-    group: "work",
-    readyMessage: "참조자·열람자 모델의 후속 데이터 계약이 필요합니다. 현재는 결재 대기·수신·예정·개인 문서함을 이용해 주세요.",
-  },
+  { key: "reference", label: "참조·열람 대기", description: "내가 참조 또는 열람할 문서", group: "work" },
   { key: "scheduled", label: "예정", description: "내 결재 순번을 기다리는 문서", group: "work" },
   { key: "personal", label: "개인 문서함", description: "내가 작성한 결재 문서", group: "library" },
-  {
-    key: "department",
-    label: "부서 문서함",
-    description: "부서 권한으로 공유되는 문서",
-    group: "library",
-    readyMessage: "부서 문서 권한 모델의 후속 데이터 계약이 필요합니다. 현재는 개인 문서함에서 작성 문서를 확인해 주세요.",
-  },
+  { key: "department", label: "부서 문서함", description: "부서에 공유된 완료 문서", group: "library" },
+  { key: "trash", label: "휴지통", description: "내가 삭제한 결재 문서", group: "library" },
   {
     key: "settings",
     label: "환경설정",
@@ -284,7 +277,7 @@ const APPROVAL_SHELL_MENU_ITEMS: ApprovalShellMenuItem[] = [
 ];
 
 function isApprovalActualMenuKey(key: ApprovalShellMenuKey): key is ApprovalActualMenuKey {
-  return key === "pending" || key === "received" || key === "scheduled" || key === "personal";
+  return key !== "settings";
 }
 
 const DEFAULT_MAIL_LIST_QUERY: MailListQuery = {
@@ -417,6 +410,10 @@ type CreateForm = {
   title: string;
   content: string;
   approverUserIds: string[];
+  referenceUserIds: string[];
+  viewerUserIds: string[];
+  urgent: boolean;
+  shareWithDepartment: boolean;
 };
 
 type ApprovalPendingFile = {
@@ -1365,9 +1362,7 @@ export default function App() {
   const [loginForm, setLoginForm] = useState<LoginForm>({ loginId: "", password: "" });
   const [passwordChangeForm, setPasswordChangeForm] = useState<PasswordChangeForm>({ currentPassword: "", newPassword: "", confirmPassword: "" });
   const [createForm, setCreateForm] = useState<CreateForm>({
-    title: "",
-    content: "",
-    approverUserIds: [],
+    title: "", content: "", approverUserIds: [], referenceUserIds: [], viewerUserIds: [], urgent: false, shareWithDepartment: false,
   });
   const [approvalModal, setApprovalModal] = useState<ApprovalModalMode>("none");
   const [approvalActionTarget, setApprovalActionTarget] = useState<ApprovalActionTarget | null>(null);
@@ -1390,6 +1385,8 @@ export default function App() {
   const [approvalLogsLoading, setApprovalLogsLoading] = useState(false);
   const [approvalLogsError, setApprovalLogsError] = useState("");
   const [approvalDetailMaximized, setApprovalDetailMaximized] = useState(false);
+  const [approvalLineModalOpen, setApprovalLineModalOpen] = useState(false);
+  const [approvalHistoryModalOpen, setApprovalHistoryModalOpen] = useState(false);
   const [approvalPreferences, setApprovalPreferences] = useState<ApprovalBasicPreferences | null>(null);
   const [approvalPreferencesDraft, setApprovalPreferencesDraft] = useState<ApprovalPreferenceDraft>({
     writingMethod: "general",
@@ -3923,6 +3920,14 @@ export default function App() {
       .then(([detail, preferences]) => {
         if (sequence !== approvalRequestSequence.current) return;
         setSelectedApprovalDetail(detail);
+        if (detail.currentUserAudienceType && !detail.currentUserReadAt) {
+          void markApprovalRead(token, documentId).then((readDetail) => {
+            if (sequence === approvalRequestSequence.current) {
+              setSelectedApprovalDetail(readDetail);
+              setDocuments((current) => current.map((item) => item.id === readDetail.id ? readDetail : item));
+            }
+          }).catch(() => undefined);
+        }
         const display = preferences?.attachmentImageDisplay ?? "filename";
         if (preferences) setApprovalPreferences(preferences);
         void loadApprovalDetailImages(token, detail, display, sequence);
@@ -4002,8 +4007,8 @@ export default function App() {
         document ? fetchApprovalDetail(token, document.id) : Promise.resolve(null),
       ]);
       const form = detail
-        ? { title: detail.title, content: detail.content, approverUserIds: detail.lines.map((line) => line.approverUserId) }
-        : { title: "", content: "", approverUserIds: [] };
+        ? { title: detail.title, content: detail.content, approverUserIds: detail.lines.map((line) => line.approverUserId), referenceUserIds: detail.referenceUserIds, viewerUserIds: detail.viewerUserIds, urgent: detail.urgent, shareWithDepartment: detail.sharedWithDepartment }
+        : { title: "", content: "", approverUserIds: [], referenceUserIds: [], viewerUserIds: [], urgent: false, shareWithDepartment: false };
       const retained = detail?.attachments ?? [];
       setApprovalApprovers(response.users);
       setApproverSearch("");
@@ -4089,6 +4094,10 @@ export default function App() {
         title: createForm.title.trim(),
         content: createForm.content.trim(),
         approverUserIds: createForm.approverUserIds,
+        referenceUserIds: createForm.referenceUserIds,
+        viewerUserIds: createForm.viewerUserIds,
+        urgent: createForm.urgent,
+        shareWithDepartment: createForm.shareWithDepartment,
         attachments,
       };
       if (isEdit && documentId) {
@@ -4105,12 +4114,34 @@ export default function App() {
         await keepApprovalPostAction("create", response.documentId, null);
       }
       closeApprovalModal();
-      setCreateForm({ title: "", content: "", approverUserIds: [] });
+      setCreateForm({ title: "", content: "", approverUserIds: [], referenceUserIds: [], viewerUserIds: [], urgent: false, shareWithDepartment: false });
     } catch (error) {
       setApprovalError(normalizeClientError(error, "결재 초안 저장 실패"));
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleApprovalTrashAction(action: "delete" | "restore" | "permanent") {
+    if (!token || !selectedDocumentForAction()) return;
+    const document = selectedDocumentForAction()!;
+    if (action === "permanent" && !window.confirm("휴지통에서 영구 삭제합니다. 결재 감사 이력은 보존됩니다.")) return;
+    setLoading(true);
+    setApprovalError("");
+    try {
+      if (action === "delete") await deleteApprovalDocument(token, document.id);
+      else if (action === "restore") await restoreApprovalDocument(token, document.id);
+      else await permanentlyDeleteApprovalDocument(token, document.id);
+      setSelectedApprovalId("");
+      setSelectedApprovalDetail(null);
+      await reload();
+      setMessage(action === "delete" ? "결재 문서를 휴지통으로 이동했습니다." : action === "restore" ? "결재 문서를 복원했습니다." : "결재 문서를 영구 삭제했습니다.");
+    } catch (error) { setApprovalError(normalizeClientError(error, "결재 문서 삭제 처리 실패")); }
+    finally { setLoading(false); }
+  }
+
+  function selectedDocumentForAction(): ApprovalDocumentDetail | null {
+    return selectedApprovalDetail;
   }
 
   async function executeApprovalAction(action: ApprovalActionType) {
@@ -5525,9 +5556,12 @@ export default function App() {
         const selectedApprovers = createForm.approverUserIds
           .map((userId) => approvalApprovers.find((user) => user.userId === userId))
           .filter((user): user is ApprovalApprover => Boolean(user));
+        const selectedReferences = createForm.referenceUserIds.map((userId) => approvalApprovers.find((user) => user.userId === userId)).filter((user): user is ApprovalApprover => Boolean(user));
+        const selectedViewers = createForm.viewerUserIds.map((userId) => approvalApprovers.find((user) => user.userId === userId)).filter((user): user is ApprovalApprover => Boolean(user));
         const availableApprovers = approvalApprovers.filter((user) => {
           const keyword = approverSearch.trim().toLowerCase();
-          return !createForm.approverUserIds.includes(user.userId) && (!keyword || `${user.userName} ${user.departmentName} ${user.userEmail}`.toLowerCase().includes(keyword));
+          const alreadySelected = [...createForm.approverUserIds, ...createForm.referenceUserIds, ...createForm.viewerUserIds].includes(user.userId);
+          return !alreadySelected && (!keyword || `${user.userName} ${user.departmentName} ${user.userEmail}`.toLowerCase().includes(keyword));
         });
         const openActionModal = (mode: ApprovalActionType) => {
           if (selectedDocument) openApprovalAction(mode, selectedDocument);
@@ -5582,7 +5616,7 @@ export default function App() {
                 <h2 id="ui031-content-title">{activeApprovalMenu.label}</h2>
                 <p>{activeApprovalMenu.description}</p>
               </div>
-              <strong>{isApprovalActualMenuKey(approvalShellMenu) ? `${menuDocuments.length}건` : approvalShellMenu === "settings" ? "개인 설정" : "준비 상태"}</strong>
+              <strong>{isApprovalActualMenuKey(approvalShellMenu) ? `${menuDocuments.length}건` : "개인 설정"}</strong>
             </header>
             {approvalError && approvalModal === "none" ? <FeedbackState state="error" title="결재 정보를 처리하지 못했습니다." message={approvalError} action={{ label: "다시 시도", onAction: () => void reload() }} /> : null}
             {isApprovalActualMenuKey(approvalShellMenu) ? (
@@ -5601,15 +5635,15 @@ export default function App() {
                   ))}
                 </div>
                 <input className="ui031-list__search" aria-label="결재 검색" value={approvalSearch} onChange={(event) => setApprovalSearch(event.target.value)} placeholder="제목, 기안자, 현재 결재자 검색" />
+                <div className="ui032-list-columns" aria-hidden="true"><span>기안일</span><span>긴급 여부</span><span>제목</span><span>기안자</span></div>
                 <div className="ui031-list__items">
                   {filteredDocuments.map((document) => {
                     const currentLine = document.lines.find((line) => line.sequence === document.currentLineIndex);
                     const isSelected = effectiveSelectionId === document.id;
                     const decidedCount = document.lines.filter((line) => line.status !== "pending").length;
                     return <button className={`ui032-list-row${isSelected ? " is-active" : ""}`} aria-current={isSelected ? "true" : undefined} key={document.id} type="button" onClick={() => void selectApprovalDocument(document.id)}>
-                      <span className={`ui032-status is-${document.status}`}>{approvalStatusLabel(document.status)}</span><strong>{document.title}</strong>
-                      <span>기안 {document.creatorUserName}</span><span>현재 {currentLine?.approverUserName ?? "-"}</span>
-                      <small>{formatDateLabel(document.updatedAt)} · 진행 {decidedCount}/{document.lines.length}</small>
+                      <span>{formatDateLabel(document.createdAt)}</span><span className={document.urgent ? "is-urgent" : ""}>{document.urgent ? "긴급" : "일반"}</span><strong>{document.title}</strong><span>{document.creatorUserName}</span>
+                      <small><span className={`ui032-status is-${document.status}`}>{approvalStatusLabel(document.status)}</span> 현재 {currentLine?.approverUserName ?? "-"} · 진행 {decidedCount}/{document.lines.length}</small>
                     </button>;
                   })}
                   {!filteredDocuments.length ? <div className="ui032-empty">표시할 결재 문서가 없습니다.</div> : null}
@@ -5622,7 +5656,7 @@ export default function App() {
                 {!approvalDetailLoading && !approvalDetailError && selectedDocument ? <>
                   <header className="ui032-detail__header"><div><span>선택 문서</span><h2>{selectedDocument.title}</h2><p>기안 {selectedDocument.creatorUserName} · 작성 {formatDateLabel(selectedDocument.createdAt)} · 상신 {selectedDocument.submittedAt ? formatDateLabel(selectedDocument.submittedAt) : "-"} · 갱신 {formatDateLabel(selectedDocument.updatedAt)}</p></div><span className={`ui032-status is-${selectedDocument.status}`}>{approvalStatusLabel(selectedDocument.status)}</span></header>
                   <section className="ui032-detail__content"><h3>본문</h3><p>{selectedDocument.content}</p></section>
-                  <section className="ui032-timeline"><h3>결재선</h3>{selectedDocument.lines.length ? selectedDocument.lines.map((line) => <article key={line.id}><i>{line.sequence}</i><div><strong>{line.approverUserName}{line.delegationId && line.decidedByUserName ? ` · 대결 ${line.decidedByUserName}` : ""}</strong><span>{approvalLineStatusLabel(line.status)} · {line.decidedAt ? formatDateLabel(line.decidedAt) : "결정 대기"}</span></div>{line.hasSignature && line.signatureUrl ? (approvalLineSignatureUrls[line.id] ? <img className="ui035-line-signature" src={approvalLineSignatureUrls[line.id]} alt={`${line.decidedByUserName ?? line.approverUserName} 승인 서명`} /> : <small>서명 확인 중</small>) : null}</article>) : <div className="ui032-empty">등록된 결재선이 없습니다.</div>}</section>
+                  <div className="ui032-detail-links"><button type="button" onClick={() => setApprovalLineModalOpen(true)}>결재선 보기</button><button type="button" onClick={() => setApprovalHistoryModalOpen(true)}>처리 이력 보기</button></div>
                   <section className="ui032-comments"><h3>처리 의견</h3>{approvalComments.length ? approvalComments.map((comment) => <article key={comment.key}><strong>{comment.actor} · {comment.action}</strong><p>{comment.text}</p><small>{comment.at ? formatDateLabel(comment.at) : "시각 없음"}</small></article>) : <div className="ui032-empty">등록된 처리 의견이 없습니다.</div>}</section>
                   <section className="ui032-attachments"><h3>첨부</h3>{approvalAttachmentError ? <div className="ui032-attachment-error" role="alert">{approvalAttachmentError}</div> : null}{selectedDocument.attachments.length ? selectedDocument.attachments.map((attachment) => <article key={attachment.attachmentId}>{attachment.previewUrl && approvalAttachmentPreviewUrls[attachment.attachmentId] ? <img className={`ui035-attachment-preview is-${approvalPreferences?.attachmentImageDisplay ?? "filename"}`} src={approvalAttachmentPreviewUrls[attachment.attachmentId]} alt={attachment.fileName} /> : null}<div><strong>{attachment.fileName}</strong><span>{attachment.contentType} · {formatFileSize(attachment.sizeBytes)} · {formatDateLabel(attachment.createdAt)}</span></div><button type="button" onClick={() => void handleApprovalAttachmentDownload(attachment.attachmentId, attachment.fileName)}>다운로드</button></article>) : <div className="ui032-empty">첨부 파일이 없습니다.</div>}</section>
                   <div className="ui032-actions" aria-label="결재 처리 도구">
@@ -5632,8 +5666,10 @@ export default function App() {
                     {selectedDocument.creatorUserId === me?.userId && (selectedDocument.status === "rejected" || selectedDocument.status === "withdrawn") && canAct.rework ? <button type="button" onClick={() => openActionModal("redraft")}>재기안</button> : null}
                     {isCurrentApprovalActor(selectedDocument) && canAct.act ? <button type="button" onClick={() => openActionModal("approve")}>승인</button> : null}
                     {isCurrentApprovalActor(selectedDocument) && canAct.act ? <button type="button" onClick={() => openActionModal("reject")}>반려</button> : null}
+                    {approvalShellMenu !== "trash" && selectedDocument.creatorUserId === me?.userId && (selectedDocument.status === "draft" || selectedDocument.status === "approved") ? <button type="button" onClick={() => void handleApprovalTrashAction("delete")}>삭제</button> : null}
+                    {approvalShellMenu === "trash" ? <button type="button" onClick={() => void handleApprovalTrashAction("restore")}>복원</button> : null}
+                    {approvalShellMenu === "trash" ? <button className="is-destructive" type="button" onClick={() => void handleApprovalTrashAction("permanent")}>영구 삭제</button> : null}
                   </div>
-                  <section className="ui032-history"><h3>처리 이력</h3>{approvalLogsLoading ? <div className="ui032-state" role="status">처리 이력을 불러오는 중입니다.</div> : approvalLogsError ? <div className="ui032-state is-error" role="alert">{approvalLogsError}<button type="button" onClick={retryApprovalLogs}>이력 다시 시도</button></div> : approvalLogs.length ? approvalLogs.map((log) => <article key={log.id}><strong>{log.event}</strong><span>{log.actorUserName} · {log.statusBefore ?? "-"} → {log.statusAfter ?? "-"} · {formatDateLabel(log.createdAt)}</span></article>) : <div className="ui032-empty">처리 이력이 없습니다.</div>}</section>
                 </> : !approvalDetailLoading && !approvalDetailError ? <div className="ui032-empty">목록에서 결재 문서를 선택하세요.</div> : null}
               </section>}
               />
@@ -5699,6 +5735,12 @@ export default function App() {
               </section>
             )}
             </main>
+            <CommonPopup title="결재선" open={approvalLineModalOpen} onClose={() => setApprovalLineModalOpen(false)} className="ui032-approval-line-modal">
+              <section className="ui032-timeline">{selectedDocument?.lines.length ? selectedDocument.lines.map((line) => <article key={line.id}><i>{line.sequence}</i><div><strong>{line.approverUserName}{line.delegationId && line.decidedByUserName ? ` · 대결 ${line.decidedByUserName}` : ""}</strong><span>{approvalLineStatusLabel(line.status)} · {line.decidedAt ? formatDateLabel(line.decidedAt) : "결정 대기"}</span></div>{line.hasSignature && line.signatureUrl && approvalLineSignatureUrls[line.id] ? <img className="ui035-line-signature" src={approvalLineSignatureUrls[line.id]} alt={`${line.approverUserName} 승인 서명`} /> : null}</article>) : <div className="ui032-empty">등록된 결재선이 없습니다.</div>}</section>
+            </CommonPopup>
+            <CommonPopup title="처리 이력" open={approvalHistoryModalOpen} onClose={() => setApprovalHistoryModalOpen(false)} className="ui032-history-modal">
+              <section className="ui032-history">{approvalLogsLoading ? <div className="ui032-state" role="status">처리 이력을 불러오는 중입니다.</div> : approvalLogsError ? <div className="ui032-state is-error" role="alert">{approvalLogsError}<button type="button" onClick={retryApprovalLogs}>이력 다시 시도</button></div> : approvalLogs.length ? approvalLogs.map((log) => <article key={log.id}><strong>{log.event}</strong><span>{log.actorUserName} · {log.statusBefore ?? "-"} → {log.statusAfter ?? "-"} · {formatDateLabel(log.createdAt)}</span></article>) : <div className="ui032-empty">처리 이력이 없습니다.</div>}</section>
+            </CommonPopup>
             <CommonPopup
               title={approvalModal === "edit" ? "결재 초안 수정" : "새 결재 작성"}
               open={approvalModal === "create" || approvalModal === "edit"}
@@ -5717,6 +5759,7 @@ export default function App() {
                 </div>
                 {approvalComposeTab === "document" ? (
                   <section className="ui033-compose__panel" role="tabpanel" aria-label="문서 입력">
+                    <div className="ui033-compose__options"><label><input type="checkbox" checked={createForm.urgent} onChange={(event) => setCreateForm((current) => ({ ...current, urgent: event.target.checked }))} /> 긴급 결재</label><label><input type="checkbox" checked={createForm.shareWithDepartment} onChange={(event) => setCreateForm((current) => ({ ...current, shareWithDepartment: event.target.checked }))} /> 완료 후 부서 공유</label></div>
                     <label>제목<input aria-label="결재 제목" required maxLength={200} value={createForm.title} onChange={(event) => setCreateForm((current) => ({ ...current, title: event.target.value }))} placeholder="결재 제목을 입력하세요." /></label>
                     <label className="ui033-compose__content">본문<textarea aria-label="결재 본문" required maxLength={20000} value={createForm.content} onChange={(event) => setCreateForm((current) => ({ ...current, content: event.target.value }))} placeholder="결재 내용을 입력하세요." /></label>
                     <section className="ui033-compose__attachments">
@@ -5731,8 +5774,9 @@ export default function App() {
                   </section>
                 ) : (
                   <section className="ui033-compose__panel ui033-compose__line" role="tabpanel" aria-label="결재선 설정">
-                    <div className="ui033-approver-search"><label>사용자 검색<input aria-label="결재선 사용자 검색" value={approverSearch} onChange={(event) => setApproverSearch(event.target.value)} placeholder="이름, 부서, 이메일 검색" /></label><div>{availableApprovers.map((user) => <button type="button" key={user.userId} onClick={() => selectApprovalApprover(user.userId)}><strong>{user.userName}</strong><span>{user.departmentName} · {user.userEmail}</span></button>)}</div></div>
-                    <div className="ui033-approver-selected" aria-label="선택된 결재선"><header><strong>선택된 결재선</strong><span>{selectedApprovers.length}명</span></header>{selectedApprovers.map((user, index) => <article key={user.userId}><i>{index + 1}</i><div><strong>{user.userName}</strong><span>{user.departmentName} · {user.userEmail}</span></div><button type="button" disabled={index === 0} onClick={() => moveApprovalApprover(user.userId, -1)}>위</button><button type="button" disabled={index === selectedApprovers.length - 1} onClick={() => moveApprovalApprover(user.userId, 1)}>아래</button><button type="button" onClick={() => setCreateForm((current) => ({ ...current, approverUserIds: current.approverUserIds.filter((id) => id !== user.userId) }))}>제거</button></article>)}{!selectedApprovers.length ? <p>임시저장은 결재선 없이 가능하며, 상신 전에 1명 이상 지정해야 합니다.</p> : null}</div>
+                    <div className="ui033-approver-search"><label>사용자 검색<input aria-label="결재선 사용자 검색" value={approverSearch} onChange={(event) => setApproverSearch(event.target.value)} placeholder="이름, 부서, 이메일 검색" /></label><div>{availableApprovers.map((user) => <article key={user.userId}><div><strong>{user.userName}</strong><span>{user.departmentName} · {user.userEmail}</span></div><button type="button" onClick={() => selectApprovalApprover(user.userId)}>결재</button><button type="button" onClick={() => setCreateForm((current) => ({ ...current, referenceUserIds: [...current.referenceUserIds, user.userId] }))}>참조</button><button type="button" onClick={() => setCreateForm((current) => ({ ...current, viewerUserIds: [...current.viewerUserIds, user.userId] }))}>열람</button></article>)}</div></div>
+                    <div className="ui033-approver-selected" aria-label="선택된 결재선"><header><strong>선택된 결재선</strong><span>{selectedApprovers.length}명</span></header>{selectedApprovers.map((user, index) => <article className="ui033-selected-approver" key={user.userId}><i>{index + 1}</i><div><strong>{user.userName}</strong><span>{user.departmentName} · {user.userEmail}</span></div><button type="button" disabled={index === 0} onClick={() => moveApprovalApprover(user.userId, -1)}>위</button><button type="button" disabled={index === selectedApprovers.length - 1} onClick={() => moveApprovalApprover(user.userId, 1)}>아래</button><button type="button" onClick={() => setCreateForm((current) => ({ ...current, approverUserIds: current.approverUserIds.filter((id) => id !== user.userId) }))}>제거</button></article>)}{!selectedApprovers.length ? <p>임시저장은 결재선 없이 가능하며, 상신 전에 1명 이상 지정해야 합니다.</p> : null}</div>
+                    <div className="ui033-audience-selected"><section><header><strong>참조자</strong><span>{selectedReferences.length}명</span></header>{selectedReferences.map((user) => <article key={user.userId}><div><strong>{user.userName}</strong><span>{user.departmentName}</span></div><button type="button" onClick={() => setCreateForm((current) => ({ ...current, referenceUserIds: current.referenceUserIds.filter((id) => id !== user.userId) }))}>제거</button></article>)}</section><section><header><strong>열람자</strong><span>{selectedViewers.length}명</span></header>{selectedViewers.map((user) => <article key={user.userId}><div><strong>{user.userName}</strong><span>{user.departmentName}</span></div><button type="button" onClick={() => setCreateForm((current) => ({ ...current, viewerUserIds: current.viewerUserIds.filter((id) => id !== user.userId) }))}>제거</button></article>)}</section></div>
                   </section>
                 )}
                 <footer className="ui033-compose__footer"><button type="button" onClick={() => approvalComposeCloseRequestRef.current?.()}>취소</button><button type="submit" disabled={loading}>{approvalModal === "edit" ? "수정 저장" : "임시저장"}</button></footer>

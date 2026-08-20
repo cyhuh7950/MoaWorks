@@ -140,6 +140,17 @@ export type ApprovalDocument = {
   content: string;
   creatorUserId: string;
   creatorUserName: string;
+  creatorDepartmentId?: string;
+  creatorDepartmentName?: string;
+  urgent: boolean;
+  referenceUserIds: string[];
+  viewerUserIds: string[];
+  currentUserAudienceType?: "reference" | "viewer";
+  currentUserReadAt?: string;
+  sharedWithDepartment: boolean;
+  currentUserDepartmentMember: boolean;
+  deletedForCurrentUser: boolean;
+  permanentlyDeletedForCurrentUser: boolean;
   status: string;
   createdAt: string;
   updatedAt: string;
@@ -213,6 +224,10 @@ export type ApprovalDraftPayload = {
   title: string;
   content: string;
   approverUserIds: string[];
+  referenceUserIds: string[];
+  viewerUserIds: string[];
+  urgent: boolean;
+  shareWithDepartment: boolean;
   attachments: ApprovalAttachmentUpload[];
 };
 
@@ -762,6 +777,27 @@ export async function fetchApprovalDetail(token: string, documentId: string): Pr
   return request<ApprovalDocumentDetail>(`/approvals/${documentId}`, {
     headers: authHeaders(token),
   });
+}
+
+export type ApprovalTrashActionResponse = {
+  documentId: string;
+  state: "deleted" | "restored" | "permanently_deleted";
+};
+
+export async function markApprovalRead(token: string, documentId: string): Promise<ApprovalDocumentDetail> {
+  return request<ApprovalDocumentDetail>(`/approvals/${documentId}/read`, { method: "POST", headers: authHeaders(token) });
+}
+
+export async function deleteApprovalDocument(token: string, documentId: string): Promise<ApprovalTrashActionResponse> {
+  return request<ApprovalTrashActionResponse>(`/approvals/${documentId}`, { method: "DELETE", headers: authHeaders(token) });
+}
+
+export async function restoreApprovalDocument(token: string, documentId: string): Promise<ApprovalTrashActionResponse> {
+  return request<ApprovalTrashActionResponse>(`/approvals/${documentId}/restore`, { method: "POST", headers: authHeaders(token) });
+}
+
+export async function permanentlyDeleteApprovalDocument(token: string, documentId: string): Promise<ApprovalTrashActionResponse> {
+  return request<ApprovalTrashActionResponse>(`/approvals/${documentId}/permanent`, { method: "DELETE", headers: authHeaders(token) });
 }
 
 export async function downloadApprovalAttachment(token: string, documentId: string, attachmentId: string, fileName: string) {
