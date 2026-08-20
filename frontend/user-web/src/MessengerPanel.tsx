@@ -47,6 +47,22 @@ function languageLabel(locale: string) {
   return ROOM_LANGUAGES.find((item) => item.value === locale)?.label || locale;
 }
 
+function normalizeTranslationText(value: string) {
+  return value.normalize("NFKC").replace(/\s+/gu, " ").trim();
+}
+
+function messageNeedsTranslation(value: string, targetLocale: RoomLanguage) {
+  const normalized = normalizeTranslationText(value);
+  if (!normalized) return false;
+  if (targetLocale === "ko") {
+    const hangulCount = (normalized.match(/[\u3131-\u318e\uac00-\ud7a3]/gu) || []).length;
+    const latinCount = (normalized.match(/[a-z]/giu) || []).length;
+    if (hangulCount > 0 && hangulCount >= latinCount) return false;
+  }
+  if (targetLocale === "ja" && /[\u3040-\u30ff]/u.test(normalized)) return false;
+  if (targetLocale === "zh-cn" && /[\u3400-\u9fff]/u.test(normalized) && !/[\u3040-\u30ff]/u.test(normalized)) return false;
+  return true;
+}
 function errorText(error: unknown) {
   return error instanceof ApiRequestError ? error.message : error instanceof Error ? error.message : "요청 처리에 실패했습니다.";
 }
@@ -99,8 +115,22 @@ export function MessengerPanel({ token }: { token: string }) {
   const translationContextRef = useRef("");
 
   const loadMessageTranslations = useCallback(async (locale: RoomLanguage, items: MessengerMessage[], generation: number) => {
-    const candidates = items.filter((item) => item.body.trim());
-    if (!candidates.length) return;
+    const messageIds = items.filter((item) => item.body.trim()).map((item) => item.messageId);
+    const candidates = items.filter((item) => messageNeedsTranslation(item.body, locale));
+    const replaceTranslations = (translatedByMessage: Record<string, string>) => {
+      if (generation !== translationGenerationRef.current) return;
+      setMessageTranslations((current) => {
+        const next = { ...current };
+        messageIds.forEach((messageId) => delete next[messageId]);
+        return { ...next, ...translatedByMessage };
+      });
+    };
+    if (!messageIds.length) return;
+    if (!candidates.length) {
+      replaceTranslations({});
+      setTranslationNotice("");
+      return;
+    }
     try {
       const status = await fetchTranslationStatus(token);
       if (!status.enabled || !status.available) {
@@ -119,19 +149,18 @@ export function MessengerPanel({ token }: { token: string }) {
           const message = batch[index];
           if (!message) return;
           const original = message.body;
-          if (translated.translated && translated.translatedText.trim() && translated.translatedText.trim() !== original.trim()) {
-            translatedByMessage[message.messageId] = translated.translatedText.trim();
+          const translatedText = translated.translatedText.trim();
+          if (translated.translated && translatedText && normalizeTranslationText(translated.translatedText) !== normalizeTranslationText(original)) {
+            translatedByMessage[message.messageId] = translatedText;
           }
         });
       }
-      if (generation !== translationGenerationRef.current) return;
-      setMessageTranslations((current) => ({ ...current, ...translatedByMessage }));
-      setTranslationNotice(`${languageLabel(locale)} 자동 번역`);
+      replaceTranslations(translatedByMessage);
+      if (generation === translationGenerationRef.current) setTranslationNotice(Object.keys(translatedByMessage).length ? `${languageLabel(locale)} 자동 번역` : "");
     } catch {
       if (generation === translationGenerationRef.current) setTranslationNotice("번역을 불러오지 못해 원문만 표시합니다.");
     }
   }, [token]);
-
   const loadRoom = useCallback(async (roomId: string) => {
     const generation = ++translationGenerationRef.current;
     setTimelineLoading(true);

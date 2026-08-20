@@ -114,6 +114,26 @@ class Stage03ProviderContractTest(unittest.TestCase):
         system_prompt = transport.calls[0]["payload"]["messages"][0]["content"]
         self.assertIn("Never reveal reasoning", system_prompt)
         self.assertIn("Return exactly and only", system_prompt)
+        self.assertIn("business communication translation engine", system_prompt)
+        self.assertIn("<translation>", system_prompt)
+        self.assertNotIn("mail translation engine", system_prompt)
+
+    def test_unclosed_reasoning_is_hidden_when_tagged_translation_exists(self) -> None:
+        from app.services.translation_provider import sanitize_translation_output
+
+        raw = "<think>unfinished private reasoning\nOutput draft\n<translation>원래 정보 요구사항을 해결하는 기존 질문의 순위 목록이 유용합니다.</translation>\nProceeds."
+
+        self.assertEqual(
+            sanitize_translation_output(raw),
+            "원래 정보 요구사항을 해결하는 기존 질문의 순위 목록이 유용합니다.",
+        )
+
+    def test_unclosed_reasoning_without_translation_is_rejected(self) -> None:
+        from app.services.translation_provider import sanitize_translation_output
+
+        with self.assertRaisesRegex(ValueError, "no final translated text"):
+            sanitize_translation_output("<think>unfinished private reasoning\nOutput draft only")
+
     def test_deepl_provider_uses_professional_translation_contract(self) -> None:
         from app.services.translation_provider import DeepLProvider
 
