@@ -110,6 +110,35 @@ class MailInboundIngestTest(unittest.TestCase):
         self.assertTrue(db.migrations_checked)
         self.assertEqual(db.connection.commits, 1)
 
+    def test_inbox_ingest_uses_delivered_status_visible_to_existing_mailbox_queries(self) -> None:
+        cursor = FakeCursor()
+        with tempfile.TemporaryDirectory() as temporary:
+            MailInboundOperations(
+                db=FakeDb(cursor), storage=MailInboundStorage(Path(temporary))
+            ).ingest(
+                envelope_from="sender@example.net",
+                recipient_email="admin@moaworks.sinsan.kr",
+                raw_message=inbound_raw(),
+            )
+
+        message_insert = next(
+            query for query, _ in cursor.statements if query.startswith("INSERT INTO mail_messages")
+        )
+        self.assertIn("'sent'", message_insert)
+        self.assertNotIn("'received'", message_insert)
+
+    def test_migration_repairs_only_existing_external_smtp_received_rows(self) -> None:
+        migration_path = Path(__file__).parent / "migrations" / "056_mail_inbound_delivered_status.sql"
+        self.assertTrue(migration_path.exists(), "external SMTP status repair migration is required")
+        normalized = " ".join(migration_path.read_text(encoding="utf-8").lower().split())
+
+        self.assertIn("update mail_messages", normalized)
+        self.assertIn("m.status = 'received'", normalized)
+        self.assertIn("set status = 'sent'", normalized)
+        self.assertIn("delivery_source = 'external_smtp'", normalized)
+        self.assertIn("exists", normalized)
+        self.assertNotIn("where status = 'received';", normalized)
+
     def test_infected_message_is_quarantined_without_mailbox_delivery(self) -> None:
         cursor = FakeCursor()
         with tempfile.TemporaryDirectory() as temporary:
