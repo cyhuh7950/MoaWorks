@@ -41,6 +41,27 @@ class MailInboundContractTest(unittest.TestCase):
         self.assertEqual(parsed.attachments[0].content, b"attachment-data")
         self.assertEqual(len(parsed.content_sha256), 64)
 
+    def test_embeds_safe_cid_image_in_html_body(self) -> None:
+        message = EmailMessage()
+        message["From"] = "sender@example.net"
+        message["To"] = "admin@moaworks.sinsan.kr"
+        message["Subject"] = "CID 이미지"
+        message.set_content("이미지 본문")
+        message.add_alternative('<p>본문</p><img src="cid:logo@example.net">', subtype="html")
+        html_part = message.get_payload()[1]
+        html_part.add_related(
+            b"\x89PNG\r\n\x1a\ninline-image",
+            maintype="image",
+            subtype="png",
+            cid="<logo@example.net>",
+            filename="logo.png",
+            disposition="inline",
+        )
+
+        parsed = parse_inbound_message(message.as_bytes())
+
+        self.assertIn("data:image/png;base64,", parsed.body_html or "")
+        self.assertNotIn("cid:logo@example.net", parsed.body_html or "")
     def test_security_result_routes_normal_spam_and_virus_separately(self) -> None:
         self.assertEqual(classify_inbound_security(parse_inbound_message(raw_message())).disposition, "inbox")
         self.assertEqual(classify_inbound_security(parse_inbound_message(raw_message(spam=True))).disposition, "spam")

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from base64 import b64encode
 from dataclasses import dataclass
 from email import policy
 from email.message import Message
 from email.parser import BytesParser
 from email.utils import parseaddr
 from hashlib import sha256
+import re
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +43,7 @@ def parse_inbound_message(raw_message: bytes) -> ParsedInboundMessage:
         raise ValueError("빈 SMTP 메시지는 처리할 수 없습니다.")
     message = BytesParser(policy=policy.default).parsebytes(raw_message)
     body_text = _body_content(message, "plain")
-    body_html = _body_content(message, "html") or None
+    body_html = _embed_inline_images(message, _body_content(message, "html")) or None
     attachments: list[InboundAttachment] = []
     for part in message.iter_attachments():
         content = part.get_payload(decode=True) or b""
@@ -79,6 +81,23 @@ def classify_inbound_security(message: ParsedInboundMessage) -> InboundSecurityD
         return InboundSecurityDecision("spam", "rspamd_spam")
     return InboundSecurityDecision("inbox", "security_checks_passed")
 
+
+def _embed_inline_images(message: Message, body_html: str) -> str:
+    if not body_html:
+        return body_html
+    allowed_types = {"image/png", "image/gif", "image/jpeg", "image/webp"}
+    result = body_html
+    for part in message.walk():
+        content_id = str(part.get("Content-ID") or "").strip().strip("<>")
+        content_type = part.get_content_type().lower()
+        if not content_id or content_type not in allowed_types:
+            continue
+        content = part.get_payload(decode=True) or b""
+        if not content or len(content) > 5 * 1024 * 1024:
+            continue
+        data_uri = f"data:{content_type};base64,{b64encode(content).decode('ascii')}"
+        result = re.sub(r"cid:" + re.escape(content_id), data_uri, result, flags=re.IGNORECASE)
+    return result
 
 def _body_content(message: Message, subtype: str) -> str:
     selected = message.get_body(preferencelist=(subtype,))
