@@ -2730,6 +2730,7 @@ class DirectoryStore:
             roleName=row["role_name"],
             status=row["user_status"],
             userType=row["user_type"],
+            isDepartmentHead=bool(row.get("is_department_head", False)),
             mailAccountEmail=row["mail_account_email"],
             mailAccountStatus=row["mail_account_status"],
             permissions=permissions,
