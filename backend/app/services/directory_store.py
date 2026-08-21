@@ -362,6 +362,7 @@ class DirectoryStore:
                         u.email AS user_email,
                         u.status AS user_status,
                         u.user_type,
+                        u.is_department_head,
                         d.id AS department_id,
                         d.name AS department_name,
                         r.id AS role_id,

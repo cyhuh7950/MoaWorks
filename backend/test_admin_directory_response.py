@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import unittest
+import inspect
 
 from app.services.directory_store import DirectoryStore
 
 
 class AdminDirectoryResponseTest(unittest.TestCase):
+    def test_directory_overview_selects_department_head_flag(self) -> None:
+        source = inspect.getsource(DirectoryStore.get_overview)
+
+        self.assertIn("u.is_department_head", source)
+
     def test_user_view_includes_department_head_flag(self) -> None:
         store = DirectoryStore.__new__(DirectoryStore)
         row = {
