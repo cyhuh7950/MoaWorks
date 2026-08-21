@@ -175,6 +175,7 @@ type UserForm = {
   roleId: string;
   status: string;
   userType: string;
+  isDepartmentHead: boolean;
 };
 
 type ManagementDialog = "user" | "department" | "role" | "orgImport" | null;
@@ -202,6 +203,7 @@ const initialUserForm: UserForm = {
   roleId: "",
   status: "active",
   userType: "user",
+  isDepartmentHead: false,
 };
 
 const ORG_IMPORT_DEACTIVATION_CONFIRMATION_TEXT = "누락 사용자 비활성화에 동의합니다.";
@@ -1827,6 +1829,7 @@ export default function App() {
           departmentId: userForm.departmentId,
           roleId: userForm.roleId,
           status: userForm.status,
+          isDepartmentHead: userForm.isDepartmentHead,
         });
         setMessage("사용자 정보가 수정되었습니다.");
       } else {
@@ -1838,6 +1841,7 @@ export default function App() {
           roleId: userForm.roleId,
           status: userForm.status,
           userType: "user",
+          isDepartmentHead: userForm.isDepartmentHead,
         });
         setMessage("사용자가 생성되었습니다. 입력한 초기 비밀번호를 사용자에게 안전하게 전달하세요.");
       }
@@ -2032,6 +2036,7 @@ export default function App() {
       roleId: user.roleId,
       status: user.status === "deleted" ? "inactive" : user.status,
       userType: user.userType,
+      isDepartmentHead: user.isDepartmentHead,
     } : {
       ...initialUserForm,
       departmentId: activeDepartments.find((item) => item.status === "active")?.id || activeDepartments[0]?.id || "",
@@ -2709,6 +2714,13 @@ export default function App() {
                     <span>계정 분류</span>
                     <input value={userTypeSummary} readOnly />
                   </label>
+                  <label className="compact-field">
+                    <span>부서장 여부 <InlineHint label="부서당 한 명만 부서장으로 지정됩니다. 새 부서장을 지정하면 기존 지정은 해제됩니다." /></span>
+                    <select value={userForm.isDepartmentHead ? "yes" : "no"} onChange={(event) => setUserForm({ ...userForm, isDepartmentHead: event.target.value === "yes" })}>
+                      <option value="no">아니오</option>
+                      <option value="yes">예</option>
+                    </select>
+                  </label>
                 </div>
                 <div className="actions compact-actions">
                   <button type="submit" disabled={loading}>
@@ -2843,9 +2855,9 @@ export default function App() {
               ) : null}
               <div className="ops-list-panel">
                 <div className="ops-list-head"><strong>사용자 목록</strong><span className="muted">행을 더블클릭하면 상세·수정 창이 열립니다.</span></div>
-                <div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th><input type="checkbox" aria-label="현재 사용자 결과 전체 선택" checked={filteredUsers.length > 0 && filteredUsers.every((item) => selectedUserIds.includes(item.userId))} onChange={(event) => setSelectedUserIds(event.target.checked ? filteredUsers.map((item) => item.userId) : [])} /></th><th>이름</th><th>아이디/이메일</th><th>부서</th><th>권한 역할</th><th>사용자 상태</th><th>메일 상태</th><th>정합성</th></tr></thead><tbody>
-                  {filteredUsers.map((item) => <tr key={item.userId} onDoubleClick={() => openUserDialog(item)} className="management-list-row"><td><input type="checkbox" aria-label={`${item.userName} 선택`} checked={selectedUserIds.includes(item.userId)} onChange={(event) => toggleSelection(selectedUserIds, item.userId, event.target.checked, setSelectedUserIds)} onClick={(event) => event.stopPropagation()} /></td><td>{item.userName}</td><td>{item.userEmail}</td><td>{item.departmentName}</td><td>{item.roleName}</td><td><span className={`badge ${item.status === "active" ? "badge-ok" : item.status === "deleted" ? "badge-danger" : "badge-warning"}`}>{item.status}</span></td><td>{item.mailAccountStatus}</td><td>{item.consistencyIssues.length === 0 ? "정상" : item.consistencyIssues.map((issue) => issue.code).join(", ")}</td></tr>)}
-                  {filteredUsers.length === 0 ? <tr><td colSpan={8}>조건에 맞는 사용자가 없습니다.</td></tr> : null}
+                <div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th><input type="checkbox" aria-label="현재 사용자 결과 전체 선택" checked={filteredUsers.length > 0 && filteredUsers.every((item) => selectedUserIds.includes(item.userId))} onChange={(event) => setSelectedUserIds(event.target.checked ? filteredUsers.map((item) => item.userId) : [])} /></th><th>이름</th><th>아이디/이메일</th><th>부서</th><th>부서장</th><th>권한 역할</th><th>사용자 상태</th><th>메일 상태</th><th>정합성</th></tr></thead><tbody>
+                  {filteredUsers.map((item) => <tr key={item.userId} onDoubleClick={() => openUserDialog(item)} className="management-list-row"><td><input type="checkbox" aria-label={`${item.userName} 선택`} checked={selectedUserIds.includes(item.userId)} onChange={(event) => toggleSelection(selectedUserIds, item.userId, event.target.checked, setSelectedUserIds)} onClick={(event) => event.stopPropagation()} /></td><td>{item.userName}</td><td>{item.userEmail}</td><td>{item.departmentName}</td><td>{item.isDepartmentHead ? <span className="badge badge-ok">부서장</span> : "-"}</td><td>{item.roleName}</td><td><span className={`badge ${item.status === "active" ? "badge-ok" : item.status === "deleted" ? "badge-danger" : "badge-warning"}`}>{item.status}</span></td><td>{item.mailAccountStatus}</td><td>{item.consistencyIssues.length === 0 ? "정상" : item.consistencyIssues.map((issue) => issue.code).join(", ")}</td></tr>)}
+                  {filteredUsers.length === 0 ? <tr><td colSpan={9}>조건에 맞는 사용자가 없습니다.</td></tr> : null}
                 </tbody></table></div>
               </div>
             </div>

@@ -44,6 +44,7 @@ class UserRecord(BaseModel):
     roleId: str
     status: str
     userType: str
+    isDepartmentHead: bool = False
     createdAt: datetime
     updatedAt: datetime
 
@@ -423,6 +424,7 @@ class UserCreateRequest(BaseModel):
     roleId: str = Field(min_length=1)
     status: str = Field(default="active")
     userType: str = Field(default="user")
+    isDepartmentHead: bool = False
 
     @field_validator("email")
     @classmethod
@@ -458,6 +460,7 @@ class UserUpdateRequest(BaseModel):
     departmentId: str | None = None
     roleId: str | None = None
     status: str | None = None
+    isDepartmentHead: bool | None = None
 
 
 class UserView(BaseModel):
@@ -471,6 +474,7 @@ class UserView(BaseModel):
     roleName: str
     status: str
     userType: str
+    isDepartmentHead: bool
     mailAccountEmail: str
     mailAccountStatus: str
     permissions: list[str]

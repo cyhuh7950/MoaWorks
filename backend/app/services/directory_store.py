@@ -599,13 +599,16 @@ class DirectoryStore:
                 if cursor.fetchone() is not None:
                     raise DirectoryUserEmailConflictError("이미 존재하는 이메일입니다.")
 
+                if payload.isDepartmentHead:
+                    cursor.execute("UPDATE users SET is_department_head = FALSE WHERE department_id = %s", (department["id"],))
+
                 cursor.execute(
                     """
                     INSERT INTO users (
                         id, company_id, email, name, password_hash, department_id, role_id,
-                        status, user_type, created_at, updated_at
+                        status, user_type, is_department_head, created_at, updated_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         user_id,
@@ -617,6 +620,7 @@ class DirectoryStore:
                         role["id"],
                         payload.status,
                         payload.userType,
+                        payload.isDepartmentHead,
                         now,
                         now,
                     ),
@@ -677,6 +681,7 @@ class DirectoryStore:
                 next_department_id = payload.departmentId or current["department_id"]
                 next_role_id = payload.roleId or current["role_id"]
                 next_status = payload.status or current["user_status"]
+                next_is_department_head = current["is_department_head"] if payload.isDepartmentHead is None else payload.isDepartmentHead
                 next_password_hash = (
                     self.security.hash_password(payload.password)
                     if payload.password is not None
@@ -686,6 +691,9 @@ class DirectoryStore:
                 self._fetch_required_department(cursor, next_department_id)
                 self._fetch_required_role(cursor, next_role_id)
 
+                if next_is_department_head:
+                    cursor.execute("UPDATE users SET is_department_head = FALSE WHERE department_id = %s AND id <> %s", (next_department_id, user_id))
+
                 cursor.execute(
                     """
                     UPDATE users
@@ -694,10 +702,11 @@ class DirectoryStore:
                         department_id = %s,
                         role_id = %s,
                         status = %s,
+                        is_department_head = %s,
                         updated_at = %s
                     WHERE id = %s
                     """,
-                    (next_name, next_password_hash, next_department_id, next_role_id, next_status, self._now(), user_id),
+                    (next_name, next_password_hash, next_department_id, next_role_id, next_status, next_is_department_head, self._now(), user_id),
                 )
                 cursor.execute(
                     """
@@ -2099,6 +2108,7 @@ class DirectoryStore:
                 u.role_id,
                 u.status AS user_status,
                 u.user_type,
+                u.is_department_head,
                 d.name AS department_name,
                 r.name AS role_name,
                 r.permissions,
@@ -2692,6 +2702,7 @@ class DirectoryStore:
             roleId=row["role_id"],
             roleName=row["role_name"],
             userType=row["user_type"],
+            isDepartmentHead=bool(row["is_department_head"]),
             status=row["user_status"],
             permissions=self._permissions(row["permissions"]),
             departmentId=row.get("department_id"),

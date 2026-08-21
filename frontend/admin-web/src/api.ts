@@ -18,6 +18,7 @@ export type AuthUser = {
   roleId: string;
   roleName: string;
   userType: string;
+  isDepartmentHead: boolean;
   status: string;
   permissions: string[];
   mustChangePassword: boolean;
@@ -777,7 +778,7 @@ export async function deleteRole(token: string, roleId: string) {
 
 export async function createUser(
   token: string,
-  payload: { name: string; loginId: string; password: string; departmentId: string; roleId: string; status: string; userType?: string },
+  payload: { name: string; loginId: string; password: string; departmentId: string; roleId: string; status: string; userType?: string; isDepartmentHead?: boolean },
 ) {
   return request<UserView>("/admin/users", {
     method: "POST",
@@ -789,7 +790,7 @@ export async function createUser(
 export async function updateUser(
   token: string,
   userId: string,
-  payload: { name?: string; password?: string; departmentId?: string; roleId?: string; status?: string },
+  payload: { name?: string; password?: string; departmentId?: string; roleId?: string; status?: string; isDepartmentHead?: boolean },
 ) {
   return request<UserView>(`/admin/users/${userId}`, {
     method: "PATCH",
