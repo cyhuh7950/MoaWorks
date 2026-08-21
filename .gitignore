@@ -9,6 +9,7 @@ dist/
 build/
 .gradle/
 .worktrees/
+.claude/
 .next/
 .turbo/
 
