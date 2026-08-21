@@ -68,6 +68,7 @@ export type UserView = {
   roleName: string;
   status: string;
   userType: string;
+  isDepartmentHead: boolean;
   mailAccountEmail: string;
   mailAccountStatus: string;
   permissions: string[];
