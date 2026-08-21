@@ -1,0 +1,82 @@
+import unittest
+from pathlib import Path
+
+from app.services.mail_operations_policy import build_mail_domain_contract
+from app.services.mail_operations_service import MailOperationsService
+
+
+class RecordingCursor:
+    def __init__(self, queued_rows: list[dict] | None = None) -> None:
+        self.queued_rows = queued_rows or []
+        self.statements: list[tuple[str, tuple | None]] = []
+
+    def execute(self, query: str, params: tuple | None = None) -> None:
+        self.statements.append((" ".join(query.split()), params))
+
+    def fetchall(self) -> list[dict]:
+        return self.queued_rows
+
+
+class MailOperationsPersistenceTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.service = MailOperationsService()
+
+    def test_migration_defines_domain_settings_and_provider_contract(self) -> None:
+        migration = Path(__file__).parent / "migrations" / "021_mail_operations.sql"
+
+        sql = migration.read_text(encoding="utf-8")
+
+        self.assertIn("CREATE TABLE IF NOT EXISTS mail_domain_settings", sql)
+        self.assertIn("admin_access_mode", sql)
+        self.assertIn("active_outbound_provider_key", sql)
+        self.assertIn("provider_switched_at", sql)
+        self.assertIn("CHECK (admin_access_mode IN ('public', 'restricted', 'private'))", sql)
+        self.assertNotIn("DROP TABLE", sql.upper())
+
+    def test_save_contract_uses_upsert_without_changing_existing_user_email(self) -> None:
+        cursor = RecordingCursor()
+        contract = build_mail_domain_contract(
+            registered_domain="sinsan.kr",
+            mail_domain="moaworks.sinsan.kr",
+            admin_access_mode="restricted",
+        )
+
+        self.service.save_domain_contract(
+            cursor=cursor,
+            company_id="cmp-default",
+            contract=contract,
+            active_provider="oci_email_delivery",
+        )
+
+        statements = "\n".join(query for query, _ in cursor.statements)
+        self.assertIn("INSERT INTO mail_domain_settings", statements)
+        self.assertIn("ON CONFLICT (company_id) DO UPDATE", statements)
+        self.assertNotIn("UPDATE users", statements)
+        self.assertNotIn("UPDATE mail_accounts", statements)
+
+    def test_provider_switch_pins_existing_queue_without_updating_queue_rows(self) -> None:
+        cursor = RecordingCursor(
+            queued_rows=[
+                {"queue_id": "q-1", "provider_key": "oci_email_delivery"},
+                {"queue_id": "q-2", "provider_key": "self_hosted"},
+            ]
+        )
+
+        plan = self.service.switch_outbound_provider(
+            cursor=cursor,
+            company_id="cmp-default",
+            actor_user_id="user-admin",
+            current_provider="oci_email_delivery",
+            target_provider="self_hosted",
+        )
+
+        statements = "\n".join(query for query, _ in cursor.statements)
+        self.assertEqual(plan.new_message_provider, "self_hosted")
+        self.assertEqual(plan.pinned_queue_providers["q-1"], "oci_email_delivery")
+        self.assertIn("UPDATE mail_domain_settings", statements)
+        self.assertIn("INSERT INTO audit_logs", statements)
+        self.assertNotIn("UPDATE mail_delivery_queue", statements)
+
+
+if __name__ == "__main__":
+    unittest.main()
