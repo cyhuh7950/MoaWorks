@@ -1061,7 +1061,7 @@ class ObservabilityService:
             suffix=".tmp",
             delete=False,
         ) as temp_file:
-            json.dump(state, temp_file, ensure_ascii=False, indent=2)
+            json.dump(state, temp_file, ensure_ascii=False, indent=2, default=str)
             temp_path = Path(temp_file.name)
         temp_path.replace(self.state_file)
         self._state_cache = state

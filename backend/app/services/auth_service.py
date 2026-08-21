@@ -11,6 +11,17 @@ class AuthService:
         self.token_service = token_service
 
     def login(self, payload: LoginRequest) -> LoginResponse:
+        allowed_domain = self.store.get_login_domain()
+        normalized_email = payload.email.strip().lower()
+        if allowed_domain and not normalized_email.endswith(f"@{allowed_domain}"):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={
+                    "code": "AUTH_DOMAIN_NOT_ALLOWED",
+                    "userMessage": "회사 도메인 계정만 로그인할 수 있습니다.",
+                    "adminMessage": f"login domain not allowed: {normalized_email}",
+                },
+            )
         try:
             user = self.store.authenticate(payload.email, payload.password)
         except PermissionError as exc:

@@ -56,11 +56,11 @@ class PostgresService:
                 cursor.fetchone()
 
     def ensure_migrations_applied(self, db_config: DbConfigPayload | None = None) -> None:
-        if db_config is None and self._runtime_migrations_applied:
+        if db_config is None and type(self)._runtime_migrations_applied:
             return
 
         with self._migration_lock:
-            if db_config is None and self._runtime_migrations_applied:
+            if db_config is None and type(self)._runtime_migrations_applied:
                 return
 
             with self.connect(db_config) as connection:
@@ -87,4 +87,4 @@ class PostgresService:
                 connection.commit()
 
             if db_config is None:
-                self._runtime_migrations_applied = True
+                type(self)._runtime_migrations_applied = True

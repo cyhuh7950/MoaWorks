@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MoaWorks Subagent Result",
+  "type": "object",
+  "required": [
+    "taskId",
+    "issueId",
+    "outcome",
+    "summary",
+    "reportPath",
+    "modifiedFiles",
+    "verification",
+    "remaining",
+    "scopeChange",
+    "requirementChange",
+    "majorRiskChange"
+  ],
+  "properties": {
+    "taskId": { "type": "string", "minLength": 1 },
+    "issueId": { "type": "string", "minLength": 1 },
+    "outcome": { "enum": ["SUCCESS", "FORMAL_FAILURE", "INTERRUPTED"] },
+    "summary": { "type": "string" },
+    "reportPath": { "type": "string" },
+    "modifiedFiles": { "type": "array", "items": { "type": "string" } },
+    "verification": { "type": "array", "items": { "type": "object" } },
+    "remaining": { "type": "array", "items": { "type": "string" } },
+    "directCause": { "type": ["string", "null"] },
+    "evidence": { "type": "array", "items": { "type": "string" } },
+    "attemptedAlternatives": { "type": "array", "items": { "type": "string" } },
+    "currentState": { "type": ["string", "null"] },
+    "remediationProposal": { "type": ["string", "null"] },
+    "resumePoint": { "type": ["string", "null"] },
+    "scopeChange": { "type": "boolean" },
+    "requirementChange": { "type": "boolean" },
+    "majorRiskChange": { "type": "boolean" }
+  },
+  "additionalProperties": true
+}

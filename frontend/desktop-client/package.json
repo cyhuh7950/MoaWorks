@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "electron .",
     "build": "node ./scripts/package-desktop-client.js",
-    "package": "node ./scripts/package-desktop-client.js"
+    "package": "node ./scripts/package-desktop-client.js",
+    "check:storage": "node ./scripts/local-storage-smoke.js"
   },
   "devDependencies": {
     "electron": "^32.2.1"

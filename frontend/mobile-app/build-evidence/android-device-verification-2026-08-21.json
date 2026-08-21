@@ -1,0 +1,27 @@
+{
+  "date": "2026-08-21",
+  "scope": "Android physical-device verification",
+  "deviceSerial": "R3CN90A1WZF",
+  "status": "success",
+  "checks": {
+    "adbAuthorized": true,
+    "debugApkBuild": "success",
+    "apkInstall": "success",
+    "mainActivityResumed": true,
+    "packagePathConfirmed": true,
+    "scriptSyntax": "pass",
+    "diffCheck": "pass"
+  },
+  "package": "com.moaworks.mobile",
+  "activity": "com.moaworks.mobile/.MainActivity",
+  "deferred": [
+    "iOS macOS/Xcode",
+    "Apple signing",
+    "iPhone physical-device verification"
+  ],
+  "notes": [
+    "Android app module and Gradle wrapper files were restored because they were deleted in the workspace.",
+    "Windows SDK adb discovery and Windows path-with-spaces execution were fixed in scripts/mobile-android-command.js.",
+    "This evidence confirms build, install, and launch; functional screen-by-screen acceptance remains separate."
+  ]
+}

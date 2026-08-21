@@ -107,9 +107,11 @@ const gradleProjectPath = path.join(projectRoot, "android");
 const rnBinary = findExecutable("react-native");
 const nodeExecutable = findExecutable("node");
 const npmExecutable = findExecutable("npm");
+const npxExecutable = findExecutable("npx");
 
 report.checks.push({ key: "node", status: !!nodeExecutable, path: nodeExecutable ?? "" });
 report.checks.push({ key: "npm", status: !!npmExecutable, path: npmExecutable ?? "" });
+report.checks.push({ key: "npx", status: !!npxExecutable, path: npxExecutable ?? "" });
 report.checks.push({ key: "app_entry_file", status: fs.existsSync(appTsxPath), path: "App.tsx" });
 report.checks.push({ key: "android_entry_file", status: fs.existsSync(indexJsPath), path: "index.js" });
 report.checks.push({ key: "app_registry_config", status: fs.existsSync(appJsonPath), path: "app.json" });
@@ -124,6 +126,7 @@ report.checks.push({
 
 appendLog(`check node=${!!nodeExecutable}`);
 appendLog(`check npm=${!!npmExecutable}`);
+appendLog(`check npx=${!!npxExecutable}`);
 appendLog(`check node_modules=${fs.existsSync(nodeModulesPath)}`);
 appendLog(`check react_native_binary=${!!rnBinary}`);
 appendLog(`check app_entry_file=${fs.existsSync(appTsxPath)}`);
@@ -132,6 +135,83 @@ appendLog(`check app_registry_config=${fs.existsSync(appJsonPath)}`);
 appendLog(`check android_project=${fs.existsSync(gradleProjectPath)}`);
 
 const missingCritical = report.checks.filter((item) => item.key !== "metro_config_or_default" && !item.status);
+
+const appSource = fs.existsSync(appTsxPath) ? fs.readFileSync(appTsxPath, "utf8") : "";
+const homeContractChecks = [
+  ["home_card_alerts", 'id: "alerts"'],
+  ["home_card_approval", 'id: "approval"'],
+  ["home_card_chat", 'id: "chat"'],
+  ["home_card_mail", 'id: "mail"'],
+  ["home_card_accessibility", 'accessibilityLabel={`${item.title} 화면 열기`}'],
+  ["home_today_schedule", "오늘 일정"],
+  ["home_recent_chat", "최근 대화"],
+];
+for (const [key, marker] of homeContractChecks) {
+  const status = appSource.includes(marker);
+  report.checks.push({ key, status, marker });
+  appendLog(`check ${key}=${status}`);
+}
+
+const missingHomeContract = report.checks.filter((item) => item.key.startsWith("home_") && !item.status);
+if (missingHomeContract.length > 0) {
+  report.status = "blocked";
+  report.blockerCode = "MOBILE_HOME_CONTRACT_MISSING";
+  report.blockerMessage = `Missing home contract markers: ${missingHomeContract.map((i) => i.key).join(", ")}`;
+  appendLog(`blocker: ${report.blockerMessage}`);
+}
+
+const mailContractChecks = [
+  ["mail_dev_samples", "developmentMailSamples"],
+  ["mail_search", 'accessibilityLabel="메일 검색"'],
+  ["mail_filter_unread", '"안 읽음"'],
+  ["mail_filter_starred", '"중요"'],
+  ["mail_row_sender", "item.senderEmail"],
+  ["mail_row_subject", "item.subject"],
+  ["mail_row_preview", "item.preview || item.snippet"],
+  ["mail_row_date", "formatStamp(item.receivedAt || item.sentAt)"],
+  ["mail_detail_open", "메일 열기"],
+];
+for (const [key, marker] of mailContractChecks) {
+  const status = appSource.includes(marker);
+  report.checks.push({ key, status, marker });
+  appendLog(`check ${key}=${status}`);
+}
+
+const missingMailContract = report.checks.filter((item) => item.key.startsWith("mail_") && !item.status);
+if (missingMailContract.length > 0) {
+  report.status = "blocked";
+  report.blockerCode = "MOBILE_MAIL_CONTRACT_MISSING";
+  report.blockerMessage = `Missing mail contract markers: ${missingMailContract.map((i) => i.key).join(", ")}`;
+  appendLog(`blocker: ${report.blockerMessage}`);
+}
+
+const workflowContractChecks = [
+  ["approval_status_tabs", "긴급 승인 / 대기 문서 / 최근 처리"],
+  ["approval_submit_action", "승인"],
+  ["approval_reject_action", "반려"],
+  ["chat_recent_rooms", "최근 대화 / 고정 채널 / 미확인 메시지"],
+  ["chat_message_input", "메시지를 입력하세요."],
+  ["calendar_month", "2026년 8월"],
+  ["calendar_event", "주간회의"],
+  ["directory_search", "사원 정보 검색"],
+  ["ai_chat", "연결된 LLM에게 질문하고 검색"],
+  ["integrated_search", "메일·결재·메신저 통합 검색"],
+  ["mobile_settings", "앱 기본 설정"],
+];
+for (const [key, marker] of workflowContractChecks) {
+  const status = appSource.includes(marker);
+  report.checks.push({ key, status, marker });
+  appendLog(`check ${key}=${status}`);
+}
+
+const missingWorkflowContract = report.checks.filter((item) => workflowContractChecks.some(([key]) => key === item.key) && !item.status);
+if (missingWorkflowContract.length > 0) {
+  report.status = "blocked";
+  report.blockerCode = "MOBILE_WORKFLOW_CONTRACT_MISSING";
+  report.blockerMessage = `Missing workflow contract markers: ${missingWorkflowContract.map((i) => i.key).join(", ")}`;
+  appendLog(`blocker: ${report.blockerMessage}`);
+}
+
 if (missingCritical.length > 0) {
   report.status = "blocked";
   report.blockerCode = "MOBILE_BUILD_PREREQUISITE_MISSING";
@@ -150,8 +230,8 @@ if (missingCritical.length > 0) {
 }
 
 const bundleOutput = path.join(evidenceDir, `bundle-${runId}.js`);
-const commandResult = runCommand("npx", [
-  "react-native",
+const bundleCli = path.join(projectRoot, "node_modules", "react-native", "cli.js");
+const commandResult = runCommand(process.execPath, [bundleCli,
   "bundle",
   "--platform",
   "android",

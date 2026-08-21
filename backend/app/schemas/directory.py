@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from enum import Enum
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -17,6 +18,8 @@ class CompanyRecord(BaseModel):
 class DepartmentRecord(BaseModel):
     id: str
     companyId: str
+    systemDepartmentCode: str | None = None
+    departmentCode: str | None = None
     name: str
     parentId: str | None = None
     status: str
@@ -43,6 +46,7 @@ class UserRecord(BaseModel):
     roleId: str
     status: str
     userType: str
+    mustChangePassword: bool = False
     createdAt: datetime
     updatedAt: datetime
 
@@ -107,6 +111,7 @@ class AuthUserSummary(BaseModel):
     userType: str
     status: str
     permissions: list[str]
+    mustChangePassword: bool = False
 
 
 class ApprovalStatus(str, Enum):
@@ -170,6 +175,23 @@ class ApprovalDocumentCreateRequest(BaseModel):
     title: str = Field(min_length=1)
     content: str = Field(min_length=1)
     approverUserIds: list[str] = Field(default_factory=list)
+
+
+class ApprovalDocumentUpdateRequest(BaseModel):
+    title: str = Field(min_length=1)
+    content: str = Field(min_length=1)
+    approverUserIds: list[str] = Field(default_factory=list)
+
+
+class ApprovalApproverView(BaseModel):
+    userId: str
+    userName: str
+    userEmail: str
+    departmentName: str
+
+
+class ApprovalApproverListResponse(BaseModel):
+    users: list[ApprovalApproverView]
 
 
 class ApprovalSubmitResponse(BaseModel):
@@ -236,6 +258,13 @@ class DepartmentCreateRequest(BaseModel):
     sortOrder: int = 100
 
 
+class DepartmentUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1)
+    parentId: str | None = None
+    sortOrder: int | None = None
+    status: str | None = None
+
+
 class RoleCreateRequest(BaseModel):
     name: str = Field(min_length=1)
     permissions: list[str] = Field(default_factory=list)
@@ -249,16 +278,33 @@ class RoleUpdateRequest(BaseModel):
 
 class UserCreateRequest(BaseModel):
     name: str = Field(min_length=1)
-    email: str
-    password: str = Field(min_length=8)
+    loginId: str | None = None
+    email: str | None = None
+    password: str | None = Field(default=None, min_length=1)
     departmentId: str = Field(min_length=1)
     roleId: str = Field(min_length=1)
     status: str = Field(default="active")
     userType: str = Field(default="user")
+    isDepartmentHead: bool = False
+
+    @field_validator("loginId")
+    @classmethod
+    def validate_login_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("아이디를 입력해야 합니다.")
+        allowed = set("abcdefghijklmnopqrstuvwxyz0123456789._-")
+        if any(char not in allowed for char in normalized):
+            raise ValueError("아이디는 영문 소문자, 숫자, 점(.), 하이픈(-), 밑줄(_)만 사용할 수 있습니다.")
+        return normalized
 
     @field_validator("email")
     @classmethod
-    def validate_email(cls, value: str) -> str:
+    def validate_email(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         normalized = value.strip().lower()
         if "@" not in normalized or normalized.startswith("@") or normalized.endswith("@"):
             raise ValueError("이메일 형식이 올바르지 않습니다.")
@@ -271,6 +317,7 @@ class UserUpdateRequest(BaseModel):
     departmentId: str | None = None
     roleId: str | None = None
     status: str | None = None
+    isDepartmentHead: bool | None = None
 
 
 class UserView(BaseModel):
@@ -284,10 +331,13 @@ class UserView(BaseModel):
     roleName: str
     status: str
     userType: str
+    isDepartmentHead: bool = False
+    isDepartmentHead: bool = False
     mailAccountEmail: str
     mailAccountStatus: str
     permissions: list[str]
     consistencyIssues: list[UserStatusIssue]
+    mustChangePassword: bool = False
 
 
 class DirectoryOverviewResponse(BaseModel):
@@ -296,6 +346,79 @@ class DirectoryOverviewResponse(BaseModel):
     roles: list[RoleRecord]
     users: list[UserView]
     mailProvider: MailProviderConfigView
+
+
+class OrgImportDepartmentPreview(BaseModel):
+    rowNumber: int
+    systemDepartmentCode: str
+    departmentCode: str
+    departmentName: str
+    parentDepartmentCode: str | None = None
+    parentDepartmentName: str | None = None
+    sortOrder: int
+    status: str
+
+
+class OrgImportUserPreview(BaseModel):
+    rowNumber: int
+    loginId: str
+    name: str
+    departmentCode: str
+    departmentName: str
+    roleCode: str
+    roleName: str
+    status: str
+    action: str
+
+
+class OrgImportDeactivationPreview(BaseModel):
+    userId: str
+    loginId: str
+    name: str
+    email: str
+    currentDepartmentName: str
+    currentRoleName: str
+    currentStatus: str
+    reason: str
+
+
+class OrgImportIssue(BaseModel):
+    level: str
+    rowNumber: int | None = None
+    sheet: str | None = None
+    message: str
+
+
+OrgImportDeactivationScope = Literal["none", "uploaded_departments_only", "company_all"]
+
+
+class OrgImportBatchResponse(BaseModel):
+    batchId: str
+    fileName: str
+    uploadedByUserId: str | None = None
+    uploadedByUserName: str
+    validationStatus: str
+    applyStatus: str
+    deactivationScope: OrgImportDeactivationScope = "uploaded_departments_only"
+    createdDepartmentCount: int
+    movedUserCount: int
+    createdUserCount: int
+    deactivatedUserCount: int
+    inactiveDepartmentCount: int
+    errors: list[OrgImportIssue]
+    warnings: list[OrgImportIssue]
+    departments: list[OrgImportDepartmentPreview]
+    users: list[OrgImportUserPreview]
+    usersToDeactivate: list[OrgImportDeactivationPreview]
+    protectedUsers: list[OrgImportDeactivationPreview] = Field(default_factory=list)
+    uploadedAt: datetime
+    appliedAt: datetime | None = None
+
+
+class OrgImportApplyRequest(BaseModel):
+    batchId: str = Field(min_length=1)
+    confirmDeactivateMissingUsers: bool = False
+    confirmationText: str | None = None
 
 
 class DomainVerifyRequest(BaseModel):

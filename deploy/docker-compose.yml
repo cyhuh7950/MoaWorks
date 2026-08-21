@@ -31,7 +31,8 @@ services:
       context: ..
       dockerfile: deploy/admin-web.Dockerfile
     environment:
-      VITE_API_BASE_URL: http://127.0.0.1:${BACKEND_PORT:-8510}/api/v1
+      VITE_API_BASE_URL: /api/v1
+      VITE_PROXY_TARGET: http://server:8000
     ports:
       - "${FRONTEND_PORT:-3510}:3510"
     depends_on:
@@ -42,7 +43,8 @@ services:
       context: ..
       dockerfile: deploy/user-web.Dockerfile
     environment:
-      VITE_API_BASE_URL: http://127.0.0.1:${BACKEND_PORT:-8510}/api/v1
+      VITE_API_BASE_URL: /api/v1
+      VITE_PROXY_TARGET: http://server:8000
     ports:
       - "${USER_WEB_PORT:-3520}:3520"
     depends_on:

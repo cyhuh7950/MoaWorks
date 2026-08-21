@@ -43,9 +43,15 @@ fs.mkdirSync(evidenceRoot, { recursive: true });
 const runId = isoNow().replace(/[:.]/g, "-");
 const bundleDirName = `desktop-client-package-${runId}`;
 const bundleDir = path.join(evidenceRoot, bundleDirName);
+const portableDirName = `${bundleDirName}-portable`;
+const portableDir = path.join(evidenceRoot, portableDirName);
+const portableAppDir = path.join(portableDir, "resources", "app");
 const logPath = path.join(evidenceRoot, `${bundleDirName}.log`);
 const manifestPath = path.join(evidenceRoot, `${bundleDirName}.json`);
 const archivePath = path.join(evidenceRoot, `${bundleDirName}.tar.gz`);
+const electronDistDir = path.join(projectRoot, "node_modules", "electron", "dist");
+const portableExeName = "MoaWorks Desktop Client.exe";
+const portableExePath = path.join(portableDir, portableExeName);
 
 const filesToCopy = [
   "index.html",
@@ -59,6 +65,14 @@ const directoriesToCopy = [
 
 writeLogLine(logPath, `desktop packaging start projectRoot=${projectRoot}`);
 
+if (!fs.existsSync(electronDistDir)) {
+  writeLogLine(logPath, `missing electron dist=${electronDistDir}`);
+  console.error(`STATUS=blocked`);
+  console.error(`BLOCKER=DESKTOP_ELECTRON_RUNTIME_MISSING`);
+  console.error(`DETAIL=missing node_modules/electron/dist`);
+  process.exit(2);
+}
+
 for (const file of filesToCopy) {
   const source = path.join(projectRoot, file);
   if (!fs.existsSync(source)) {
@@ -69,6 +83,7 @@ for (const file of filesToCopy) {
     process.exit(2);
   }
   copyFile(source, path.join(bundleDir, file));
+  copyFile(source, path.join(portableAppDir, file));
   writeLogLine(logPath, `copied file=${file}`);
 }
 
@@ -82,8 +97,27 @@ for (const dir of directoriesToCopy) {
     process.exit(2);
   }
   copyDirectory(source, path.join(bundleDir, dir));
+  copyDirectory(source, path.join(portableAppDir, dir));
   writeLogLine(logPath, `copied directory=${dir}`);
 }
+
+copyDirectory(electronDistDir, portableDir);
+writeLogLine(logPath, `copied electron dist=${electronDistDir}`);
+
+const copiedElectronExePath = path.join(portableDir, "electron.exe");
+if (!fs.existsSync(copiedElectronExePath)) {
+  writeLogLine(logPath, `missing copied electron exe=${copiedElectronExePath}`);
+  console.error(`STATUS=blocked`);
+  console.error(`BLOCKER=DESKTOP_ELECTRON_EXE_MISSING`);
+  console.error(`DETAIL=missing electron.exe in copied runtime`);
+  process.exit(2);
+}
+
+if (fs.existsSync(portableExePath)) {
+  fs.unlinkSync(portableExePath);
+}
+fs.renameSync(copiedElectronExePath, portableExePath);
+writeLogLine(logPath, `renamed portable exe=${path.relative(projectRoot, portableExePath)}`);
 
 const archiveResult = spawnSync("tar", ["-czf", archivePath, "-C", evidenceRoot, bundleDirName], {
   encoding: "utf8",
@@ -116,12 +150,15 @@ const manifest = {
   executedAt: isoNow(),
   projectRoot,
   bundleDir: path.relative(projectRoot, bundleDir),
+  portableDir: path.relative(projectRoot, portableDir),
+  portableExePath: fs.existsSync(portableExePath) ? path.relative(projectRoot, portableExePath) : null,
+  portableExeSha256: fs.existsSync(portableExePath) ? sha256(portableExePath) : null,
   archivePath: fs.existsSync(archivePath) ? path.relative(projectRoot, archivePath) : null,
   archiveSha256: fs.existsSync(archivePath) ? sha256(archivePath) : null,
   artifacts: artifactFiles,
   nodeModulesPresent: fs.existsSync(path.join(projectRoot, "node_modules")),
   electronBinaryPresent: fs.existsSync(path.join(projectRoot, "node_modules", ".bin", process.platform === "win32" ? "electron.cmd" : "electron")),
-  status: fs.existsSync(archivePath) ? "success" : "partial",
+  status: fs.existsSync(archivePath) && fs.existsSync(portableExePath) ? "success" : "partial",
 };
 
 fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
@@ -134,6 +171,12 @@ if (manifest.archivePath) {
   console.log(`ARCHIVE_SHA256=${manifest.archiveSha256}`);
 } else {
   console.log(`ARCHIVE=none`);
+}
+if (manifest.portableExePath) {
+  console.log(`PORTABLE_EXE=${manifest.portableExePath}`);
+  console.log(`PORTABLE_EXE_SHA256=${manifest.portableExeSha256}`);
+} else {
+  console.log(`PORTABLE_EXE=none`);
 }
 console.log(`MANIFEST=${path.relative(projectRoot, manifestPath)}`);
 console.log(`LOG=${path.relative(projectRoot, logPath)}`);

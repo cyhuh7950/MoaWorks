@@ -12,6 +12,12 @@ class MailAttachmentMeta(BaseModel):
     storageKey: str | None = None
 
 
+class MailAttachmentView(BaseModel):
+    fileName: str = Field(min_length=1)
+    contentType: str = Field(default="application/octet-stream")
+    sizeBytes: int = Field(default=0, ge=0)
+
+
 class MailSendRequest(BaseModel):
     to: list[str] = Field(default_factory=list)
     cc: list[str] = Field(default_factory=list)
@@ -56,8 +62,6 @@ class MailCategoryRequest(BaseModel):
         if normalized not in {"primary", "promotions", "social", "updates", "forums"}:
             raise ValueError("지원하지 않는 메일 분류입니다.")
         return normalized
-
-
 
 
 class MailListQuery(BaseModel):
@@ -159,10 +163,22 @@ class MailBulkResponse(BaseModel):
     unchangedCount: int
     targetCategory: str | None = None
 
+class MailDeliveryOutcomeSummary(BaseModel):
+    provider: str
+    engineEnabled: bool
+    internalRecipientCount: int = 0
+    externalRecipientCount: int = 0
+    queuedCount: int = 0
+    sentCount: int = 0
+    failedCount: int = 0
+    retryPendingCount: int = 0
+
+
 class MailSendResponse(BaseModel):
     mailId: str
     status: str
     sentAt: datetime | None = None
+    deliverySummary: MailDeliveryOutcomeSummary | None = None
 
 
 class MailRecipientView(BaseModel):
@@ -205,6 +221,17 @@ class MailStorageResponse(BaseModel):
     usagePercent: float = Field(ge=0)
 
 
+class MailExternalDeliveryStatus(BaseModel):
+    queueId: str
+    recipient: str
+    provider: str
+    status: str
+    attemptCount: int
+    lastError: str | None = None
+    nextRetryAt: datetime | None = None
+    sentAt: datetime | None = None
+
+
 class MailDetailResponse(BaseModel):
     mailId: str
     accountId: str
@@ -220,13 +247,109 @@ class MailDetailResponse(BaseModel):
     retentionExpiresAt: datetime | None = None
     attachmentCount: int
     recipients: list[MailRecipientView]
-    attachments: list[MailAttachmentMeta]
+    attachments: list[MailAttachmentView]
+    externalDeliveries: list[MailExternalDeliveryStatus] = Field(default_factory=list)
+
+
+class MailDeliveryProviderView(BaseModel):
+    providerId: str
+    companyId: str
+    providerKey: str
+    enabled: bool
+    senderDomain: str
+    heloName: str
+    senderAddress: str
+    useTls: bool
+    timeoutSec: int
+    maxRetryCount: int
+    retryIntervalSec: int
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class MailDeliveryQueueSummary(BaseModel):
+    queuedCount: int = 0
+    sendingCount: int = 0
+    sentCount: int = 0
+    failedCount: int = 0
+    retryPendingCount: int = 0
+    cancelledCount: int = 0
+
+
+class MailDeliveryQueueItem(BaseModel):
+    queueId: str
+    mailId: str
+    sender: str
+    recipient: str
+    subject: str
+    provider: str
+    status: str
+    attemptCount: int
+    lastError: str | None = None
+    nextRetryAt: datetime | None = None
+    sentAt: datetime | None = None
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class MailDeliveryAttemptItem(BaseModel):
+    attemptId: str
+    queueId: str
+    status: str
+    errorMessage: str | None = None
+    responseDetail: str | None = None
+    attemptedAt: datetime
+
+
+class MailDeliveryEventItem(BaseModel):
+    eventId: str
+    queueId: str
+    eventType: str
+    message: str
+    payload: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+    createdAt: datetime
+
+
+class MailDeliveryStatusResponse(BaseModel):
+    provider: MailDeliveryProviderView
+    summary: MailDeliveryQueueSummary
+
+
+class MailDeliveryQueueResponse(BaseModel):
+    provider: MailDeliveryProviderView
+    summary: MailDeliveryQueueSummary
+    queue: list[MailDeliveryQueueItem]
+    attempts: list[MailDeliveryAttemptItem]
+    events: list[MailDeliveryEventItem]
+
+
+class MailDeliveryTestRequest(BaseModel):
+    recipient: str = Field(min_length=3)
+    subject: str = Field(default="MoaWorks SMTP 테스트")
+    bodyText: str = Field(default="MoaWorks 자체 SMTP 엔진 테스트 메일입니다.")
+
+    @field_validator("recipient")
+    @classmethod
+    def validate_recipient(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if "@" not in normalized or normalized.startswith("@") or normalized.endswith("@"):
+            raise ValueError("이메일 형식이 올바르지 않습니다.")
+        return normalized
+
+
+class MailDeliveryRetryResponse(BaseModel):
+    queueItem: MailDeliveryQueueItem
+    message: str
 
 
 class MessengerRoomCreateRequest(BaseModel):
     roomName: str = Field(min_length=1)
     roomType: str = Field(default="group")
     participantUserIds: list[str] = Field(default_factory=list)
+
+
+class MessengerRoomParticipantsUpdateRequest(BaseModel):
+    participantUserIds: list[str] = Field(min_length=1)
 
 
 class MessengerMessageSendRequest(BaseModel):

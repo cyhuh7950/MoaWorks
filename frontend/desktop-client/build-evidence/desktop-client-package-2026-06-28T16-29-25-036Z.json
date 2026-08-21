@@ -1,0 +1,32 @@
+{
+  "executedAt": "2026-06-28T16:29:25.714Z",
+  "projectRoot": "D:\\Project\\MoaWorks\\frontend\\desktop-client",
+  "bundleDir": "build-evidence\\desktop-client-package-2026-06-28T16-29-25-036Z",
+  "archivePath": "build-evidence\\desktop-client-package-2026-06-28T16-29-25-036Z.tar.gz",
+  "archiveSha256": "95aa1a353d8cbe41bbf5fd6d1ecf07416f6cc1bd59e63b44dcb69ece5edf1190",
+  "artifacts": [
+    {
+      "path": "build-evidence\\desktop-client-package-2026-06-28T16-29-25-036Z\\index.html",
+      "size": 53888,
+      "sha256": "491110171921271fcc721b30b9c1cf8758d9fc8ca29687e740771874f16054da"
+    },
+    {
+      "path": "build-evidence\\desktop-client-package-2026-06-28T16-29-25-036Z\\package.json",
+      "size": 325,
+      "sha256": "168b3b0957894c2efbb470016fd81ee1e6fc8b27ca04447199e1039df46322fd"
+    },
+    {
+      "path": "build-evidence\\desktop-client-package-2026-06-28T16-29-25-036Z\\README.md",
+      "size": 1034,
+      "sha256": "b3b2b4b3bcc8bfc4a9127dc8fa85138bb6a24cbca4f05464218c24177b3a5b7d"
+    },
+    {
+      "path": "build-evidence\\desktop-client-package-2026-06-28T16-29-25-036Z\\electron\\main.js",
+      "size": 572,
+      "sha256": "2cb33dd82fd10704fde7c2c0a3f7a2a09d484cda74247818d310cab5601e7459"
+    }
+  ],
+  "nodeModulesPresent": false,
+  "electronBinaryPresent": false,
+  "status": "success"
+}

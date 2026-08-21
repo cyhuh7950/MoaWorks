@@ -1,0 +1,71 @@
+{
+  "executedAt": "2026-06-28T16:29:23.462Z",
+  "projectRoot": "D:\\Project\\MoaWorks\\frontend\\mobile-app",
+  "runId": "2026-06-28T16-29-23-460Z",
+  "mode": "android",
+  "checks": [
+    {
+      "key": "node",
+      "status": true,
+      "path": "C:\\Program Files\\nodejs\\node.exe"
+    },
+    {
+      "key": "npm",
+      "status": true,
+      "path": "C:\\Program Files\\nodejs\\npm"
+    },
+    {
+      "key": "app_entry_file",
+      "status": true,
+      "path": "App.tsx"
+    },
+    {
+      "key": "android_entry_file",
+      "status": true,
+      "path": "index.js"
+    },
+    {
+      "key": "app_registry_config",
+      "status": true,
+      "path": "app.json"
+    },
+    {
+      "key": "node_modules",
+      "status": true,
+      "path": "node_modules"
+    },
+    {
+      "key": "react_native_binary",
+      "status": true,
+      "path": "D:\\Project\\MoaWorks\\frontend\\mobile-app\\node_modules\\.bin\\react-native"
+    },
+    {
+      "key": "android_project",
+      "status": true,
+      "path": "android"
+    },
+    {
+      "key": "metro_config_or_default",
+      "status": true,
+      "path": "metro.config.js(optional)"
+    }
+  ],
+  "commands": [
+    {
+      "command": "npx react-native bundle --platform android --dev false --entry-file index.js --bundle-output D:\\Project\\MoaWorks\\frontend\\mobile-app\\build-evidence\\bundle-2026-06-28T16-29-23-460Z.js --assets-dest D:\\Project\\MoaWorks\\frontend\\mobile-app\\build-evidence --reset-cache",
+      "status": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "build-evidence\\mobile-app-build-2026-06-28T16-29-23-460Z.log",
+      "size": 772,
+      "sha256": "6ba957a1ccdc65e157a5b778c7419e17487c35b8130f474806f7dbb1c87278e6"
+    }
+  ],
+  "status": "blocked",
+  "blockerCode": "MOBILE_BUILD_COMMAND_FAILED",
+  "blockerMessage": "npx react-native bundle failed with exit code 1"
+}

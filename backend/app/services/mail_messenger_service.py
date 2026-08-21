@@ -9,11 +9,14 @@ from psycopg.types.json import Jsonb
 from app.schemas.directory import AuthUserSummary
 from app.schemas.mail_messenger import (
     MailAttachmentMeta,
+    MailAttachmentView,
     MailBulkRequest,
     MailBulkResponse,
     MailCategoryRequest,
+    MailDeliveryOutcomeSummary,
     MailDetailResponse,
     MailDraftRequest,
+    MailExternalDeliveryStatus,
     MailListQuery,
     MailListResponse,
     MailRecipientView,
@@ -29,9 +32,11 @@ from app.schemas.mail_messenger import (
     MessengerReadResponse,
     MessengerRoomCreateRequest,
     MessengerRoomDetailResponse,
+    MessengerRoomParticipantsUpdateRequest,
     MessengerRoomListResponse,
     MessengerRoomSummary,
 )
+from app.services.mail_delivery_service import MailDeliveryService
 from app.services.postgres_service import PostgresService
 
 
@@ -339,12 +344,15 @@ class MailMessengerService:
 
     def get_mail(self, actor: AuthUserSummary, mail_id: str) -> MailDetailResponse:
         self.db.ensure_migrations_applied()
+        delivery_service = MailDeliveryService()
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
                 message = self._fetch_accessible_mail(cursor, actor, mail_id)
-                recipients = self._fetch_mail_recipients(cursor, mail_id)
+                is_sender_view = bool(message["is_sender_view"])
+                recipients = self._fetch_mail_recipients(cursor, actor, mail_id, is_sender_view=is_sender_view)
                 attachments = self._fetch_mail_attachments(cursor, mail_id)
-        return self._to_mail_detail(message, recipients, attachments)
+                external_deliveries = delivery_service.list_mail_external_deliveries(cursor, mail_id) if is_sender_view else []
+        return self._to_mail_detail(message, recipients, attachments, external_deliveries)
 
     def send_mail(self, actor: AuthUserSummary, payload: MailSendRequest) -> MailSendResponse:
         if not payload.to and not payload.cc and not payload.bcc:
@@ -611,6 +619,17 @@ class MailMessengerService:
             ),
         )
 
+    def _write_mail_audit(self, cursor, actor: AuthUserSummary, target_id: str, event_type: str, payload: dict) -> None:
+        cursor.execute(
+            """INSERT INTO audit_logs (
+                id, company_id, actor_user_id, actor_user_name, target_type, target_id,
+                event, status_before, status_after, reason, created_at
+            ) VALUES (%s, %s, %s, %s, 'mail', %s, %s, NULL, 'success', %s, %s)""",
+            (
+                self._new_id("audit"), actor.companyId, actor.userId, actor.userName,
+                target_id, event_type, json.dumps(payload, ensure_ascii=False), self._now(),
+            ),
+        )
     def list_rooms(self, actor: AuthUserSummary) -> MessengerRoomListResponse:
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection:
@@ -711,6 +730,35 @@ class MailMessengerService:
                 summary = self._room_row_to_summary_with_participants(cursor, actor, room)
         return MessengerRoomDetailResponse(**summary.model_dump(), participants=participants)
 
+    def update_room_participants(
+        self,
+        actor: AuthUserSummary,
+        room_id: str,
+        payload: MessengerRoomParticipantsUpdateRequest,
+    ) -> MessengerRoomDetailResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        participant_ids = self._dedupe([actor.userId, *payload.participantUserIds])
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                room = self._fetch_accessible_room(cursor, actor, room_id)
+                if room["created_by_user_id"] != actor.userId:
+                    raise PermissionError("대화방 생성자만 참여자를 변경할 수 있습니다.")
+                users = self._fetch_company_users(cursor, actor.companyId, participant_ids)
+                if set(users.keys()) != set(participant_ids) or any(item["status"] != "active" for item in users.values()):
+                    raise ValueError("참여자는 활성 사용자만 선택할 수 있습니다.")
+                cursor.execute("DELETE FROM messenger_room_members WHERE room_id = %s", (room_id,))
+                for user_id in participant_ids:
+                    cursor.execute(
+                        """
+                        INSERT INTO messenger_room_members (id, room_id, user_id, joined_at)
+                        VALUES (%s, %s, %s, %s)
+                        """,
+                        (self._new_id("member"), room_id, user_id, now),
+                    )
+                cursor.execute("UPDATE messenger_rooms SET updated_at = %s WHERE id = %s", (now, room_id))
+            connection.commit()
+        return self.get_room(actor, room_id)
     def list_messages(self, actor: AuthUserSummary, room_id: str) -> MessengerMessageListResponse:
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection:
@@ -826,13 +874,21 @@ class MailMessengerService:
 
     def _save_mail(self, actor: AuthUserSummary, payload: MailSendRequest | MailDraftRequest, *, status_value: str) -> MailSendResponse:
         self.db.ensure_migrations_applied()
+        delivery_service = MailDeliveryService()
         now = self._now()
         mail_id = self._new_id("mailmsg")
         sent_at = now if status_value == "sent" else None
         received_at = now if status_value == "sent" else None
+        queued_rows: list[dict] = []
+        internal_count = 0
+        external_count = 0
+        provider: dict | None = None
+
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
                 account = self._fetch_mail_account(cursor, actor.userId)
+                company = self._fetch_company_row(cursor, actor.companyId)
+                company_domain = company["domain"].strip().lower()
                 cursor.execute(
                     """
                     INSERT INTO mail_messages (
@@ -860,8 +916,17 @@ class MailMessengerService:
                     ),
                 )
                 recipient_pairs = [("to", item) for item in payload.to] + [("cc", item) for item in payload.cc] + [("bcc", item) for item in payload.bcc]
+                external_recipients: list[str] = []
                 for kind, email in recipient_pairs:
                     recipient_user_id = self._resolve_user_id_by_email(cursor, actor.companyId, email)
+                    is_internal_domain = email.lower().endswith(f"@{company_domain}")
+                    if is_internal_domain:
+                        if recipient_user_id is None:
+                            raise ValueError("회사 도메인 수신자 중 등록되지 않은 사용자가 있습니다.")
+                        internal_count += 1
+                    else:
+                        external_count += 1
+                        external_recipients.append(email)
                     cursor.execute(
                         """
                         INSERT INTO mail_recipients (
@@ -890,8 +955,46 @@ class MailMessengerService:
                             now,
                         ),
                     )
+                if status_value == "sent":
+                    provider = delivery_service.ensure_provider(cursor, actor.companyId, company_domain)
+                    if external_recipients and not provider["enabled"]:
+                        raise ValueError("자체 SMTP 엔진이 비활성화되어 외부 수신자에게 발송할 수 없습니다.")
+                    if external_recipients:
+                        queued_rows = delivery_service.enqueue_external_deliveries(
+                            cursor=cursor,
+                            actor=actor,
+                            provider=provider,
+                            mail_id=mail_id,
+                            sender_email=account["email"],
+                            subject=payload.subject.strip(),
+                            body_text=payload.bodyText,
+                            body_html=payload.bodyHtml,
+                            recipients=external_recipients,
+                        )
+                self._write_mail_audit(
+                    cursor,
+                    actor,
+                    mail_id,
+                    "mail.sent" if status_value == "sent" else "mail.draft.saved",
+                    {"status": status_value, "recipientCount": len(recipient_pairs)},
+                )
             connection.commit()
-        return MailSendResponse(mailId=mail_id, status=status_value, sentAt=sent_at)
+
+        delivery_summary = None
+        if status_value == "sent":
+            provider_key = provider["provider_key"] if provider else "self_hosted_smtp"
+            provider_enabled = bool(provider["enabled"]) if provider else False
+            delivery_summary = MailDeliveryOutcomeSummary(
+                provider=provider_key,
+                engineEnabled=provider_enabled,
+                internalRecipientCount=internal_count,
+                externalRecipientCount=external_count,
+                queuedCount=len(queued_rows),
+                sentCount=0,
+                failedCount=0,
+                retryPendingCount=0,
+            )
+        return MailSendResponse(mailId=mail_id, status=status_value, sentAt=sent_at, deliverySummary=delivery_summary)
 
     def _fetch_mail_account(self, cursor, user_id: str) -> dict:
         cursor.execute("SELECT id, email, status FROM mail_accounts WHERE user_id = %s", (user_id,))
@@ -900,6 +1003,14 @@ class MailMessengerService:
             raise ValueError("메일 계정을 찾을 수 없습니다.")
         if row["status"] != "active":
             raise PermissionError("메일 계정이 활성 상태가 아닙니다.")
+        return row
+
+
+    def _fetch_company_row(self, cursor, company_id: str) -> dict:
+        cursor.execute("SELECT id, name, domain FROM companies WHERE id = %s", (company_id,))
+        row = cursor.fetchone()
+        if row is None:
+            raise ValueError("회사를 찾을 수 없습니다.")
         return row
 
     def _fetch_accessible_mail(self, cursor, actor: AuthUserSummary, mail_id: str) -> dict:
@@ -919,33 +1030,49 @@ class MailMessengerService:
                 m.created_at,
                 m.updated_at,
                 m.retention_expires_at,
-                m.attachment_count
+                m.attachment_count,
+                (m.sender_user_id = %s) AS is_sender_view
             FROM mail_messages m
             LEFT JOIN mail_recipients r ON r.message_id = m.id
             WHERE m.id = %s
               AND m.company_id = %s
               AND (
-                m.sender_user_id = %s
-                OR r.recipient_user_id = %s
-                OR LOWER(r.recipient_email) = %s
+                (m.sender_user_id = %s AND m.sender_deleted_at IS NULL)
+                OR (
+                  (r.recipient_user_id = %s OR LOWER(r.recipient_email) = %s)
+                  AND r.deleted_at IS NULL
+                )
               )
             """,
-            (mail_id, actor.companyId, actor.userId, actor.userId, actor.userEmail.lower()),
+            (actor.userId, mail_id, actor.companyId, actor.userId, actor.userId, actor.userEmail.lower()),
         )
         row = cursor.fetchone()
         if row is None:
             raise PermissionError("메일을 조회할 권한이 없습니다.")
         return row
 
-    def _fetch_mail_recipients(self, cursor, mail_id: str) -> list[MailRecipientView]:
+    def _fetch_mail_recipients(
+        self,
+        cursor,
+        actor: AuthUserSummary,
+        mail_id: str,
+        *,
+        is_sender_view: bool,
+    ) -> list[MailRecipientView]:
         cursor.execute(
             """
             SELECT recipient_email, recipient_user_id, recipient_kind, is_read, is_starred, received_at, read_at
             FROM mail_recipients
             WHERE message_id = %s
+              AND (
+                recipient_kind <> 'bcc'
+                OR %s
+                OR recipient_user_id = %s
+                OR LOWER(recipient_email) = %s
+              )
             ORDER BY recipient_kind, recipient_email
             """,
-            (mail_id,),
+            (mail_id, is_sender_view, actor.userId, actor.userEmail.lower()),
         )
         return [
             MailRecipientView(
@@ -960,10 +1087,10 @@ class MailMessengerService:
             for row in cursor.fetchall()
         ]
 
-    def _fetch_mail_attachments(self, cursor, mail_id: str) -> list[MailAttachmentMeta]:
+    def _fetch_mail_attachments(self, cursor, mail_id: str) -> list[MailAttachmentView]:
         cursor.execute(
             """
-            SELECT file_name, content_type, size_bytes, storage_key
+            SELECT file_name, content_type, size_bytes
             FROM mail_attachments
             WHERE message_id = %s
             ORDER BY created_at ASC
@@ -971,11 +1098,10 @@ class MailMessengerService:
             (mail_id,),
         )
         return [
-            MailAttachmentMeta(
+            MailAttachmentView(
                 fileName=row["file_name"],
                 contentType=row["content_type"],
                 sizeBytes=row["size_bytes"],
-                storageKey=row["storage_key"],
             )
             for row in cursor.fetchall()
         ]
@@ -1092,7 +1218,13 @@ class MailMessengerService:
             category=row.get("category") or "primary",
         )
 
-    def _to_mail_detail(self, message: dict, recipients: list[MailRecipientView], attachments: list[MailAttachmentMeta]) -> MailDetailResponse:
+    def _to_mail_detail(
+        self,
+        message: dict,
+        recipients: list[MailRecipientView],
+        attachments: list[MailAttachmentMeta],
+        external_deliveries: list[dict],
+    ) -> MailDetailResponse:
         return MailDetailResponse(
             mailId=message["mail_id"],
             accountId=message["account_id"],
@@ -1109,6 +1241,19 @@ class MailMessengerService:
             attachmentCount=message["attachment_count"],
             recipients=recipients,
             attachments=attachments,
+            externalDeliveries=[
+                MailExternalDeliveryStatus(
+                    queueId=row["id"],
+                    recipient=row["recipient_email"],
+                    provider=row["provider_key"],
+                    status=row["status"],
+                    attemptCount=int(row["attempt_count"] or 0),
+                    lastError=row.get("last_error"),
+                    nextRetryAt=row.get("next_retry_at"),
+                    sentAt=row.get("sent_at"),
+                )
+                for row in external_deliveries
+            ],
         )
 
     def _to_room_summary(self, row: dict) -> MessengerRoomSummary:
