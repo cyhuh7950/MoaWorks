@@ -2892,7 +2892,7 @@ export default function App() {
           </section>
         );      case "service":
         return (
-          <section className="panel ops-panel"><div className="ops-shell">
+          <section className="panel ops-panel"><div className="ops-shell ops-runtime-shell">
             <div className="panel-head ops-head"><div><h2>서비스 운영</h2><p className="muted">감시와 암호화 백업·격리 복구 훈련을 화면에서 운영합니다.</p></div><div className="actions compact-actions"><button type="button" onClick={() => setOperationsDialog("domain")}>도메인 검증 실행</button><button type="button" className="secondary" onClick={() => setOperationsDialog("relay")}>Relay 테스트 실행</button><button type="button" className="secondary" onClick={() => void refreshOperationalBackups()}>새로고침</button></div></div>
             <div className="overview-grid"><article className="status-card"><strong>운영 점검</strong><span className="mini-stat">열린 경고 {monitoringOverview?.alertOpenCount ?? 0}건</span></article><article className="status-card"><strong>Relay 상태</strong><span className="mini-stat">{relayResult?.status ?? "최근 실행 없음"}</span></article><article className="status-card"><strong>자동 백업</strong><span className="mini-stat">{operationalBackups?.policy.enabled ? `${operationalBackups.policy.intervalHours}시간마다` : "비활성"}</span></article><article className="status-card"><strong>최근 복구 가능 시점</strong><span className="mini-stat">{contentDate(operationalBackups?.backups.find((item) => item.status === "completed")?.snapshotAt)}</span></article></div>
             <div className="ops-list-panel"><div className="ops-list-head"><strong>운영 경고</strong><span className="muted">원인과 현재값을 확인하고 확인·해소 상태를 감사로그에 남깁니다.</span></div><div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>감지</th><th>심각도</th><th>지표</th><th>현재/임계치</th><th>상태</th><th>처리</th></tr></thead><tbody>{monitoringAlerts.map((item) => <tr key={item.alertId}><td>{contentDate(item.detectedAt)}</td><td>{item.severity}</td><td title={item.message}>{item.metric}</td><td>{item.currentValue} / {item.threshold}</td><td>{item.status}</td><td><div className="actions compact-actions"><button type="button" className="secondary" disabled={loading || item.status !== "OPEN"} onClick={() => void handleMonitoringAlert(item.alertId, "ack")}>확인</button><button type="button" disabled={loading || item.status === "RESOLVED"} onClick={() => void handleMonitoringAlert(item.alertId, "resolve")}>해소</button></div></td></tr>)}{monitoringAlerts.length === 0 ? <tr><td colSpan={6}>운영 경고가 없습니다.</td></tr> : null}</tbody></table></div></div>
@@ -2904,7 +2904,7 @@ export default function App() {
       case "mail":
         return (
           <section className="panel ops-panel">
-            <div className="ops-shell">
+            <div className="ops-shell ops-runtime-shell">
               <div className="panel-head ops-head">
                 <div><h2>메일 설정</h2><p className="muted">도메인, 관리자 접근, 자체/OCI 발신 경로를 화면에서 운영합니다.</p></div>
                 <div className="actions compact-actions">
