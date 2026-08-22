@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, AppState, Button, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
 type AuthUser = {
   userId: string;
@@ -114,150 +114,18 @@ type MessengerMessage = {
   readState: string;
 };
 
+type WorkspaceFile = {
+  id: string;
+  file_name: string;
+  content_type: string;
+  size_bytes: number;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
 type AppLocale = "ko-KR" | "en-US" | "ja-JP" | "zh-CN" | "es-ES" | "fr-FR" | "de-DE";
-type MobileTab = "home" | "mail" | "approval" | "chat" | "calendar" | "more";
-type ScreenKey = MobileTab | "directory" | "ai" | "search" | "settings";
-type LlmProvider = "CEREBRAS" | "GROQ" | "MISTRAL" | "OPENAI" | "UPSTAGE" | "GEMINI" | "OPENROUTER" | "ANTHROPIC" | "OLLAMA";
-type IconName = "home" | "mail" | "approval" | "chat" | "calendar" | "directory" | "ai" | "search" | "settings" | "more";
-
-const iconGlyphs: Record<IconName, string> = {
-  home: "⌂",
-  mail: "✉",
-  approval: "✓",
-  chat: "◌",
-  calendar: "▣",
-  directory: "♙",
-  ai: "✦",
-  search: "⌕",
-  settings: "⚙",
-  more: "•••",
-};
-
-function MoaIcon({ name, color = "#0f766e", size = 18 }: { name: IconName; color?: string; size?: number }) {
-  return <Text accessibilityLabel={`${name} 아이콘`} style={{ color, fontSize: size, lineHeight: size + 2, fontWeight: "800", textAlign: "center" }}>{iconGlyphs[name]}</Text>;
-}
-
-const llmProviders: LlmProvider[] = ["CEREBRAS", "GROQ", "MISTRAL", "OPENAI", "UPSTAGE", "GEMINI", "OPENROUTER", "ANTHROPIC", "OLLAMA"];
-const directorySamples = [
-  { name: "김민준", team: "전략기획본부", role: "일반 사용자", email: "mj.kim@moaworks.sinsan.kr" },
-  { name: "박지현", team: "전략기획본부", role: "부서장", email: "jh.park@moaworks.sinsan.kr" },
-  { name: "Alex Kim", team: "IT전략팀", role: "일반 사용자", email: "alex.kim@moaworks.sinsan.kr" },
-  { name: "Sophia Chen", team: "전략기획본부", role: "일반 사용자", email: "sophia.chen@moaworks.sinsan.kr" },
-];
-
-// 개발 빌드에서만 사용하는 화면 검증용 메일 데이터입니다. 운영 API/인증 경로에는 포함되지 않습니다.
-const developmentMailSamples: MailSummary[] = [
-  {
-    mailId: "dev-mail-001",
-    accountId: "development-account",
-    senderEmail: "admin@moaworks.sinsan.kr",
-    subject: "MoaWorks 모바일 메일 테스트",
-    status: "received",
-    isRead: false,
-    isStarred: true,
-    sentAt: null,
-    receivedAt: "2026-08-22T09:00:00+09:00",
-    retentionExpiresAt: null,
-    attachmentCount: 1,
-    preview: "모바일 메일 목록과 상세 화면을 확인해 주세요.",
-  },
-  {
-    mailId: "dev-mail-002",
-    accountId: "development-account",
-    senderEmail: "alex.kim@moaworks.sinsan.kr",
-    subject: "회의 일정 안내",
-    status: "received",
-    isRead: true,
-    isStarred: false,
-    sentAt: null,
-    receivedAt: "2026-08-21T16:30:00+09:00",
-    retentionExpiresAt: null,
-    attachmentCount: 0,
-    preview: "다음 주 회의 일정을 공유드립니다.",
-  },
-];
-
-const developmentMailDetails: Record<string, MailDetail> = {
-  "dev-mail-001": {
-    mailId: "dev-mail-001",
-    accountId: "development-account",
-    senderUserId: "admin",
-    senderEmail: "admin@moaworks.sinsan.kr",
-    subject: "MoaWorks 모바일 메일 테스트",
-    bodyText: "모바일 메일 목록과 상세 화면을 확인해 주세요.\n첨부파일 1개가 포함된 테스트 메일입니다.",
-    bodyHtml: null,
-    status: "received",
-    sentAt: null,
-    createdAt: "2026-08-22T09:00:00+09:00",
-    updatedAt: "2026-08-22T09:00:00+09:00",
-    retentionExpiresAt: null,
-    attachmentCount: 1,
-    recipients: [{ recipientEmail: "development@moaworks.local", recipientUserId: "development-user", recipientKind: "to", isRead: false, isStarred: true, receivedAt: "2026-08-22T09:00:00+09:00", readAt: null }],
-  },
-  "dev-mail-002": {
-    mailId: "dev-mail-002",
-    accountId: "development-account",
-    senderUserId: "alex-kim",
-    senderEmail: "alex.kim@moaworks.sinsan.kr",
-    subject: "회의 일정 안내",
-    bodyText: "다음 주 회의 일정을 공유드립니다.",
-    bodyHtml: null,
-    status: "received",
-    sentAt: null,
-    createdAt: "2026-08-21T16:30:00+09:00",
-    updatedAt: "2026-08-21T16:30:00+09:00",
-    retentionExpiresAt: null,
-    attachmentCount: 0,
-    recipients: [{ recipientEmail: "development@moaworks.local", recipientUserId: "development-user", recipientKind: "to", isRead: true, isStarred: false, receivedAt: "2026-08-21T16:30:00+09:00", readAt: "2026-08-21T16:35:00+09:00" }],
-  },
-};
-
-// 개발 빌드에서 결재·메신저 화면의 기본 흐름을 확인하기 위한 최소 fixture입니다.
-// 운영 빌드에서는 이 데이터가 사용되지 않고 기존 API 응답만 사용합니다.
-const developmentApprovalSamples: Approval[] = [
-  {
-    id: "dev-approval-001",
-    title: "모바일 결재 테스트",
-    content: "승인·반려 흐름을 확인해 주세요.",
-    creatorUserId: "development-user",
-    creatorUserName: "개발 테스트 사용자",
-    status: "submitted",
-    currentLineIndex: 1,
-    lines: [{ sequence: 1, approverUserId: "development-user", approverUserName: "개발 테스트 사용자", status: "pending" }],
-  },
-];
-
-const developmentRoomSamples: MessengerRoom[] = [
-  {
-    roomId: "dev-room-001",
-    roomType: "group",
-    roomName: "MoaWorks 모바일 대화",
-    participantIds: ["development-user", "alex-kim"],
-    lastMessage: "모바일 메신저 화면을 확인해 주세요.",
-    lastMessageAt: "2026-08-22T09:10:00+09:00",
-    unreadCount: 1,
-    readState: "unread",
-    createdAt: "2026-08-22T09:00:00+09:00",
-    updatedAt: "2026-08-22T09:10:00+09:00",
-    retentionExpiresAt: null,
-  },
-];
-
-const developmentMessageSamples: MessengerMessage[] = [
-  {
-    messageId: "dev-message-001",
-    roomId: "dev-room-001",
-    senderUserId: "alex-kim",
-    senderUserName: "Alex Kim",
-    messageType: "text",
-    body: "모바일 메신저 화면을 확인해 주세요.",
-    attachmentMeta: [],
-    createdAt: "2026-08-22T09:10:00+09:00",
-    retentionExpiresAt: null,
-    readBy: [],
-    readState: "unread",
-  },
-];
+type MobileTab = "home" | "mail" | "approval" | "chat" | "files";
 
 const supportedLocales: AppLocale[] = ["ko-KR", "en-US", "ja-JP", "zh-CN", "es-ES", "fr-FR", "de-DE"];
 const supportedTimezones = ["Asia/Seoul", "Asia/Tokyo", "America/New_York", "America/Chicago", "Europe/Paris", "Europe/Berlin"];
@@ -360,15 +228,9 @@ export default function App() {
   const [roomMessages, setRoomMessages] = useState<MessengerMessage[]>([]);
   const [chatDraft, setChatDraft] = useState("");
   const [chatError, setChatError] = useState("");
-  const [moreScreen, setMoreScreen] = useState<Exclude<ScreenKey, MobileTab>>("directory");
-  const [directoryQuery, setDirectoryQuery] = useState("");
-  const [llmProvider, setLlmProvider] = useState<LlmProvider>("GROQ");
-  const [llmApiKey, setLlmApiKey] = useState("");
-  const [llmConnected, setLlmConnected] = useState(false);
-  const [screenDensity, setScreenDensity] = useState<"standard" | "compact">("standard");
-  const [aiDraft, setAiDraft] = useState("");
-  const [aiMessages, setAiMessages] = useState<Array<{ role: "user" | "assistant"; body: string }>>([]);
-  const activeTabError = activeTab === "mail" ? mailError : activeTab === "chat" ? chatError : "";
+  const [files, setFiles] = useState<WorkspaceFile[]>([]);
+  const [fileError, setFileError] = useState("");
+  const activeTabError = activeTab === "files" ? fileError : activeTab === "mail" ? mailError : activeTab === "chat" ? chatError : "";
 
   function connectLlm() {
     if (!llmApiKey.trim()) {
@@ -497,6 +359,7 @@ export default function App() {
       await loadNotifications(login.accessToken);
       await loadMail(login.accessToken);
       await loadRooms(login.accessToken);
+      await loadFiles(login.accessToken);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "로그인 실패");
     }
@@ -636,6 +499,31 @@ export default function App() {
     }
   }
 
+  async function loadFiles(activeToken: string = token) {
+    if (!activeToken) return;
+    try {
+      const body = await request<{ items: WorkspaceFile[] }>("/workspace/files?scope=mine", {
+        headers: { Authorization: `Bearer ${activeToken}` },
+      });
+      setFiles(body.items ?? []);
+      setFileError("");
+    } catch (error) {
+      setFileError(error instanceof Error ? error.message : "파일 조회 실패");
+    }
+  }
+
+  async function refreshAuthenticatedData(activeToken: string) {
+    await Promise.all([
+      loadApprovals(activeToken),
+      withRetry(() => loadNotifications(activeToken)).catch((error) => {
+        setNotificationError(error instanceof Error ? error.message : "알림 조회 실패");
+      }),
+      loadMail(activeToken),
+      loadRooms(activeToken),
+      loadFiles(activeToken),
+    ]);
+  }
+
   async function openRoom(roomId: string, activeToken: string = token) {
     if (!activeToken) return;
     if (developmentAuthBypassEnabled) {
@@ -708,6 +596,10 @@ export default function App() {
     }
     if (nextTab === "chat") {
       void loadRooms(token);
+      return;
+    }
+    if (nextTab === "files") {
+      void loadFiles(token);
     }
   }
 
@@ -795,10 +687,18 @@ export default function App() {
 
   useEffect(() => {
     if (token) {
-      void loadApprovals();
-      void loadMail();
-      void loadRooms();
+      void refreshAuthenticatedData(token);
     }
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active") {
+        void refreshAuthenticatedData(token);
+      }
+    });
+    return () => subscription.remove();
   }, [token]);
 
   useEffect(() => {
@@ -967,7 +867,30 @@ export default function App() {
                     <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} onPress={() => setMoreScreen(item.id as Exclude<ScreenKey, MobileTab>)} style={[styles.mobileSubTab, moreScreen === item.id ? styles.mobileSubTabActive : styles.mobileSubTabIdle]}><MoaIcon name={item.icon as IconName} color={moreScreen === item.id ? "#ffffff" : "#0f766e"} /><Text style={[styles.mobileTabLabel, moreScreen === item.id ? styles.mobileTabLabelActive : null]}>{item.label}</Text></Pressable>
                   ))}
                 </View>
-              ) : null}
+              ))}
+            </View>
+
+            <View style={styles.surfaceCard}>
+              <Text style={styles.surfaceKicker}>빠른 이동</Text>
+              <Text style={styles.surfaceTitle}>모바일 주요 업무 탭</Text>
+              <View style={styles.mobileTabRow}>
+                {[
+                  { id: "home", label: "홈" },
+                  { id: "mail", label: "메일" },
+                  { id: "approval", label: "결재" },
+                  { id: "chat", label: "메신저" },
+                  { id: "files", label: "파일" },
+                ].map((item) => (
+                  <Text
+                    key={item.id}
+                    onPress={() => handleTabPress(item.id as MobileTab)}
+                    style={[styles.mobileTab, activeTab === item.id ? styles.mobileTabActive : styles.mobileTabIdle]}
+                  >
+                    {item.label}
+                  </Text>
+                ))}
+              </View>
+              <Text style={styles.surfaceHint}>정책 본문은 메인에 두지 않고 {uiContract.helpText} 경로만 제공합니다.</Text>
               {activeTabError ? <Text style={styles.error}>{activeTabError}</Text> : null}
               </View>
             ) : null}
@@ -1146,48 +1069,25 @@ export default function App() {
               </View>
             ) : null}
 
-            {activeTab === "calendar" ? (
+            {activeTab === "files" ? (
               <View style={styles.surfaceCard}>
-                <Text style={styles.surfaceKicker}>일정</Text>
-                <Text style={styles.surfaceTitle}>오늘의 일정</Text>
-                <View style={styles.calendarHeader}><Text style={styles.calendarMonth}>2026년 8월</Text><Text style={styles.surfaceHint}>내 일정 · 회사 일정</Text></View>
-                <View style={styles.calendarGrid}>{["월", "화", "수", "목", "금", "토", "일"].map((day) => <Text key={day} style={styles.calendarDay}>{day}</Text>)}{Array.from({ length: 14 }, (_, index) => <View key={index} style={[styles.calendarCell, index === 7 ? styles.calendarCellActive : null]}><Text style={styles.calendarDate}>{index + 1}</Text>{index === 7 ? <Text style={styles.calendarEvent}>주간회의</Text> : null}</View>)}</View>
-                <Text style={styles.emptyState}>일정을 선택하면 상세 내용을 확인할 수 있습니다.</Text>
-              </View>
-            ) : null}
-
-            {activeTab === "more" && moreScreen === "directory" ? (
-              <View style={styles.surfaceCard}>
-                <Text style={styles.surfaceKicker}>주소록</Text>
-                <Text style={styles.surfaceTitle}>사원 정보 검색</Text>
-                <TextInput style={styles.input} value={directoryQuery} onChangeText={setDirectoryQuery} placeholder="이름, 부서, 이메일 검색" />
-                {directorySamples.filter((item) => `${item.name}${item.team}${item.email}`.toLowerCase().includes(directoryQuery.toLowerCase())).map((item) => <View key={item.email} style={styles.directoryCard}><View style={styles.avatar}><Text style={styles.avatarText}>{item.name.slice(0, 1)}</Text></View><View style={styles.directoryInfo}><Text style={styles.listTitle}>{item.name}</Text><Text style={styles.listBody}>{item.team} · {item.role}</Text><Text style={styles.listBody}>{item.email}</Text></View></View>)}
-              </View>
-            ) : null}
-
-            {activeTab === "more" && moreScreen === "ai" ? (
-              <View style={styles.surfaceCard}>
-                <Text style={styles.surfaceKicker}>AI 채팅</Text>
-                <Text style={styles.surfaceTitle}>연결된 LLM에게 질문하고 검색</Text>
-                <Text style={styles.surfaceHint}>개인 API 키는 이 화면에서만 입력하며, 실제 Provider 호출은 서버 보안 프록시로 연결합니다.</Text>
-                {aiMessages.map((item, index) => <View key={`${item.role}-${index}`} style={[styles.aiBubble, item.role === "user" ? styles.aiUserBubble : styles.aiAssistantBubble]}><Text style={styles.aiRole}>{item.role === "user" ? "나" : llmProvider}</Text><Text style={styles.listBody}>{item.body}</Text></View>)}
-                <TextInput style={[styles.input, styles.textarea]} value={aiDraft} onChangeText={setAiDraft} placeholder="질문을 입력하세요." multiline />
-                <Button title="질문 보내기" onPress={askAi} />
-              </View>
-            ) : null}
-
-            {activeTab === "more" && moreScreen === "search" ? (
-              <View style={styles.surfaceCard}><Text style={styles.surfaceKicker}>업무 검색</Text><Text style={styles.surfaceTitle}>메일·결재·메신저 통합 검색</Text><TextInput style={styles.input} placeholder="검색어를 입력하세요." /><Text style={styles.emptyState}>검색어를 입력하면 관련 업무가 표시됩니다.</Text></View>
-            ) : null}
-
-            {activeTab === "more" && moreScreen === "settings" ? (
-              <View style={styles.surfaceCard}>
-                <Text style={styles.surfaceKicker}>설정</Text><Text style={styles.surfaceTitle}>앱 기본 설정</Text>
-                <Text style={styles.sectionLabel}>연결 서버</Text><TextInput style={styles.input} value={apiBase} onChangeText={setApiBase} autoCapitalize="none" />
-                <Text style={styles.sectionLabel}>화면 언어</Text><Text style={styles.settingsValue}>{locale}</Text><Text style={styles.sectionLabel}>시간대</Text><Text style={styles.settingsValue}>{timezone}</Text>
-                <Text style={styles.sectionLabel}>화면 밀도</Text><View style={styles.providerRow}><Text onPress={() => setScreenDensity("standard")} style={[styles.providerChip, screenDensity === "standard" ? styles.providerChipActive : null]}>표준</Text><Text onPress={() => setScreenDensity("compact")} style={[styles.providerChip, screenDensity === "compact" ? styles.providerChipActive : null]}>간결</Text></View>
-                <Text style={styles.sectionLabel}>LLM Provider</Text><View style={styles.providerRow}>{llmProviders.map((provider) => <Text key={provider} onPress={() => setLlmProvider(provider)} style={[styles.providerChip, llmProvider === provider ? styles.providerChipActive : null]}>{provider}</Text>)}</View>
-                <TextInput style={styles.input} value={llmApiKey} onChangeText={setLlmApiKey} placeholder="개인 LLM API 키" secureTextEntry autoCapitalize="none" /><Button title={llmConnected ? "연결됨 · 다시 테스트" : "LLM 연결 테스트"} onPress={connectLlm} /><Button title="설정 저장" onPress={saveAppSettings} />
+                <Text style={styles.surfaceKicker}>파일</Text>
+                <Text style={styles.surfaceTitle}>내 파일 / 최근 수정</Text>
+                <View style={styles.quickGrid}>
+                  <View style={[styles.quickCard, styles.quickTeal]}>
+                    <Text style={styles.quickCardTitle}>내 파일</Text>
+                    <Text style={styles.quickCardNote}>{files.length}개</Text>
+                  </View>
+                </View>
+                {files.length === 0 ? <Text style={styles.emptyState}>표시할 파일이 없습니다.</Text> : null}
+                {files.slice(0, 20).map((item) => (
+                  <View key={item.id} style={styles.listCard}>
+                    <Text style={styles.listKicker}>{item.status}</Text>
+                    <Text style={styles.listTitle}>{item.file_name}</Text>
+                    <Text style={styles.listBody}>{`${item.content_type} · ${item.size_bytes.toLocaleString()} B · ${formatStamp(item.updated_at)}`}</Text>
+                  </View>
+                ))}
+                {fileError ? <Text style={styles.error}>{fileError}</Text> : null}
               </View>
             ) : null}
 
@@ -1256,8 +1156,10 @@ export default function App() {
                     setMe(null);
                     setMessage("로그아웃되었습니다.");
                     setSelectedMailDetail(null);
-                    setSelectedRoomId("");
-                    setRoomMessages([]);
+                    setSelectedRoom(null);
+                    setSelectedRoomMessages([]);
+                    setFiles([]);
+                    setFileError("");
                   }}
                 />
               </View>

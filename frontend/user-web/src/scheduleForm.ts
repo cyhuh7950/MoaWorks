@@ -76,6 +76,21 @@ export function createScheduleDraft(schedule: WorkspaceSchedule | null, timezone
   return { scheduleId: null, title: "", startsAt, endsAt: utcToLocalDateTime(end, timezone), location: "", attendeeUserIds: [], repeatType: "none", repeatUntil: addMonthsClamped(localDate(startsAt), 3), alertMinutes: [], description: "", timezone, calendarId: defaultCalendarId };
 }
 
+export function moveScheduleStart(draft: ScheduleDraft, startsAt: string): ScheduleDraft {
+  let duration = 3_600_000;
+  if (!localPattern.test(startsAt)) return { ...draft, startsAt };
+  try {
+    const previousStart = new Date(localDateTimeToUtc(draft.startsAt, draft.timezone)).getTime();
+    const previousEnd = new Date(localDateTimeToUtc(draft.endsAt, draft.timezone)).getTime();
+    if (previousEnd > previousStart) duration = previousEnd - previousStart;
+  } catch {
+    // Keep the safe one-hour duration while the browser has a partial datetime value.
+  }
+  const nextStart = new Date(localDateTimeToUtc(startsAt, draft.timezone));
+  const endsAt = utcToLocalDateTime(new Date(nextStart.getTime() + duration), draft.timezone);
+  return { ...draft, startsAt, endsAt };
+}
+
 export function scheduleDraftPayload(draft: ScheduleDraft) {
   if (!draft.title.trim()) throw new Error("일정 제목을 입력하세요.");
   const startsAt = localDateTimeToUtc(draft.startsAt, draft.timezone);

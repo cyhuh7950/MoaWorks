@@ -17,6 +17,7 @@ from app.schemas.directory import (
     ApprovalLineRecord,
     ApprovalLineActionRequest,
     ApprovalListResponse,
+    ApprovalTrashActionResponse,
     AuditLogListResponse,
     AuditLogRecord,
     AuditLogView,
@@ -40,6 +41,7 @@ from app.schemas.observability import EventEnvelope, MonitoringCategory, Severit
 from app.services.observability_service import ObservabilityService
 from app.schemas.setup import SetupInitializeRequest
 from app.services.postgres_service import PostgresService
+from app.services.resource_policy import ResourceNotFoundError
 from app.services.security_service import SecurityService
 from app.services.approval_attachment_storage import (
     APPROVAL_ATTACHMENT_MAX_COUNT,
@@ -73,6 +75,10 @@ class ApprovalDelegationNotFoundError(Exception):
     pass
 
 
+class DirectoryUserEmailConflictError(RuntimeError):
+    pass
+
+
 class DirectoryStore:
     def __init__(self) -> None:
         self.db = PostgresService()
@@ -87,6 +93,28 @@ class DirectoryStore:
                 cursor.execute("SELECT COUNT(*) AS count FROM users WHERE user_type = 'admin'")
                 admin_count = int(cursor.fetchone()["count"])
         return company_count > 0 and admin_count > 0
+
+    def get_public_company_identity(self) -> dict[str, str] | None:
+        """Return the installed company identity used by public login screens."""
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT name, domain
+                    FROM companies
+                    WHERE status = 'active'
+                    ORDER BY created_at ASC
+                    LIMIT 1
+                    """
+                )
+                row = cursor.fetchone()
+        if row is None:
+            return None
+        return {
+            "name": str(row["name"]).strip(),
+            "domain": str(row["domain"]).strip().lower(),
+        }
 
     def initialize_installation(self, payload: SetupInitializeRequest) -> None:
         self.db.ensure_migrations_applied(payload.dbConfig)
@@ -115,9 +143,9 @@ class DirectoryStore:
                 cursor.execute(
                     """
                     INSERT INTO departments (
-                        id, company_id, system_department_code, department_code, name, parent_id, status, sort_order, created_at
+                        id, company_id, name, parent_id, status, sort_order, is_default, created_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s)
                     """,
                     (department_id, company_id, self._new_system_department_code(), "HQ", "본사", None, "active", 100, now),
                 )
@@ -328,7 +356,6 @@ class DirectoryStore:
                         u.status AS user_status,
                         u.user_type,
                         u.is_department_head,
-                        u.must_change_password,
                         d.id AS department_id,
                         d.name AS department_name,
                         r.id AS role_id,
@@ -460,7 +487,7 @@ class DirectoryStore:
                 current = self._fetch_required_department(cursor, department_id)
                 if current["status"] == "deleted":
                     raise ValueError("이미 삭제된 부서입니다.")
-                if current["parent_id"] is None or current["name"] == "본사":
+                if current["is_default"]:
                     raise ValueError("기본 부서는 삭제할 수 없습니다.")
                 cursor.execute(
                     "SELECT 1 FROM departments WHERE parent_id = %s AND status != 'deleted' LIMIT 1",
@@ -618,7 +645,10 @@ class DirectoryStore:
                 provider = self._fetch_provider_row(cursor)
                 cursor.execute("SELECT 1 FROM users WHERE email = %s", (normalized_email,))
                 if cursor.fetchone() is not None:
-                    raise ValueError("이미 존재하는 이메일입니다.")
+                    raise DirectoryUserEmailConflictError("이미 존재하는 이메일입니다.")
+
+                if payload.isDepartmentHead:
+                    cursor.execute("UPDATE users SET is_department_head = FALSE WHERE department_id = %s", (department["id"],))
 
                 if payload.isDepartmentHead:
                     cursor.execute("UPDATE users SET is_department_head = FALSE, updated_at = %s WHERE department_id = %s", (now, department["id"]))
@@ -627,7 +657,7 @@ class DirectoryStore:
                     """
                     INSERT INTO users (
                         id, company_id, email, name, password_hash, department_id, role_id,
-                        status, user_type, must_change_password, created_at, updated_at
+                        status, user_type, is_department_head, created_at, updated_at
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
@@ -640,8 +670,8 @@ class DirectoryStore:
                         department["id"],
                         role["id"],
                         payload.status,
-                        normalized_user_type,
-                        must_change_password,
+                        payload.userType,
+                        payload.isDepartmentHead,
                         now,
                         now,
                     ),
@@ -721,6 +751,9 @@ class DirectoryStore:
                 if next_is_department_head:
                     cursor.execute("UPDATE users SET is_department_head = FALSE, updated_at = %s WHERE department_id = %s AND id <> %s", (self._now(), next_department_id, user_id))
 
+                if next_is_department_head:
+                    cursor.execute("UPDATE users SET is_department_head = FALSE WHERE department_id = %s AND id <> %s", (next_department_id, user_id))
+
                 cursor.execute(
                     """
                     UPDATE users
@@ -730,11 +763,11 @@ class DirectoryStore:
                         role_id = %s,
                         is_department_head = %s,
                         status = %s,
-                        must_change_password = %s,
+                        is_department_head = %s,
                         updated_at = %s
                     WHERE id = %s
                     """,
-                    (next_name, next_password_hash, next_department_id, next_role_id, next_is_department_head, next_status, next_must_change_password, self._now(), user_id),
+                    (next_name, next_password_hash, next_department_id, next_role_id, next_status, next_is_department_head, self._now(), user_id),
                 )
                 cursor.execute(
                     """
@@ -983,6 +1016,95 @@ class DirectoryStore:
                 row = self._fetch_required_approval_document(cursor, document_id)
                 self._assert_approval_visible(cursor, actor, row)
                 return self._to_approval_document_detail_response(cursor, row, actor)
+
+    def mark_approval_document_read(self, actor_id: str, document_id: str) -> ApprovalDocumentDetailResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                actor = self._fetch_actor_summary(cursor, actor_id)
+                document = self._fetch_required_approval_document(cursor, document_id, for_update=True)
+                self._assert_approval_visible(cursor, actor, document)
+                cursor.execute(
+                    """
+                    UPDATE approval_document_audiences
+                    SET read_at = %s
+                    WHERE document_id = %s AND user_id = %s AND read_at IS NULL
+                    RETURNING audience_type
+                    """,
+                    (now, document_id, actor.userId),
+                )
+                changed = cursor.fetchone()
+                if changed:
+                    self._insert_audit(
+                        cursor=cursor, company_id=actor.companyId, actor_user_id=actor.userId,
+                        actor_user_name=actor.userName, target_type="approval_document", target_id=document_id,
+                        event="approval.audience_read", status_before=None, status_after=changed["audience_type"], reason=None,
+                    )
+                response = self._to_approval_document_detail_response(
+                    cursor, self._fetch_required_approval_document(cursor, document_id), actor
+                )
+            connection.commit()
+        return response
+
+    def delete_approval_document_for_actor(self, actor_id: str, document_id: str) -> ApprovalTrashActionResponse:
+        return self._set_approval_deletion(actor_id, document_id, "deleted")
+
+    def restore_approval_document_for_actor(self, actor_id: str, document_id: str) -> ApprovalTrashActionResponse:
+        return self._set_approval_deletion(actor_id, document_id, "restored")
+
+    def permanently_delete_approval_document_for_actor(self, actor_id: str, document_id: str) -> ApprovalTrashActionResponse:
+        return self._set_approval_deletion(actor_id, document_id, "permanently_deleted")
+
+    def _set_approval_deletion(
+        self, actor_id: str, document_id: str, state: str
+    ) -> ApprovalTrashActionResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                actor = self._fetch_actor_summary(cursor, actor_id)
+                document = self._fetch_required_approval_document(cursor, document_id, for_update=True)
+                self._assert_creator(actor, document)
+                if document["status"] not in {"draft", "approved"}:
+                    raise ValueError("초안 또는 완료 문서만 삭제할 수 있습니다.")
+                if state == "deleted":
+                    cursor.execute(
+                        """
+                        INSERT INTO approval_document_deletions (document_id, user_id, deleted_at, permanently_deleted_at)
+                        VALUES (%s, %s, %s, NULL)
+                        ON CONFLICT (document_id, user_id) DO UPDATE
+                        SET deleted_at = EXCLUDED.deleted_at, permanently_deleted_at = NULL
+                        """,
+                        (document_id, actor.userId, now),
+                    )
+                elif state == "restored":
+                    cursor.execute(
+                        """
+                        DELETE FROM approval_document_deletions
+                        WHERE document_id = %s AND user_id = %s AND permanently_deleted_at IS NULL
+                        """,
+                        (document_id, actor.userId),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        UPDATE approval_document_deletions
+                        SET permanently_deleted_at = %s
+                        WHERE document_id = %s AND user_id = %s
+                          AND deleted_at IS NOT NULL AND permanently_deleted_at IS NULL
+                        """,
+                        (now, document_id, actor.userId),
+                    )
+                    if cursor.rowcount != 1:
+                        raise ValueError("휴지통에 있는 문서만 영구 삭제할 수 있습니다.")
+                self._insert_audit(
+                    cursor=cursor, company_id=actor.companyId, actor_user_id=actor.userId,
+                    actor_user_name=actor.userName, target_type="approval_document", target_id=document_id,
+                    event=f"approval.{state}", status_before=document["status"], status_after=document["status"], reason=None,
+                )
+            connection.commit()
+        return ApprovalTrashActionResponse(documentId=document_id, state=state)
 
     def get_approval_attachment(self, actor_id: str, document_id: str, attachment_id: str) -> dict[str, object]:
         self.db.ensure_migrations_applied()
@@ -1551,6 +1673,41 @@ class DirectoryStore:
             raise ValueError("같은 회사의 활성 사용자만 결재선에 지정할 수 있습니다.")
         return [by_id[user_id] for user_id in approver_user_ids]
 
+    def _replace_approval_audiences(
+        self,
+        cursor,
+        actor: AuthUserSummary,
+        document_id: str,
+        reference_user_ids: list[str],
+        viewer_user_ids: list[str],
+        now: datetime,
+    ) -> None:
+        references = self._validate_approval_approvers(cursor, actor, reference_user_ids)
+        viewers = self._validate_approval_approvers(cursor, actor, viewer_user_ids)
+        cursor.execute("DELETE FROM approval_document_audiences WHERE document_id = %s", (document_id,))
+        for audience_type, rows in (("reference", references), ("viewer", viewers)):
+            for item in rows:
+                cursor.execute(
+                    """
+                    INSERT INTO approval_document_audiences (
+                        id, document_id, user_id, audience_type, read_at, created_at
+                    ) VALUES (%s, %s, %s, %s, NULL, %s)
+                    """,
+                    (self._new_id("aaud"), document_id, item["user_id"], audience_type, now),
+                )
+
+    def _fetch_approval_audiences(self, cursor, document_id: str) -> list[dict]:
+        cursor.execute(
+            """
+            SELECT user_id, audience_type, read_at
+            FROM approval_document_audiences
+            WHERE document_id = %s
+            ORDER BY created_at ASC, id ASC
+            """,
+            (document_id,),
+        )
+        return list(cursor.fetchall())
+
     def _consume_approval_uploads(
         self,
         cursor,
@@ -1654,9 +1811,10 @@ class DirectoryStore:
                     """
                     INSERT INTO approval_documents (
                         id, company_id, title, content, creator_user_id, status,
-                        current_line_index, submitted_by_user_id, submitted_at, created_at, updated_at
+                        current_line_index, submitted_by_user_id, submitted_at, created_at, updated_at,
+                        urgent, creator_department_id, shared_with_department
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         document_id,
@@ -1670,6 +1828,9 @@ class DirectoryStore:
                         None,
                         now,
                         now,
+                        payload.urgent,
+                        actor.departmentId,
+                        payload.shareWithDepartment,
                     ),
                 )
                 for sequence, approver in enumerate(approvers, start=1):
@@ -1693,6 +1854,9 @@ class DirectoryStore:
                             None,
                         ),
                     )
+                self._replace_approval_audiences(
+                    cursor, actor, document_id, payload.referenceUserIds, payload.viewerUserIds, now
+                )
                 self._consume_approval_uploads(
                     cursor,
                     actor,
@@ -1724,8 +1888,33 @@ class DirectoryStore:
                 document = self._fetch_required_approval_document(cursor, document_id, for_update=True)
                 self._assert_creator(actor, document)
                 self._assert_document_status(document, allowed={"draft"}, action_label="수정")
-                approvers = [self._fetch_actor_summary(cursor, approver_id) for approver_id in payload.approverUserIds]
-                cursor.execute("UPDATE approval_documents SET title = %s, content = %s, updated_at = %s WHERE id = %s", (payload.title.strip(), payload.content.strip(), now, document_id))
+                approvers = self._validate_approval_approvers(cursor, actor, payload.approverUserIds)
+                cursor.execute(
+                    """
+                    SELECT id, size_bytes, storage_key
+                    FROM approval_attachments
+                    WHERE document_id = %s
+                    FOR UPDATE
+                    """,
+                    (document_id,),
+                )
+                existing = cursor.fetchall()
+                existing_by_id = {row["id"]: row for row in existing}
+                if any(attachment_id not in existing_by_id for attachment_id in payload.retainedAttachmentIds):
+                    raise ValueError("유지할 결재 첨부를 찾을 수 없습니다.")
+                retained = [existing_by_id[attachment_id] for attachment_id in payload.retainedAttachmentIds]
+                if len(retained) + len(payload.attachments) > APPROVAL_ATTACHMENT_MAX_COUNT:
+                    raise ValueError("결재 첨부는 최대 10개까지 등록할 수 있습니다.")
+                retained_size = sum(int(row["size_bytes"]) for row in retained)
+
+                cursor.execute(
+                    """
+                    UPDATE approval_documents
+                    SET title = %s, content = %s, urgent = %s, shared_with_department = %s, updated_at = %s
+                    WHERE id = %s
+                    """,
+                    (payload.title.strip(), payload.content.strip(), payload.urgent, payload.shareWithDepartment, now, document_id),
+                )
                 cursor.execute("DELETE FROM approval_lines WHERE document_id = %s", (document_id,))
                 for sequence, approver in enumerate(approvers, start=1):
                     cursor.execute(
@@ -1733,8 +1922,46 @@ class DirectoryStore:
                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                         (self._new_id("aline"), document_id, approver.userId, approver.userName, sequence, "pending", None, None, None),
                     )
-                self._insert_audit(cursor=cursor, company_id=actor.companyId, actor_user_id=actor.userId, actor_user_name=actor.userName, target_type="approval_document", target_id=document_id, event="approval.updated", status_before="draft", status_after="draft", reason="문서 또는 결재선 수정")
-                response = self._to_approval_document_response(cursor, self._fetch_required_approval_document(cursor, document_id))
+                self._replace_approval_audiences(
+                    cursor, actor, document_id, payload.referenceUserIds, payload.viewerUserIds, now
+                )
+                removed_ids = [row["id"] for row in existing if row["id"] not in set(payload.retainedAttachmentIds)]
+                if removed_ids:
+                    cursor.execute(
+                        """
+                        DELETE FROM approval_attachments
+                        WHERE document_id = %s AND id = ANY(%s)
+                        RETURNING storage_key
+                        """,
+                        (document_id, removed_ids),
+                    )
+                    removed_storage_keys = [row["storage_key"] for row in cursor.fetchall()]
+                self._consume_approval_uploads(
+                    cursor,
+                    actor,
+                    payload.attachments,
+                    document_id=document_id,
+                    now=now,
+                    retained_count=len(retained),
+                    retained_size=retained_size,
+                )
+                self._insert_audit(
+                    cursor=cursor,
+                    company_id=actor.companyId,
+                    actor_user_id=actor.userId,
+                    actor_user_name=actor.userName,
+                    target_type="approval_document",
+                    target_id=document_id,
+                    event="approval.updated",
+                    status_before="draft",
+                    status_after="draft",
+                    reason=None,
+                )
+                response = self._to_approval_document_detail_response(
+                    cursor,
+                    self._fetch_required_approval_document(cursor, document_id),
+                    actor,
+                )
             connection.commit()
         return response
 
@@ -1938,7 +2165,7 @@ class DirectoryStore:
 
     def _fetch_required_department(self, cursor, department_id: str) -> dict:
         cursor.execute(
-            "SELECT id, company_id, system_department_code, department_code, name, parent_id, status, sort_order, created_at FROM departments WHERE id = %s",
+            "SELECT id, company_id, name, parent_id, status, sort_order, is_default, created_at FROM departments WHERE id = %s",
             (department_id,),
         )
         row = cursor.fetchone()
@@ -1970,7 +2197,6 @@ class DirectoryStore:
                 u.status AS user_status,
                 u.user_type,
                 u.is_department_head,
-                u.must_change_password,
                 d.name AS department_name,
                 r.name AS role_name,
                 r.permissions,
@@ -2002,6 +2228,10 @@ class DirectoryStore:
                 ad.title,
                 ad.content,
                 ad.creator_user_id,
+                ad.creator_department_id,
+                creator_department.name AS creator_department_name,
+                ad.urgent,
+                ad.shared_with_department,
                 ad.status,
                 ad.current_line_index,
                 ad.submitted_by_user_id,
@@ -2011,6 +2241,7 @@ class DirectoryStore:
                 u.name AS creator_user_name
             FROM approval_documents ad
             JOIN users u ON u.id = ad.creator_user_id
+            LEFT JOIN departments creator_department ON creator_department.id = ad.creator_department_id
             WHERE ad.id = %s
         """
         if for_update:
@@ -2018,7 +2249,7 @@ class DirectoryStore:
         cursor.execute(query, (document_id,))
         row = cursor.fetchone()
         if row is None:
-            raise ValueError("대상 결재 문서를 찾을 수 없습니다.")
+            raise ResourceNotFoundError("대상 결재 문서를 찾을 수 없습니다.")
         return row
 
     def _fetch_approval_lines(self, cursor, document_id: str, *, for_update: bool = False) -> list[dict]:
@@ -2050,53 +2281,50 @@ class DirectoryStore:
         return list(cursor.fetchall())
 
     def _fetch_visible_approval_rows(self, cursor, actor: AuthUserSummary) -> list[dict]:
+        common_select = """
+            SELECT DISTINCT
+                ad.id, ad.company_id, ad.title, ad.content, ad.creator_user_id,
+                ad.creator_department_id, creator_department.name AS creator_department_name,
+                ad.urgent, ad.shared_with_department, ad.status, ad.current_line_index,
+                ad.submitted_by_user_id, ad.submitted_at, ad.created_at, ad.updated_at,
+                u.name AS creator_user_name,
+                audience.audience_type AS current_user_audience_type,
+                audience.read_at AS current_user_read_at,
+                (ad.shared_with_department = TRUE AND ad.status = 'approved'
+                 AND ad.creator_department_id = %s) AS current_user_department_member,
+                (deletion.deleted_at IS NOT NULL) AS deleted_for_current_user,
+                (deletion.permanently_deleted_at IS NOT NULL) AS permanently_deleted_for_current_user
+            FROM approval_documents ad
+            JOIN users u ON u.id = ad.creator_user_id
+            LEFT JOIN departments creator_department ON creator_department.id = ad.creator_department_id
+            LEFT JOIN approval_lines apl ON apl.document_id = ad.id
+            LEFT JOIN approval_document_audiences audience
+              ON audience.document_id = ad.id AND audience.user_id = %s
+            LEFT JOIN approval_document_deletions deletion
+              ON deletion.document_id = ad.id AND deletion.user_id = %s
+        """
+        base_params: list[object] = [actor.departmentId, actor.userId, actor.userId]
         if self._can_view_all_approvals(actor):
             cursor.execute(
-                """
-                SELECT
-                    ad.id,
-                    ad.company_id,
-                    ad.title,
-                    ad.content,
-                    ad.creator_user_id,
-                    ad.status,
-                    ad.current_line_index,
-                    ad.submitted_by_user_id,
-                    ad.submitted_at,
-                    ad.created_at,
-                    ad.updated_at,
-                    u.name AS creator_user_name
-                FROM approval_documents ad
-                JOIN users u ON u.id = ad.creator_user_id
+                common_select + """
                 WHERE ad.company_id = %s
+                  AND deletion.permanently_deleted_at IS NULL
                 ORDER BY ad.updated_at DESC, ad.created_at DESC
                 """,
-                (actor.companyId,),
+                (*base_params, actor.companyId),
             )
         else:
             cursor.execute(
-                """
-                SELECT DISTINCT
-                    ad.id,
-                    ad.company_id,
-                    ad.title,
-                    ad.content,
-                    ad.creator_user_id,
-                    ad.status,
-                    ad.current_line_index,
-                    ad.submitted_by_user_id,
-                    ad.submitted_at,
-                    ad.created_at,
-                    ad.updated_at,
-                    u.name AS creator_user_name
-                FROM approval_documents ad
-                JOIN users u ON u.id = ad.creator_user_id
-                LEFT JOIN approval_lines apl ON apl.document_id = ad.id
+                common_select + """
                 WHERE ad.company_id = %s
+                  AND deletion.permanently_deleted_at IS NULL
                   AND (
                       ad.creator_user_id = %s
                       OR apl.approver_user_id = %s
                       OR apl.decided_by_user_id = %s
+                      OR audience.user_id = %s
+                      OR (ad.shared_with_department = TRUE AND ad.status = 'approved'
+                          AND ad.creator_department_id = %s)
                       OR EXISTS (
                           SELECT 1
                           FROM approval_lines current_line
@@ -2104,8 +2332,7 @@ class DirectoryStore:
                             ON adg.company_id = ad.company_id
                            AND adg.owner_user_id = current_line.approver_user_id
                            AND adg.delegate_user_id = %s
-                           AND adg.enabled = TRUE
-                           AND adg.deleted_at IS NULL
+                           AND adg.enabled = TRUE AND adg.deleted_at IS NULL
                            AND adg.start_date <= timezone('Asia/Seoul', CURRENT_TIMESTAMP)::date
                            AND adg.end_date >= timezone('Asia/Seoul', CURRENT_TIMESTAMP)::date
                           WHERE current_line.document_id = ad.id
@@ -2115,25 +2342,41 @@ class DirectoryStore:
                   )
                 ORDER BY ad.updated_at DESC, ad.created_at DESC
                 """,
-                (actor.companyId, actor.userId, actor.userId, actor.userId, actor.userId),
+                (*base_params, actor.companyId, actor.userId, actor.userId, actor.userId,
+                 actor.userId, actor.departmentId, actor.userId),
             )
         return list(cursor.fetchall())
 
     def _assert_approval_visible(self, cursor, actor: AuthUserSummary, document: dict) -> None:
         if document["company_id"] != actor.companyId:
             raise PermissionError("대상 결재 문서에 접근할 수 없습니다.")
-        if self._can_view_all_approvals(actor):
+        cursor.execute(
+            """
+            SELECT deleted_at, permanently_deleted_at
+            FROM approval_document_deletions
+            WHERE document_id = %s AND user_id = %s
+            """,
+            (document["id"], actor.userId),
+        )
+        deletion = cursor.fetchone()
+        if deletion and deletion["permanently_deleted_at"] is not None:
+            raise PermissionError("대상 결재 문서에 접근할 수 없습니다.")
+        if self._can_view_all_approvals(actor) or document["creator_user_id"] == actor.userId:
             return
-        if document["creator_user_id"] == actor.userId:
+        if (document.get("shared_with_department") and document["status"] == "approved"
+                and document.get("creator_department_id") == actor.departmentId):
             return
         cursor.execute(
             """
             SELECT 1
+            FROM approval_document_audiences audience
+            WHERE audience.document_id = %s AND audience.user_id = %s
+            UNION ALL
+            SELECT 1
             FROM approval_lines apl
             WHERE apl.document_id = %s
               AND (
-                  apl.approver_user_id = %s
-                  OR apl.decided_by_user_id = %s
+                  apl.approver_user_id = %s OR apl.decided_by_user_id = %s
                   OR (
                       apl.sequence = %s AND apl.status = 'pending'
                       AND EXISTS (
@@ -2149,11 +2392,11 @@ class DirectoryStore:
               )
             LIMIT 1
             """,
-            (document["id"], actor.userId, actor.userId, document["current_line_index"], actor.companyId, actor.userId),
+            (document["id"], actor.userId, document["id"], actor.userId, actor.userId,
+             document["current_line_index"], actor.companyId, actor.userId),
         )
-        if cursor.fetchone() is not None:
-            return
-        raise PermissionError("대상 결재 문서에 접근할 수 없습니다.")
+        if cursor.fetchone() is None:
+            raise PermissionError("대상 결재 문서에 접근할 수 없습니다.")
 
     def _can_actor_process_current_line(self, cursor, row: dict, actor: AuthUserSummary) -> bool:
         if row["status"] != "submitted" or row["current_line_index"] is None:
@@ -2219,6 +2462,8 @@ class DirectoryStore:
         *,
         can_current_user_act: bool | None = None,
     ) -> ApprovalDocumentResponse:
+        audiences = self._fetch_approval_audiences(cursor, row["id"])
+        current_audience = next((item for item in audiences if item["user_id"] == actor.userId), None)
         lines = [
             ApprovalLineRecord(
                 id=line["id"],
@@ -2246,7 +2491,10 @@ class DirectoryStore:
             content=row["content"],
             creatorUserId=row["creator_user_id"],
             creatorUserName=row["creator_user_name"],
+            creatorDepartmentId=row.get("creator_department_id"),
+            creatorDepartmentName=row.get("creator_department_name"),
             status=row["status"],
+            urgent=bool(row.get("urgent")),
             createdAt=row["created_at"],
             updatedAt=row["updated_at"],
             submittedByUserId=row["submitted_by_user_id"],
@@ -2256,6 +2504,14 @@ class DirectoryStore:
                 self._can_actor_process_current_line(cursor, row, actor)
                 if can_current_user_act is None else can_current_user_act
             ),
+            referenceUserIds=[item["user_id"] for item in audiences if item["audience_type"] == "reference"],
+            viewerUserIds=[item["user_id"] for item in audiences if item["audience_type"] == "viewer"],
+            currentUserAudienceType=current_audience["audience_type"] if current_audience else row.get("current_user_audience_type"),
+            currentUserReadAt=current_audience["read_at"] if current_audience else row.get("current_user_read_at"),
+            sharedWithDepartment=bool(row.get("shared_with_department")),
+            currentUserDepartmentMember=bool(row.get("current_user_department_member")),
+            deletedForCurrentUser=bool(row.get("deleted_for_current_user")),
+            permanentlyDeletedForCurrentUser=bool(row.get("permanently_deleted_for_current_user")),
             lines=lines,
         )
 
@@ -2587,10 +2843,11 @@ class DirectoryStore:
             roleId=row["role_id"],
             roleName=row["role_name"],
             userType=row["user_type"],
-            isDepartmentHead=bool(row.get("is_department_head", False)),
+            isDepartmentHead=bool(row["is_department_head"]),
             status=row["user_status"],
             permissions=self._permissions(row["permissions"]),
-            mustChangePassword=bool(row["must_change_password"]),
+            departmentId=row.get("department_id"),
+            departmentName=row.get("department_name"),
         )
 
     def _row_to_user_view(self, row: dict) -> UserView:
@@ -2622,6 +2879,7 @@ class DirectoryStore:
             roleName=row["role_name"],
             status=row["user_status"],
             userType=row["user_type"],
+            isDepartmentHead=bool(row.get("is_department_head", False)),
             mailAccountEmail=row["mail_account_email"],
             mailAccountStatus=row["mail_account_status"],
             permissions=permissions,

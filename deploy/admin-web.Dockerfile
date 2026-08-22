@@ -10,7 +10,7 @@ RUN npm run build
 
 FROM nginx:1.28.3-alpine3.23 AS runtime
 
-COPY deploy/admin-web.nginx.conf /etc/nginx/conf.d/default.conf
+COPY deploy/admin-web.nginx.conf /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html
 
 EXPOSE 3510

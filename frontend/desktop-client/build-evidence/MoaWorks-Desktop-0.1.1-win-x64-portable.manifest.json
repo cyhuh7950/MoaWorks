@@ -1,0 +1,25 @@
+{
+  "product": "MoaWorks Desktop Client",
+  "version": "0.1.1",
+  "platform": "win32",
+  "arch": "x64",
+  "packageType": "portable-zip",
+  "portableDirectory": "MoaWorks-Desktop-0.1.1-win-x64-portable",
+  "zip": {
+    "fileName": "MoaWorks-Desktop-0.1.1-win-x64-portable.zip",
+    "size": 144221750,
+    "sha256": "9bbc636fe0a28090e1d3d6b6e7ff075c1a14387713840be74e562a87e7564b3f"
+  },
+  "executable": {
+    "fileName": "MoaWorks Desktop Client.exe",
+    "size": 225613824,
+    "sha256": "8593db40c0c6e5e3c4b6b0a225b1dc9a549ecdf10f6cf2010cf5b6ce869ce07f"
+  },
+  "appCode": {
+    "path": "resources/app/electron/main.js",
+    "size": 2615,
+    "sha256": "ff0f1a25913e3379f74fb509ab3f1ada419c323ab388588c976fa2334678571f"
+  },
+  "status": "success",
+  "generatedAt": "2026-08-11T06:02:18.694Z"
+}

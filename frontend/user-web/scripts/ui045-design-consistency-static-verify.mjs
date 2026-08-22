@@ -25,6 +25,7 @@ const checks = [
   ["Shell viewport 고정", /\.user-shell\s*\{[^}]*height:\s*100dvh;[^}]*overflow:\s*hidden;/s.test(styles)],
   ["Shell 본문 외부 overflow 차단", /\.user-shell-content\s*\{[^}]*overflow:\s*hidden\s*!important;/s.test(styles)],
   ["메일 compact 136px", /\.user-mail-workbench\s*\{[^}]*grid-template-columns:\s*136px\s+minmax\(0,\s*1fr\)/s.test(styles)],
+  ["메일 설정 체크박스 18px", /\.user-mail-setting-toggle input\s*\{[^}]*width:\s*18px;[^}]*height:\s*18px;/s.test(styles)],
   ["split 기본 50대50", styles.includes("--split-primary-ratio: 50%")],
   ["split pane overflow 차단", /\.user-split-view__pane\s*\{[^}]*min-width:\s*0;[^}]*min-height:\s*0;[^}]*overflow:\s*hidden;/s.test(styles)],
   ["popup 내부 스크롤", /\.common-popup\s*\{[^}]*max-height:\s*82vh;[^}]*overflow:\s*auto;/s.test(styles)],

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,12 +59,12 @@ const expectedAssets = [
 ];
 
 const checks = [
-  ["final evidence 상태", manifest.environment === "sinsan" && manifest.status === "FINAL_EVIDENCE_WAIT"],
+  ["final evidence 상태", manifest.environment === "sinsan" && manifest.status === "FINAL_EVIDENCE_PASS"],
   ["live deployment PASS", deployment.status === "PASS" && deployment.liveDeployment.status === "PASS"],
-  ["전체 WAIT", result.status === "WAIT" && result.releaseCandidate === false && result.deployReady === false],
-  ["최종 GAP 2개", JSON.stringify(result.gaps) === JSON.stringify(["RUN1_NETWORK_STATUS_COLUMN_WAIT", "RUN2_NETWORK_STATUS_COLUMN_WAIT"])],
-  ["run 판정 fail closed", runs.every((run) => run.result.status === "WAIT_NETWORK_STATUS_EVIDENCE" && run.result.evidenceComplete === false)],
-  ["실행 계약과 책임자", contract.browserRuns.every((run) => run.executionOwner === "OWOUL1" && run.status === "WAIT_NETWORK_STATUS_EVIDENCE") && runs.every((run) => run.result.executionOwner === "OWOUL1")],
+  ["전체 LIVE PASS", result.status === "LIVE_PASS_DEPLOY_READY" && result.releaseCandidate === true && result.deployReady === true],
+  ["최종 GAP 0개", result.gaps.length === 0],
+  ["run 판정 PASS", runs.every((run) => run.result.status === "PASS" && run.result.evidenceComplete === true && run.result.networkEvidenceComplete === true)],
+  ["실행 계약과 책임자", contract.browserRuns.every((run) => run.executionOwner === "OWOUL1" && run.status === "PASS") && runs.every((run) => run.result.executionOwner === "OWOUL1")],
   ["screen 증거 PASS", runs.every((run) => run.screen.status === "PASS" && run.result.screenEvidenceComplete === true && run.result.screenMetricsConsoleSameOriginComplete === true)],
   ["유효 viewport 1920x1080", runs.every((run) => run.result.viewport.width === 1920 && run.result.viewport.height === 1080 && run.screen.viewport.width === 1920 && run.screen.viewport.height === 1080)],
   ["사용자 전체 매트릭스", runs.every((run) => JSON.stringify(run.screen.user?.areas) === JSON.stringify(requiredUserAreas))],
@@ -76,7 +77,7 @@ const checks = [
   ["pageAssets same-origin", runs.every((run) => run.network.sameOrigin === true && run.network.forbiddenTargetCount === 0 && run.network.pageAssets?.user?.sameOrigin === true && run.network.pageAssets?.admin?.sameOrigin === true)],
   ["asset 관찰 수", runs.every((run, index) => run.network.pageAssets?.user?.total === expectedAssets[index].user && run.network.pageAssets?.admin?.total === expectedAssets[index].admin)],
   ["run2 asset 유형", runs[1].network.pageAssets?.user?.types?.script === 1 && runs[1].network.pageAssets?.user?.types?.stylesheet === 1 && runs[1].network.pageAssets?.user?.types?.other === 50 && runs[1].network.pageAssets?.admin?.types?.script === 1 && runs[1].network.pageAssets?.admin?.types?.stylesheet === 1 && runs[1].network.pageAssets?.admin?.types?.other === 8 && runs[1].network.pageAssets?.admin?.types?.image === 1],
-  ["Status 열 fail closed", runs.every((run) => run.network.status === "WAIT_STATUS_COLUMN_EVIDENCE" && run.network.responseStatusAvailable === false && run.network.nameStatusDomainComplete === false)],
+  ["Network Name Status Domain PASS", runs.every((run) => run.network.status === "PASS" && run.network.responseStatusAvailable === true && run.network.nameStatusDomainComplete === true && run.network.unexpectedHttpStatusCount === 0 && JSON.stringify(run.network.requiredKindsObserved) === JSON.stringify(["document", "script", "stylesheet", "fetch"]) && run.network.requests.length >= 4)],
   ["run2 빈 Network 진단 rejected", runs[1].network.rejectedDiagnostics?.length === 1 && runs[1].network.rejectedDiagnostics[0].path === "run2/user-network-filter-empty.png" && runs[1].network.rejectedDiagnostics[0].observedRows === 0 && runs[1].network.rejectedDiagnostics[0].availableRows === 9],
   ["run2 1559x762 폐기", runs[1].result.discardedAttempts?.length === 1 && runs[1].result.discardedAttempts[0].viewport?.width === 1559 && runs[1].result.discardedAttempts[0].viewport?.height === 762 && runs[1].result.discardedAttempts[0].includedInValidRun === false],
   ["task-owned data 없음", runs.every((run) => run.cleanup.status === "PASS_NO_TASK_OWNED_DATA" && run.cleanup.mutationCreated === false && run.cleanup.residualCount === 0 && run.cleanup.protectedAccountsUnchanged === "NO_PROFILE_CREDENTIAL_ROLE_MUTATION_OBSERVED")],
@@ -94,15 +95,26 @@ const rejectedScreenshotPaths = [
   "run2/admin-help-rejected-1559x762.jpg",
   "run2/user-network-filter-empty.png",
 ];
+const networkScreenshotPaths = [
+  "run1/user-network-name-status-domain-1920x1080.png",
+  "run1/admin-network-name-status-domain-1920x1080.png",
+  "run2/user-network-name-status-domain-1920x1080.png",
+  "run2/admin-network-name-status-domain-1920x1080.png",
+];
 let screenshotFilesPresent = true;
-for (const path of [...validScreenshotPaths, ...rejectedScreenshotPaths]) {
+for (const path of [...validScreenshotPaths, ...rejectedScreenshotPaths, ...networkScreenshotPaths]) {
   try { await access(resolve(evidenceRoot, path)); }
   catch { screenshotFilesPresent = false; }
 }
 const validScreenshotDimensions = await Promise.all(validScreenshotPaths.map(readImageDimensions));
 const rejectedScreenshotDimensions = await Promise.all(rejectedScreenshotPaths.map(readImageDimensions));
-checks.push(["스크린샷 파일 6개", screenshotFilesPresent]);
+const networkScreenshotDimensions = await Promise.all(networkScreenshotPaths.map(readImageDimensions));
+const networkScreenshotHashes = await Promise.all(networkScreenshotPaths.map(async (path) => createHash("sha256").update(await readFile(resolve(evidenceRoot, path))).digest("hex")));
+const recordedNetworkHashes = runs.flatMap((run) => [run.network.captures.user.sha256, run.network.captures.admin.sha256]);
+checks.push(["스크린샷 파일 10개", screenshotFilesPresent]);
 checks.push(["유효 JPEG 1920x1080", validScreenshotDimensions.every((size) => size.format === "jpeg" && size.width === 1920 && size.height === 1080)]);
+checks.push(["Network PNG 4개 1920x1080", networkScreenshotDimensions.every((size) => size.format === "png" && size.width === 1920 && size.height === 1080)]);
+checks.push(["Network 독립 SHA-256", new Set(networkScreenshotHashes).size === 4 && JSON.stringify(networkScreenshotHashes) === JSON.stringify(recordedNetworkHashes)]);
 checks.push(["거부 스크린샷 치수 분리", rejectedScreenshotDimensions[0].format === "jpeg" && rejectedScreenshotDimensions[0].width === 1559 && rejectedScreenshotDimensions[0].height === 762 && rejectedScreenshotDimensions[1].format === "png" && runs[1].screen.rejectedDiagnostics?.[0]?.path === rejectedScreenshotPaths[0]]);
 
 for (const [name, passed] of checks) console.log(`${passed ? "PASS" : "FAIL"} ${name}`);

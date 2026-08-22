@@ -29,3 +29,8 @@ test("portable packaging contract includes versioned directory, EXE, ZIP and SHA
   assert.match(packageScript, /sha256/i);
   assert.match(packageScript, /manifest/i);
 });
+
+test("portable packaging includes the Squirrel startup runtime required by main process", () => {
+  assert.match(packageScript, /electron-squirrel-startup/);
+  assert.match(packageScript, /node_modules/);
+});

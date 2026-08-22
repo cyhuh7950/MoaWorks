@@ -13,6 +13,8 @@ from app.services.mail_delivery_service import MailDeliveryPolicy
 
 from app.schemas.directory import AuthUserSummary
 from app.schemas.mail_messenger import (
+    AdminMessengerRoomListResponse,
+    AdminMessengerRoomView,
     MailAttachmentMeta,
     MailAttachmentView,
     MailBulkRequest,
@@ -50,6 +52,10 @@ from app.schemas.mail_messenger import (
     MessengerRoomParticipantsUpdateRequest,
     MessengerRoomListResponse,
     MessengerRoomParticipantsRequest,
+    MessengerRoomTranslationRequest,
+    MessengerRoomDeleteResponse,
+    MessengerRoomLeaveResponse,
+    MessengerRoomOwnerTransferRequest,
     MessengerRoomSummary,
 )
 from app.services.mail_delivery_service import MailDeliveryService
@@ -58,6 +64,7 @@ from app.services.spam_settings_service import SpamDecision, SpamSettingsService
 from app.services.mail_auto_classification_service import AutoClassificationTargetInUseError, MailAutoClassificationService
 from app.services.mail_auto_forwarding_service import MailAutoForwardingService
 from app.services.mail_out_of_office_service import MailOutOfOfficeService
+from app.services.resource_policy import ResourceNotFoundError, ResourceStateError
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +81,10 @@ class MailSignatureConflictError(RuntimeError):
 
 
 class MessengerConflictError(RuntimeError):
+    pass
+
+
+class MailFolderConflictError(RuntimeError):
     pass
 
 
@@ -152,7 +163,7 @@ class MailMessengerService:
                     FROM mail_messages m
                     WHERE m.company_id = %s
                       AND m.sender_user_id = %s
-                      AND m.status IN ('sent', 'scheduled')
+                      AND m.status = 'sent'
                       AND m.sender_deleted_at IS NULL
                       AND m.sender_purged_at IS NULL
                       AND m.sender_copy_saved = TRUE
@@ -162,6 +173,89 @@ class MailMessengerService:
                 )
                 mails = [self._to_mail_summary(row) for row in cursor.fetchall()]
                 return MailListResponse(mails=mails, total=len(mails), limit=50, offset=0, hasMore=False)
+
+    def list_scheduled(self, actor: AuthUserSummary, query: MailListQuery | None = None) -> MailListResponse:
+        return self._list_sender_query(actor, query or MailListQuery(), mailbox="scheduled")
+
+    def update_scheduled_mail(self, actor: AuthUserSummary, mail_id: str, payload) -> MailDetailResponse:
+        if not payload.to and not payload.cc and not payload.bcc:
+            raise ValueError("수신자를 1명 이상 입력해야 합니다.")
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            message = self._fetch_owned_scheduled_mail(cursor, actor, mail_id)
+            cursor.execute("SELECT LOWER(email) AS email, id FROM users WHERE company_id = %s AND status = 'active'", (actor.companyId,))
+            active_users = {row["email"]: row["id"] for row in cursor.fetchall()}
+            cursor.execute("DELETE FROM mail_recipients WHERE message_id = %s", (mail_id,))
+            for kind, email in [("to", item) for item in payload.to] + [("cc", item) for item in payload.cc] + [("bcc", item) for item in payload.bcc]:
+                cursor.execute(
+                    """INSERT INTO mail_recipients (id,message_id,recipient_user_id,recipient_email,recipient_kind,is_read,is_starred,received_at,is_spam,spam_marked_at,delivery_source)
+                    VALUES (%s,%s,%s,%s,%s,FALSE,FALSE,NULL,FALSE,NULL,'direct')""",
+                    (self._new_id("rcpt"), mail_id, active_users.get(email), email, kind),
+                )
+            cursor.execute(
+                """UPDATE mail_messages SET subject=%s,body_text=%s,body_html=%s,scheduled_at=%s,updated_at=%s
+                WHERE id=%s RETURNING *""",
+                (payload.subject.strip(), payload.bodyText, payload.bodyHtml, payload.scheduledAt, now, mail_id),
+            )
+            updated = cursor.fetchone()
+            self._write_mail_event_audit(cursor, company_id=actor.companyId, actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id, event="mail.scheduled.updated", status_before="scheduled", status_after="scheduled", now=now, reason="scheduled mail user update")
+            connection.commit()
+        return self.get_mail(actor, mail_id, "scheduled")
+
+    def cancel_scheduled_mail(self, actor: AuthUserSummary, mail_id: str):
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            self._fetch_owned_scheduled_mail(cursor, actor, mail_id)
+            cursor.execute("UPDATE mail_messages SET status='draft',scheduled_at=NULL,updated_at=%s WHERE id=%s", (now, mail_id))
+            self._write_mail_event_audit(cursor, company_id=actor.companyId, actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id, event="mail.scheduled.cancelled", status_before="scheduled", status_after="draft", now=now, reason="scheduled mail user cancel")
+            connection.commit()
+        from app.schemas.mail_messenger import MailScheduledActionResponse
+        return MailScheduledActionResponse(mailId=mail_id, status="draft")
+
+    def send_scheduled_mail_now(self, actor: AuthUserSummary, mail_id: str):
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            self._fetch_owned_scheduled_mail(cursor, actor, mail_id)
+            cursor.execute("UPDATE mail_messages SET scheduled_at=%s,updated_at=%s WHERE id=%s", (now, now, mail_id))
+            connection.commit()
+        self.dispatch_scheduled_mail(limit=100)
+        detail = self.get_mail(actor, mail_id, "sent")
+        from app.schemas.mail_messenger import MailScheduledActionResponse
+        return MailScheduledActionResponse(mailId=mail_id, status="sent", sentAt=detail.sentAt)
+
+    def retry_scheduled_mail(self, actor: AuthUserSummary, mail_id: str):
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT id,status FROM mail_messages WHERE id=%s AND company_id=%s AND sender_user_id=%s AND sender_deleted_at IS NULL FOR UPDATE", (mail_id, actor.companyId, actor.userId))
+            message = cursor.fetchone()
+            if message is None:
+                raise ResourceNotFoundError("메일을 찾을 수 없습니다.")
+            if message["status"] == "scheduled":
+                connection.rollback()
+                return self.send_scheduled_mail_now(actor, mail_id)
+            if message["status"] != "sent":
+                raise ResourceStateError("발송 실패 메일만 재시도할 수 있습니다.")
+            cursor.execute("""UPDATE mail_delivery_queue q SET status='queued',next_attempt_at=%s,lease_expires_at=NULL,worker_id=NULL,last_error=NULL,updated_at=%s
+                FROM mail_provider_configs p WHERE q.provider_config_id=p.id AND q.mail_id=%s AND q.status IN ('failed','blocked')
+                AND p.delivery_enabled=TRUE AND p.last_test_status='success' RETURNING q.id""", (now, now, mail_id))
+            changed = cursor.fetchall()
+            if not changed:
+                raise ResourceStateError("재시도할 외부 전달 실패가 없거나 Provider가 준비되지 않았습니다.")
+            self._write_mail_event_audit(cursor, company_id=actor.companyId, actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id, event="mail.delivery.retry.requested", status_before="failed", status_after="queued", now=now, reason="scheduled delivery user retry")
+            connection.commit()
+        from app.schemas.mail_messenger import MailScheduledActionResponse
+        return MailScheduledActionResponse(mailId=mail_id, status="sent", sentAt=now)
+
+    def _fetch_owned_scheduled_mail(self, cursor, actor: AuthUserSummary, mail_id: str) -> dict:
+        cursor.execute("SELECT * FROM mail_messages WHERE id=%s AND company_id=%s AND sender_user_id=%s AND status='scheduled' AND sender_deleted_at IS NULL FOR UPDATE", (mail_id, actor.companyId, actor.userId))
+        row = cursor.fetchone()
+        if row is None:
+            raise ResourceNotFoundError("예약 메일을 찾을 수 없습니다.")
+        return row
 
     def list_drafts(self, actor: AuthUserSummary, query: MailListQuery | None = None) -> MailListResponse:
         if query is not None:
@@ -274,7 +368,7 @@ class MailMessengerService:
 
     def _list_sender_query(self, actor: AuthUserSummary, query: MailListQuery, *, mailbox: str) -> MailListResponse:
         self.db.ensure_migrations_applied()
-        status_condition = "m.status = 'draft'" if mailbox == "draft" else "m.status IN ('sent', 'scheduled')"
+        status_condition = "m.status = 'draft'" if mailbox == "draft" else "m.status = 'scheduled'" if mailbox == "scheduled" else "m.status = 'sent'"
         conditions = [
             "m.company_id = %s",
             "m.sender_user_id = %s",
@@ -416,8 +510,253 @@ class MailMessengerService:
                 is_sender_view = bool(message["is_sender_view"])
                 recipients = self._fetch_mail_recipients(cursor, actor, mail_id, is_sender_view=is_sender_view)
                 attachments = self._fetch_mail_attachments(cursor, mail_id)
-                external_deliveries = delivery_service.list_mail_external_deliveries(cursor, mail_id) if is_sender_view else []
-        return self._to_mail_detail(message, recipients, attachments, external_deliveries)
+                external_deliveries = self._fetch_external_deliveries(cursor, mail_id) if message["is_sender_view"] else []
+                preferences = self._ensure_basic_preferences(cursor, actor)
+            connection.commit()
+        return self._to_mail_detail(message, recipients, attachments, external_deliveries, preferences)
+
+    def stage_attachment(
+        self,
+        actor: AuthUserSummary,
+        file_name: str,
+        content_type: str,
+        content: bytes,
+    ):
+        self.attachment_storage.cleanup_expired()
+        return self.attachment_storage.stage(actor, file_name, content_type, content)
+
+    def list_recent_recipients(self, actor: AuthUserSummary, limit: int = 20) -> MailRecentRecipientListResponse:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, recipient_email AS email, recipient_name AS name,
+                           department_name, last_used_at, use_count
+                    FROM user_recent_mail_recipients
+                    WHERE company_id = %s AND owner_user_id = %s
+                    ORDER BY last_used_at DESC, id
+                    LIMIT %s
+                    """,
+                    (actor.companyId, actor.userId, limit),
+                )
+                recipients = [
+                    MailRecentRecipient(
+                        recipientId=row["id"],
+                        email=row["email"],
+                        name=row["name"],
+                        departmentName=row["department_name"],
+                        lastUsedAt=row["last_used_at"],
+                        useCount=row["use_count"],
+                    )
+                    for row in cursor.fetchall()
+                ]
+        return MailRecentRecipientListResponse(recipients=recipients)
+
+    def list_recent_recipient_settings(self, actor: AuthUserSummary, limit: int = 200) -> MailRecentRecipientSettingsResponse:
+        response = self.list_recent_recipients(actor, limit)
+        return MailRecentRecipientSettingsResponse(recipients=response.recipients, totalCount=len(response.recipients))
+
+    def delete_recent_recipient(self, actor: AuthUserSummary, recipient_id: str) -> MailRecentRecipientDeleteResponse:
+        payload = MailRecentRecipientBulkDeleteRequest(recipientIds=[recipient_id])
+        return self.bulk_delete_recent_recipients(actor, payload)
+
+    def bulk_delete_recent_recipients(
+        self,
+        actor: AuthUserSummary,
+        payload: MailRecentRecipientBulkDeleteRequest,
+    ) -> MailRecentRecipientDeleteResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                if payload.deleteAll:
+                    cursor.execute(
+                        """SELECT id FROM user_recent_mail_recipients
+                        WHERE company_id = %s AND owner_user_id = %s FOR UPDATE""",
+                        (actor.companyId, actor.userId),
+                    )
+                    locked_ids = [row["id"] for row in cursor.fetchall()]
+                else:
+                    requested_ids = payload.recipientIds or []
+                    cursor.execute(
+                        """SELECT id FROM user_recent_mail_recipients
+                        WHERE company_id = %s AND owner_user_id = %s AND id = ANY(%s)
+                        FOR UPDATE""",
+                        (actor.companyId, actor.userId, requested_ids),
+                    )
+                    locked_ids = [row["id"] for row in cursor.fetchall()]
+                    if len(locked_ids) != len(requested_ids):
+                        raise PermissionError("최근 주소를 삭제할 권한이 없습니다.")
+                requested_count = len(locked_ids) if payload.deleteAll else len(payload.recipientIds or [])
+                changed_count = 0
+                if locked_ids:
+                    cursor.execute(
+                        """DELETE FROM user_recent_mail_recipients
+                        WHERE company_id = %s AND owner_user_id = %s AND id = ANY(%s)""",
+                        (actor.companyId, actor.userId, locked_ids),
+                    )
+                    changed_count = cursor.rowcount
+                self._write_recent_recipient_audit(
+                    cursor, actor, "mail.recent_recipients.deleted", changed_count, now
+                )
+            connection.commit()
+        return MailRecentRecipientDeleteResponse(
+            requestedCount=requested_count,
+            changedCount=changed_count,
+        )
+
+    def _write_recent_recipient_audit(
+        self,
+        cursor,
+        actor: AuthUserSummary,
+        event: str,
+        count: int,
+        now: datetime,
+    ) -> None:
+        reason = json.dumps({"count": count}, ensure_ascii=True, separators=(",", ":"))
+        cursor.execute(
+            """INSERT INTO audit_logs (
+                id, company_id, actor_user_id, actor_user_name, target_type, target_id,
+                event, status_before, status_after, reason, created_at
+            ) VALUES (%s,%s,%s,%s,'mail_recent_recipients',%s,%s,NULL,NULL,%s,%s)""",
+            (self._new_id("audit"), actor.companyId, actor.userId, actor.userName, actor.userId, event, reason, now),
+        )
+
+    def _upsert_recent_recipients(
+        self,
+        cursor,
+        *,
+        company_id: str,
+        owner_user_id: str,
+        recipient_emails: list[str],
+        now: datetime,
+    ) -> None:
+        normalized = list(dict.fromkeys(email.strip().lower() for email in recipient_emails if email.strip()))
+        if not normalized:
+            return
+        cursor.execute(
+            """SELECT LOWER(u.email) AS email, u.name, d.name AS department_name
+            FROM users u LEFT JOIN departments d ON d.id = u.department_id
+            WHERE u.company_id = %s AND LOWER(u.email) = ANY(%s)""",
+            (company_id, normalized),
+        )
+        directory = {row["email"]: row for row in cursor.fetchall()}
+        for email in normalized:
+            person = directory.get(email, {})
+            cursor.execute(
+                """INSERT INTO user_recent_mail_recipients (
+                    id, company_id, owner_user_id, recipient_email, recipient_name,
+                    department_name, last_used_at, use_count, created_at, updated_at
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,1,%s,%s)
+                ON CONFLICT (company_id, owner_user_id, (LOWER(recipient_email))) DO UPDATE SET
+                    recipient_name = COALESCE(EXCLUDED.recipient_name, user_recent_mail_recipients.recipient_name),
+                    department_name = COALESCE(EXCLUDED.department_name, user_recent_mail_recipients.department_name),
+                    last_used_at = EXCLUDED.last_used_at,
+                    use_count = user_recent_mail_recipients.use_count + 1,
+                    updated_at = EXCLUDED.updated_at""",
+                (
+                    self._new_id("recent"), company_id, owner_user_id, email,
+                    person.get("name"), person.get("department_name"), now, now, now,
+                ),
+            )
+        cursor.execute(
+            """DELETE FROM user_recent_mail_recipients WHERE id IN (
+                SELECT id FROM user_recent_mail_recipients
+                WHERE company_id = %s AND owner_user_id = %s
+                ORDER BY last_used_at DESC, id OFFSET 200
+            )""",
+            (company_id, owner_user_id),
+        )
+
+    def download_attachment(self, actor: AuthUserSummary, mail_id: str, attachment_id: str) -> dict:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                self._fetch_accessible_mail(cursor, actor, mail_id)
+                cursor.execute(
+                    """
+                    SELECT id, file_name, content_type, size_bytes, storage_key
+                    FROM mail_attachments
+                    WHERE id = %s AND message_id = %s
+                    """,
+                    (attachment_id, mail_id),
+                )
+                row = cursor.fetchone()
+        if row is None:
+            raise PermissionError("첨부 파일에 접근할 권한이 없습니다.")
+        path = self.attachment_storage.stored_path(row["storage_key"])
+        return {
+            "path": path,
+            "fileName": row["file_name"],
+            "contentType": row["content_type"],
+            "sizeBytes": row["size_bytes"],
+        }
+
+    def get_basic_preferences(self, actor: AuthUserSummary) -> MailBasicPreferencesResponse:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                row = self._ensure_basic_preferences(cursor, actor)
+            connection.commit()
+        return self._to_basic_preferences(row)
+
+    def update_basic_preferences(self, actor: AuthUserSummary, payload: MailBasicPreferencesUpdateRequest) -> MailBasicPreferencesResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        values = payload.model_dump(exclude={"expectedVersion"})
+        columns = {
+            "senderDisplayMode": "sender_display_mode", "blockRemoteImages": "block_remote_images",
+            "disableRiskyTags": "disable_risky_tags", "showRouteCountry": "show_route_country",
+            "includeSpamTrashInSearch": "include_spam_trash_in_search", "showListPreview": "show_list_preview",
+            "recipientInputMode": "recipient_input_mode", "confirmBeforeSend": "confirm_before_send",
+            "saveSentCopy": "save_sent_copy", "readReceiptEnabled": "read_receipt_enabled",
+            "editorMode": "editor_mode", "composeMode": "compose_mode", "messageEncoding": "message_encoding",
+            "draftReminderEnabled": "draft_reminder_enabled", "senderDisplayName": "sender_display_name",
+            "replyToEmail": "reply_to_email", "vcardEnabled": "vcard_enabled",
+            "translationTargetLocale": "translation_target_locale", "translationComposeMode": "translation_compose_mode",
+        }
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                before = self._ensure_basic_preferences(cursor, actor)
+                legacy_defaults = {"translation_target_locale": "ko", "translation_compose_mode": "preview"}
+                changed = [key for key, column in columns.items() if before.get(column, legacy_defaults.get(column)) != values[key]]
+                assignments = ", ".join(f"{column} = %s" for column in columns.values())
+                cursor.execute(
+                    f"""UPDATE user_mail_basic_preferences SET {assignments}, version = version + 1, updated_at = %s
+                    WHERE company_id = %s AND owner_user_id = %s AND version = %s RETURNING *""",
+                    tuple(values[key] for key in columns) + (now, actor.companyId, actor.userId, payload.expectedVersion),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise MailPreferenceConflictError("다른 위치에서 설정이 변경되었습니다. 최신값을 다시 불러오세요.")
+                self._write_preference_audit(cursor, actor, "mail.preferences.basic.update", changed, now)
+            connection.commit()
+        return self._to_basic_preferences(row)
+
+    def reset_basic_preferences(self, actor: AuthUserSummary) -> MailBasicPreferencesResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                self._ensure_basic_preferences(cursor, actor)
+                cursor.execute(
+                    """UPDATE user_mail_basic_preferences SET
+                    sender_display_mode = 'name', block_remote_images = TRUE, disable_risky_tags = TRUE,
+                    show_route_country = FALSE, include_spam_trash_in_search = FALSE, show_list_preview = FALSE,
+                    recipient_input_mode = 'autocomplete', confirm_before_send = TRUE, save_sent_copy = TRUE,
+                    read_receipt_enabled = TRUE, editor_mode = 'html', compose_mode = 'normal',
+                    message_encoding = 'utf-8', draft_reminder_enabled = FALSE, sender_display_name = '',
+                    reply_to_email = NULL, vcard_enabled = FALSE, translation_target_locale = 'ko', translation_compose_mode = 'preview', version = version + 1, updated_at = %s
+                    WHERE company_id = %s AND owner_user_id = %s RETURNING *""",
+                    (now, actor.companyId, actor.userId),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise PermissionError("메일 설정을 초기화할 권한이 없습니다.")
+                self._write_preference_audit(cursor, actor, "mail.preferences.basic.reset", ["defaults"], now)
+            connection.commit()
+        return self._to_basic_preferences(row)
 
     def send_mail(self, actor: AuthUserSummary, payload: MailSendRequest) -> MailSendResponse:
         if not payload.to and not payload.cc and not payload.bcc:
@@ -444,7 +783,7 @@ class MailMessengerService:
             recipientInputMode=row["recipient_input_mode"], confirmBeforeSend=row["confirm_before_send"], saveSentCopy=row["save_sent_copy"],
             readReceiptEnabled=row["read_receipt_enabled"], editorMode=row["editor_mode"], composeMode=row["compose_mode"], messageEncoding=row["message_encoding"],
             draftReminderEnabled=row["draft_reminder_enabled"], senderDisplayName=row["sender_display_name"], replyToEmail=row["reply_to_email"],
-            vcardEnabled=row["vcard_enabled"], version=row["version"], updatedAt=row["updated_at"],
+            vcardEnabled=row["vcard_enabled"], translationTargetLocale=row.get("translation_target_locale", "ko"), translationComposeMode=row.get("translation_compose_mode", "preview"), version=row["version"], updatedAt=row["updated_at"],
         )
 
     def _write_preference_audit(self, cursor, actor: AuthUserSummary, event: str, changed_fields: list[str], now: datetime) -> None:
@@ -976,7 +1315,7 @@ class MailMessengerService:
                     (actor.companyId, actor.userId, payload.name),
                 )
                 if cursor.fetchone():
-                    raise ValueError("같은 이름의 사용자 메일함이 이미 있습니다.")
+                    raise MailFolderConflictError("같은 이름의 사용자 메일함이 이미 있습니다.")
                 cursor.execute(
                     "SELECT COUNT(*) AS count FROM mail_user_folders WHERE company_id = %s AND user_id = %s",
                     (actor.companyId, actor.userId),
@@ -1004,7 +1343,7 @@ class MailMessengerService:
                     (actor.companyId, actor.userId, payload.name, folder_id),
                 )
                 if cursor.fetchone():
-                    raise ValueError("같은 이름의 사용자 메일함이 이미 있습니다.")
+                    raise MailFolderConflictError("같은 이름의 사용자 메일함이 이미 있습니다.")
                 cursor.execute("UPDATE mail_user_folders SET name = %s, updated_at = %s WHERE id = %s", (payload.name, self._now(), folder_id))
                 self._write_mail_bulk_audit(cursor, actor, folder_id, "folder_update", {"updated": False}, {"updated": True}, "folder", self._new_id("mailfolder"))
             connection.commit()
@@ -1230,14 +1569,14 @@ class MailMessengerService:
         cursor.execute("SELECT id, name, sort_order FROM mail_user_folders WHERE id = %s AND company_id = %s AND user_id = %s FOR UPDATE", (folder_id, actor.companyId, actor.userId))
         row = cursor.fetchone()
         if row is None:
-            raise PermissionError("사용자 메일함에 접근할 권한이 없습니다.")
+            raise ResourceNotFoundError("메일함을 찾을 수 없습니다.")
         return row
 
     def _lock_owned_tag(self, cursor, actor: AuthUserSummary, tag_id: str) -> dict:
         cursor.execute("SELECT id, name, color, sort_order FROM mail_tags WHERE id = %s AND company_id = %s AND user_id = %s FOR UPDATE", (tag_id, actor.companyId, actor.userId))
         row = cursor.fetchone()
         if row is None:
-            raise PermissionError("태그에 접근할 권한이 없습니다.")
+            raise ResourceNotFoundError("태그를 찾을 수 없습니다.")
         return row
 
     def _bulk_mail_ui020(self, actor: AuthUserSummary, payload: MailBulkRequest) -> MailBulkResponse:
@@ -1543,7 +1882,7 @@ class MailMessengerService:
         with self.db.connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT room.id AS room_id, room.room_type, room.room_name, room.created_by_user_id,
+                SELECT room.id AS room_id, room.room_type, room.room_name, room.translation_locale, room.created_by_user_id,
                        room.created_at, room.updated_at, room.retention_expires_at,
                        self_member.is_favorite,
                        COALESCE(member_ids.participant_ids, '[]'::jsonb) AS participant_ids,
@@ -1551,12 +1890,12 @@ class MailMessengerService:
                        last_msg.body AS last_message, last_msg.created_at AS last_message_at,
                        COALESCE(unread.unread_count, 0) AS unread_count
                 FROM messenger_rooms room
-                JOIN messenger_room_members self_member ON self_member.room_id=room.id AND self_member.user_id=%s
+                JOIN messenger_room_members self_member ON self_member.room_id=room.id AND self_member.user_id=%s AND self_member.left_at IS NULL
                 LEFT JOIN LATERAL (
                     SELECT jsonb_agg(member.user_id ORDER BY member.joined_at) AS participant_ids, COUNT(*) AS participant_count
                     FROM messenger_room_members member
                     JOIN users active_member ON active_member.id=member.user_id AND active_member.status='active'
-                    WHERE member.room_id=room.id
+                    WHERE member.room_id=room.id AND member.left_at IS NULL
                 ) member_ids ON TRUE
                 LEFT JOIN LATERAL (
                     SELECT body,created_at FROM messenger_messages WHERE room_id=room.id ORDER BY created_at DESC LIMIT 1
@@ -1566,13 +1905,68 @@ class MailMessengerService:
                     LEFT JOIN messenger_message_reads reads ON reads.message_id=msg.id AND reads.user_id=%s
                     WHERE msg.room_id=room.id AND msg.sender_user_id<>%s AND reads.id IS NULL
                 ) unread ON TRUE
-                WHERE room.company_id=%s
+                WHERE room.company_id=%s AND room.status='active'
                 ORDER BY self_member.is_favorite DESC,COALESCE(last_msg.created_at,room.updated_at) DESC
                 """,
                 (actor.userId, actor.userId, actor.userId, actor.companyId),
             )
             rooms = [self._to_room_summary(row, actor.userId) for row in cursor.fetchall()]
         return MessengerRoomListResponse(rooms=rooms)
+
+    def list_admin_rooms(
+        self,
+        actor: AuthUserSummary,
+        status_filter: str = "all",
+        limit: int = 200,
+        offset: int = 0,
+    ) -> AdminMessengerRoomListResponse:
+        if status_filter not in {"active", "deleted", "all"}:
+            raise ResourceStateError("대화방 상태 필터를 확인하세요.")
+        bounded_limit = max(1, min(limit, 200))
+        bounded_offset = max(0, offset)
+        status_sql = "" if status_filter == "all" else " AND room.status=%s"
+        count_params: list[object] = [actor.companyId]
+        if status_filter != "all":
+            count_params.append(status_filter)
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT COUNT(*)::INT AS total FROM messenger_rooms room WHERE room.company_id=%s{status_sql}",
+                tuple(count_params),
+            )
+            total = int((cursor.fetchone() or {"total": 0})["total"] or 0)
+            cursor.execute(
+                f"""SELECT room.id,room.room_type,room.room_name,room.status,
+                    room.created_by_user_id,owner.name AS owner_user_name,
+                    room.created_at,room.updated_at,room.closed_at,room.retention_expires_at,
+                    COALESCE(member_count.count,0)::INT AS participant_count,
+                    COALESCE(message_count.count,0)::INT AS message_count
+                FROM messenger_rooms room
+                JOIN users owner ON owner.id=room.created_by_user_id
+                LEFT JOIN LATERAL (
+                    SELECT COUNT(*) FROM messenger_room_members member
+                    JOIN users active_member ON active_member.id=member.user_id AND active_member.status='active'
+                    WHERE member.room_id=room.id AND member.left_at IS NULL
+                ) member_count ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT COUNT(*) FROM messenger_messages message WHERE message.room_id=room.id
+                ) message_count ON TRUE
+                WHERE room.company_id=%s{status_sql}
+                ORDER BY room.updated_at DESC,room.id DESC
+                LIMIT %s OFFSET %s""",
+                tuple([*count_params, bounded_limit, bounded_offset]),
+            )
+            rooms = [
+                AdminMessengerRoomView(
+                    roomId=row["id"], roomType=row["room_type"], roomName=row["room_name"],
+                    status=row["status"], ownerUserId=row["created_by_user_id"], ownerUserName=row["owner_user_name"],
+                    participantCount=row["participant_count"], messageCount=row["message_count"],
+                    createdAt=row["created_at"], updatedAt=row["updated_at"], closedAt=row["closed_at"],
+                    retentionExpiresAt=row["retention_expires_at"],
+                )
+                for row in cursor.fetchall()
+            ]
+        return AdminMessengerRoomListResponse(rooms=rooms, total=total)
 
     def create_room(self, actor: AuthUserSummary, payload: MessengerRoomCreateRequest) -> MessengerRoomDetailResponse:
         self.db.ensure_migrations_applied()
@@ -1591,9 +1985,9 @@ class MailMessengerService:
                 raise ValueError("같은 회사의 활성 사용자만 참여할 수 있습니다.")
             cursor.execute(
                 """INSERT INTO messenger_rooms
-                (id,company_id,room_type,room_name,created_by_user_id,created_at,updated_at,retention_expires_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
-                (room_id, actor.companyId, payload.roomType, payload.roomName, actor.userId, now, now, now + timedelta(days=14)),
+                (id,company_id,room_type,room_name,translation_locale,created_by_user_id,created_at,updated_at,retention_expires_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (room_id, actor.companyId, payload.roomType, payload.roomName, payload.translationLocale, actor.userId, now, now, now + timedelta(days=14)),
             )
             for user_id in participant_ids:
                 cursor.execute(
@@ -1660,6 +2054,34 @@ class MailMessengerService:
             connection.commit()
         return self.get_room(actor, room_id)
 
+    def update_room_translation(self, actor: AuthUserSummary, room_id: str, payload: MessengerRoomTranslationRequest) -> MessengerRoomDetailResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM messenger_rooms WHERE id=%s AND company_id=%s AND status='active' FOR UPDATE",
+                (room_id, actor.companyId),
+            )
+            room = cursor.fetchone()
+            if room is None:
+                raise ResourceNotFoundError("대화방을 찾을 수 없습니다.")
+            if room["created_by_user_id"] != actor.userId:
+                raise PermissionError("방 생성자만 대화방 언어를 변경할 수 있습니다.")
+            if room["updated_at"] != payload.expectedUpdatedAt:
+                raise MessengerConflictError("대화방이 변경되었습니다. 새로고침 후 다시 시도하세요.")
+            before = room.get("translation_locale") or "ko"
+            if before != payload.translationLocale:
+                cursor.execute(
+                    "UPDATE messenger_rooms SET translation_locale=%s,updated_at=%s WHERE id=%s",
+                    (payload.translationLocale, now, room_id),
+                )
+                self._write_messenger_audit(
+                    cursor, actor, room_id, "messenger.room.translation_locale_changed", before,
+                    payload.translationLocale, None, now,
+                )
+            connection.commit()
+        return self.get_room(actor, room_id)
+
     def update_room_participants(self, actor: AuthUserSummary, room_id: str, payload: MessengerRoomParticipantsRequest) -> MessengerRoomDetailResponse:
         self.db.ensure_migrations_applied()
         now = self._now()
@@ -1672,12 +2094,12 @@ class MailMessengerService:
             raise ValueError("방 생성자를 포함한 최소 2명의 참여자가 필요합니다.")
         with self.db.connect() as connection, connection.cursor() as cursor:
             cursor.execute(
-                "SELECT * FROM messenger_rooms WHERE id=%s AND company_id=%s FOR UPDATE",
+                "SELECT * FROM messenger_rooms WHERE id=%s AND company_id=%s AND status='active' FOR UPDATE",
                 (room_id, actor.companyId),
             )
             room = cursor.fetchone()
             if room is None:
-                raise PermissionError("대화방에 접근할 권한이 없습니다.")
+                raise ResourceNotFoundError("대화방을 찾을 수 없습니다.")
             if room["created_by_user_id"] != actor.userId:
                 raise PermissionError("방 생성자만 참여자를 변경할 수 있습니다.")
             if room["room_type"] == "direct" and len(participant_ids) != 2:
@@ -1687,15 +2109,17 @@ class MailMessengerService:
             users = self._fetch_company_users(cursor, actor.companyId, participant_ids, lock=True)
             if set(users) != set(participant_ids):
                 raise ValueError("같은 회사의 활성 사용자만 참여할 수 있습니다.")
-            cursor.execute("SELECT user_id FROM messenger_room_members WHERE room_id=%s ORDER BY user_id FOR UPDATE", (room_id,))
+            cursor.execute("SELECT user_id FROM messenger_room_members WHERE room_id=%s AND left_at IS NULL ORDER BY user_id FOR UPDATE", (room_id,))
             before_ids = [row["user_id"] for row in cursor.fetchall()]
             removed = [user_id for user_id in before_ids if user_id not in participant_ids]
             added = [user_id for user_id in participant_ids if user_id not in before_ids]
             if removed:
-                cursor.execute("DELETE FROM messenger_room_members WHERE room_id=%s AND user_id=ANY(%s)", (room_id, removed))
+                cursor.execute("UPDATE messenger_room_members SET left_at=%s,is_favorite=FALSE WHERE room_id=%s AND user_id=ANY(%s)", (now, room_id, removed))
             for user_id in added:
                 cursor.execute(
-                    "INSERT INTO messenger_room_members (id,room_id,user_id,joined_at) VALUES (%s,%s,%s,%s)",
+                    """INSERT INTO messenger_room_members (id,room_id,user_id,joined_at,left_at)
+                    VALUES (%s,%s,%s,%s,NULL)
+                    ON CONFLICT (room_id,user_id) DO UPDATE SET joined_at=EXCLUDED.joined_at,left_at=NULL""",
                     (self._new_id("member"), room_id, user_id, now),
                 )
             if removed or added:
@@ -1703,6 +2127,182 @@ class MailMessengerService:
                 self._write_messenger_audit(cursor, actor, room_id, "messenger.room.participants_changed", "active", "active", {"beforeUserIds": before_ids, "afterUserIds": participant_ids}, now)
             connection.commit()
         return self.get_room(actor, room_id)
+
+    def transfer_room_owner(self, actor: AuthUserSummary, room_id: str, payload: MessengerRoomOwnerTransferRequest) -> MessengerRoomDetailResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        if payload.newOwnerUserId == actor.userId:
+            raise ResourceStateError("현재 방장과 다른 참여자를 선택하세요.")
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM messenger_rooms WHERE id=%s AND company_id=%s AND status='active' FOR UPDATE",
+                (room_id, actor.companyId),
+            )
+            room = cursor.fetchone()
+            if room is None:
+                raise ResourceNotFoundError("대화방을 찾을 수 없습니다.")
+            if room["created_by_user_id"] != actor.userId:
+                raise PermissionError("현재 방장만 방장을 이전할 수 있습니다.")
+            if room["updated_at"] != payload.expectedUpdatedAt:
+                raise MessengerConflictError("대화방이 변경되었습니다. 새로고침 후 다시 시도하세요.")
+            cursor.execute(
+                """SELECT member.user_id FROM messenger_room_members member
+                JOIN users active_user ON active_user.id=member.user_id AND active_user.status='active'
+                WHERE member.room_id=%s AND member.user_id=%s AND member.left_at IS NULL FOR UPDATE OF member""",
+                (room_id, payload.newOwnerUserId),
+            )
+            if cursor.fetchone() is None:
+                raise ResourceStateError("현재 참여 중인 사용자에게만 방장을 이전할 수 있습니다.")
+            cursor.execute(
+                "UPDATE messenger_rooms SET created_by_user_id=%s,updated_at=%s WHERE id=%s",
+                (payload.newOwnerUserId, now, room_id),
+            )
+            self._write_messenger_audit(
+                cursor, actor, room_id, "messenger.room.owner_transferred", actor.userId,
+                payload.newOwnerUserId, {"newOwnerUserId": payload.newOwnerUserId}, now,
+            )
+            connection.commit()
+        return self.get_room(actor, room_id)
+
+    def leave_room(self, actor: AuthUserSummary, room_id: str) -> MessengerRoomLeaveResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT room.created_by_user_id FROM messenger_rooms room
+                JOIN messenger_room_members member ON member.room_id=room.id
+                WHERE room.id=%s AND room.company_id=%s AND room.status='active'
+                  AND member.user_id=%s AND member.left_at IS NULL FOR UPDATE OF room,member""",
+                (room_id, actor.companyId, actor.userId),
+            )
+            room = cursor.fetchone()
+            if room is None:
+                raise ResourceNotFoundError("대화방을 찾을 수 없습니다.")
+            if room["created_by_user_id"] == actor.userId:
+                raise ResourceStateError("방장을 이전하거나 대화방을 삭제한 후 나갈 수 있습니다.")
+            cursor.execute(
+                "UPDATE messenger_room_members SET left_at=%s,is_favorite=FALSE WHERE room_id=%s AND user_id=%s AND left_at IS NULL",
+                (now, room_id, actor.userId),
+            )
+            self._write_messenger_audit(cursor, actor, room_id, "messenger.room.left", "active", "left", None, now)
+            connection.commit()
+        return MessengerRoomLeaveResponse(roomId=room_id, leftAt=now)
+
+    def delete_room(
+        self,
+        actor: AuthUserSummary,
+        room_id: str,
+        *,
+        allow_admin: bool = False,
+    ) -> MessengerRoomDeleteResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        retention_expires_at = now + timedelta(days=14)
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM messenger_rooms WHERE id=%s AND company_id=%s AND status='active' FOR UPDATE",
+                (room_id, actor.companyId),
+            )
+            room = cursor.fetchone()
+            if room is None:
+                raise ResourceNotFoundError("대화방을 찾을 수 없습니다.")
+            if room["created_by_user_id"] != actor.userId and not allow_admin:
+                raise PermissionError("현재 방장만 대화방을 삭제할 수 있습니다.")
+            cursor.execute(
+                """UPDATE messenger_rooms SET status='deleted',closed_at=%s,closed_by_user_id=%s,
+                retention_expires_at=%s,updated_at=%s WHERE id=%s""",
+                (now, actor.userId, retention_expires_at, now, room_id),
+            )
+            self._write_messenger_audit(
+                cursor, actor, room_id, "messenger.room.deleted", "active", "deleted",
+                {"retentionDays": 14, "deletedByAdmin": allow_admin}, now,
+            )
+            connection.commit()
+        return MessengerRoomDeleteResponse(
+            roomId=room_id, status="deleted", deletedAt=now,
+            retentionExpiresAt=retention_expires_at,
+        )
+
+    def run_messenger_retention_batch(self, worker_id: str, limit: int = 500) -> int:
+        bounded_limit = max(1, min(limit, 500))
+        self.db.ensure_migrations_applied()
+        connection = self.db.connect()
+        lock_acquired = False
+        storage_keys: list[str] = []
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT pg_try_advisory_lock(hashtext(%s)) AS acquired", ("moaworks.messenger.retention",))
+                lock_row = cursor.fetchone()
+                lock_acquired = bool(lock_row and lock_row["acquired"])
+                if not lock_acquired:
+                    return 0
+                cursor.execute(
+                    """SELECT id,company_id FROM messenger_rooms
+                    WHERE status='deleted' AND retention_expires_at<=NOW()
+                    ORDER BY retention_expires_at,id LIMIT %s FOR UPDATE SKIP LOCKED""",
+                    (bounded_limit,),
+                )
+                room_candidates = cursor.fetchall()
+                room_ids = [row["id"] for row in room_candidates]
+                message_sql = """SELECT message.id,room.company_id
+                    FROM messenger_messages message
+                    JOIN messenger_rooms room ON room.id=message.room_id
+                    WHERE message.retention_expires_at<=NOW()"""
+                message_params: list[object] = []
+                if room_ids:
+                    message_sql += " AND NOT (message.room_id=ANY(%s))"
+                    message_params.append(room_ids)
+                message_sql += " ORDER BY message.retention_expires_at,message.id LIMIT %s FOR UPDATE OF message SKIP LOCKED"
+                message_params.append(bounded_limit)
+                cursor.execute(message_sql, tuple(message_params))
+                message_candidates = cursor.fetchall()
+                message_ids = [row["id"] for row in message_candidates]
+                if message_ids or room_ids:
+                    cursor.execute(
+                        """SELECT DISTINCT attachment.storage_key
+                        FROM messenger_attachments attachment
+                        JOIN messenger_messages message ON message.id=attachment.message_id
+                        WHERE message.id=ANY(%s) OR message.room_id=ANY(%s)""",
+                        (message_ids, room_ids),
+                    )
+                    storage_keys = [row["storage_key"] for row in cursor.fetchall()]
+                if message_ids:
+                    cursor.execute("DELETE FROM messenger_messages WHERE id=ANY(%s)", (message_ids,))
+                if room_ids:
+                    cursor.execute("DELETE FROM messenger_rooms WHERE id=ANY(%s)", (room_ids,))
+                changed = len(message_candidates) + len(room_candidates)
+                if changed:
+                    company_counts: dict[str, int] = {}
+                    for row in [*message_candidates, *room_candidates]:
+                        company_id = row["company_id"]
+                        company_counts[company_id] = company_counts.get(company_id, 0) + 1
+                    now = self._now()
+                    for company_id, company_changed in sorted(company_counts.items()):
+                        cursor.execute(
+                            """INSERT INTO audit_logs
+                            (id,company_id,actor_user_id,actor_user_name,target_type,target_id,event,status_before,status_after,reason,created_at)
+                            VALUES (%s,%s,NULL,%s,'messenger','retention-batch','messenger.retention.purged','expired','purged',%s,%s)""",
+                            (
+                                self._new_id("audit"), company_id, worker_id,
+                                json.dumps({"changedCount": company_changed}, separators=(",", ":")), now,
+                            ),
+                        )
+            connection.commit()
+            for storage_key in storage_keys:
+                try:
+                    self.messenger_attachment_storage.delete_attached(storage_key)
+                except (OSError, ValueError):
+                    logger.warning("메신저 보존 정리 후 첨부 파일 삭제에 실패했습니다.")
+            return changed
+        finally:
+            if lock_acquired:
+                try:
+                    with connection.cursor() as cursor:
+                        cursor.execute("SELECT pg_advisory_unlock(hashtext(%s))", ("moaworks.messenger.retention",))
+                finally:
+                    connection.close()
+            else:
+                connection.close()
 
     def list_messages(self, actor: AuthUserSummary, room_id: str, limit: int = 100, before: datetime | None = None) -> MessengerMessageListResponse:
         self.db.ensure_migrations_applied()
@@ -1714,6 +2314,7 @@ class MailMessengerService:
             cursor.execute(
                 f"""
                 SELECT msg.id AS message_id,msg.room_id,msg.sender_user_id,u.name AS sender_user_name,
+                       COALESCE(sender_pref.locale,'ko-KR') AS sender_locale,
                        msg.message_type,msg.body,msg.attachment_meta,msg.created_at,msg.retention_expires_at,
                        COALESCE(reads.read_by,'[]'::jsonb) AS read_by,
                        COALESCE(members.recipient_count,0) AS recipient_count,
@@ -1721,11 +2322,13 @@ class MailMessengerService:
                        GREATEST(COALESCE(members.recipient_count,0)-COALESCE(reads.read_count,0),0) AS unread_count,
                        COALESCE(files.attachments,'[]'::jsonb) AS attachments
                 FROM messenger_messages msg JOIN users u ON u.id=msg.sender_user_id
+                LEFT JOIN user_workspace_preferences sender_pref
+                  ON sender_pref.owner_user_id=msg.sender_user_id AND sender_pref.company_id=u.company_id
                 LEFT JOIN LATERAL (
                     SELECT jsonb_agg(reads.user_id ORDER BY reads.read_at) FILTER (WHERE reads.user_id<>msg.sender_user_id) AS read_by,
                            COUNT(*) FILTER (WHERE reads.user_id<>msg.sender_user_id) AS read_count
                     FROM messenger_message_reads reads
-                    JOIN messenger_room_members current_member ON current_member.room_id=msg.room_id AND current_member.user_id=reads.user_id
+                    JOIN messenger_room_members current_member ON current_member.room_id=msg.room_id AND current_member.user_id=reads.user_id AND current_member.left_at IS NULL
                     JOIN users active_reader ON active_reader.id=current_member.user_id AND active_reader.status='active'
                     WHERE reads.message_id=msg.id
                 ) reads ON TRUE
@@ -1733,7 +2336,7 @@ class MailMessengerService:
                     SELECT COUNT(*) AS recipient_count
                     FROM messenger_room_members member
                     JOIN users active_member ON active_member.id=member.user_id AND active_member.status='active'
-                    WHERE member.room_id=msg.room_id AND member.user_id<>msg.sender_user_id
+                    WHERE member.room_id=msg.room_id AND member.user_id<>msg.sender_user_id AND member.left_at IS NULL
                 ) members ON TRUE
                 LEFT JOIN LATERAL (
                     SELECT jsonb_agg(jsonb_build_object('attachmentId',id,'fileName',file_name,'contentType',content_type,'sizeBytes',size_bytes) ORDER BY created_at) AS attachments
@@ -1989,15 +2592,20 @@ class MailMessengerService:
             raise PermissionError("메일 계정이 활성 상태가 아닙니다.")
         return row
 
-
-    def _fetch_company_row(self, cursor, company_id: str) -> dict:
-        cursor.execute("SELECT id, name, domain FROM companies WHERE id = %s", (company_id,))
-        row = cursor.fetchone()
-        if row is None:
-            raise ValueError("회사를 찾을 수 없습니다.")
-        return row
-
-    def _fetch_accessible_mail(self, cursor, actor: AuthUserSummary, mail_id: str) -> dict:
+    def _fetch_accessible_mail(self, cursor, actor: AuthUserSummary, mail_id: str, *, view: str = "inbox") -> dict:
+        allowed_views = {"inbox", "folder", "tag", "spam", "trash", "sent", "draft", "scheduled"}
+        if view not in allowed_views:
+            raise ValueError("지원하지 않는 메일 상세 문맥입니다.")
+        sender_state = "m.sender_deleted_at IS NOT NULL AND m.sender_purged_at IS NULL" if view == "trash" else "m.sender_deleted_at IS NULL AND m.sender_purged_at IS NULL"
+        view_status = " AND m.status = 'scheduled'" if view == "scheduled" else ""
+        if view == "trash":
+            recipient_state = "r.deleted_at IS NOT NULL AND r.purged_at IS NULL"
+        elif view == "spam":
+            recipient_state = "r.deleted_at IS NULL AND r.purged_at IS NULL AND r.is_spam = TRUE"
+        elif view == "inbox":
+            recipient_state = "r.deleted_at IS NULL AND r.purged_at IS NULL AND r.is_spam = FALSE AND r.folder_id IS NULL"
+        else:
+            recipient_state = "r.deleted_at IS NULL AND r.purged_at IS NULL"
         cursor.execute(
             f"""
             SELECT DISTINCT
@@ -2018,7 +2626,7 @@ class MailMessengerService:
                 (m.sender_user_id = %s) AS is_sender_view
             FROM mail_messages m
             LEFT JOIN mail_recipients r ON r.message_id = m.id
-            WHERE m.id = %s AND m.company_id = %s
+            WHERE m.id = %s AND m.company_id = %s{view_status}
               AND (
                 (m.sender_user_id = %s AND m.sender_deleted_at IS NULL)
                 OR (
@@ -2031,7 +2639,7 @@ class MailMessengerService:
         )
         row = cursor.fetchone()
         if row is None:
-            raise PermissionError("메일을 조회할 권한이 없습니다.")
+            raise ResourceNotFoundError("메일을 찾을 수 없습니다.")
         return row
 
     def _fetch_mail_recipients(
@@ -2066,6 +2674,49 @@ class MailMessengerService:
                 isStarred=row["is_starred"] if is_sender_view else None,
                 receivedAt=row["received_at"],
                 readAt=row["read_at"] if is_sender_view else None,
+            )
+            for row in cursor.fetchall()
+        ]
+
+    def _fetch_source_attachments(
+        self,
+        cursor,
+        actor: AuthUserSummary,
+        source_mail_id: str,
+        attachment_ids: list[str],
+    ) -> list[dict]:
+        self._fetch_accessible_mail(cursor, actor, source_mail_id)
+        if not attachment_ids:
+            return []
+        cursor.execute(
+            """
+            SELECT id, file_name, content_type, size_bytes, storage_key
+            FROM mail_attachments
+            WHERE message_id = %s
+              AND id = ANY(%s)
+            """,
+            (source_mail_id, attachment_ids),
+        )
+        rows = cursor.fetchall()
+        by_id = {row["id"]: row for row in rows}
+        if len(by_id) != len(attachment_ids) or any(attachment_id not in by_id for attachment_id in attachment_ids):
+            raise PermissionError("전달할 원문 첨부에 접근할 권한이 없습니다.")
+        if any(not row["storage_key"] for row in rows):
+            raise ValueError("원문 첨부 파일 저장 상태가 올바르지 않습니다.")
+        return [by_id[attachment_id] for attachment_id in attachment_ids]
+
+    def _fetch_external_deliveries(self, cursor, mail_id: str) -> list[ExternalDeliveryView]:
+        cursor.execute(
+            """SELECT r.recipient_email, r.recipient_kind, q.status, q.attempt_count, q.next_attempt_at, q.sent_at
+            FROM mail_delivery_queue q JOIN mail_recipients r ON r.id = q.recipient_id
+            WHERE q.mail_id = %s AND r.delivery_source = 'direct' ORDER BY r.recipient_kind, r.recipient_email""",
+            (mail_id,),
+        )
+        return [
+            ExternalDeliveryView(
+                recipientEmail=row["recipient_email"], recipientKind=row["recipient_kind"],
+                status=row["status"], attemptCount=row["attempt_count"],
+                nextAttemptAt=row["next_attempt_at"], sentAt=row["sent_at"], lastError=("메일 Provider 운영 설정이 필요합니다." if row["status"] == "blocked" else "외부 메일 서버 전달에 실패했습니다." if row["status"] == "failed" else None),
             )
             for row in cursor.fetchall()
         ]
@@ -2116,12 +2767,14 @@ class MailMessengerService:
             WHERE room.id = %s
               AND room.company_id = %s
               AND member.user_id = %s
+              AND room.status='active'
+              AND member.left_at IS NULL
             """,
             (room_id, actor.companyId, actor.userId),
         )
         row = cursor.fetchone()
         if row is None:
-            raise PermissionError("대화방에 접근할 권한이 없습니다.")
+            raise ResourceNotFoundError("대화방을 찾을 수 없습니다.")
         return row
 
     def _fetch_room_participants(self, cursor, room_id: str) -> list[dict]:
@@ -2132,7 +2785,7 @@ class MailMessengerService:
             FROM messenger_room_members member
             JOIN users u ON u.id = member.user_id AND u.status='active'
             LEFT JOIN departments department ON department.id=u.department_id
-            WHERE member.room_id = %s
+            WHERE member.room_id = %s AND member.left_at IS NULL
             ORDER BY member.joined_at ASC
             """,
             (room_id,),
@@ -2154,6 +2807,7 @@ class MailMessengerService:
             """
             SELECT
                 room.created_by_user_id,
+                room.translation_locale,
                 self_member.is_favorite,
                 COALESCE(member_ids.participant_ids, '[]'::jsonb) AS participant_ids,
                 COALESCE(member_ids.participant_count, 0) AS participant_count,
@@ -2161,12 +2815,12 @@ class MailMessengerService:
                 last_msg.created_at AS last_message_at,
                 COALESCE(unread.unread_count, 0) AS unread_count
             FROM messenger_rooms room
-            JOIN messenger_room_members self_member ON self_member.room_id=room.id AND self_member.user_id=%s
+            JOIN messenger_room_members self_member ON self_member.room_id=room.id AND self_member.user_id=%s AND self_member.left_at IS NULL
             LEFT JOIN LATERAL (
                 SELECT jsonb_agg(member.user_id ORDER BY member.joined_at) AS participant_ids, COUNT(*) AS participant_count
                 FROM messenger_room_members member
                 JOIN users active_member ON active_member.id=member.user_id AND active_member.status='active'
-                WHERE member.room_id = room.id
+                WHERE member.room_id = room.id AND member.left_at IS NULL
             ) member_ids ON TRUE
             LEFT JOIN LATERAL (
                 SELECT body, created_at
@@ -2184,7 +2838,7 @@ class MailMessengerService:
                   AND msg.sender_user_id <> %s
                   AND reads.id IS NULL
             ) unread ON TRUE
-            WHERE room.id = %s
+            WHERE room.id = %s AND room.status='active'
             """,
             (actor.userId, actor.userId, actor.userId, room["id"]),
         )
@@ -2267,6 +2921,7 @@ class MailMessengerService:
             roomId=row["room_id"],
             roomType=row["room_type"],
             roomName=row["room_name"],
+            translationLocale=row.get("translation_locale") or "ko",
             participantIds=[str(item) for item in (participant_ids or [])],
             lastMessage=row["last_message"],
             lastMessageAt=row["last_message_at"],
@@ -2276,6 +2931,9 @@ class MailMessengerService:
             participantCount=int(row.get("participant_count") or len(participant_ids or [])),
             createdByUserId=row.get("created_by_user_id") or "",
             canManageParticipants=bool(actor_user_id and row.get("created_by_user_id") == actor_user_id),
+            canLeave=bool(actor_user_id and row.get("created_by_user_id") != actor_user_id),
+            canDelete=bool(actor_user_id and row.get("created_by_user_id") == actor_user_id),
+            status=row.get("status") or "active",
             createdAt=row["created_at"],
             updatedAt=row["updated_at"],
             retentionExpiresAt=row["retention_expires_at"],
@@ -2297,6 +2955,7 @@ class MailMessengerService:
             roomId=row["room_id"],
             senderUserId=row["sender_user_id"],
             senderUserName=row["sender_user_name"],
+            senderLocale=row.get("sender_locale") or "ko-KR",
             messageType=row["message_type"],
             body=row["body"],
             attachmentMeta=list(attachment_meta or []),

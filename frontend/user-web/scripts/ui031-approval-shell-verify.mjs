@@ -20,16 +20,17 @@ const menuLabels = [
   "예정",
   "개인 문서함",
   "부서 문서함",
+  "휴지통",
   "환경설정",
 ];
 
 const checks = [
   ["ui031 전용 2영역 Shell", app.includes('className="ui031-shell"') && app.includes('className="ui031-shell__sidebar"') && app.includes('className="ui031-shell__main"')],
-  ["보조 메뉴 7개", menuLabels.every((label) => app.includes(label))],
+  ["보조 메뉴 8개", menuLabels.every((label) => app.includes(label))],
   ["업무·문서함 그룹", app.includes("전자결재 업무 메뉴") && app.includes("전자결재 문서함")],
   ["새 결재 진행 권한 연결", app.includes("새 결재 진행") && app.includes('disabled={!canAct.create}') && app.includes('openApprovalEditor("create")')],
   ["선택 메뉴 접근성", app.includes('aria-label="전자결재 보조 메뉴"') && app.includes('aria-current={isCurrent ? "page" : undefined}') && app.includes('aria-labelledby="ui031-content-title"')],
-  ["데이터 계약 준비 상태", app.includes("후속 데이터 계약이 필요합니다") && !app.includes("UI-035~036") && app.includes('approvalShellMenu === "settings"')],
+  ["데이터 계약 활성 상태", !app.includes("후속 데이터 계약이 필요합니다") && helper.includes("currentUserAudienceType") && helper.includes("currentUserDepartmentMember") && app.includes('approvalShellMenu === "settings"')],
   ["기존 목록·상세 유지", app.includes('aria-label="결재 목록"') && app.includes('aria-label="결재 상세"') && app.includes('aria-label="결재 검색"')],
   ["기존 처리 action 유지", ["수정", "상신", "회수", "재기안", "승인", "반려", "처리 이력"].every((label) => app.includes(label))],
   ["actor ID pure helper", helper.includes("classifyApprovalDocuments") && helper.includes("approverUserId === actorUserId") && helper.includes("creatorUserId === actorUserId") && !helper.includes("approverUserName") && !helper.includes("creatorUserName")],

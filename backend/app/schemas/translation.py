@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator
+from typing import Literal
+from ipaddress import ip_address
+from urllib.parse import urlparse
+
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 
 
 class TranslationTextRequest(BaseModel):
-    text: str = Field(min_length=1)
+    text: str = Field(min_length=1, max_length=50000)
     sourceLocale: str = Field(default="ko")
     targetLocale: str = Field(default="en")
 
@@ -31,6 +35,8 @@ class TranslationRequest(BaseModel):
             raise ValueError("요청 텍스트는 1개 이상이어야 합니다.")
         if len(value) > 64:
             raise ValueError("요청 텍스트는 64개 이하로 제한됩니다.")
+        if sum(len(item.text.encode("utf-8")) for item in value) > 128 * 1024:
+            raise ValueError("요청 텍스트 전체 크기는 128KiB 이하로 제한됩니다.")
         return value
 
 
@@ -44,6 +50,10 @@ class TranslationItem(BaseModel):
     cacheHit: bool
     translated: bool
     statusMessage: str | None = None
+    detectedSourceLocale: str | None = None
+    model: str = ""
+    estimatedCost: float | None = None
+    reviewId: str | None = None
 
 
 class TranslationResponse(BaseModel):
@@ -69,6 +79,18 @@ class TranslationPolicyRequest(BaseModel):
     enabled: bool | None = None
     provider: str | None = None
     cacheEnabled: bool | None = None
+    model: str | None = Field(default=None, max_length=200)
+    apiBaseUrl: str | None = Field(default=None, max_length=500)
+    apiKey: SecretStr | None = Field(default=None, min_length=1, max_length=1000)
+    timeoutSeconds: int | None = Field(default=None, ge=1, le=120)
+    maxRetries: int | None = Field(default=None, ge=0, le=5)
+    rateLimitPerMinute: int | None = Field(default=None, ge=1, le=10000)
+    circuitFailureThreshold: int | None = Field(default=None, ge=1, le=100)
+    circuitRecoverySeconds: int | None = Field(default=None, ge=1, le=3600)
+    inputCostPerMillionTokens: float | None = Field(default=None, ge=0)
+    outputCostPerMillionTokens: float | None = Field(default=None, ge=0)
+    costPerMillionUnits: float | None = Field(default=None, ge=0)
+    costUnit: Literal["tokens", "characters"] | None = None
 
     @field_validator("provider")
     @classmethod
@@ -77,6 +99,94 @@ class TranslationPolicyRequest(BaseModel):
             return None
         return value.strip().lower()
 
+    @field_validator("apiBaseUrl")
+    @classmethod
+    def normalize_api_base_url(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return value
+        normalized = value.strip().rstrip("/")
+        parsed = urlparse(normalized)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("API Base URL 형식이 올바르지 않습니다.")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_provider_url(self):
+        _validate_provider_url(self.provider, self.apiBaseUrl)
+        if (self.inputCostPerMillionTokens is None) != (self.outputCostPerMillionTokens is None):
+            raise ValueError("입력·출력 토큰 단가는 함께 입력하거나 함께 비워야 합니다.")
+        return self
+
+
+class TranslationProviderOption(BaseModel):
+    provider: str
+    label: str
+    apiBaseUrl: str
+    apiKeyRequired: bool
+
+
+class TranslationConnectionTestRequest(BaseModel):
+    provider: str
+    model: str = Field(min_length=1, max_length=200)
+    apiBaseUrl: str = Field(min_length=1, max_length=500)
+    apiKey: SecretStr | None = Field(default=None, min_length=1, max_length=1000)
+    timeoutSeconds: int = Field(default=15, ge=1, le=120)
+
+    @field_validator("provider")
+    @classmethod
+    def normalize_provider(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("apiBaseUrl")
+    @classmethod
+    def normalize_api_base_url(cls, value: str) -> str:
+        return value.strip().rstrip("/")
+
+    @model_validator(mode="after")
+    def validate_connection_config(self):
+        _validate_provider_url(self.provider, self.apiBaseUrl)
+        return self
+
+
+class TranslationConnectionTestResponse(BaseModel):
+    success: bool
+    provider: str
+    model: str
+    code: str
+    message: str
+    testedAt: datetime
+
+
+class TranslationModelListRequest(BaseModel):
+    provider: str
+    apiBaseUrl: str = Field(min_length=1, max_length=500)
+    apiKey: SecretStr | None = Field(default=None, min_length=1, max_length=1000)
+    timeoutSeconds: int = Field(default=15, ge=1, le=120)
+
+    @field_validator("provider")
+    @classmethod
+    def normalize_provider(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("apiBaseUrl")
+    @classmethod
+    def normalize_api_base_url(cls, value: str) -> str:
+        return value.strip().rstrip("/")
+
+    @model_validator(mode="after")
+    def validate_model_list_config(self):
+        _validate_provider_url(self.provider, self.apiBaseUrl)
+        return self
+
+
+class TranslationModelListResponse(BaseModel):
+    success: bool
+    provider: str
+    models: list[str]
+    code: str
+    message: str
+    loadedAt: datetime
+
 
 class TranslationPolicyResponse(BaseModel):
     provider: str
@@ -84,3 +194,74 @@ class TranslationPolicyResponse(BaseModel):
     cacheEnabled: bool
     supportedSourceLocales: list[str]
     supportedTargetLocales: list[str]
+    model: str = ""
+    apiBaseUrl: str = ""
+    apiKeyConfigured: bool = False
+    apiKeyMasked: str | None = None
+    timeoutSeconds: int = 15
+    maxRetries: int = 2
+    rateLimitPerMinute: int = 60
+    circuitFailureThreshold: int = 5
+    circuitRecoverySeconds: int = 60
+    inputCostPerMillionTokens: float | None = None
+    outputCostPerMillionTokens: float | None = None
+    costPerMillionUnits: float | None = None
+    costUnit: Literal["tokens", "characters"] = "tokens"
+    providerOptions: list[TranslationProviderOption] = Field(default_factory=list)
+
+
+class TranslationReviewActionRequest(BaseModel):
+    action: Literal["edit", "approve", "retranslate"]
+    translatedText: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def require_text_for_edit(self):
+        if self.action == "edit" and not self.translatedText:
+            raise ValueError("edit 작업에는 translatedText가 필요합니다.")
+        return self
+
+
+class TranslationReviewItem(BaseModel):
+    id: str
+    companyId: str
+    sourceLocale: str
+    targetLocale: str
+    sourceText: str
+    translatedText: str
+    provider: str
+    model: str
+    status: str
+    estimatedCost: float | None = None
+    createdByUserId: str
+    approvedByUserId: str | None = None
+    approvedAt: datetime | None = None
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class TranslationReviewListResponse(BaseModel):
+    items: list[TranslationReviewItem]
+    total: int
+
+
+def _validate_provider_url(provider: str | None, value: str | None) -> None:
+    if not value:
+        return
+    parsed = urlparse(value)
+    if not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("API Base URL 형식이 올바르지 않습니다.")
+    normalized_provider = (provider or "").strip().lower()
+    if normalized_provider == "ollama":
+        if parsed.scheme not in {"http", "https"} or parsed.hostname.lower() not in {"localhost", "127.0.0.1", "ollama"}:
+            raise ValueError("Ollama URL은 승인된 로컬 호스트만 사용할 수 있습니다.")
+        return
+    if parsed.scheme != "https":
+        raise ValueError("외부 LLM API는 HTTPS 주소여야 합니다.")
+    if parsed.hostname.lower() == "localhost":
+        raise ValueError("내부 주소는 외부 Provider URL로 사용할 수 없습니다.")
+    try:
+        address = ip_address(parsed.hostname)
+    except ValueError:
+        return
+    if not address.is_global:
+        raise ValueError("공인 IP만 외부 Provider URL로 사용할 수 있습니다.")

@@ -140,6 +140,17 @@ export type ApprovalDocument = {
   content: string;
   creatorUserId: string;
   creatorUserName: string;
+  creatorDepartmentId?: string;
+  creatorDepartmentName?: string;
+  urgent: boolean;
+  referenceUserIds: string[];
+  viewerUserIds: string[];
+  currentUserAudienceType?: "reference" | "viewer";
+  currentUserReadAt?: string;
+  sharedWithDepartment: boolean;
+  currentUserDepartmentMember: boolean;
+  deletedForCurrentUser: boolean;
+  permanentlyDeletedForCurrentUser: boolean;
   status: string;
   createdAt: string;
   updatedAt: string;
@@ -213,6 +224,10 @@ export type ApprovalDraftPayload = {
   title: string;
   content: string;
   approverUserIds: string[];
+  referenceUserIds: string[];
+  viewerUserIds: string[];
+  urgent: boolean;
+  shareWithDepartment: boolean;
   attachments: ApprovalAttachmentUpload[];
 };
 
@@ -358,7 +373,7 @@ export type MailAttachmentView = {
 
 export type MailSummary = {
   mailId: string;
-  accountId: string;
+  accountId: string | null;
   senderEmail: string;
   senderDisplayName: string;
   subject: string;
@@ -530,8 +545,8 @@ export type MailExternalAccountPayload = {
 
 export type MailDetail = {
   mailId: string;
-  accountId: string;
-  senderUserId: string;
+  accountId: string | null;
+  senderUserId: string | null;
   senderEmail: string;
   senderDisplayName: string;
   subject: string;
@@ -586,7 +601,7 @@ export type MailSendResponse = {
 
 export type MailExternalDeliveryStatus = {
   recipientEmail: string; recipientKind: string; status: string; attemptCount: number;
-  nextAttemptAt: string | null; sentAt: string | null;
+  nextAttemptAt: string | null; sentAt: string | null; lastError: string | null;
 };
 
 export type MessengerParticipant = {
@@ -611,6 +626,7 @@ export type MessengerRoomSummary = {
   roomId: string;
   roomType: string;
   roomName: string;
+  translationLocale: "ko" | "en" | "ja" | "zh-cn" | "es" | "fr" | "de";
   participantIds: string[];
   lastMessage: string | null;
   lastMessageAt: string | null;
@@ -620,6 +636,9 @@ export type MessengerRoomSummary = {
   participantCount: number;
   createdByUserId: string;
   canManageParticipants: boolean;
+  canLeave: boolean;
+  canDelete: boolean;
+  status: string;
   createdAt: string;
   updatedAt: string;
   retentionExpiresAt: string | null;
@@ -638,6 +657,7 @@ export type MessengerMessage = {
   roomId: string;
   senderUserId: string;
   senderUserName: string;
+  senderLocale: string;
   messageType: string;
   body: string;
   attachmentMeta: Array<Record<string, unknown>>;
@@ -759,6 +779,27 @@ export async function fetchApprovalDetail(token: string, documentId: string): Pr
   return request<ApprovalDocumentDetail>(`/approvals/${documentId}`, {
     headers: authHeaders(token),
   });
+}
+
+export type ApprovalTrashActionResponse = {
+  documentId: string;
+  state: "deleted" | "restored" | "permanently_deleted";
+};
+
+export async function markApprovalRead(token: string, documentId: string): Promise<ApprovalDocumentDetail> {
+  return request<ApprovalDocumentDetail>(`/approvals/${documentId}/read`, { method: "POST", headers: authHeaders(token) });
+}
+
+export async function deleteApprovalDocument(token: string, documentId: string): Promise<ApprovalTrashActionResponse> {
+  return request<ApprovalTrashActionResponse>(`/approvals/${documentId}`, { method: "DELETE", headers: authHeaders(token) });
+}
+
+export async function restoreApprovalDocument(token: string, documentId: string): Promise<ApprovalTrashActionResponse> {
+  return request<ApprovalTrashActionResponse>(`/approvals/${documentId}/restore`, { method: "POST", headers: authHeaders(token) });
+}
+
+export async function permanentlyDeleteApprovalDocument(token: string, documentId: string): Promise<ApprovalTrashActionResponse> {
+  return request<ApprovalTrashActionResponse>(`/approvals/${documentId}/permanent`, { method: "DELETE", headers: authHeaders(token) });
 }
 
 export async function downloadApprovalAttachment(token: string, documentId: string, attachmentId: string, fileName: string) {
@@ -1029,8 +1070,10 @@ export async function requestTranslation(payload: TranslationRequest, token: str
   });
 }
 
-export async function fetchTranslationStatus(): Promise<{ available: boolean; enabled: boolean; provider: string }> {
-  return request<{ available: boolean; enabled: boolean; provider: string }>("/translation/status");
+export async function fetchTranslationStatus(token: string): Promise<{ available: boolean; enabled: boolean; provider: string }> {
+  return request<{ available: boolean; enabled: boolean; provider: string }>("/translation/status", {
+    headers: authHeaders(token),
+  });
 }
 
 export async function fetchUiContract(): Promise<UiContract> {
@@ -1059,6 +1102,32 @@ async function fetchMailList(token: string, mailbox: "inbox" | "sent" | "drafts"
 
 export async function fetchInbox(token: string, options?: MailListQuery): Promise<MailListResponse> {
   return fetchMailList(token, "inbox", options);
+}
+
+export async function fetchScheduledMail(token: string, options?: MailListQuery): Promise<MailListResponse> {
+  const query = new URLSearchParams();
+  if (options?.q?.trim()) query.set("q", options.q.trim());
+  if (options?.sort) query.set("sort", options.sort);
+  if (options?.limit !== undefined) query.set("limit", String(options.limit));
+  if (options?.offset !== undefined) query.set("offset", String(options.offset));
+  const suffix = query.toString();
+  return request<MailListResponse>(`/mail/scheduled${suffix ? `?${suffix}` : ""}`, { headers: authHeaders(token) });
+}
+
+export async function updateScheduledMail(token: string, mailId: string, payload: MailComposePayload): Promise<MailDetail> {
+  return request<MailDetail>(`/mail/${mailId}/scheduled`, { method: "PUT", headers: { ...authHeaders(token), "Content-Type": "application/json" }, body: JSON.stringify({ ...payload, confirmed: true }) });
+}
+
+export async function cancelScheduledMail(token: string, mailId: string): Promise<{ mailId: string; status: string }> {
+  return request(`/mail/${mailId}/scheduled`, { method: "DELETE", headers: authHeaders(token) });
+}
+
+export async function sendScheduledMailNow(token: string, mailId: string): Promise<{ mailId: string; status: string }> {
+  return request(`/mail/${mailId}/scheduled/send-now`, { method: "POST", headers: authHeaders(token) });
+}
+
+export async function retryScheduledMail(token: string, mailId: string): Promise<{ mailId: string; status: string }> {
+  return request(`/mail/${mailId}/scheduled/retry`, { method: "POST", headers: authHeaders(token) });
 }
 
 export async function fetchMailStorage(token: string): Promise<MailStorageResponse> {
@@ -1293,6 +1362,8 @@ export type MailBasicPreferences = {
   senderDisplayName: string;
   replyToEmail: string | null;
   vcardEnabled: boolean;
+  translationTargetLocale: string;
+  translationComposeMode: "preview" | "apply";
   version: number;
   updatedAt: string;
 };
@@ -1639,11 +1710,11 @@ export async function fetchMessengerRooms(token: string): Promise<MessengerRoomL
   });
 }
 
-export async function createMessengerRoom(token: string, payload: { roomName: string; roomType?: string; participantUserIds: string[] }) {
+export async function createMessengerRoom(token: string, payload: { roomName: string; roomType?: string; participantUserIds: string[]; translationLocale: MessengerRoomSummary["translationLocale"] }) {
   return request<MessengerRoomDetail>("/messenger/rooms", {
     method: "POST",
     headers: authHeaders(token),
-    body: JSON.stringify({ roomName: payload.roomName, roomType: payload.roomType ?? "group", participantUserIds: payload.participantUserIds }),
+    body: JSON.stringify({ roomName: payload.roomName, roomType: payload.roomType ?? "group", participantUserIds: payload.participantUserIds, translationLocale: payload.translationLocale }),
   });
 }
 
@@ -1655,6 +1726,14 @@ export async function favoriteMessengerRoom(token: string, roomId: string, isFav
   });
 }
 
+export async function updateMessengerRoomTranslation(token: string, roomId: string, translationLocale: MessengerRoomSummary["translationLocale"], expectedUpdatedAt: string) {
+  return request<MessengerRoomDetail>(`/messenger/rooms/${roomId}/translation`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+    body: JSON.stringify({ translationLocale, expectedUpdatedAt }),
+  });
+}
+
 export async function updateMessengerRoomParticipants(token: string, roomId: string, participantUserIds: string[], expectedUpdatedAt: string) {
   return request<MessengerRoomDetail>(`/messenger/rooms/${roomId}/participants`, {
     method: "PATCH",
@@ -1662,6 +1741,29 @@ export async function updateMessengerRoomParticipants(token: string, roomId: str
     body: JSON.stringify({ participantUserIds, expectedUpdatedAt }),
   });
 }
+
+export async function transferMessengerRoomOwner(token: string, roomId: string, newOwnerUserId: string, expectedUpdatedAt: string) {
+  return request<MessengerRoomDetail>(`/messenger/rooms/${roomId}/owner`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+    body: JSON.stringify({ newOwnerUserId, expectedUpdatedAt }),
+  });
+}
+
+export async function leaveMessengerRoom(token: string, roomId: string) {
+  return request<{ roomId: string; leftAt: string }>(`/messenger/rooms/${roomId}/leave`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+}
+
+export async function deleteMessengerRoom(token: string, roomId: string) {
+  return request<{ roomId: string; status: string; deletedAt: string; retentionExpiresAt: string }>(`/messenger/rooms/${roomId}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+}
+
 export async function fetchMessengerRoom(token: string, roomId: string): Promise<MessengerRoomDetail> {
   return request<MessengerRoomDetail>(`/messenger/rooms/${roomId}`, {
     headers: authHeaders(token),
@@ -1743,7 +1845,12 @@ export type WorkspaceFolder = { id: string; parent_id?: string | null; parentId?
 export type WorkspaceDirectory = { departments: Array<{ id: string; name: string; parent_id: string | null; department_code: string | null }>; users: Array<{ id: string; name: string; email: string; department_name: string; role_name: string }> };
 export type OrganizationDepartment = { id: string; name: string; departmentCode: string | null; parentId: string | null; directMemberCount: number };
 export type OrganizationMember = { id: string; name: string; email: string; departmentId: string | null; departmentName: string; roleName: string };
-export type WorkspaceProfile = { userId: string; name: string; email: string; companyName: string; departmentName: string; roleName: string };
+export type WorkspaceProfile = {
+  userId: string; name: string; email: string; companyName: string; departmentName: string; roleName: string;
+  externalEmail: string; mobilePhone: string; officePhone: string; introduction: string; postalCode: string;
+  addressLine1: string; addressLine2: string; memo: string; anniversary: string | null; photoAvailable: boolean; version: number;
+};
+export type PersonalProfilePayload = Pick<WorkspaceProfile, "externalEmail" | "mobilePhone" | "officePhone" | "introduction" | "postalCode" | "addressLine1" | "addressLine2" | "memo" | "anniversary"> & { expectedVersion: number };
 export type WorkspacePreferences = { locale: string; timezone: string; startPage: "home" | "mail" | "approval" | "messenger" | "schedule" | "contacts" | "org" | "files"; version: number };
 export type WorkspaceHelpPolicy = { id: string; code: string; title: string; category: string; audience: string; content: string; version: number; published_at: string; updated_at: string };
 export type WorkspaceNotice = { id: string; title: string; content: string; author_name: string; published_at: string; is_read: boolean };
@@ -1789,6 +1896,18 @@ export async function renameWorkspaceFolder(token: string, id: string, name: str
 export async function deleteWorkspaceFolder(token: string, id: string, expectedVersion: number) { return request<void>(`/workspace/file-folders/${id}?expectedVersion=${expectedVersion}`, { method: "DELETE", headers: authHeaders(token) }); }
 export async function downloadWorkspaceFile(token: string, file: WorkspaceFile, version?: number) { const suffix = version ? `?version=${version}` : ""; const response = await fetch(`${apiBase}/workspace/files/${file.id}/download${suffix}`, { headers: authHeaders(token) }); if (!response.ok) throw extractApiError(response, await response.json().catch(() => ({}))); const objectUrl = URL.createObjectURL(await response.blob()); try { const anchor = document.createElement("a"); anchor.href = objectUrl; anchor.download = file.file_name; anchor.click(); } finally { URL.revokeObjectURL(objectUrl); } }
 export async function fetchWorkspaceProfile(token: string) { return request<WorkspaceProfile>("/workspace/profile", { headers: authHeaders(token) }); }
+export async function saveWorkspaceProfile(token: string, payload: PersonalProfilePayload) { return request<WorkspaceProfile>("/workspace/profile", { method: "PUT", headers: authHeaders(token), body: JSON.stringify(payload) }); }
+export async function fetchWorkspaceProfilePhoto(token: string) {
+  const response = await fetch(`${apiBase}/workspace/profile/photo`, { headers: authHeaders(token), cache: "no-store" });
+  if (response.status === 404) return null;
+  if (!response.ok) throw extractApiError(response, await response.json().catch(() => ({})));
+  return response.blob();
+}
+export async function saveWorkspaceProfilePhoto(token: string, file: File, expectedVersion: number) {
+  const form = new FormData(); form.append("file", file);
+  return request<WorkspaceProfile>(`/workspace/profile/photo?expectedVersion=${expectedVersion}`, { method: "PUT", headers: { Authorization: `Bearer ${token}` }, body: form });
+}
+export async function deleteWorkspaceProfilePhoto(token: string, expectedVersion: number) { return request<WorkspaceProfile>(`/workspace/profile/photo?expectedVersion=${expectedVersion}`, { method: "DELETE", headers: authHeaders(token) }); }
 export async function fetchWorkspacePreferences(token: string) { return request<WorkspacePreferences>("/workspace/preferences", { headers: authHeaders(token) }); }
 export async function saveWorkspacePreferences(token: string, payload: WorkspacePreferences) { return request<WorkspacePreferences>("/workspace/preferences", { method: "PUT", headers: authHeaders(token), body: JSON.stringify({ locale: payload.locale, timezone: payload.timezone, startPage: payload.startPage, expectedVersion: payload.version }) }); }
 export async function fetchWorkspaceHelpPolicies(token: string, options: { query?: string; category?: string } = {}) { const params = new URLSearchParams(); if (options.query) params.set("query", options.query); if (options.category) params.set("category", options.category); return request<{ items: WorkspaceHelpPolicy[] }>(`/workspace/help-policies${params.size ? `?${params}` : ""}`, { headers: authHeaders(token) }); }

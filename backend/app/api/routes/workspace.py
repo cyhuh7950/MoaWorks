@@ -6,7 +6,7 @@ from fastapi.responses import Response
 
 from app.api.dependencies import permission_required
 from app.schemas.directory import AuthUserSummary
-from app.schemas.workspace import CalendarCreatePayload, CalendarOrderPayload, CalendarSubscriptionPayload, CalendarUpdatePayload, ContactGroupCreatePayload, ContactGroupUpdatePayload, ContactPayload, FilePatchPayload, FileScope, FileShareSnapshotPayload, FileSort, FolderCreatePayload, FolderPatchPayload, NoticeListResponse, NoticeRecord, PreferencePayload, SchedulePayload, WorkspaceDirectoryResponse, WorkspaceItemList, WorkspacePreferencesResponse
+from app.schemas.workspace import CalendarCreatePayload, CalendarOrderPayload, CalendarSubscriptionPayload, CalendarUpdatePayload, ContactGroupCreatePayload, ContactGroupUpdatePayload, ContactPayload, FilePatchPayload, FileScope, FileShareSnapshotPayload, FileSort, FolderCreatePayload, FolderPatchPayload, NoticeListResponse, NoticeRecord, PersonalProfilePayload, PreferencePayload, SchedulePayload, WorkspaceDirectoryResponse, WorkspaceItemList, WorkspacePreferencesResponse
 from app.services.workspace_file_storage import ContentTypeRejected, WorkspaceFileStorage
 from app.services.workspace_service import WorkspaceService
 
@@ -277,6 +277,44 @@ def preferences(user: AuthUserSummary = Depends(permission_required("profile:rea
 @router.get('/profile')
 def profile(user: AuthUserSummary = Depends(permission_required("profile:read"))):
     return _service().profile(user)
+
+
+@router.put('/profile')
+def save_profile(payload: PersonalProfilePayload, user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().save_personal_profile(user, payload)
+
+
+@router.get('/profile/photo')
+def profile_photo(user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    item = _service().profile_photo(user)
+    return Response(content=item['content'], media_type=item['content_type'], headers={
+        'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, no-store',
+    })
+
+
+def _validated_profile_photo(content: bytes) -> tuple[bytes, str]:
+    if not content:
+        raise HTTPException(status_code=400, detail={"code":"PROFILE_PHOTO_EMPTY","userMessage":"프로필 사진 파일이 비어 있습니다."})
+    if len(content) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail={"code":"PROFILE_PHOTO_TOO_LARGE","userMessage":"프로필 사진은 2MB 이하만 등록할 수 있습니다."})
+    if content.startswith(b"\xff\xd8\xff"):
+        return content, "image/jpeg"
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return content, "image/png"
+    if len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return content, "image/webp"
+    raise HTTPException(status_code=415, detail={"code":"PROFILE_PHOTO_TYPE_INVALID","userMessage":"JPEG, PNG, WebP 사진만 등록할 수 있습니다."})
+
+
+@router.put('/profile/photo')
+async def save_profile_photo(file: UploadFile = File(...), expectedVersion: int = Query(ge=0), user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    content, content_type = _validated_profile_photo(await file.read(2 * 1024 * 1024 + 1))
+    return _service().save_profile_photo(user, content, content_type, expectedVersion)
+
+
+@router.delete('/profile/photo')
+def delete_profile_photo(expectedVersion: int = Query(ge=0), user: AuthUserSummary = Depends(permission_required("profile:read"))):
+    return _service().delete_profile_photo(user, expectedVersion)
 
 
 @router.put('/preferences', response_model=WorkspacePreferencesResponse)

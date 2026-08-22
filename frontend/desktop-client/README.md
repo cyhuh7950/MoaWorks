@@ -1,15 +1,23 @@
 # MoaWorks Desktop Client
 
-일반 사용자가 명령어 없이 실행하는 Windows x64 포터블 업무 클라이언트입니다.
+일반 사용자가 명령어 없이 설치하거나 portable로 실행하는 Windows x64 업무 클라이언트입니다.
 
-## 사용자 실행
+## 설치형 사용자 실행
+
+1. 배포받은 `MoaWorks-Desktop-<version>-Setup.exe`의 SHA-256을 manifest와 대조합니다.
+2. Setup을 실행합니다. 사용자 단위로 설치되며 관리자 권한을 요구하지 않습니다.
+3. 설치된 `MoaWorks Desktop Client`를 실행해 로그인합니다.
+4. 새 버전 Setup을 실행하면 동일한 `MoaWorksDesktop` 앱 식별자로 버전이 올라갑니다.
+5. Windows 앱 제거에서 클라이언트를 제거할 수 있습니다. 사용자가 별도 경로에 저장한 archive는 제거하지 않습니다.
+
+## Portable 사용자 실행
 
 1. 배포받은 `MoaWorks-Desktop-<version>-win-x64-portable.zip`을 새 폴더에 압축 해제합니다.
 2. `MoaWorks Desktop Client.exe`를 실행합니다.
 3. 화면에서 로그인한 뒤 메일, 메신저, 결재와 알림 기능을 사용합니다.
 4. 메일 및 메신저 아카이브는 화면의 저장 기능으로 사용자가 선택한 외부 폴더에 저장합니다.
 
-재설치는 실행 중인 앱을 종료한 뒤 새 버전 ZIP을 새 폴더에 압축 해제해 실행합니다. 제거는 앱 종료 후 압축 해제 폴더를 삭제합니다. 사용자가 별도 저장한 아카이브 파일은 제거 대상이 아닙니다.
+Portable 재설치는 실행 중인 앱을 종료한 뒤 새 버전 ZIP을 새 폴더에 압축 해제해 실행합니다. 제거는 앱 종료 후 압축 해제 폴더를 삭제합니다. 사용자가 별도 저장한 아카이브 파일은 제거 대상이 아닙니다.
 
 ## 보안·운영 경계
 
@@ -28,7 +36,10 @@ npm ci
 npm test
 npm run test:coverage
 npm run build
+npm run package:installer
 npm audit --omit=dev
 ```
 
-빌드 결과는 `build-evidence/`에 versioned portable ZIP, SHA-256 manifest, 최소 로그로 생성됩니다. manifest에는 ZIP, EXE, 앱 main 코드의 버전·크기·해시가 포함됩니다.
+Portable 결과는 `build-evidence/`에 versioned ZIP, SHA-256 manifest, 최소 로그로 생성됩니다. 설치형 결과는 `out/make/squirrel.windows/x64/`에 versioned Setup EXE, update NUPKG, RELEASES로 생성되고 SHA-256 manifest는 `build-evidence/`에 생성됩니다.
+
+Squirrel의 Windows 리소스 도구는 한글·공백이 포함된 긴 checkout 경로에서 실패할 수 있습니다. 릴리스 빌드 작업폴더는 짧은 영문 경로를 사용합니다. 제품 소스·사용자 데이터 문제는 아닙니다.

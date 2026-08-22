@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 3520",
-    "build": "tsc -b && vite build"
+    "build": "tsc -b && vite build",
+    "verify:translation-visibility": "node scripts/stage03-translation-visibility-verify.mjs",
+    "verify:translation-bootstrap": "node scripts/stage03-translation-bootstrap-verify.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

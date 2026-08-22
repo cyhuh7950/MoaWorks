@@ -164,6 +164,17 @@ class MailDetailTest(unittest.TestCase):
         )
         self.assertNotIn("storageKey", detail.model_dump(mode="json")["attachments"][0])
 
+    def test_external_smtp_detail_allows_missing_internal_sender_identity(self):
+        service = MailMessengerService()
+        message = self.message(sender_view=False)
+        message["account_id"] = None
+        message["sender_user_id"] = None
+
+        detail = service._to_mail_detail(message, [], [])
+
+        self.assertIsNone(detail.accountId)
+        self.assertIsNone(detail.senderUserId)
+
     def test_route_keeps_mail_forbidden_403_contract(self):
         service = Mock()
         service.get_mail.side_effect = PermissionError("메일을 조회할 권한이 없습니다.")

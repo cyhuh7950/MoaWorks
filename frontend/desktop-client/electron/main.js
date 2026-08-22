@@ -1,8 +1,14 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const squirrelStartup = require("electron-squirrel-startup");
 const { createApiBroker } = require("./api-broker");
 const { saveArchive } = require("./archive-service");
+
+if (squirrelStartup) app.quit();
+if (process.platform === "win32") {
+  app.setAppUserModelId("com.squirrel.MoaWorksDesktop.MoaWorksDesktop");
+}
 
 const apiBroker = createApiBroker();
 let lastArchivePath = "";

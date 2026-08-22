@@ -18,6 +18,7 @@ export type AuthUser = {
   roleId: string;
   roleName: string;
   userType: string;
+  isDepartmentHead: boolean;
   status: string;
   permissions: string[];
   mustChangePassword: boolean;
@@ -174,6 +175,7 @@ export type DomainVerifyResponse = {
     host: string;
     expectedValue: string;
     status: string;
+    code: string;
     message: string;
   }>;
 };
@@ -232,6 +234,10 @@ export type TranslationItem = {
   cacheHit: boolean;
   translated: boolean;
   statusMessage?: string | null;
+  detectedSourceLocale?: string | null;
+  model: string;
+  estimatedCost?: number | null;
+  reviewId?: string | null;
 };
 
 export type TranslationResponse = {
@@ -259,7 +265,119 @@ export type TranslationPolicy = {
   cacheEnabled: boolean;
   supportedSourceLocales: string[];
   supportedTargetLocales: string[];
+  model: string;
+  apiBaseUrl: string;
+  apiKeyConfigured: boolean;
+  apiKeyMasked?: string | null;
+  timeoutSeconds: number;
+  maxRetries: number;
+  rateLimitPerMinute: number;
+  circuitFailureThreshold: number;
+  circuitRecoverySeconds: number;
+  inputCostPerMillionTokens?: number | null;
+  outputCostPerMillionTokens?: number | null;
+  costPerMillionUnits?: number | null;
+  costUnit: "tokens" | "characters";
+  providerOptions: TranslationProviderOption[];
 };
+
+export type MonitoringAlert = {
+  alertId: string;
+  ruleId: string;
+  metric: string;
+  category: "approval" | "mail" | "messenger" | "schedule" | "file" | "notice" | "system";
+  severity: "INFO" | "WARN" | "ERROR" | "CRITICAL";
+  status: "OPEN" | "ACKNOWLEDGED" | "RESOLVED";
+  currentValue: number;
+  threshold: number;
+  detectedAt: string;
+  acknowledgedAt: string | null;
+  resolvedAt: string | null;
+  message: string;
+};
+
+export type OperationalBackupOverview = {
+  policy: {
+    enabled: boolean;
+    intervalHours: number;
+    retentionDays: number;
+    encryptionRequired: boolean;
+    storageMode: "managed_local";
+    lastScheduledAt: string | null;
+    nextScheduledAt: string | null;
+    updatedAt: string | null;
+  };
+  backups: Array<{
+    backupId: string;
+    triggerType: "manual" | "schedule";
+    status: "queued" | "running" | "completed" | "failed" | "expired";
+    artifactSha256: string | null;
+    sizeBytes: number | null;
+    snapshotAt: string | null;
+    completedAt: string | null;
+    expiresAt: string | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+    createdAt: string;
+  }>;
+  restoreDrills: Array<{
+    drillId: string;
+    backupId: string;
+    status: "queued" | "running" | "completed" | "failed";
+    checksumVerified: boolean;
+    rpoSeconds: number | null;
+    rtoSeconds: number | null;
+    completedAt: string | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+    createdAt: string;
+  }>;
+};
+
+export type TranslationProviderOption = {
+  provider: string;
+  label: string;
+  apiBaseUrl: string;
+  apiKeyRequired: boolean;
+};
+
+export type TranslationConnectionTestResponse = {
+  success: boolean;
+  provider: string;
+  model: string;
+  code: string;
+  message: string;
+  testedAt: string;
+};
+
+export type TranslationModelListResponse = {
+  success: boolean;
+  provider: string;
+  models: string[];
+  code: string;
+  message: string;
+  loadedAt: string;
+};
+
+export type TranslationReview = {
+  id: string;
+  companyId: string;
+  sourceLocale: string;
+  targetLocale: string;
+  sourceText: string;
+  translatedText: string;
+  provider: string;
+  model: string;
+  status: string;
+  estimatedCost?: number | null;
+  createdByUserId: string;
+  approvedByUserId?: string | null;
+  approvedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TranslationReviewList = { items: TranslationReview[]; total: number };
 
 export type MailDeliveryProviderStatus = {
   providerId: string;
@@ -289,6 +407,51 @@ export type MailDeliveryQueueSummary = {
 export type MailDeliveryStatusResponse = {
   provider: MailDeliveryProviderStatus;
   summary: MailDeliveryQueueSummary;
+};
+
+export type MailOperationsProvider = {
+  providerId: string;
+  providerKey: "self_hosted" | "oci_email_delivery";
+  active: boolean;
+  deliveryEnabled: boolean;
+  relayHost: string;
+  relayPort: number;
+  tlsMode: "none" | "starttls" | "tls";
+  senderAddress: string | null;
+  usernameConfigured: boolean;
+  passwordConfigured: boolean;
+  dkimDomain: string | null;
+  dkimSelector: string | null;
+  dkimPrivateKeyConfigured: boolean;
+  lastTestStatus: string;
+  lastConnectionAt: string | null;
+  lastConnectionError: string | null;
+};
+export type SelfHostedDkimGenerationResponse = {
+  provider: MailOperationsProvider;
+  dnsHost: string;
+  dnsValue: string;
+};
+
+
+export type MailOperationsOverview = {
+  domain: null | {
+    registeredDomain: string;
+    mailDomain: string;
+    userHost: string;
+    adminHost: string;
+    mailHost: string;
+    inboundMxHost: string;
+    adminAccessMode: "public" | "restricted" | "private";
+    adminAllowedCidrs: string[];
+    activeOutboundProvider: "self_hosted" | "oci_email_delivery";
+    previousOutboundProvider: "self_hosted" | "oci_email_delivery" | null;
+    providerSwitchedAt: string | null;
+  };
+  providers: MailOperationsProvider[];
+  queue: Record<string, number>;
+  feedbackCount: number;
+  ociSuppression: { activeCount: number; lastSeenAt: string | null };
 };
 
 export type MailDeliveryQueueItem = {
@@ -331,6 +494,26 @@ export type MailDeliveryQueueResponse = {
   queue: MailDeliveryQueueItem[];
   attempts: MailDeliveryAttemptItem[];
   events: MailDeliveryEventItem[];
+};
+
+export type AdminMessengerRoom = {
+  roomId: string;
+  roomType: string;
+  roomName: string;
+  status: "active" | "deleted";
+  ownerUserId: string;
+  ownerUserName: string;
+  participantCount: number;
+  messageCount: number;
+  createdAt: string;
+  updatedAt: string;
+  closedAt: string | null;
+  retentionExpiresAt: string | null;
+};
+
+export type AdminMessengerRoomListResponse = {
+  rooms: AdminMessengerRoom[];
+  total: number;
 };
 
 export type MailSendResponse = {
@@ -480,7 +663,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBase}${path}`, init);
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.adminMessage ?? data.userMessage ?? data.detail ?? "요청 처리에 실패했습니다.");
+    const detail = data.detail;
+    const detailMessage = typeof detail === "string" ? detail : detail?.userMessage ?? detail?.adminMessage;
+    throw new Error(data.adminMessage ?? data.userMessage ?? detailMessage ?? "요청 처리에 실패했습니다.");
   }
   return data as T;
 }
@@ -594,7 +779,7 @@ export async function deleteRole(token: string, roleId: string) {
 
 export async function createUser(
   token: string,
-  payload: { name: string; loginId: string; departmentId: string; roleId: string; status: string; userType?: string; isDepartmentHead?: boolean },
+  payload: { name: string; loginId: string; password: string; departmentId: string; roleId: string; status: string; userType?: string; isDepartmentHead?: boolean },
 ) {
   return request<UserView>("/admin/users", {
     method: "POST",
@@ -651,6 +836,59 @@ export async function fetchMailDeliveryQueue(token: string): Promise<MailDeliver
   });
 }
 
+export async function fetchMailOperations(token: string): Promise<MailOperationsOverview> {
+  return request<MailOperationsOverview>("/admin/mail-operations", { headers: authHeaders(token) });
+}
+
+export async function updateMailOperationsDomain(token: string, payload: {
+  registeredDomain: string;
+  mailDomain: string;
+  inboundMxHost: string;
+  adminAccessMode: "public" | "restricted" | "private";
+  adminAllowedCidrs: string[];
+}): Promise<MailOperationsOverview> {
+  return request<MailOperationsOverview>("/admin/mail-operations/domain", {
+    method: "PUT", headers: authHeaders(token), body: JSON.stringify(payload),
+  });
+}
+
+export async function updateMailOperationsProvider(token: string, providerKey: "self_hosted" | "oci_email_delivery", payload: Record<string, unknown>) {
+  return request<MailOperationsProvider>(`/admin/mail-operations/providers/${providerKey}`, {
+    method: "PUT", headers: authHeaders(token), body: JSON.stringify(payload),
+  });
+}
+export async function generateSelfHostedDkim(token: string): Promise<SelfHostedDkimGenerationResponse> {
+  return request<SelfHostedDkimGenerationResponse>("/admin/mail-operations/providers/self_hosted/dkim/generate", {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+}
+
+
+export async function switchMailOperationsProvider(token: string, targetProvider: "self_hosted" | "oci_email_delivery") {
+  return request<{ previousProvider: string; activeProvider: string; pinnedQueueCount: number }>("/admin/mail-operations/providers/switch", {
+    method: "POST", headers: authHeaders(token), body: JSON.stringify({ targetProvider }),
+  });
+}
+
+export async function testMailOperationsProvider(token: string, providerKey: "self_hosted" | "oci_email_delivery", recipient: string) {
+  return request<MailOperationsProvider>(`/admin/mail-operations/providers/${providerKey}/test`, {
+    method: "POST", headers: authHeaders(token), body: JSON.stringify({ recipient }),
+  });
+}
+
+export async function rollbackMailOperationsProvider(token: string) {
+  return request<{ previousProvider: string; activeProvider: string; pinnedQueueCount: number }>("/admin/mail-operations/providers/rollback", {
+    method: "POST", headers: authHeaders(token),
+  });
+}
+
+export async function syncOciMailSuppressions(token: string) {
+  return request<{ suppressionCount: number; approvedSenders: Array<{ email: string; status: string }>; emailDomains: Array<{ name: string; status: string }>; syncedAt: string }>("/admin/mail-operations/oci/suppressions/sync", {
+    method: "POST", headers: authHeaders(token),
+  });
+}
+
 export async function testMailDelivery(
   token: string,
   payload: { recipient: string; subject?: string; bodyText?: string },
@@ -665,6 +903,19 @@ export async function testMailDelivery(
 export async function retryMailDelivery(token: string, queueId: string) {
   return request<{ queueItem: MailDeliveryQueueItem; message: string }>(`/mail/delivery/${queueId}/retry`, {
     method: "POST",
+    headers: authHeaders(token),
+  });
+}
+
+export async function fetchAdminMessengerRooms(token: string, status: "active" | "deleted" | "all" = "all") {
+  return request<AdminMessengerRoomListResponse>(`/admin/messenger/rooms?status=${encodeURIComponent(status)}&limit=200`, {
+    headers: authHeaders(token),
+  });
+}
+
+export async function deleteAdminMessengerRoom(token: string, roomId: string) {
+  return request<{ roomId: string; status: string; deletedAt: string; retentionExpiresAt: string }>(`/admin/messenger/rooms/${roomId}`, {
+    method: "DELETE",
     headers: authHeaders(token),
   });
 }
@@ -743,8 +994,42 @@ export async function bulkDeleteHelpPolicies(token: string, ids: string[]) {
   return request<ContentListResponse<HelpPolicyDocument>>("/admin/content/help-policies/bulk-delete", { method: "POST", headers: authHeaders(token), body: JSON.stringify({ ids }) });
 }
 
-export async function fetchTranslationStatus(): Promise<TranslationStatus> {
-  return request<TranslationStatus>("/translation/status");
+export async function fetchTranslationStatus(token?: string): Promise<TranslationStatus> {
+  return request<TranslationStatus>(token ? "/translation/admin/status" : "/translation/status", token ? { headers: authHeaders(token) } : undefined);
+}
+
+export async function fetchMonitoringAlerts(token: string) {
+  return request<{ alerts: MonitoringAlert[]; total: number }>("/admin/monitoring/alerts", { headers: authHeaders(token) });
+}
+
+export async function acknowledgeMonitoringAlert(token: string, alertId: string) {
+  return request<MonitoringAlert>(`/admin/monitoring/alerts/${encodeURIComponent(alertId)}/ack`, { method: "POST", headers: authHeaders(token) });
+}
+
+export async function resolveMonitoringAlert(token: string, alertId: string) {
+  return request<MonitoringAlert>(`/admin/monitoring/alerts/${encodeURIComponent(alertId)}/resolve`, { method: "POST", headers: authHeaders(token) });
+}
+
+export async function fetchOperationalBackups(token: string) {
+  return request<OperationalBackupOverview>("/admin/operations/backups", { headers: authHeaders(token) });
+}
+
+export async function updateOperationalBackupPolicy(token: string, payload: { enabled: boolean; intervalHours: number; retentionDays: number }) {
+  return request<OperationalBackupOverview["policy"]>("/admin/operations/backups/policy", {
+    method: "PUT", headers: authHeaders(token), body: JSON.stringify(payload),
+  });
+}
+
+export async function queueOperationalBackup(token: string) {
+  return request<OperationalBackupOverview["backups"][number]>("/admin/operations/backups/jobs", {
+    method: "POST", headers: authHeaders(token),
+  });
+}
+
+export async function queueOperationalRestoreDrill(token: string, backupId: string) {
+  return request<OperationalBackupOverview["restoreDrills"][number]>(`/admin/operations/backups/jobs/${encodeURIComponent(backupId)}/restore-drills`, {
+    method: "POST", headers: authHeaders(token),
+  });
 }
 
 export async function requestTranslation(payload: TranslationRequest, token: string): Promise<TranslationResponse> {
@@ -766,7 +1051,7 @@ export async function fetchTranslationPolicy(token: string): Promise<Translation
 
 export async function updateTranslationPolicy(
   token: string,
-  payload: Partial<{ enabled: boolean; provider: string; cacheEnabled: boolean }>,
+  payload: Partial<{ enabled: boolean; provider: string; cacheEnabled: boolean; model: string; apiBaseUrl: string; apiKey: string; timeoutSeconds: number; maxRetries: number; rateLimitPerMinute: number; circuitFailureThreshold: number; circuitRecoverySeconds: number; inputCostPerMillionTokens: number | null; outputCostPerMillionTokens: number | null; costPerMillionUnits: number | null; costUnit: "tokens" | "characters" }>,
 ): Promise<TranslationPolicy> {
   return request<TranslationPolicy>("/translation/admin", {
     method: "PATCH",
@@ -774,6 +1059,41 @@ export async function updateTranslationPolicy(
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function testTranslationProviderConnection(
+  token: string,
+  payload: { provider: string; model: string; apiBaseUrl: string; apiKey?: string; timeoutSeconds: number },
+): Promise<TranslationConnectionTestResponse> {
+  return request<TranslationConnectionTestResponse>("/translation/admin/test-connection", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchTranslationProviderModels(
+  token: string,
+  payload: { provider: string; apiBaseUrl: string; apiKey?: string; timeoutSeconds: number },
+): Promise<TranslationModelListResponse> {
+  return request<TranslationModelListResponse>("/translation/admin/models", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchTranslationReviews(token: string, reviewStatus?: string): Promise<TranslationReviewList> {
+  const query = reviewStatus ? `?reviewStatus=${encodeURIComponent(reviewStatus)}` : "";
+  return request<TranslationReviewList>(`/translation/reviews${query}`, { headers: authHeaders(token) });
+}
+
+export async function applyTranslationReviewAction(token: string, reviewId: string, payload: { action: "edit" | "approve" | "retranslate"; translatedText?: string }): Promise<TranslationReview> {
+  return request<TranslationReview>(`/translation/reviews/${reviewId}/actions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(payload),
   });
 }

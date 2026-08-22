@@ -6,6 +6,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.services.setup_service import SetupPersistenceError
+from app.services.resource_policy import ResourceNotFoundError
 
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,14 @@ def register_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=422,
             content=_public_error("VALIDATION_ERROR", "입력값 검증에 실패했습니다."),
+        )
+
+    @app.exception_handler(ResourceNotFoundError)
+    async def handle_resource_not_found(request: Request, exc: ResourceNotFoundError) -> JSONResponse:
+        _log_rejection(request, 404, "RESOURCE_NOT_FOUND")
+        return JSONResponse(
+            status_code=404,
+            content=_public_error("RESOURCE_NOT_FOUND", "대상을 찾을 수 없습니다."),
         )
 
     @app.exception_handler(PermissionError)

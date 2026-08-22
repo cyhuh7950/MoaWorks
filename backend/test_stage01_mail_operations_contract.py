@@ -20,7 +20,28 @@ class MailDomainContractTest(unittest.TestCase):
         self.assertEqual(contract.user_host, "user.moaworks.sinsan.kr")
         self.assertEqual(contract.admin_host, "admin.moaworks.sinsan.kr")
         self.assertEqual(contract.mail_host, "mail.moaworks.sinsan.kr")
+        self.assertEqual(contract.inbound_mx_host, "mail.moaworks.sinsan.kr")
         self.assertEqual(contract.admin_access_mode, "restricted")
+
+    def test_split_inbound_mx_host_is_explicit_and_normalized(self) -> None:
+        contract = build_mail_domain_contract(
+            registered_domain="sinsan.kr",
+            mail_domain="dev.moaworks.sinsan.kr",
+            inbound_mx_host="MX.DEV.MOAWORKS.SINSAN.KR.",
+            admin_access_mode="restricted",
+        )
+
+        self.assertEqual(contract.mail_host, "mail.dev.moaworks.sinsan.kr")
+        self.assertEqual(contract.inbound_mx_host, "mx.dev.moaworks.sinsan.kr")
+
+    def test_inbound_mx_host_outside_mail_domain_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "수신 MX"):
+            build_mail_domain_contract(
+                registered_domain="sinsan.kr",
+                mail_domain="dev.moaworks.sinsan.kr",
+                inbound_mx_host="mx.example.net",
+                admin_access_mode="restricted",
+            )
 
     def test_unrelated_mail_domain_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "등록 도메인"):

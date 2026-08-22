@@ -38,6 +38,11 @@ await check("compose uses CommonPopup 960x760 with document and approval-line ta
   for (const token of ['role="tablist"', 'role="tab"', 'role="tabpanel"', 'aria-selected=', "문서", "결재선"]) assert.ok(app.includes(token), token);
 });
 
+await check("document and approval-line panels keep compact explicit rows", () => {
+  assert.match(css, /\.ui033-compose__panel\s*\{[^}]*grid-template-rows:\s*auto\s+auto\s+minmax\(300px,\s*1fr\)\s+minmax\(0,\s*94px\)/s);
+  assert.match(css, /\.ui033-approver-selected\s*\{[^}]*grid-template-rows:\s*auto[^}]*grid-auto-rows:\s*minmax\(42px,\s*auto\)[^}]*align-content:\s*start/s);
+});
+
 await check("editor identity and latest edit detail are independent from list selection", () => {
   assert.ok(app.includes("approvalEditorDocumentId"));
   assert.match(app, /openApprovalEditor[\s\S]*fetchApprovalDetail\(token,\s*document\.id\)/);

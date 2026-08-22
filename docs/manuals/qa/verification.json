@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 1,
+  "verifiedAt": "2026-08-11T09:42:36.924965+00:00",
+  "status": "PASS",
+  "checks": [
+    {
+      "manual": "end_user",
+      "source": "docs\\manuals\\moaworks-end-user-manual-v2.0.md",
+      "required_terms_missing": [],
+      "image_count": 29,
+      "minimum_images": 20,
+      "missing_images": [],
+      "banned_pattern_hits": [],
+      "heading_count": 49,
+      "accessibility": {
+        "high": 0,
+        "medium": 0,
+        "low": 0
+      }
+    },
+    {
+      "manual": "admin_operator",
+      "source": "docs\\manuals\\moaworks-admin-operator-manual-v2.0.md",
+      "required_terms_missing": [],
+      "image_count": 2,
+      "minimum_images": 2,
+      "missing_images": [],
+      "banned_pattern_hits": [],
+      "heading_count": 38,
+      "accessibility": {
+        "high": 0,
+        "medium": 0,
+        "low": 0
+      }
+    },
+    {
+      "manual": "install_deploy",
+      "source": "docs\\manuals\\moaworks-install-deploy-manual-v2.0.md",
+      "required_terms_missing": [],
+      "image_count": 7,
+      "minimum_images": 7,
+      "missing_images": [],
+      "banned_pattern_hits": [],
+      "heading_count": 41,
+      "accessibility": {
+        "high": 0,
+        "medium": 0,
+        "low": 0
+      }
+    },
+    {
+      "manual": "incident_recovery",
+      "source": "docs\\manuals\\moaworks-incident-backup-recovery-manual-v2.0.md",
+      "required_terms_missing": [],
+      "image_count": 1,
+      "minimum_images": 1,
+      "missing_images": [],
+      "banned_pattern_hits": [],
+      "heading_count": 40,
+      "accessibility": {
+        "high": 0,
+        "medium": 0,
+        "low": 0
+      }
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "docs\\manuals\\output\\moaworks-end-user-manual-v2.0.docx",
+      "bytes": 3539906,
+      "sha256": "96a6d90a3ef9216d938b8468cfa770b046da788afd4563adf6b911a5795ce094",
+      "embedded_media": 29
+    },
+    {
+      "path": "docs\\manuals\\output\\moaworks-end-user-manual-v2.0.pdf",
+      "bytes": 3024169,
+      "sha256": "1ac474f111aabbcbb446ec564db6c2515d49ed89374261c76047aa4c54c13925"
+    },
+    {
+      "path": "docs\\manuals\\output\\moaworks-admin-operator-manual-v2.0.docx",
+      "bytes": 179839,
+      "sha256": "ddb88ae035e0874b3aa0e45eb202f4f926ab026068f0ad1fc3151d508bcc049e",
+      "embedded_media": 2
+    },
+    {
+      "path": "docs\\manuals\\output\\moaworks-admin-operator-manual-v2.0.pdf",
+      "bytes": 545965,
+      "sha256": "70581e66591736ff6e74909ac83851b0252a0d73bb8c815e4ba164c9f8343278"
+    },
+    {
+      "path": "docs\\manuals\\output\\moaworks-install-deploy-manual-v2.0.docx",
+      "bytes": 492852,
+      "sha256": "2af2ae9e4868884691766837db9d63245b80a1e337ff157d0e9f01f90de91532",
+      "embedded_media": 7
+    },
+    {
+      "path": "docs\\manuals\\output\\moaworks-install-deploy-manual-v2.0.pdf",
+      "bytes": 722904,
+      "sha256": "aa87e74d241c3b92dc2ea3f89f4e183cc11b000c4ae48b5c37f7fd1231864880"
+    },
+    {
+      "path": "docs\\manuals\\output\\moaworks-incident-backup-recovery-manual-v2.0.docx",
+      "bytes": 85353,
+      "sha256": "a605235961d7381ed77864691acc17d85f999f7404eae54b431268d18843fe1b",
+      "embedded_media": 1
+    },
+    {
+      "path": "docs\\manuals\\output\\moaworks-incident-backup-recovery-manual-v2.0.pdf",
+      "bytes": 441696,
+      "sha256": "47590236711317701a111d8936cb3beba33ae7af25591dbe3a2e491556ed6c77"
+    }
+  ],
+  "failures": [],
+  "deferred": [
+    "iOS macOS/Xcode, Apple signing, and iPhone native device verification"
+  ]
+}

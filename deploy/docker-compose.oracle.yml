@@ -34,6 +34,9 @@ services:
       VITE_PROXY_TARGET: http://server:8000
     expose:
       - "3510"
+    environment:
+      ADMIN_ACCESS_CHECK_TOKEN: ${ADMIN_ACCESS_CHECK_TOKEN}
+      TRUSTED_PROXY_CIDR: ${TRUSTED_PROXY_CIDR:-172.16.0.0/12}
     depends_on:
       - server
     networks:
@@ -51,6 +54,67 @@ services:
       - server
     networks:
       - proxy_net
+    restart: unless-stopped
+
+  mail-gateway:
+    container_name: moaworks-mail-gateway
+    build:
+      context: ..
+      dockerfile: deploy/mail-gateway/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      POSTGRES_HOST: shared-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      MAIL_HOSTNAME: ${MAIL_HOSTNAME:-mail.moaworks.sinsan.kr}
+      MAIL_INGEST_URL: http://server:8000/api/v1/internal/mail/ingest
+      MAIL_INGEST_TOKEN: ${MAIL_INGEST_TOKEN}
+      SMTP_RELAY_DOMAINS: ${SMTP_RELAY_DOMAINS:-}
+      SMTP_RELAY_TRANSPORT_HOST: ${SMTP_RELAY_TRANSPORT_HOST:-}
+      SMTP_RELAY_TRANSPORT_PORT: ${SMTP_RELAY_TRANSPORT_PORT:-25}
+      SMTP_TLS_MODE: ${SMTP_TLS_MODE:-disabled}
+      SMTP_TLS_CERT_ROOT: /run/moaworks-mail-tls
+      SMTP_TLS_CERT_NAME: ${SMTP_TLS_CERT_NAME:-}
+      SMTP_TLS_CERT_FILE: ${SMTP_TLS_CERT_FILE:-}
+      SMTP_TLS_KEY_FILE: ${SMTP_TLS_KEY_FILE:-}
+      SMTP_TLS_CA_FILE: ${SMTP_TLS_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}
+    ports:
+      - "25:25"
+    volumes:
+      - mail-spool:/var/spool/postfix
+      - ${SMTP_TLS_LIVE_DIR:-/etc/ssl/certs}:/run/moaworks-mail-tls/live/${SMTP_TLS_CERT_NAME:-disabled}:ro
+      - ${SMTP_TLS_ARCHIVE_DIR:-/etc/ssl/certs}:/run/moaworks-mail-tls/archive/${SMTP_TLS_CERT_NAME:-disabled}:ro
+    depends_on:
+      - server
+      - rspamd
+      - clamav
+    networks:
+      - app_net
+      - pg_net
+    restart: unless-stopped
+
+  rspamd:
+    container_name: moaworks-rspamd
+    image: rspamd/rspamd:3.11
+    volumes:
+      - ./mail-gateway/rspamd-worker-proxy.inc:/etc/rspamd/local.d/worker-proxy.inc:ro
+      - ./mail-gateway/rspamd-antivirus.conf:/etc/rspamd/local.d/antivirus.conf:ro
+    depends_on:
+      - clamav
+    networks:
+      - app_net
+    restart: unless-stopped
+
+  clamav:
+    container_name: moaworks-clamav
+    image: clamav/clamav-debian:1.4.3
+    volumes:
+      - clamav-db:/var/lib/clamav
+    networks:
+      - app_net
     restart: unless-stopped
 
   mail-layer:
@@ -145,6 +209,8 @@ services:
 
 volumes:
   storage-data:
+  mail-spool:
+  clamav-db:
 
 networks:
   app_net:

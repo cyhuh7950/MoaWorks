@@ -9,12 +9,12 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class MailBasicPreferencesBase(BaseModel):
-    senderDisplayMode: Literal["name", "name_email"] = "name_email"
+    senderDisplayMode: Literal["name", "name_email"] = "name"
     blockRemoteImages: bool = True
     disableRiskyTags: bool = True
     showRouteCountry: bool = False
     includeSpamTrashInSearch: bool = False
-    showListPreview: bool = True
+    showListPreview: bool = False
     recipientInputMode: Literal["autocomplete", "name_only", "search"] = "autocomplete"
     confirmBeforeSend: bool = True
     saveSentCopy: bool = True
@@ -26,6 +26,8 @@ class MailBasicPreferencesBase(BaseModel):
     senderDisplayName: str = Field(default="", max_length=100)
     replyToEmail: str | None = Field(default=None, max_length=254)
     vcardEnabled: bool = False
+    translationTargetLocale: str = Field(default="ko", min_length=2, max_length=20)
+    translationComposeMode: Literal["preview", "apply"] = "preview"
 
     @field_validator("senderDisplayName")
     @classmethod
@@ -246,6 +248,22 @@ class MailSendRequest(BaseModel):
         if self.composeAction != "forward" and self.copiedAttachmentIds:
             raise ValueError("원문 첨부는 전달에서만 복제할 수 있습니다.")
         return self
+
+
+class MailScheduledUpdateRequest(MailSendRequest):
+    scheduledAt: datetime
+    attachments: list[MailAttachmentMeta] = Field(default_factory=list, max_length=0)
+    sourceMailId: None = None
+    copiedAttachmentIds: list[str] = Field(default_factory=list, max_length=0)
+    confirmed: bool = True
+
+
+class MailScheduledActionResponse(BaseModel):
+    mailId: str
+    status: Literal["scheduled", "draft", "sent"]
+    scheduledAt: datetime | None = None
+    sentAt: datetime | None = None
+
 
 
 class MailDraftRequest(MailSendRequest):
@@ -1046,7 +1064,7 @@ class MailRecipientView(BaseModel):
 
 class MailSummary(BaseModel):
     mailId: str
-    accountId: str
+    accountId: str | None
     senderEmail: str
     senderDisplayName: str = ""
     subject: str
@@ -1090,8 +1108,8 @@ class MailExternalDeliveryStatus(BaseModel):
 
 class MailDetailResponse(BaseModel):
     mailId: str
-    accountId: str
-    senderUserId: str
+    accountId: str | None
+    senderUserId: str | None
     senderEmail: str
     senderDisplayName: str = ""
     subject: str
@@ -1206,6 +1224,7 @@ class MessengerRoomCreateRequest(BaseModel):
     roomName: str = Field(min_length=1, max_length=80)
     roomType: Literal["direct", "group"] = Field(default="group")
     participantUserIds: list[str] = Field(default_factory=list, max_length=100)
+    translationLocale: Literal["ko", "en", "ja", "zh-cn", "es", "fr", "de"] = Field(default="ko")
 
     @field_validator("roomName")
     @classmethod
@@ -1214,6 +1233,11 @@ class MessengerRoomCreateRequest(BaseModel):
         if not normalized:
             raise ValueError("대화방 이름을 입력하세요.")
         return normalized
+
+    @field_validator("translationLocale", mode="before")
+    @classmethod
+    def normalize_translation_locale(cls, value: str) -> str:
+        return value.strip().replace("_", "-").lower()
 
 
 class MessengerAttachmentMeta(BaseModel):
@@ -1238,13 +1262,36 @@ class MessengerRoomFavoriteRequest(BaseModel):
     isFavorite: bool
 
 
+class MessengerRoomTranslationRequest(BaseModel):
+    translationLocale: Literal["ko", "en", "ja", "zh-cn", "es", "fr", "de"]
+    expectedUpdatedAt: datetime
+
+    @field_validator("translationLocale", mode="before")
+    @classmethod
+    def normalize_translation_locale(cls, value: str) -> str:
+        return value.strip().replace("_", "-").lower()
+
+
 class MessengerRoomParticipantsRequest(BaseModel):
     participantUserIds: list[str] = Field(min_length=2, max_length=100)
     expectedUpdatedAt: datetime
 
 
-class MessengerRoomParticipantsUpdateRequest(BaseModel):
-    participantUserIds: list[str] = Field(min_length=1)
+class MessengerRoomOwnerTransferRequest(BaseModel):
+    newOwnerUserId: str = Field(min_length=1, max_length=100)
+    expectedUpdatedAt: datetime
+
+
+class MessengerRoomLeaveResponse(BaseModel):
+    roomId: str
+    leftAt: datetime
+
+
+class MessengerRoomDeleteResponse(BaseModel):
+    roomId: str
+    status: Literal["deleted"]
+    deletedAt: datetime
+    retentionExpiresAt: datetime
 
 
 class MessengerMessageSendRequest(BaseModel):
@@ -1267,6 +1314,7 @@ class MessengerRoomSummary(BaseModel):
     roomId: str
     roomType: str
     roomName: str
+    translationLocale: str = "ko"
     participantIds: list[str]
     lastMessage: str | None = None
     lastMessageAt: datetime | None = None
@@ -1276,6 +1324,9 @@ class MessengerRoomSummary(BaseModel):
     participantCount: int = 0
     createdByUserId: str
     canManageParticipants: bool = False
+    canLeave: bool = True
+    canDelete: bool = False
+    status: str = "active"
     createdAt: datetime
     updatedAt: datetime
     retentionExpiresAt: datetime | None = None
@@ -1283,6 +1334,26 @@ class MessengerRoomSummary(BaseModel):
 
 class MessengerRoomListResponse(BaseModel):
     rooms: list[MessengerRoomSummary]
+
+
+class AdminMessengerRoomView(BaseModel):
+    roomId: str
+    roomType: str
+    roomName: str
+    status: Literal["active", "deleted"]
+    ownerUserId: str
+    ownerUserName: str
+    participantCount: int = 0
+    messageCount: int = 0
+    createdAt: datetime
+    updatedAt: datetime
+    closedAt: datetime | None = None
+    retentionExpiresAt: datetime | None = None
+
+
+class AdminMessengerRoomListResponse(BaseModel):
+    rooms: list[AdminMessengerRoomView]
+    total: int
 
 
 class MessengerRoomDetailResponse(MessengerRoomSummary):
@@ -1294,6 +1365,7 @@ class MessengerMessageView(BaseModel):
     roomId: str
     senderUserId: str
     senderUserName: str
+    senderLocale: str = "ko-KR"
     messageType: str
     body: str
     attachmentMeta: list[dict]
@@ -1331,6 +1403,7 @@ class ExternalDeliveryView(BaseModel):
     attemptCount: int = 0
     nextAttemptAt: datetime | None = None
     sentAt: datetime | None = None
+    lastError: str | None = None
 
 class MailDeliveryProviderUpdateRequest(BaseModel):
     deliveryEnabled: bool | None = None

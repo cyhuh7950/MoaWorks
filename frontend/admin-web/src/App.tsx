@@ -1,6 +1,7 @@
 import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 
 import {
+  acknowledgeMonitoringAlert,
   apiBase,
   applyOrgImport,
   bulkContentMessageStatus,
@@ -20,15 +21,21 @@ import {
   createRole,
   createUser,
   deleteDepartment,
+  deleteAdminMessengerRoom,
   deleteRole,
   deleteUser,
   downloadOrgImportTemplate,
   fetchDirectory,
   fetchHealth,
   fetchMailDeliveryQueue,
+  fetchAdminMessengerRooms,
   fetchMailDeliveryStatus,
+  fetchMailOperations,
+  generateSelfHostedDkim,
   fetchMonitoringEvents,
+  fetchMonitoringAlerts,
   fetchMonitoringOverview,
+  fetchOperationalBackups,
   fetchApprovalAuditLogs,
   fetchOrgImportBatch,
   fetchUiContract,
@@ -36,31 +43,49 @@ import {
   initializeSetup,
   login,
   retryMailDelivery,
+  rollbackMailOperationsProvider,
   storeToken,
-  testMailDelivery,
+  testMailOperationsProvider,
+  testTranslationProviderConnection,
   testRelay,
+  syncOciMailSuppressions,
+  switchMailOperationsProvider,
   fetchTranslationPolicy,
+  fetchTranslationProviderModels,
+  fetchTranslationReviews,
   fetchTranslationStatus,
+  applyTranslationReviewAction,
   requestTranslation,
   type TranslationItem,
   type TranslationRequest,
   type TranslationPolicy,
   type TranslationResponse,
   type TranslationStatus,
+  type TranslationReview,
+  type TranslationConnectionTestResponse,
+  type TranslationModelListResponse,
   type UiContract as ServerUiContract,
   type DirectoryOverview,
   type MailDeliveryQueueResponse,
+  type AdminMessengerRoom,
   type MailDeliveryStatusResponse,
+  type MailOperationsProvider,
+  type MailOperationsOverview,
   type MailSendResponse,
   type Role,
   type DomainVerifyResponse,
   type HealthResponse,
   type MonitoringEvent,
+  type MonitoringAlert,
   type MonitoringOverview,
+  type OperationalBackupOverview,
   type ApprovalAuditLog,
   type OrgImportBatch,
   type RelayTestResponse,
   updateDepartment,
+  updateOperationalBackupPolicy,
+  updateMailOperationsDomain,
+  updateMailOperationsProvider,
   updateRole,
   updateUiContract,
   updateTranslationPolicy,
@@ -68,6 +93,9 @@ import {
   validateOrgImport,
   validateSetup,
   verifyDomain,
+  queueOperationalBackup,
+  queueOperationalRestoreDrill,
+  resolveMonitoringAlert,
 } from "./api";
 import { resolveLocale, supportedLocales, supportedTimezones, t, type AppLocale } from "./i18n";
 
@@ -112,6 +140,27 @@ const initialForm: SetupForm = {
 type LoginForm = {
   loginId: string;
   password: string;
+};
+
+type MailDomainOperationsForm = {
+  registeredDomain: string;
+  mailDomain: string;
+  inboundMxHost: string;
+  adminAccessMode: "public" | "restricted" | "private";
+  adminAllowedCidrs: string;
+};
+
+type MailProviderOperationsForm = {
+  providerKey: "self_hosted" | "oci_email_delivery";
+  relayHost: string;
+  relayPort: string;
+  tlsMode: "none" | "starttls" | "tls";
+  senderAddress: string;
+  username: string;
+  password: string;
+  dkimDomain: string;
+  dkimSelector: string;
+  dkimPrivateKey: string;
 };
 
 type PublicUiContractState = "pending" | "ready" | "error";
@@ -184,7 +233,7 @@ type UiContract = {
   };
 };
 
-type AdminMenuKey = "dashboard" | "users" | "departments" | "roles" | "service" | "mail" | "storage" | "approval" | "brand" | "language" | "help";
+type AdminMenuKey = "dashboard" | "users" | "departments" | "roles" | "service" | "mail" | "messenger" | "storage" | "approval" | "brand" | "language" | "help";
 
 const adminMenus: Array<{ key: AdminMenuKey; label: string; description: string }> = [
   { key: "dashboard", label: "대시보드", description: "상태와 빠른 작업" },
@@ -193,6 +242,7 @@ const adminMenus: Array<{ key: AdminMenuKey; label: string; description: string 
   { key: "roles", label: "권한 관리", description: "역할과 권한 상태" },
   { key: "service", label: "서비스 운영", description: "운영 점검과 연결 확인" },
   { key: "mail", label: "메일 설정", description: "메일 연결 상태와 테스트" },
+  { key: "messenger", label: "메신저 관리", description: "대화방 상태와 보존 관리" },
   { key: "storage", label: "저장소/DB 상태", description: "저장소와 DB 점검" },
   { key: "approval", label: "결재/감사", description: "감사 로그와 이벤트" },
   { key: "brand", label: "브랜드/화면 설정", description: "설정 계약과 반영" },
@@ -671,6 +721,13 @@ function buildCompanyLoginEmail(loginId: string, companyDomain: string): string 
   return `${normalizeLoginIdInput(loginId)}@${companyDomain.trim().toLowerCase()}`;
 }
 
+function formatMailProviderDkimStatus(provider: MailOperationsProvider): string {
+  if (provider.providerKey === "oci_email_delivery") {
+    return provider.dkimDomain && provider.dkimSelector ? `${provider.dkimSelector} OCI 관리` : "미설정";
+  }
+  return provider.dkimPrivateKeyConfigured ? `${provider.dkimSelector ?? "-"} 설정` : "미설정";
+}
+
 export default function App() {
   const [locale, setLocale] = useState<AppLocale>(resolveLocale(safeLocalStorageGet("moaworks.locale")));
   const copy = adminCopy[locale];
@@ -679,19 +736,43 @@ export default function App() {
   const [overview, setOverview] = useState<DirectoryOverview | null>(null);
   const [monitoringOverview, setMonitoringOverview] = useState<MonitoringOverview | null>(null);
   const [monitoringEvents, setMonitoringEvents] = useState<MonitoringEvent[]>([]);
+  const [monitoringAlerts, setMonitoringAlerts] = useState<MonitoringAlert[]>([]);
+  const [operationalBackups, setOperationalBackups] = useState<OperationalBackupOverview | null>(null);
+  const [backupPolicyForm, setBackupPolicyForm] = useState({ enabled: false, intervalHours: "24", retentionDays: "30" });
   const [approvalAuditLogs, setApprovalAuditLogs] = useState<ApprovalAuditLog[]>([]);
   const [domainResult, setDomainResult] = useState<DomainVerifyResponse | null>(null);
   const [relayResult, setRelayResult] = useState<RelayTestResponse | null>(null);
   const [mailDeliveryStatus, setMailDeliveryStatus] = useState<MailDeliveryStatusResponse | null>(null);
   const [mailDeliveryQueue, setMailDeliveryQueue] = useState<MailDeliveryQueueResponse | null>(null);
   const [mailDeliveryTestResult, setMailDeliveryTestResult] = useState<MailSendResponse | null>(null);
+  const [adminMessengerRooms, setAdminMessengerRooms] = useState<AdminMessengerRoom[]>([]);
+  const [adminMessengerStatus, setAdminMessengerStatus] = useState<"active" | "deleted" | "all">("all");
+  const [messengerDeleteTarget, setMessengerDeleteTarget] = useState<AdminMessengerRoom | null>(null);
+  const [mailOperations, setMailOperations] = useState<MailOperationsOverview | null>(null);
+  const [mailDomainOperationsForm, setMailDomainOperationsForm] = useState<MailDomainOperationsForm>({ registeredDomain: "", mailDomain: "", inboundMxHost: "", adminAccessMode: "restricted", adminAllowedCidrs: "" });
+  const [mailProviderOperationsForm, setMailProviderOperationsForm] = useState<MailProviderOperationsForm>({ providerKey: "self_hosted", relayHost: "", relayPort: "25", tlsMode: "none", senderAddress: "", username: "", password: "", dkimDomain: "", dkimSelector: "", dkimPrivateKey: "" });
   const [translationStatus, setTranslationStatus] = useState<TranslationStatus | null>(null);
   const [translationPolicy, setTranslationPolicy] = useState<TranslationPolicy | null>(null);
   const [translationSource, setTranslationSource] = useState("");
+  const [translationSourceLocale, setTranslationSourceLocale] = useState("auto");
   const [translationTargetLocale, setTranslationTargetLocale] = useState("en");
   const [translationResult, setTranslationResult] = useState<TranslationItem[]>([]);
   const [translationError, setTranslationError] = useState("");
   const [translationLoading, setTranslationLoading] = useState(false);
+  const [translationConnectionResult, setTranslationConnectionResult] = useState<TranslationConnectionTestResponse | null>(null);
+  const [translationModelListResult, setTranslationModelListResult] = useState<TranslationModelListResponse | null>(null);
+  const [translationModels, setTranslationModels] = useState<string[]>([]);
+  const [translationReviews, setTranslationReviews] = useState<TranslationReview[]>([]);
+  const [translationReviewStatus, setTranslationReviewStatus] = useState("all");
+  const [selectedTranslationReviewId, setSelectedTranslationReviewId] = useState("");
+  const [translationReviewDraft, setTranslationReviewDraft] = useState("");
+  const [translationPolicyForm, setTranslationPolicyForm] = useState({
+    provider: "disabled", model: "", apiBaseUrl: "", apiKey: "", cacheEnabled: true,
+    timeoutSeconds: "15", maxRetries: "2", rateLimitPerMinute: "60",
+    circuitFailureThreshold: "5", circuitRecoverySeconds: "60",
+    inputCostPerMillionTokens: "", outputCostPerMillionTokens: "",
+    costPerMillionUnits: "", costUnit: "tokens" as "tokens" | "characters",
+  });
   const [form, setForm] = useState<SetupForm>(initialForm);
   const [loginForm, setLoginForm] = useState<LoginForm>({ loginId: "", password: "" });
   const [userForm, setUserForm] = useState<UserForm>(initialUserForm);
@@ -861,20 +942,146 @@ export default function App() {
 
   async function refreshMonitoring(nextToken = token) {
     if (!nextToken) return;
-    const nextMonitoring = await fetchMonitoringOverview(nextToken);
+    const [nextMonitoring, events, alerts] = await Promise.all([
+      fetchMonitoringOverview(nextToken),
+      fetchMonitoringEvents(nextToken),
+      fetchMonitoringAlerts(nextToken),
+    ]);
     setMonitoringOverview(nextMonitoring);
-    const events = await fetchMonitoringEvents(nextToken);
     setMonitoringEvents(events.events ?? []);
+    setMonitoringAlerts(alerts.alerts ?? []);
+  }
+
+  async function handleMonitoringAlert(alertId: string, action: "ack" | "resolve") {
+    if (!token) return;
+    setLoading(true);
+    try {
+      if (action === "ack") await acknowledgeMonitoringAlert(token, alertId);
+      else await resolveMonitoringAlert(token, alertId);
+      await refreshMonitoring(token);
+      setMessage(action === "ack" ? "운영 경고를 확인했습니다." : "운영 경고를 해소 처리했습니다.");
+    } catch (error) {
+      setErrors((current) => [...current, error instanceof Error ? error.message : "운영 경고 처리 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function refreshOperationalBackups(nextToken = token) {
+    if (!nextToken) return;
+    const result = await fetchOperationalBackups(nextToken);
+    setOperationalBackups(result);
+    setBackupPolicyForm({
+      enabled: result.policy.enabled,
+      intervalHours: String(result.policy.intervalHours),
+      retentionDays: String(result.policy.retentionDays),
+    });
+  }
+
+  async function handleBackupPolicySave() {
+    if (!token) return;
+    setLoading(true);
+    try {
+      await updateOperationalBackupPolicy(token, {
+        enabled: backupPolicyForm.enabled,
+        intervalHours: Number(backupPolicyForm.intervalHours),
+        retentionDays: Number(backupPolicyForm.retentionDays),
+      });
+      await refreshOperationalBackups(token);
+      setMessage("운영 백업 정책을 저장했습니다.");
+    } catch (error) {
+      setErrors((current) => [...current, error instanceof Error ? error.message : "백업 정책 저장 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleQueueOperationalBackup() {
+    if (!token) return;
+    setLoading(true);
+    try {
+      await queueOperationalBackup(token);
+      await refreshOperationalBackups(token);
+      setMessage("암호화 운영 백업을 요청했습니다.");
+    } catch (error) {
+      setErrors((current) => [...current, error instanceof Error ? error.message : "운영 백업 요청 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleQueueRestoreDrill(backupId: string) {
+    if (!token) return;
+    setLoading(true);
+    try {
+      await queueOperationalRestoreDrill(token, backupId);
+      await refreshOperationalBackups(token);
+      setMessage("격리 복구 훈련을 요청했습니다.");
+    } catch (error) {
+      setErrors((current) => [...current, error instanceof Error ? error.message : "복구 훈련 요청 실패"]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function refreshMailDelivery(nextToken = token) {
     if (!nextToken) return;
-    const [status, queue] = await Promise.all([
+    const [status, queue, operations] = await Promise.all([
       fetchMailDeliveryStatus(nextToken),
       fetchMailDeliveryQueue(nextToken),
+      fetchMailOperations(nextToken),
     ]);
     setMailDeliveryStatus(status);
     setMailDeliveryQueue(queue);
+    setMailOperations(operations);
+    if (operations.domain) {
+      setMailDomainOperationsForm({
+        registeredDomain: operations.domain.registeredDomain,
+        mailDomain: operations.domain.mailDomain,
+        inboundMxHost: operations.domain.inboundMxHost,
+        adminAccessMode: operations.domain.adminAccessMode,
+        adminAllowedCidrs: operations.domain.adminAllowedCidrs.join("\n"),
+      });
+    }
+    const selected = operations.providers.find((item) => item.providerKey === mailProviderOperationsForm.providerKey)
+      ?? operations.providers.find((item) => item.active);
+    if (selected) {
+      setMailProviderOperationsForm((current) => ({
+        ...current,
+        providerKey: selected.providerKey,
+        relayHost: selected.relayHost,
+        relayPort: String(selected.relayPort),
+        tlsMode: selected.tlsMode,
+        senderAddress: selected.senderAddress ?? "",
+        username: "",
+        password: "",
+        dkimDomain: selected.dkimDomain ?? "",
+        dkimSelector: selected.dkimSelector ?? "",
+        dkimPrivateKey: "",
+      }));
+    }
+  }
+
+  async function refreshAdminMessengerRooms(nextToken = token, statusFilter = adminMessengerStatus) {
+    if (!nextToken) return;
+    const response = await fetchAdminMessengerRooms(nextToken, statusFilter);
+    setAdminMessengerRooms(response.rooms ?? []);
+  }
+
+  async function confirmDeleteAdminMessengerRoom() {
+    if (!token || !messengerDeleteTarget) return;
+    setLoading(true);
+    setErrors([]);
+    try {
+      await deleteAdminMessengerRoom(token, messengerDeleteTarget.roomId);
+      setMessengerDeleteTarget(null);
+      await refreshAdminMessengerRooms(token);
+      setMessage("대화방을 삭제 상태로 전환했습니다. 대화와 첨부는 14일 후 자동 정리됩니다.");
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "대화방 삭제 실패"]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function refreshApprovalAuditLogs(nextToken = token) {
@@ -1000,7 +1207,7 @@ export default function App() {
   }
 
   async function refreshTranslationState(nextToken = token) {
-    const status = await fetchTranslationStatus();
+    const status = await fetchTranslationStatus(nextToken || undefined);
     setTranslationStatus(status);
     if (!nextToken) {
       setTranslationPolicy(null);
@@ -1009,6 +1216,20 @@ export default function App() {
     try {
       const policy = await fetchTranslationPolicy(nextToken);
       setTranslationPolicy(policy);
+      setTranslationPolicyForm({
+        provider: policy.provider, model: policy.model, apiBaseUrl: policy.apiBaseUrl, apiKey: "",
+        cacheEnabled: policy.cacheEnabled, timeoutSeconds: String(policy.timeoutSeconds),
+        maxRetries: String(policy.maxRetries), rateLimitPerMinute: String(policy.rateLimitPerMinute),
+        circuitFailureThreshold: String(policy.circuitFailureThreshold), circuitRecoverySeconds: String(policy.circuitRecoverySeconds),
+        inputCostPerMillionTokens: policy.inputCostPerMillionTokens == null ? "" : String(policy.inputCostPerMillionTokens),
+        outputCostPerMillionTokens: policy.outputCostPerMillionTokens == null ? "" : String(policy.outputCostPerMillionTokens),
+        costPerMillionUnits: policy.costPerMillionUnits == null ? "" : String(policy.costPerMillionUnits), costUnit: policy.costUnit,
+      });
+      setTranslationConnectionResult(null);
+      setTranslationModelListResult(null);
+      setTranslationModels(policy.model ? [policy.model] : []);
+      const reviews = await fetchTranslationReviews(nextToken, translationReviewStatus === "all" ? undefined : translationReviewStatus);
+      setTranslationReviews(reviews.items);
       setTranslationTargetLocale(toTranslationLocale(policy.supportedTargetLocales.includes(translationTargetLocale) ? translationTargetLocale : policy.supportedTargetLocales[0]));
     } catch (error) {
       setTranslationPolicy(null);
@@ -1123,8 +1344,130 @@ export default function App() {
     }
   }
 
-  async function runTranslationDemo(event: FormEvent) {
+  async function saveTranslationProviderPolicy(event: FormEvent) {
     event.preventDefault();
+    if (!token) return;
+    setTranslationLoading(true);
+    setTranslationError("");
+    try {
+      const payload = {
+        enabled: translationStatus?.enabled ?? false,
+        provider: translationPolicyForm.provider,
+        model: translationPolicyForm.model,
+        apiBaseUrl: translationPolicyForm.apiBaseUrl,
+        cacheEnabled: translationPolicyForm.cacheEnabled,
+        timeoutSeconds: Number(translationPolicyForm.timeoutSeconds),
+        maxRetries: Number(translationPolicyForm.maxRetries),
+        rateLimitPerMinute: Number(translationPolicyForm.rateLimitPerMinute),
+        circuitFailureThreshold: Number(translationPolicyForm.circuitFailureThreshold),
+        circuitRecoverySeconds: Number(translationPolicyForm.circuitRecoverySeconds),
+        inputCostPerMillionTokens: translationPolicyForm.inputCostPerMillionTokens === "" ? null : Number(translationPolicyForm.inputCostPerMillionTokens),
+        outputCostPerMillionTokens: translationPolicyForm.outputCostPerMillionTokens === "" ? null : Number(translationPolicyForm.outputCostPerMillionTokens),
+        costPerMillionUnits: translationPolicyForm.costPerMillionUnits === "" ? null : Number(translationPolicyForm.costPerMillionUnits),
+        costUnit: translationPolicyForm.costUnit,
+        ...(translationPolicyForm.apiKey ? { apiKey: translationPolicyForm.apiKey } : {}),
+      };
+      await updateTranslationPolicy(token, payload);
+      await refreshTranslationState(token);
+      setMessage("번역 Provider 정책을 저장했습니다. 비밀키 원문은 다시 표시하지 않습니다.");
+    } catch (error) {
+      setTranslationError(error instanceof Error ? error.message : "번역 Provider 정책 저장 실패");
+    } finally {
+      setTranslationLoading(false);
+    }
+  }
+
+  function applyTranslationProviderSelection(provider: string) {
+    const option = translationPolicy?.providerOptions.find((item) => item.provider === provider);
+    setTranslationPolicyForm((current) => ({
+      ...current,
+      provider,
+      apiBaseUrl: option?.apiBaseUrl ?? "",
+      model: "",
+      apiKey: "",
+    }));
+    setTranslationConnectionResult(null);
+    setTranslationModelListResult(null);
+    setTranslationModels([]);
+    setTranslationError("");
+  }
+
+  async function loadTranslationProviderModels() {
+    if (!token) return;
+    setTranslationLoading(true);
+    setTranslationModelListResult(null);
+    setTranslationConnectionResult(null);
+    setTranslationError("");
+    try {
+      const result = await fetchTranslationProviderModels(token, {
+        provider: translationPolicyForm.provider,
+        apiBaseUrl: translationPolicyForm.apiBaseUrl.trim(),
+        timeoutSeconds: Number(translationPolicyForm.timeoutSeconds),
+        ...(translationPolicyForm.apiKey ? { apiKey: translationPolicyForm.apiKey } : {}),
+      });
+      setTranslationModelListResult(result);
+      setTranslationModels(result.models);
+      if (result.success) {
+        setTranslationPolicyForm((current) => ({
+          ...current,
+          model: result.models.includes(current.model) ? current.model : (result.models[0] ?? ""),
+        }));
+      }
+    } catch (error) {
+      setTranslationError(error instanceof Error ? error.message : "Provider 모델 목록 조회 실패");
+      setTranslationModels([]);
+    } finally {
+      setTranslationLoading(false);
+    }
+  }
+
+  async function runTranslationProviderConnectionTest() {
+    if (!token) return;
+    setTranslationLoading(true);
+    setTranslationConnectionResult(null);
+    setTranslationError("");
+    try {
+      const result = await testTranslationProviderConnection(token, {
+        provider: translationPolicyForm.provider,
+        model: translationPolicyForm.model.trim(),
+        apiBaseUrl: translationPolicyForm.apiBaseUrl.trim(),
+        timeoutSeconds: Number(translationPolicyForm.timeoutSeconds),
+        ...(translationPolicyForm.apiKey ? { apiKey: translationPolicyForm.apiKey } : {}),
+      });
+      setTranslationConnectionResult(result);
+    } catch (error) {
+      setTranslationError(error instanceof Error ? error.message : "LLM Provider 연결 테스트 실패");
+    } finally {
+      setTranslationLoading(false);
+    }
+  }
+
+  async function runTranslationReviewAction(action: "edit" | "approve" | "retranslate") {
+    if (!token || !selectedTranslationReviewId) return;
+    if (action === "edit" && !translationReviewDraft.trim()) {
+      setTranslationError("수정 번역문을 입력하세요.");
+      return;
+    }
+    setTranslationLoading(true);
+    setTranslationError("");
+    try {
+      const updated = await applyTranslationReviewAction(token, selectedTranslationReviewId, {
+        action,
+        ...(action === "edit" ? { translatedText: translationReviewDraft.trim() } : {}),
+      });
+      setTranslationReviewDraft(updated.translatedText);
+      const reviews = await fetchTranslationReviews(token, translationReviewStatus === "all" ? undefined : translationReviewStatus);
+      setTranslationReviews(reviews.items);
+      setMessage(action === "edit" ? "번역문 수정 이력을 저장했습니다." : action === "approve" ? "번역을 승인했습니다." : "Provider 재번역을 완료했습니다.");
+    } catch (error) {
+      setTranslationError(error instanceof Error ? error.message : "번역 검수 작업 실패");
+    } finally {
+      setTranslationLoading(false);
+    }
+  }
+
+  async function runTranslationDemo(event?: FormEvent) {
+    event?.preventDefault();
     if (!token) {
       setTranslationError("로그인 후 번역 데모를 실행하세요.");
       return;
@@ -1134,7 +1477,7 @@ export default function App() {
       setTranslationError("번역 원문을 입력하세요.");
       return;
     }
-    const sourceLocale = toTranslationLocale(locale);
+    const sourceLocale = translationSourceLocale;
     setTranslationLoading(true);
     setTranslationError("");
     try {
@@ -1145,6 +1488,8 @@ export default function App() {
       };
       const response: TranslationResponse = await requestTranslation(payload, token);
       setTranslationResult(response.items);
+      const reviews = await fetchTranslationReviews(token, translationReviewStatus === "all" ? undefined : translationReviewStatus);
+      setTranslationReviews(reviews.items);
       if (!response.fallbackUsed && response.providerAvailable) {
         setMessage("번역 호출 성공");
       }
@@ -1180,8 +1525,14 @@ export default function App() {
       void refreshMonitoring(token).catch((error) => {
         setErrors((current) => [...current, error instanceof Error ? error.message : "운영 모니터링 조회 실패"]);
       });
+      void refreshOperationalBackups(token).catch((error) => {
+        setErrors((current) => [...current, error instanceof Error ? error.message : "운영 백업 조회 실패"]);
+      });
       void refreshMailDelivery(token).catch((error) => {
         setErrors((current) => [...current, error instanceof Error ? error.message : "자체 SMTP 상태 조회 실패"]);
+      });
+      void refreshAdminMessengerRooms(token).catch((error) => {
+        setErrors((current) => [...current, error instanceof Error ? error.message : "메신저 대화방 조회 실패"]);
       });
       void refreshApprovalAuditLogs(token).catch((error) => {
         setErrors((current) => [...current, error instanceof Error ? error.message : "결재 감사 로그 조회 실패"]);
@@ -1306,6 +1657,7 @@ export default function App() {
       setToken(response.accessToken);
       await refreshDirectory(response.accessToken);
       await refreshMailDelivery(response.accessToken);
+      await refreshAdminMessengerRooms(response.accessToken);
       await refreshTranslationState(response.accessToken);
       await reloadUiContract(response.accessToken);
     } catch (error) {
@@ -1788,17 +2140,13 @@ export default function App() {
 
   async function handleMailDeliveryTest(event: FormEvent) {
     event.preventDefault();
-    if (!token) return;
+    if (!token || !relayRecipient.trim()) return;
     setLoading(true);
     setErrors([]);
     try {
-      const response = await testMailDelivery(token, {
-        recipient: relayRecipient,
-        subject: "MoaWorks 자체 SMTP 테스트",
-        bodyText: "MoaWorks 자체 SMTP 엔진 테스트 메일입니다.",
-      });
-      setMailDeliveryTestResult(response);
-      setMessage(`자체 SMTP 테스트 결과: ${response.status}`);
+      const response = await testMailOperationsProvider(token, mailProviderOperationsForm.providerKey, relayRecipient.trim());
+      setMailDeliveryTestResult({ mailId: `provider-test-${response.providerId}`, status: response.lastTestStatus, sentAt: response.lastConnectionAt });
+      setMessage(`${response.providerKey} 실제 외부 SMTP 테스트 결과: ${response.lastTestStatus}`);
       await refreshMailDelivery();
     } catch (error) {
       setErrors([error instanceof Error ? error.message : "자체 SMTP 테스트 실패"]);
@@ -1822,12 +2170,130 @@ export default function App() {
     }
   }
 
-  const isHealthPending = health === null;
+  async function handleMailDomainOperationsSave(event: FormEvent) {
+    event.preventDefault();
+    if (!token) return;
+    setLoading(true);
+    setErrors([]);
+    try {
+      await updateMailOperationsDomain(token, {
+        registeredDomain: mailDomainOperationsForm.registeredDomain,
+        mailDomain: mailDomainOperationsForm.mailDomain,
+        inboundMxHost: mailDomainOperationsForm.inboundMxHost,
+        adminAccessMode: mailDomainOperationsForm.adminAccessMode,
+        adminAllowedCidrs: mailDomainOperationsForm.adminAllowedCidrs.split(/[\n,]/).map((item) => item.trim()).filter(Boolean),
+      });
+      await refreshMailDelivery();
+      setMessage("메일 도메인과 관리자 접근 정책을 저장했습니다.");
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "메일 도메인 정책 저장 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleMailProviderOperationsSave(event: FormEvent) {
+    event.preventDefault();
+    if (!token) return;
+    setLoading(true);
+    setErrors([]);
+    try {
+      const payload: Record<string, unknown> = {
+        relayHost: mailProviderOperationsForm.relayHost,
+        relayPort: Number(mailProviderOperationsForm.relayPort),
+        tlsMode: mailProviderOperationsForm.tlsMode,
+        senderAddress: mailProviderOperationsForm.senderAddress || null,
+        username: mailProviderOperationsForm.username || null,
+        dkimDomain: mailProviderOperationsForm.dkimDomain || null,
+        dkimSelector: mailProviderOperationsForm.dkimSelector || null,
+      };
+      if (mailProviderOperationsForm.password) payload.password = mailProviderOperationsForm.password;
+      if (mailProviderOperationsForm.dkimPrivateKey) payload.dkimPrivateKey = mailProviderOperationsForm.dkimPrivateKey;
+      await updateMailOperationsProvider(token, mailProviderOperationsForm.providerKey, payload);
+      await refreshMailDelivery();
+      setMessage("발신 Provider 설정을 저장했습니다. 변경 후 연결 테스트가 필요합니다.");
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "발신 Provider 저장 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleGenerateSelfHostedDkim() {
+    if (!token || mailProviderOperationsForm.providerKey !== "self_hosted") return;
+    if (!window.confirm("DKIM 키를 생성하면 자체 엔진 발송이 잠기며, DNS 등록 후 연결 테스트를 다시 실행해야 합니다. 계속할까요?")) return;
+    setLoading(true);
+    setErrors([]);
+    try {
+      const result = await generateSelfHostedDkim(token);
+      await refreshMailDelivery();
+      setOperationDetail({
+        title: "DKIM DNS 등록값",
+        lines: ["호스트: " + result.dnsHost, "TXT 값: " + result.dnsValue, "DNS 등록 후 제공자 연결 테스트를 실행하세요."],
+      });
+      setOperationsDialog("audit");
+      setMessage("DKIM 키를 안전하게 생성했습니다. 공개 DNS 값만 화면에 표시합니다.");
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "DKIM 키 생성 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleMailProviderSwitch(targetProvider: "self_hosted" | "oci_email_delivery") {
+    if (!token) return;
+    setLoading(true);
+    setErrors([]);
+    try {
+      const result = await switchMailOperationsProvider(token, targetProvider);
+      await refreshMailDelivery();
+      setMessage(`신규 메일 Provider를 ${result.activeProvider}(으)로 전환했습니다. 기존 큐 ${result.pinnedQueueCount}건은 원 Provider를 유지합니다.`);
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "Provider 전환 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleMailProviderRollback() {
+    if (!token) return;
+    setLoading(true);
+    setErrors([]);
+    try {
+      const result = await rollbackMailOperationsProvider(token);
+      await refreshMailDelivery();
+      setMessage(`Provider를 ${result.activeProvider}(으)로 되돌렸습니다.`);
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "Provider rollback 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleOciSuppressionSync() {
+    if (!token) return;
+    setLoading(true);
+    setErrors([]);
+    try {
+      const result = await syncOciMailSuppressions(token);
+      await refreshMailDelivery();
+      setMessage(`OCI suppression ${result.suppressionCount}건을 동기화했습니다.`);
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "OCI suppression 동기화 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const isPublicLoginContractPending = health?.initialized === true && !token && publicUiContractState === "pending";
+  const isHealthPending = health === null || isPublicLoginContractPending;
   const initialized = health?.initialized === true;
   const showSetupWizard = health?.initialized === false;
   const showLoginPanel = initialized && (!token || !overview) && (Boolean(token) || publicUiContractState !== "pending");
   const hasStoredSessionButNoOverview = initialized && Boolean(token) && !overview;
   const supportedTranslationTargets = translationPolicy?.supportedTargetLocales?.length ? translationPolicy.supportedTargetLocales : (translationStatus?.supportedTargetLocales ?? ["en"]);
+  const translationUiVisible = translationStatus?.available === true;
+  const selectedTranslationReview = translationReviews.find((item) => item.id === selectedTranslationReviewId) ?? null;
   const activeMenu = adminMenus.find((item) => item.key === activeAdminMenu) ?? adminMenus[0];
   const showAdminConsole = initialized && Boolean(token) && Boolean(overview);
   const uniqueErrors = normalizeWarnings(errors);
@@ -1958,7 +2424,49 @@ export default function App() {
   const renderContentMessagesPanel = () => (
     <section className="panel ops-panel content-ops-panel">
       <div className="ops-shell content-ops-shell">
-        <div className="panel-head ops-head"><div><h2>다국어/메시지</h2></div><div className="ops-head-actions"><span className="mini-stat">전체 {contentMessages.length}건</span><span className="mini-stat">조회 {filteredContentMessages.length}건</span></div></div>
+        <div className="panel-head ops-head"><div><h2>다국어/메시지</h2></div><div className="ops-head-actions"><span className={`badge ${translationStatus?.available ? "badge-ok" : "badge-warning"}`}>Provider {translationStatus?.provider ?? "확인 중"}</span><span className="mini-stat">검수 {translationReviews.length}건</span><span className="mini-stat">메시지 {filteredContentMessages.length}/{contentMessages.length}건</span></div></div>
+        <div className="ops-list-panel">
+          <div className="ops-list-head"><strong>번역 Provider 운영</strong><span className="muted">API 키는 암호화 저장되며 저장 후 원문을 다시 표시하지 않습니다.</span></div>
+          <form className="ops-toolbar-grid" onSubmit={saveTranslationProviderPolicy}>
+            <label className="compact-field"><span>LLM Provider</span><select value={translationPolicyForm.provider} onChange={(event) => applyTranslationProviderSelection(event.target.value)}><option value="disabled">선택 안 함</option>{translationPolicy?.providerOptions.map((item) => <option key={item.provider} value={item.provider}>{item.label}</option>)}</select></label>
+            <label className="compact-field"><span>모델</span><select value={translationPolicyForm.model} disabled={translationModels.length === 0} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, model: event.target.value }))}><option value="">모델 불러오기 후 선택</option>{translationModels.map((model) => <option key={model} value={model}>{model}</option>)}</select></label>
+            <label className="compact-field compact-field-wide"><span>API Base URL</span><input value={translationPolicyForm.apiBaseUrl} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, apiBaseUrl: event.target.value }))} placeholder="Provider 선택 시 기본 주소가 입력됩니다." /></label>
+            <label className="compact-field"><span>API 키 {translationPolicy?.provider === translationPolicyForm.provider && translationPolicy.apiKeyConfigured ? "(설정됨)" : translationPolicy?.providerOptions.find((item) => item.provider === translationPolicyForm.provider)?.apiKeyRequired === false ? "(선택)" : "(미설정)"}</span><input type="password" autoComplete="new-password" value={translationPolicyForm.apiKey} onChange={(event) => { setTranslationPolicyForm((current) => ({ ...current, apiKey: event.target.value, model: "" })); setTranslationConnectionResult(null); setTranslationModelListResult(null); setTranslationModels([]); }} placeholder={translationPolicy?.provider === translationPolicyForm.provider && translationPolicy.apiKeyConfigured ? "변경할 때만 입력" : "API 키 입력"} /></label>
+            <label className="compact-field"><span>Timeout(초)</span><input type="number" min="1" max="120" value={translationPolicyForm.timeoutSeconds} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, timeoutSeconds: event.target.value }))} /></label>
+            <label className="compact-field"><span>재시도</span><input type="number" min="0" max="5" value={translationPolicyForm.maxRetries} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, maxRetries: event.target.value }))} /></label>
+            <label className="compact-field"><span>분당 제한</span><input type="number" min="1" max="10000" value={translationPolicyForm.rateLimitPerMinute} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, rateLimitPerMinute: event.target.value }))} /></label>
+            <label className="compact-field"><span>차단 실패 횟수</span><input type="number" min="1" max="100" value={translationPolicyForm.circuitFailureThreshold} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, circuitFailureThreshold: event.target.value }))} /></label>
+            <label className="compact-field"><span>회복 대기(초)</span><input type="number" min="1" max="3600" value={translationPolicyForm.circuitRecoverySeconds} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, circuitRecoverySeconds: event.target.value }))} /></label>
+            <label className="compact-field"><span>입력 토큰 백만 개당 비용</span><input type="number" min="0" step="0.000001" value={translationPolicyForm.inputCostPerMillionTokens} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, inputCostPerMillionTokens: event.target.value }))} placeholder="계약 입력 요율" /></label>
+            <label className="compact-field"><span>출력 토큰 백만 개당 비용</span><input type="number" min="0" step="0.000001" value={translationPolicyForm.outputCostPerMillionTokens} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, outputCostPerMillionTokens: event.target.value }))} placeholder="계약 출력 요율" /></label>
+            <label className="compact-field"><span>혼합 단가(호환용)</span><input type="number" min="0" step="0.000001" value={translationPolicyForm.costPerMillionUnits} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, costPerMillionUnits: event.target.value }))} placeholder="기존 계약 요율" /></label>
+            <label className="compact-field"><span>비용 단위</span><select value={translationPolicyForm.costUnit} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, costUnit: event.target.value as "tokens" | "characters" }))}><option value="tokens">tokens</option><option value="characters">characters</option></select></label>
+            <label className="permission-check"><input type="checkbox" checked={translationPolicyForm.cacheEnabled} onChange={(event) => setTranslationPolicyForm((current) => ({ ...current, cacheEnabled: event.target.checked }))} /><span>PostgreSQL 캐시 사용</span></label>
+            <div className="actions compact-actions"><button type="button" className="secondary" disabled={translationLoading || translationPolicyForm.provider === "disabled" || !translationPolicyForm.apiBaseUrl.trim()} onClick={() => void loadTranslationProviderModels()}>모델 불러오기</button><button type="button" className="secondary" disabled={translationLoading || translationPolicyForm.provider === "disabled" || !translationPolicyForm.model.trim() || !translationPolicyForm.apiBaseUrl.trim()} onClick={() => void runTranslationProviderConnectionTest()}>연결 테스트</button><button type="submit" disabled={translationLoading || !translationPolicyForm.model.trim()}>Provider 정책 저장</button><button type="button" className="secondary" disabled={translationLoading} onClick={() => void toggleTranslationPolicy(!(translationStatus?.enabled ?? false))}>{translationStatus?.enabled ? "번역 비활성화" : "번역 활성화"}</button></div>
+            {translationModelListResult ? <p className={`notice ${translationModelListResult.success ? "success" : "danger"}`}>{translationModelListResult.message} ({translationModelListResult.code})</p> : null}
+            {translationConnectionResult ? <p className={`notice ${translationConnectionResult.success ? "success" : "danger"}`}>{translationConnectionResult.message} ({translationConnectionResult.provider} / {translationConnectionResult.model} / {translationConnectionResult.code})</p> : null}
+          </form>
+        </div>
+        {translationUiVisible ? (<>
+        <div className="split-panel">
+          <form className="ops-list-panel" onSubmit={runTranslationDemo}>
+            <div className="ops-list-head"><strong>실제 번역</strong><span className="muted">자동 감지 또는 원문 언어를 직접 선택합니다.</span></div>
+            <div className="ops-toolbar-grid">
+              <label className="compact-field"><span>원문 언어</span><select value={translationSourceLocale} onChange={(event) => setTranslationSourceLocale(event.target.value)}><option value="auto">자동 감지</option>{translationPolicy?.supportedSourceLocales.filter((item) => item !== "auto").map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+              <label className="compact-field"><span>번역 언어</span><select value={translationTargetLocale} onChange={(event) => setTranslationTargetLocale(event.target.value)}>{supportedTranslationTargets.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+            </div>
+            <label><span>원문</span><textarea value={translationSource} onChange={(event) => setTranslationSource(event.target.value)} /></label>
+            <div className="actions compact-actions"><button type="button" disabled={translationLoading || !translationStatus?.enabled} onClick={() => void runTranslationDemo()}>번역 실행</button></div>
+            {translationResult.map((item, index) => <article key={`${item.originalText}-${index}`} className="status-card"><div className="status-title"><strong>{item.sourceLocale} → {item.targetLocale}</strong><span className="badge">{item.cacheHit ? "DB cache" : item.provider}</span></div><p>{item.translatedText}</p>{item.statusMessage ? <p data-testid="translation-fallback-status" className="notice danger">번역을 완료하지 못했습니다. 원문을 유지했습니다. ({item.statusMessage})</p> : null}<p className="muted">모델 {item.model || "-"} / 검수 {item.reviewId ?? "캐시 결과"}</p></article>)}
+          </form>
+          <div className="ops-list-panel">
+            <div className="ops-list-head"><strong>번역 검수</strong><label className="compact-field"><span>상태</span><select value={translationReviewStatus} onChange={(event) => { const next = event.target.value; setTranslationReviewStatus(next); if (token) void fetchTranslationReviews(token, next === "all" ? undefined : next).then((response) => setTranslationReviews(response.items)); }}><option value="all">전체</option><option value="pending">검수 대기</option><option value="edited">수정</option><option value="approved">승인</option><option value="failed">실패</option></select></label></div>
+            <div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>원문</th><th>언어</th><th>Provider</th><th>상태</th><th>수정일</th></tr></thead><tbody>{translationReviews.map((item) => <tr key={item.id} className="management-list-row" onClick={() => { setSelectedTranslationReviewId(item.id); setTranslationReviewDraft(item.translatedText); }}><td>{item.sourceText.slice(0, 40)}</td><td>{item.sourceLocale} → {item.targetLocale}</td><td>{item.provider}</td><td>{item.status}</td><td>{contentDate(item.updatedAt)}</td></tr>)}{translationReviews.length === 0 ? <tr><td colSpan={5}>검수 항목이 없습니다.</td></tr> : null}</tbody></table></div>
+          </div>
+        </div>
+        {selectedTranslationReview ? <div className="ops-list-panel"><div className="ops-list-head"><strong>원문·번역문 비교</strong><span className="muted">{selectedTranslationReview.provider} / {selectedTranslationReview.model || "기본 모델"} / {selectedTranslationReview.status}</span></div><div className="split-panel"><label><span>원문</span><textarea value={selectedTranslationReview.sourceText} readOnly /></label><label><span>번역문</span><textarea value={translationReviewDraft} onChange={(event) => setTranslationReviewDraft(event.target.value)} /></label></div><div className="actions compact-actions"><button type="button" onClick={() => void runTranslationReviewAction("edit")} disabled={translationLoading}>수정 저장</button><button type="button" onClick={() => void runTranslationReviewAction("approve")} disabled={translationLoading || selectedTranslationReview.status === "approved"}>승인</button><button type="button" className="secondary" onClick={() => void runTranslationReviewAction("retranslate")} disabled={translationLoading || !translationStatus?.available}>재번역</button></div></div> : null}
+        </>) : <p className="notice">LLM 설정과 활성화 후 번역 실행·검수 화면이 표시됩니다.</p>}
+        {translationError ? <p className="notice danger">{translationError}</p> : null}
         <div className="management-list-toolbar" role="toolbar" aria-label="메시지 목록 작업">
           <label className="compact-field"><span>검색</span><input value={messageSearch} onChange={(event) => setMessageSearch(event.target.value)} placeholder="키 또는 분류" /></label>
           <label className="compact-field"><span>상태</span><select value={messageStatusFilter} onChange={(event) => setMessageStatusFilter(event.target.value)}><option value="visible">활성/비활성</option><option value="active">active</option><option value="inactive">inactive</option><option value="deleted">deleted</option><option value="all">전체</option></select></label>
@@ -2201,6 +2709,13 @@ export default function App() {
                     <span>계정 분류</span>
                     <input value={userTypeSummary} readOnly />
                   </label>
+                  <label className="compact-field">
+                    <span>부서장 여부 <InlineHint label="부서당 한 명만 부서장으로 지정됩니다. 새 부서장을 지정하면 기존 지정은 해제됩니다." /></span>
+                    <select value={userForm.isDepartmentHead ? "yes" : "no"} onChange={(event) => setUserForm({ ...userForm, isDepartmentHead: event.target.value === "yes" })}>
+                      <option value="no">아니오</option>
+                      <option value="yes">예</option>
+                    </select>
+                  </label>
                 </div>
                 <div className="actions compact-actions">
                   <button type="submit" disabled={loading}>
@@ -2371,9 +2886,73 @@ export default function App() {
             </div>
           </section>
         );      case "service":
-        return <section className="panel ops-panel"><div className="ops-shell"><div className="panel-head ops-head"><h2>서비스 운영</h2><div className="actions compact-actions"><button type="button" onClick={() => setOperationsDialog("domain")}>도메인 검증 실행</button><button type="button" className="secondary" onClick={() => setOperationsDialog("relay")}>Relay 테스트 실행</button></div></div><div className="overview-grid"><article className="status-card"><strong>운영 점검</strong><span className="mini-stat">열린 경고 {monitoringOverview?.alertOpenCount ?? 0}건</span></article><article className="status-card"><strong>Relay 상태</strong><span className="mini-stat">{relayResult?.status ?? "최근 실행 없음"}</span></article></div><div className="ops-list-panel"><div className="ops-list-head"><strong>도메인 검증 이력</strong><span className="muted">행을 더블클릭하면 실행 결과를 확인합니다.</span></div><div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>유형</th><th>대상</th><th>상태</th><th>결과</th></tr></thead><tbody>{(domainResult?.checks ?? []).map((item) => <tr key={`${item.recordType}-${item.host}`} onDoubleClick={() => { setOperationDetail({ title: "도메인 검증 상세", lines: [item.recordType, item.host, item.message, item.status] }); setOperationsDialog("audit"); }}><td>{item.recordType}</td><td>{item.host}</td><td>{item.status}</td><td>{item.message}</td></tr>)}{!domainResult ? <tr><td colSpan={4}>검증 이력이 없습니다.</td></tr> : null}</tbody></table></div></div></div></section>;
+        return (
+          <section className="panel ops-panel"><div className="ops-shell ops-runtime-shell">
+            <div className="panel-head ops-head"><div><h2>서비스 운영</h2><p className="muted">감시와 암호화 백업·격리 복구 훈련을 화면에서 운영합니다.</p></div><div className="actions compact-actions"><button type="button" onClick={() => setOperationsDialog("domain")}>도메인 검증 실행</button><button type="button" className="secondary" onClick={() => setOperationsDialog("relay")}>Relay 테스트 실행</button><button type="button" className="secondary" onClick={() => void refreshOperationalBackups()}>새로고침</button></div></div>
+            <div className="overview-grid"><article className="status-card"><strong>운영 점검</strong><span className="mini-stat">열린 경고 {monitoringOverview?.alertOpenCount ?? 0}건</span></article><article className="status-card"><strong>Relay 상태</strong><span className="mini-stat">{relayResult?.status ?? "최근 실행 없음"}</span></article><article className="status-card"><strong>자동 백업</strong><span className="mini-stat">{operationalBackups?.policy.enabled ? `${operationalBackups.policy.intervalHours}시간마다` : "비활성"}</span></article><article className="status-card"><strong>최근 복구 가능 시점</strong><span className="mini-stat">{contentDate(operationalBackups?.backups.find((item) => item.status === "completed")?.snapshotAt)}</span></article></div>
+            <div className="ops-list-panel"><div className="ops-list-head"><strong>운영 경고</strong><span className="muted">원인과 현재값을 확인하고 확인·해소 상태를 감사로그에 남깁니다.</span></div><div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>감지</th><th>심각도</th><th>지표</th><th>현재/임계치</th><th>상태</th><th>처리</th></tr></thead><tbody>{monitoringAlerts.map((item) => <tr key={item.alertId}><td>{contentDate(item.detectedAt)}</td><td>{item.severity}</td><td title={item.message}>{item.metric}</td><td>{item.currentValue} / {item.threshold}</td><td>{item.status}</td><td><div className="actions compact-actions"><button type="button" className="secondary" disabled={loading || item.status !== "OPEN"} onClick={() => void handleMonitoringAlert(item.alertId, "ack")}>확인</button><button type="button" disabled={loading || item.status === "RESOLVED"} onClick={() => void handleMonitoringAlert(item.alertId, "resolve")}>해소</button></div></td></tr>)}{monitoringAlerts.length === 0 ? <tr><td colSpan={6}>운영 경고가 없습니다.</td></tr> : null}</tbody></table></div></div>
+            <div className="ops-list-panel"><div className="ops-list-head"><strong>백업 정책</strong><span className="muted">DB·첨부·메일 원문·설정을 AES-256-GCM으로 암호화하고 checksum을 검증합니다.</span></div><div className="ops-toolbar-grid"><label className="compact-field"><span>자동 백업</span><select value={backupPolicyForm.enabled ? "enabled" : "disabled"} onChange={(event) => setBackupPolicyForm((current) => ({ ...current, enabled: event.target.value === "enabled" }))}><option value="disabled">비활성</option><option value="enabled">활성</option></select></label><label className="compact-field"><span>주기(시간)</span><input type="number" min="1" max="720" value={backupPolicyForm.intervalHours} onChange={(event) => setBackupPolicyForm((current) => ({ ...current, intervalHours: event.target.value }))} /></label><label className="compact-field"><span>보존(일)</span><input type="number" min="1" max="3650" value={backupPolicyForm.retentionDays} onChange={(event) => setBackupPolicyForm((current) => ({ ...current, retentionDays: event.target.value }))} /></label><div className="actions compact-actions"><button type="button" disabled={loading} onClick={() => void handleBackupPolicySave()}>정책 저장</button><button type="button" className="secondary" disabled={loading} onClick={() => void handleQueueOperationalBackup()}>지금 백업</button></div></div></div>
+            <div className="ops-list-panel"><div className="ops-list-head"><strong>백업·복구 이력</strong><span className="muted">완료된 백업에서 격리 DB 복구 훈련을 실행해 RPO/RTO를 기록합니다.</span></div><div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>생성</th><th>유형</th><th>상태</th><th>크기</th><th>checksum</th><th>복구 훈련</th></tr></thead><tbody>{(operationalBackups?.backups ?? []).map((item) => <tr key={item.backupId}><td>{contentDate(item.createdAt)}</td><td>{item.triggerType}</td><td>{item.status}{item.errorCode ? ` · ${item.errorCode}` : ""}</td><td>{item.sizeBytes == null ? "-" : `${Math.ceil(item.sizeBytes / 1024)} KB`}</td><td>{item.artifactSha256 ? `${item.artifactSha256.slice(0, 12)}…` : "-"}</td><td><button type="button" className="secondary" disabled={loading || item.status !== "completed"} onClick={() => void handleQueueRestoreDrill(item.backupId)}>격리 복구</button></td></tr>)}{(operationalBackups?.backups.length ?? 0) === 0 ? <tr><td colSpan={6}>운영 백업 이력이 없습니다.</td></tr> : null}</tbody></table></div><div className="badge-row">{(operationalBackups?.restoreDrills ?? []).slice(0, 5).map((item) => <span key={item.drillId} className="meta-chip">복구 {item.status} · checksum {item.checksumVerified ? "PASS" : "대기"} · RPO {item.rpoSeconds ?? "-"}초 · RTO {item.rtoSeconds ?? "-"}초</span>)}</div></div>
+            <div className="ops-list-panel"><div className="ops-list-head"><strong>도메인 검증 이력</strong><span className="muted">행을 더블클릭하면 실행 결과를 확인합니다.</span></div><div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>유형</th><th>대상</th><th>상태</th><th>결과</th></tr></thead><tbody>{(domainResult?.checks ?? []).map((item) => <tr key={`${item.recordType}-${item.host}`} onDoubleClick={() => { setOperationDetail({ title: "도메인 검증 상세", lines: [item.recordType, item.host, item.code, item.message, item.status] }); setOperationsDialog("audit"); }}><td>{item.recordType}</td><td>{item.host}</td><td>{item.status}</td><td>[{item.code}] {item.message}</td></tr>)}{!domainResult ? <tr><td colSpan={4}>검증 이력이 없습니다.</td></tr> : null}</tbody></table></div></div>
+          </div></section>
+        );
       case "mail":
-        return <section className="panel ops-panel"><div className="ops-shell"><div className="panel-head ops-head"><h2>메일 설정</h2><div className="actions compact-actions"><button type="button" onClick={() => setOperationsDialog("mailTest")}>테스트 발송</button><button type="button" className="secondary" onClick={() => setOperationsDialog("provider")}>제공자 설정</button><button type="button" className="secondary" onClick={() => void refreshMailDelivery()}>새로고침</button></div></div><div className="overview-grid"><article className="status-card"><strong>Provider</strong><span className="mini-stat">{mailDeliveryStatus?.provider.providerKey ?? "self_hosted_smtp"}</span></article><article className="status-card"><strong>발송 큐</strong><span className="mini-stat">queued {mailDeliveryStatus?.summary.queuedCount ?? 0} / failed {mailDeliveryStatus?.summary.failedCount ?? 0}</span></article></div><div className="ops-list-panel"><div className="ops-list-head"><strong>최근 전달 이력</strong></div><div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>수신자</th><th>제목</th><th>상태</th><th>재시도</th></tr></thead><tbody>{(mailDeliveryQueue?.queue ?? []).map((item) => <tr key={item.queueId} onDoubleClick={() => { setOperationDetail({ title: "전달 상세", lines: [item.recipient, item.subject, item.status, `재시도 ${item.attemptCount}`, item.lastError ?? "오류 없음"] }); setOperationsDialog("audit"); }}><td>{item.recipient}</td><td>{item.subject}</td><td>{item.status}</td><td>{item.attemptCount}</td></tr>)}{(mailDeliveryQueue?.queue?.length ?? 0) === 0 ? <tr><td colSpan={4}>전달 이력이 없습니다.</td></tr> : null}</tbody></table></div></div></div></section>;
+        return (
+          <section className="panel ops-panel">
+            <div className="ops-shell ops-runtime-shell">
+              <div className="panel-head ops-head">
+                <div><h2>메일 설정</h2><p className="muted">도메인, 관리자 접근, 자체/OCI 발신 경로를 화면에서 운영합니다.</p></div>
+                <div className="actions compact-actions">
+                  <button type="button" onClick={() => setOperationsDialog("mailTest")}>활성 Provider 연결 테스트</button>
+                  <button type="button" className="secondary" onClick={() => setOperationsDialog("provider")}>도메인·Provider 설정</button>
+                  <button type="button" className="secondary" onClick={() => void refreshMailDelivery()}>새로고침</button>
+                </div>
+              </div>
+              <div className="overview-grid">
+                <article className="status-card"><strong>활성 Provider</strong><span className="mini-stat">{mailOperations?.domain?.activeOutboundProvider ?? mailDeliveryStatus?.provider.providerKey ?? "미설정"}</span></article>
+                <article className="status-card"><strong>관리자 접근</strong><span className="mini-stat">{mailOperations?.domain?.adminAccessMode ?? "미설정"}</span></article>
+                <article className="status-card"><strong>외부 메일 도메인</strong><span className="mini-stat">{mailOperations?.domain?.mailDomain ?? "미설정"}</span></article>
+                <article className="status-card"><strong>반송 / OCI suppression</strong><span className="mini-stat">{mailOperations?.feedbackCount ?? 0} / {mailOperations?.ociSuppression.activeCount ?? 0}</span><small className="muted">마지막 동기화: {contentDate(mailOperations?.ociSuppression.lastSeenAt)}</small></article>
+              </div>
+              <div className="actions compact-actions">
+                <button type="button" disabled={loading || mailOperations?.domain?.activeOutboundProvider === "self_hosted"} onClick={() => void handleMailProviderSwitch("self_hosted")}>자체 엔진으로 전환</button>
+                <button type="button" disabled={loading || mailOperations?.domain?.activeOutboundProvider === "oci_email_delivery"} onClick={() => void handleMailProviderSwitch("oci_email_delivery")}>OCI로 전환</button>
+                <button type="button" className="secondary" disabled={loading || !mailOperations?.domain?.previousOutboundProvider} onClick={() => void handleMailProviderRollback()}>직전 Provider로 rollback</button>
+                <button type="button" className="secondary" disabled={loading} onClick={() => void handleOciSuppressionSync()}>OCI suppression 동기화</button>
+              </div>
+              <div className="ops-list-panel">
+                <div className="ops-list-head"><strong>Provider 상태</strong><span className="muted">비밀값은 화면과 API 응답에 노출하지 않습니다.</span></div>
+                <div className="table-wrap"><table className="data-table"><thead><tr><th>Provider</th><th>활성</th><th>발송 잠금</th><th>연결 검증</th><th>DKIM</th></tr></thead><tbody>{(mailOperations?.providers ?? []).map((provider) => <tr key={provider.providerId}><td>{provider.providerKey}</td><td>{provider.active ? "활성" : "대기"}</td><td>{provider.deliveryEnabled ? "해제" : "잠김"}</td><td>{provider.lastTestStatus}</td><td>{formatMailProviderDkimStatus(provider)}</td></tr>)}{(mailOperations?.providers.length ?? 0) === 0 ? <tr><td colSpan={5}>Provider 설정이 없습니다.</td></tr> : null}</tbody></table></div>
+              </div>
+              <div className="ops-list-panel"><div className="ops-list-head"><strong>최근 전달 이력</strong></div><div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>수신자</th><th>제목</th><th>상태</th><th>재시도</th></tr></thead><tbody>{(mailDeliveryQueue?.queue ?? []).map((item) => <tr key={item.queueId} onDoubleClick={() => { setOperationDetail({ title: "전달 상세", lines: [item.recipient, item.subject, item.status, `재시도 ${item.attemptCount}`, item.lastError ?? "오류 없음"] }); setOperationsDialog("audit"); }}><td>{item.recipient}</td><td>{item.subject}</td><td>{item.status}</td><td>{item.attemptCount}</td></tr>)}{(mailDeliveryQueue?.queue?.length ?? 0) === 0 ? <tr><td colSpan={4}>전달 이력이 없습니다.</td></tr> : null}</tbody></table></div></div>
+            </div>
+          </section>
+        );
+      case "messenger":
+        return (
+          <section className="panel ops-panel">
+            <div className="ops-shell">
+              <div className="panel-head ops-head">
+                <div><h2>메신저 대화방 관리</h2><p className="muted">활성 대화방과 삭제 보존 상태를 확인합니다.</p></div>
+                <div className="actions compact-actions">
+                  <label className="compact-field"><span>상태</span><select value={adminMessengerStatus} onChange={(event) => { const next = event.target.value as "active" | "deleted" | "all"; setAdminMessengerStatus(next); void refreshAdminMessengerRooms(token, next); }}><option value="all">전체</option><option value="active">활성</option><option value="deleted">삭제 보존</option></select></label>
+                  <button type="button" className="secondary" onClick={() => void refreshAdminMessengerRooms()} disabled={loading}>새로고침</button>
+                </div>
+              </div>
+              <div className="overview-grid">
+                <article className="status-card"><strong>조회 대화방</strong><span className="mini-stat">{adminMessengerRooms.length}개</span></article>
+                <article className="status-card"><strong>보존 정책</strong><span className="mini-stat">삭제 후 14일</span></article>
+              </div>
+              <div className="ops-list-panel">
+                <div className="ops-list-head"><strong>대화방 목록</strong><span className="muted">삭제하면 즉시 숨김 처리되고 대화·첨부는 14일 후 자동 정리됩니다.</span></div>
+                <div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>대화방</th><th>방장</th><th>상태</th><th>참여자</th><th>메시지</th><th>갱신일</th><th>보존 만료</th><th>작업</th></tr></thead><tbody>
+                  {adminMessengerRooms.map((room) => <tr key={room.roomId}><td>{room.roomName}</td><td>{room.ownerUserName}</td><td><span className={`badge ${room.status === "active" ? "badge-ok" : "badge-warning"}`}>{room.status}</span></td><td>{room.participantCount}</td><td>{room.messageCount}</td><td>{new Date(room.updatedAt).toLocaleString("ko-KR")}</td><td>{room.retentionExpiresAt ? new Date(room.retentionExpiresAt).toLocaleString("ko-KR") : "-"}</td><td><button type="button" className="danger-action" disabled={loading || room.status !== "active"} onClick={() => setMessengerDeleteTarget(room)}>삭제</button></td></tr>)}
+                  {adminMessengerRooms.length === 0 ? <tr><td colSpan={8}>표시할 대화방이 없습니다.</td></tr> : null}
+                </tbody></table></div>
+              </div>
+            </div>
+          </section>
+        );
       case "storage":
         return (
           <section className="panel">
@@ -2656,7 +3235,7 @@ export default function App() {
         <p className="lead">운영 콘솔은 사용자 관리 및 서비스 점검을 위한 단일 진입 화면입니다.</p>
       </section>
 
-      <section className="panel" hidden={!token || showAdminConsole || !initialized}>
+      <section className="panel" hidden={!token || showAdminConsole || !initialized || !translationUiVisible}>
         <div className="panel-head">
           <div>
             <h2>시스템 상태 요약</h2>
@@ -3137,14 +3716,55 @@ export default function App() {
                 </section>
               </div>
             ) : null}
+            {messengerDeleteTarget ? (
+              <div className="management-modal-backdrop" role="presentation" onClick={() => !loading && setMessengerDeleteTarget(null)}>
+                <section className="management-modal management-confirm-modal" role="alertdialog" aria-modal="true" aria-label="대화방 삭제 확인" onClick={(event) => event.stopPropagation()}>
+                  <div className="management-modal-head"><strong>대화방 삭제 확인</strong><button type="button" className="secondary" onClick={() => setMessengerDeleteTarget(null)} disabled={loading}>닫기</button></div>
+                  <p><strong>{messengerDeleteTarget.roomName}</strong> 대화방을 삭제 상태로 전환합니다.</p>
+                  <p className="muted">사용자 화면에서는 즉시 숨겨지고 대화·첨부는 14일 후 자동 정리됩니다. 감사 이력은 보존됩니다.</p>
+                  <div className="actions compact-actions"><button type="button" className="danger-action" onClick={() => void confirmDeleteAdminMessengerRoom()} disabled={loading}>삭제</button><button type="button" className="secondary" onClick={() => setMessengerDeleteTarget(null)} disabled={loading}>취소</button></div>
+                </section>
+              </div>
+            ) : null}
             {operationsDialog ? (
               <div className="management-modal-backdrop" role="presentation" onClick={() => !loading && setOperationsDialog(null)}>
                 <section className="management-modal operations-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
                   <div className="management-modal-head"><strong>{operationsDialog === "domain" ? "도메인 검증 실행" : operationsDialog === "relay" ? "Relay 테스트 실행" : operationsDialog === "mailTest" ? "테스트 발송" : operationsDialog === "provider" ? "메일 제공자 설정" : operationsDialog === "storage" ? "운영 점검 실행" : operationsDialog === "brand" ? "브랜드/화면 설정 편집" : operationsDialog === "language" ? "다국어/메시지 설정" : operationsDialog === "help" ? "도움말/정책 상세" : "감사 로그 상세"}</strong><button type="button" className="secondary" onClick={() => setOperationsDialog(null)}>닫기</button></div>
                   {operationsDialog === "domain" ? <form className="compact-form" onSubmit={(event) => { void handleDomainVerify(event); setOperationsDialog(null); }}><label>검증 도메인<input value={domainInput} onChange={(event) => setDomainInput(event.target.value)} /></label><button type="submit" disabled={loading}>검증 실행</button></form> : null}
                   {operationsDialog === "relay" ? <form className="compact-form" onSubmit={(event) => { void handleRelayTest(event); setOperationsDialog(null); }}><label>테스트 수신자<input type="email" value={relayRecipient} onChange={(event) => setRelayRecipient(event.target.value)} /></label><button type="submit" disabled={loading}>Relay 테스트</button></form> : null}
-                  {operationsDialog === "mailTest" ? <form className="compact-form" onSubmit={(event) => { void handleMailDeliveryTest(event); setOperationsDialog(null); }}><label>테스트 발송 수신자<input type="email" value={relayRecipient} onChange={(event) => setRelayRecipient(event.target.value)} /></label><button type="submit" disabled={loading}>테스트 발송</button></form> : null}
-                  {operationsDialog === "provider" ? <div className="stack-list"><span className="mini-stat">Provider {mailDeliveryStatus?.provider.providerKey ?? "self_hosted_smtp"}</span><span className="mini-stat">발신 주소 {mailDeliveryStatus?.provider.senderAddress ?? "-"}</span><button type="button" onClick={() => { void refreshMailDelivery(); setOperationsDialog(null); }}>저장값 다시 불러오기</button></div> : null}
+                  {operationsDialog === "mailTest" ? <form className="compact-form" onSubmit={(event) => { void handleMailDeliveryTest(event); setOperationsDialog(null); }}><label>테스트 Provider<select value={mailProviderOperationsForm.providerKey} onChange={(event) => setMailProviderOperationsForm((current) => ({ ...current, providerKey: event.target.value as MailProviderOperationsForm["providerKey"] }))}><option value="self_hosted">자체 메일 엔진</option><option value="oci_email_delivery">OCI Email Delivery</option></select></label><label>실제 외부 수신자<input type="email" required value={relayRecipient} onChange={(event) => setRelayRecipient(event.target.value)} /></label><button type="submit" disabled={loading}>실제 외부 SMTP 테스트</button></form> : null}
+                  {operationsDialog === "provider" ? (
+                    <div className="stack-list">
+                      <form className="compact-form" onSubmit={(event) => void handleMailDomainOperationsSave(event)}>
+                        <strong>도메인·관리자 접근 정책</strong>
+                        <label>등록 도메인<input value={mailDomainOperationsForm.registeredDomain} onChange={(event) => setMailDomainOperationsForm((current) => ({ ...current, registeredDomain: event.target.value }))} required /></label>
+                        <label>외부 메일 도메인<input value={mailDomainOperationsForm.mailDomain} onChange={(event) => setMailDomainOperationsForm((current) => ({ ...current, mailDomain: event.target.value }))} required /></label>
+                        <label>수신 MX 호스트 <InlineHint label="외부 메일을 받는 공개 SMTP 호스트입니다. 발신 호스트와 같거나 별도로 지정할 수 있습니다." /><input value={mailDomainOperationsForm.inboundMxHost} onChange={(event) => setMailDomainOperationsForm((current) => ({ ...current, inboundMxHost: event.target.value }))} placeholder="mx.example.com" required /></label>
+                        <label>관리자 접근 모드<select value={mailDomainOperationsForm.adminAccessMode} onChange={(event) => setMailDomainOperationsForm((current) => ({ ...current, adminAccessMode: event.target.value as MailDomainOperationsForm["adminAccessMode"] }))}><option value="public">public - 외부 공개</option><option value="restricted">restricted - 허용 IP/CIDR만</option><option value="private">private - 사설망/VPN만</option></select></label>
+                        <label>허용 IP/CIDR<textarea value={mailDomainOperationsForm.adminAllowedCidrs} onChange={(event) => setMailDomainOperationsForm((current) => ({ ...current, adminAllowedCidrs: event.target.value }))} placeholder="203.0.113.0/24&#10;2001:db8::/64" /></label>
+                        <button type="submit" disabled={loading}>도메인·접근 정책 저장</button>
+                      </form>
+                      <form className="compact-form" onSubmit={(event) => void handleMailProviderOperationsSave(event)}>
+                        <strong>발신 Provider 설정</strong>
+                        <label>Provider<select value={mailProviderOperationsForm.providerKey} onChange={(event) => {
+                          const providerKey = event.target.value as MailProviderOperationsForm["providerKey"];
+                          const provider = mailOperations?.providers.find((item) => item.providerKey === providerKey);
+                          setMailProviderOperationsForm((current) => ({ ...current, providerKey, relayHost: provider?.relayHost ?? "", relayPort: String(provider?.relayPort ?? (providerKey === "oci_email_delivery" ? 587 : 25)), tlsMode: provider?.tlsMode ?? (providerKey === "oci_email_delivery" ? "starttls" : "none"), senderAddress: provider?.senderAddress ?? "", username: "", password: "", dkimDomain: provider?.dkimDomain ?? "", dkimSelector: provider?.dkimSelector ?? "", dkimPrivateKey: "" }));
+                        }}><option value="self_hosted">자체 메일 엔진</option><option value="oci_email_delivery">OCI Email Delivery</option></select></label>
+                        <label>SMTP/MX 호스트<input value={mailProviderOperationsForm.relayHost} onChange={(event) => setMailProviderOperationsForm((current) => ({ ...current, relayHost: event.target.value }))} required /></label>
+                        <label>포트<input type="number" min="1" max="65535" value={mailProviderOperationsForm.relayPort} onChange={(event) => setMailProviderOperationsForm((current) => ({ ...current, relayPort: event.target.value }))} required /></label>
+                        <label>TLS<select value={mailProviderOperationsForm.tlsMode} onChange={(event) => setMailProviderOperationsForm((current) => ({ ...current, tlsMode: event.target.value as MailProviderOperationsForm["tlsMode"] }))}><option value="none">none</option><option value="starttls">STARTTLS</option><option value="tls">TLS</option></select></label>
+                        <label>발신 주소<input type="email" value={mailProviderOperationsForm.senderAddress} onChange={(event) => setMailProviderOperationsForm((current) => ({ ...current, senderAddress: event.target.value }))} /></label>
+                        <label>SMTP 사용자<input autoComplete="off" value={mailProviderOperationsForm.username} onChange={(event) => setMailProviderOperationsForm((current) => ({ ...current, username: event.target.value }))} placeholder="변경할 때만 입력" /></label>
+                        <label>SMTP 비밀번호<input type="password" autoComplete="new-password" value={mailProviderOperationsForm.password} onChange={(event) => setMailProviderOperationsForm((current) => ({ ...current, password: event.target.value }))} placeholder="변경할 때만 입력" /></label>
+                        <label>DKIM 도메인<input value={mailProviderOperationsForm.dkimDomain} onChange={(event) => setMailProviderOperationsForm((current) => ({ ...current, dkimDomain: event.target.value }))} /></label>
+                        <label>DKIM selector<input value={mailProviderOperationsForm.dkimSelector} onChange={(event) => setMailProviderOperationsForm((current) => ({ ...current, dkimSelector: event.target.value }))} /></label>
+                        <label>DKIM 개인키<textarea value={mailProviderOperationsForm.dkimPrivateKey} onChange={(event) => setMailProviderOperationsForm((current) => ({ ...current, dkimPrivateKey: event.target.value }))} placeholder="변경할 때만 입력하며 저장 후 다시 표시하지 않습니다." /></label>
+                        <button type="button" className="secondary" disabled={loading || mailProviderOperationsForm.providerKey !== "self_hosted" || Boolean(mailOperations?.providers.find((item) => item.providerKey === "self_hosted")?.dkimPrivateKeyConfigured)} onClick={() => void handleGenerateSelfHostedDkim()}>DKIM 키 자동 생성</button>
+                        <button type="submit" disabled={loading}>Provider 설정 저장</button>
+                      </form>
+                    </div>
+                  ) : null}
                   {operationsDialog === "storage" ? <div className="stack-list"><span className="mini-stat">저장소 {health?.components.storage?.status ?? "unknown"}</span><span className="mini-stat">DB {health?.components.db?.status ?? "unknown"}</span><button type="button" onClick={() => { void refreshDirectory(); void refreshMonitoring(); setOperationsDialog(null); }}>점검 실행</button></div> : null}
                   {operationsDialog === "brand" ? <div className="stack-list"><span className="mini-stat">회사명/도메인은 초기 설정 원천의 읽기 전용 값입니다.</span><button type="button" onClick={() => { void handleUiContractSave(); setOperationsDialog(null); }}>현재 설정 저장</button><button type="button" className="secondary" onClick={() => void reloadUiContract()}>저장값 다시 불러오기</button></div> : null}
                   {operationsDialog === "language" ? <div className="ops-toolbar-grid"><label className="compact-field"><span>언어</span><select value={locale} onChange={(event) => saveLocale(event.target.value as AppLocale)}>{supportedLocales.map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label className="compact-field"><span>시간대</span><select value={timezone} onChange={(event) => saveTimezone(event.target.value)}>{supportedTimezones.map((value) => <option key={value} value={value}>{value}</option>)}</select></label></div> : null}

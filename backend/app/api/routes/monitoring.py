@@ -65,12 +65,10 @@ def list_alerts(_: AuthUserSummary = Depends(require_admin)) -> MonitoringAlertL
     return ObservabilityService().list_alerts()
 
 @router.post("/alerts/{alert_id}/ack", response_model=MonitoringAlert)
-def ack_alert(alert_id: str, _: AuthUserSummary = Depends(require_admin)) -> MonitoringAlert:
-    del _
-    return ObservabilityService().ack_alert(alert_id)
+def ack_alert(alert_id: str, actor: AuthUserSummary = Depends(require_admin)) -> MonitoringAlert:
+    return ObservabilityService().ack_alert(alert_id, actor)
 
 
 @router.post("/alerts/{alert_id}/resolve", response_model=MonitoringAlert)
-def resolve_alert(alert_id: str, _: AuthUserSummary = Depends(require_admin)) -> MonitoringAlert:
-    del _
-    return ObservabilityService().resolve_alert(alert_id)
+def resolve_alert(alert_id: str, actor: AuthUserSummary = Depends(require_admin)) -> MonitoringAlert:
+    return ObservabilityService().resolve_alert(alert_id, actor)

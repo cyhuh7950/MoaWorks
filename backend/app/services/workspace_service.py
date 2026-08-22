@@ -14,7 +14,7 @@ from psycopg.types.json import Jsonb
 
 from app.schemas.directory import AuthUserSummary
 from app.schemas.observability import EventEnvelope, MonitoringCategory, SeverityLevel, Visibility
-from app.schemas.workspace import CalendarCreatePayload, CalendarOrderPayload, CalendarSubscriptionPayload, CalendarUpdatePayload, ContactGroupCreatePayload, ContactGroupUpdatePayload, ContactPayload, FilePatchPayload, FileShareSnapshotPayload, FolderCreatePayload, FolderPatchPayload, PreferencePayload, SchedulePayload
+from app.schemas.workspace import CalendarCreatePayload, CalendarOrderPayload, CalendarSubscriptionPayload, CalendarUpdatePayload, ContactGroupCreatePayload, ContactGroupUpdatePayload, ContactPayload, FilePatchPayload, FileShareSnapshotPayload, FolderCreatePayload, FolderPatchPayload, PersonalProfilePayload, PreferencePayload, SchedulePayload
 from app.services.workspace_file_storage import ContentTypeRejected, WorkspaceFileStorage
 from app.services.calendar_rules import subscription_action_for_visibility_change, subscription_status_for_visibility, validate_order_snapshot
 from app.services.observability_service import ObservabilityService
@@ -1130,11 +1130,22 @@ class WorkspaceService:
             cursor.execute(
                 """
                 SELECT account.id,account.name,account.email,company.name AS company_name,
-                       COALESCE(department.name,'') AS department_name,role.name AS role_name
+                       COALESCE(department.name,'') AS department_name,role.name AS role_name,
+                       COALESCE(personal.external_email,'') AS external_email,
+                       COALESCE(personal.mobile_phone,'') AS mobile_phone,
+                       COALESCE(personal.office_phone,'') AS office_phone,
+                       COALESCE(personal.introduction,'') AS introduction,
+                       COALESCE(personal.postal_code,'') AS postal_code,
+                       COALESCE(personal.address_line1,'') AS address_line1,
+                       COALESCE(personal.address_line2,'') AS address_line2,
+                       COALESCE(personal.memo,'') AS memo,personal.anniversary,
+                       personal.photo_content IS NOT NULL AS photo_available,
+                       COALESCE(personal.version,0) AS personal_version
                 FROM users account
                 JOIN companies company ON company.id=account.company_id
                 JOIN roles role ON role.id=account.role_id AND role.company_id=account.company_id
                 LEFT JOIN departments department ON department.id=account.department_id AND department.company_id=account.company_id
+                LEFT JOIN user_personal_profiles personal ON personal.owner_user_id=account.id AND personal.company_id=account.company_id
                 WHERE account.id=%s AND account.company_id=%s AND account.status='active'
                 """,
                 (user.userId, user.companyId),
@@ -1147,7 +1158,81 @@ class WorkspaceService:
         return {
             "userId": row["id"], "name": row["name"], "email": row["email"],
             "companyName": row["company_name"], "departmentName": row["department_name"], "roleName": row["role_name"],
+            "externalEmail": row["external_email"], "mobilePhone": row["mobile_phone"], "officePhone": row["office_phone"],
+            "introduction": row["introduction"], "postalCode": row["postal_code"], "addressLine1": row["address_line1"],
+            "addressLine2": row["address_line2"], "memo": row["memo"],
+            "anniversary": row["anniversary"].isoformat() if row["anniversary"] else None,
+            "photoAvailable": bool(row["photo_available"]), "version": int(row["personal_version"]),
         }
+
+    @staticmethod
+    def _personal_profile_row(cursor, user: AuthUserSummary, lock: bool = False):
+        cursor.execute(
+            "SELECT version,photo_content IS NOT NULL AS photo_available FROM user_personal_profiles WHERE owner_user_id=%s AND company_id=%s" + (" FOR UPDATE" if lock else ""),
+            (user.userId,user.companyId),
+        )
+        return cursor.fetchone()
+
+    @staticmethod
+    def _profile_conflict() -> HTTPException:
+        return HTTPException(status_code=409,detail={"code":"WORKSPACE_PROFILE_CONFLICT","userMessage":"다른 화면에서 프로필이 변경되었습니다. 최신 정보를 다시 불러오세요."})
+
+    def save_personal_profile(self, user: AuthUserSummary, payload: PersonalProfilePayload) -> dict:
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            current = self._personal_profile_row(cursor,user,lock=True)
+            if (int(current["version"]) if current else 0) != payload.expectedVersion:
+                raise self._profile_conflict()
+            values = (payload.externalEmail,payload.mobilePhone,payload.officePhone,payload.introduction,payload.postalCode,payload.addressLine1,payload.addressLine2,payload.memo,payload.anniversary)
+            if current is None:
+                cursor.execute(
+                    "INSERT INTO user_personal_profiles(owner_user_id,company_id,external_email,mobile_phone,office_phone,introduction,postal_code,address_line1,address_line2,memo,anniversary,version,created_at,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1,NOW(),NOW())",
+                    (user.userId,user.companyId,*values),
+                )
+            else:
+                cursor.execute(
+                    "UPDATE user_personal_profiles SET external_email=%s,mobile_phone=%s,office_phone=%s,introduction=%s,postal_code=%s,address_line1=%s,address_line2=%s,memo=%s,anniversary=%s,version=version+1,updated_at=NOW() WHERE owner_user_id=%s AND company_id=%s AND version=%s",
+                    (*values,user.userId,user.companyId,payload.expectedVersion),
+                )
+                if cursor.rowcount != 1:
+                    raise self._profile_conflict()
+            self._audit(cursor,user,"user_personal_profile",user.userId,"workspace.profile.updated",str(payload.expectedVersion),str(payload.expectedVersion+1),json.dumps({"changedFields":["externalEmail","mobilePhone","officePhone","introduction","postalCode","addressLine1","addressLine2","memo","anniversary"]},separators=(",",":")))
+            conn.commit()
+        return self.profile(user)
+
+    def profile_photo(self, user: AuthUserSummary) -> dict:
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            cursor.execute("SELECT photo_content,photo_content_type FROM user_personal_profiles WHERE owner_user_id=%s AND company_id=%s AND photo_content IS NOT NULL",(user.userId,user.companyId))
+            row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404,detail={"code":"PROFILE_PHOTO_NOT_FOUND","userMessage":"등록된 프로필 사진이 없습니다."})
+        return {"content":bytes(row["photo_content"]),"content_type":row["photo_content_type"]}
+
+    def save_profile_photo(self, user: AuthUserSummary, content: bytes, content_type: str, expected_version: int) -> dict:
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            current = self._personal_profile_row(cursor,user,lock=True)
+            if (int(current["version"]) if current else 0) != expected_version:
+                raise self._profile_conflict()
+            if current is None:
+                cursor.execute("INSERT INTO user_personal_profiles(owner_user_id,company_id,photo_content,photo_content_type,version,created_at,updated_at) VALUES(%s,%s,%s,%s,1,NOW(),NOW())",(user.userId,user.companyId,content,content_type))
+            else:
+                cursor.execute("UPDATE user_personal_profiles SET photo_content=%s,photo_content_type=%s,version=version+1,updated_at=NOW() WHERE owner_user_id=%s AND company_id=%s AND version=%s",(content,content_type,user.userId,user.companyId,expected_version))
+                if cursor.rowcount != 1:
+                    raise self._profile_conflict()
+            self._audit(cursor,user,"user_personal_profile",user.userId,"workspace.profile.photo.updated",str(expected_version),str(expected_version+1),json.dumps({"contentType":content_type,"sizeBytes":len(content)},separators=(",",":")))
+            conn.commit()
+        return self.profile(user)
+
+    def delete_profile_photo(self, user: AuthUserSummary, expected_version: int) -> dict:
+        with self.db.connect() as conn, conn.cursor() as cursor:
+            current = self._personal_profile_row(cursor,user,lock=True)
+            if not current or int(current["version"]) != expected_version:
+                raise self._profile_conflict()
+            cursor.execute("UPDATE user_personal_profiles SET photo_content=NULL,photo_content_type=NULL,version=version+1,updated_at=NOW() WHERE owner_user_id=%s AND company_id=%s AND version=%s",(user.userId,user.companyId,expected_version))
+            if cursor.rowcount != 1:
+                raise self._profile_conflict()
+            self._audit(cursor,user,"user_personal_profile",user.userId,"workspace.profile.photo.deleted",str(expected_version),str(expected_version+1),None)
+            conn.commit()
+        return self.profile(user)
 
     def _preference_row(self, cursor, user: AuthUserSummary, lock: bool = False):
         cursor.execute(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from ipaddress import ip_network
 import re
 from typing import Mapping, Sequence
 
@@ -17,7 +18,9 @@ class MailDomainContract:
     user_host: str
     admin_host: str
     mail_host: str
+    inbound_mx_host: str
     admin_access_mode: str
+    admin_allowed_cidrs: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +41,9 @@ def build_mail_domain_contract(
     *,
     registered_domain: str,
     mail_domain: str,
+    inbound_mx_host: str | None = None,
     admin_access_mode: str,
+    admin_allowed_cidrs: Sequence[str] | None = None,
 ) -> MailDomainContract:
     normalized_registered = _normalize_domain(registered_domain)
     normalized_mail = _normalize_domain(mail_domain)
@@ -47,17 +52,35 @@ def build_mail_domain_contract(
     ):
         raise ValueError("메일 도메인은 등록 도메인과 같거나 그 하위 도메인이어야 합니다.")
 
+    outbound_mail_host = f"mail.{normalized_mail}"
+    normalized_inbound_mx = _normalize_domain(inbound_mx_host or outbound_mail_host)
+    if normalized_inbound_mx != normalized_mail and not normalized_inbound_mx.endswith(f".{normalized_mail}"):
+        raise ValueError("수신 MX 호스트는 메일 도메인 또는 그 하위 호스트여야 합니다.")
+
     normalized_mode = admin_access_mode.strip().lower()
     if normalized_mode not in _ADMIN_ACCESS_MODES:
         raise ValueError("관리자 접근 모드는 public, restricted, private 중 하나여야 합니다.")
+    cidr_values = (
+        ("127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+        if admin_allowed_cidrs is None
+        else admin_allowed_cidrs
+    )
+    try:
+        normalized_cidrs = tuple(dict.fromkeys(str(ip_network(value.strip(), strict=False)) for value in cidr_values))
+    except (AttributeError, ValueError) as exc:
+        raise ValueError("관리자 허용 IP/CIDR 형식이 올바르지 않습니다.") from exc
+    if normalized_mode == "restricted" and not normalized_cidrs:
+        raise ValueError("restricted 관리자 접근 모드에는 허용 IP/CIDR이 한 개 이상 필요합니다.")
 
     return MailDomainContract(
         registered_domain=normalized_registered,
         mail_domain=normalized_mail,
         user_host=f"user.{normalized_mail}",
         admin_host=f"admin.{normalized_mail}",
-        mail_host=f"mail.{normalized_mail}",
+        mail_host=outbound_mail_host,
+        inbound_mx_host=normalized_inbound_mx,
         admin_access_mode=normalized_mode,
+        admin_allowed_cidrs=normalized_cidrs,
     )
 
 

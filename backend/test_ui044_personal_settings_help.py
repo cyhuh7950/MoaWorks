@@ -31,6 +31,56 @@ def test_migration_045_is_additive_idempotent_and_preserves_existing_rows():
     assert "DO UPDATE" not in upper
 
 
+def test_migration_061_keeps_organization_fields_separate_from_self_managed_profile():
+    sql = read("migrations/061_user_personal_profiles.sql")
+    for marker in (
+        "CREATE TABLE IF NOT EXISTS user_personal_profiles",
+        "owner_user_id TEXT PRIMARY KEY REFERENCES users(id)",
+        "external_email",
+        "mobile_phone",
+        "office_phone",
+        "introduction",
+        "postal_code",
+        "address_line1",
+        "address_line2",
+        "memo",
+        "anniversary",
+        "photo_content BYTEA",
+        "photo_content_type",
+        "version INTEGER NOT NULL DEFAULT 0",
+    ):
+        assert marker in sql
+    assert "ALTER TABLE USERS" not in sql.upper()
+    assert "DROP TABLE" not in sql.upper()
+
+
+def test_personal_profile_schema_normalizes_fields_and_validates_external_email():
+    from app.schemas.workspace import PersonalProfilePayload
+
+    payload = PersonalProfilePayload(
+        externalEmail=" Person@Example.com ", mobilePhone=" 010-1234-5678 ", officePhone="02-123-4567",
+        introduction=" 소개 ", postalCode="12345", addressLine1=" 서울 ", addressLine2=" 101호 ",
+        memo=" 메모 ", anniversary="2026-08-20", expectedVersion=0,
+    )
+    assert payload.externalEmail == "person@example.com"
+    assert payload.introduction == "소개"
+    for invalid in ("missing-at.example.com", "person@", "@example.com"):
+        with pytest.raises(ValidationError):
+            PersonalProfilePayload(externalEmail=invalid, expectedVersion=0)
+
+
+def test_profile_photo_validation_uses_file_signature_and_enforces_two_megabytes():
+    from app.api.routes.workspace import _validated_profile_photo
+
+    assert _validated_profile_photo(b"\xff\xd8\xffpayload")[1] == "image/jpeg"
+    assert _validated_profile_photo(b"\x89PNG\r\n\x1a\npayload")[1] == "image/png"
+    assert _validated_profile_photo(b"RIFFxxxxWEBPpayload")[1] == "image/webp"
+    for content, status in ((b"not-image", 415), (b"x" * (2 * 1024 * 1024 + 1), 413)):
+        with pytest.raises(HTTPException) as caught:
+            _validated_profile_photo(content)
+        assert caught.value.status_code == status
+
+
 def test_preferences_schema_whitelists_locale_timezone_start_page_and_version():
     from app.schemas.workspace import PreferencePayload
 
@@ -63,6 +113,10 @@ def test_workspace_routes_expose_self_scoped_profile_preferences_and_filtered_he
     source = read("app/api/routes/workspace.py")
     for marker in (
         "@router.get('/profile'",
+        "@router.put('/profile'",
+        "@router.get('/profile/photo'",
+        "@router.put('/profile/photo'",
+        "@router.delete('/profile/photo'",
         "@router.get('/preferences'",
         "@router.put('/preferences'",
         "@router.get('/help-policies'",
@@ -71,6 +125,8 @@ def test_workspace_routes_expose_self_scoped_profile_preferences_and_filtered_he
     ):
         assert marker in source
     assert "permission_required(\"profile:read\")" in source
+    assert "Cache-Control': 'private, no-store'" in source
+    assert "X-Content-Type-Options': 'nosniff'" in source
 
 
 def test_workspace_service_has_default_no_write_version_lock_audience_and_safe_audit():
@@ -78,6 +134,10 @@ def test_workspace_service_has_default_no_write_version_lock_audience_and_safe_a
     for marker in (
         "def profile",
         "workspace.profile.viewed",
+        "workspace.profile.updated",
+        "workspace.profile.photo.updated",
+        "workspace.profile.photo.deleted",
+        "WORKSPACE_PROFILE_CONFLICT",
         '"startPage":"home"',
         "payload.expectedVersion",
         "WORKSPACE_PREFERENCES_CONFLICT",
@@ -166,6 +226,21 @@ def test_preference_version_conflict_returns_stable_409_without_update():
     assert caught.value.status_code == 409
     assert caught.value.detail["code"] == "WORKSPACE_PREFERENCES_CONFLICT"
     assert not any(sql.startswith("UPDATE user_workspace_preferences") for sql, _ in cursor.executed)
+
+
+def test_personal_profile_version_conflict_is_self_scoped_and_does_not_update():
+    from app.schemas.workspace import PersonalProfilePayload
+    from app.services.workspace_service import WorkspaceService
+
+    cursor = FakeCursor([{"version": 3, "photo_available": False}])
+    service = WorkspaceService.__new__(WorkspaceService)
+    service.db = FakeDb(cursor)
+    with pytest.raises(HTTPException) as caught:
+        service.save_personal_profile(actor(), PersonalProfilePayload(externalEmail="user@example.com", expectedVersion=2))
+    assert caught.value.status_code == 409
+    assert caught.value.detail["code"] == "WORKSPACE_PROFILE_CONFLICT"
+    assert cursor.executed[0][1] == ("usr_1", "cmp_1")
+    assert not any(sql.startswith("UPDATE user_personal_profiles") for sql, _ in cursor.executed)
 
 
 class FakeSecurity:

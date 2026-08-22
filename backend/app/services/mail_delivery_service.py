@@ -1,10 +1,20 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
-from uuid import uuid4
+from email.message import EmailMessage
+from email.headerregistry import Address
+from pathlib import Path
+import re
+import smtplib
+import ssl
+from typing import Protocol
 
-from psycopg.types.json import Jsonb
+from app.services.mail_transports import MailTransportFailure
+
+@dataclass(frozen=True)
+class RecipientClassification:
+    internal: list[tuple[str, str, str]]
+    external: list[tuple[str, str]]
 
 try:
     import dns.resolver
@@ -323,246 +333,61 @@ class MailDeliveryService:
         sending_row = {**row, **sending_row}
         self._insert_event(cursor, queue_id=row["id"], event_type="mail.delivery.attempt", message="외부 SMTP 발송을 시도했습니다.", payload={"attemptCount": attempt_count})
 
+class MailDeliveryWorker:
+    def __init__(self, worker_id: str, adapter: RelayAdapter):
+        self.worker_id, self.adapter = worker_id, adapter
+    def deliver_claimed(self, job, provider: dict) -> DeliveryResult:
+        if not provider.get("delivery_enabled") or provider.get("last_test_status") != "success":
+            return DeliveryResult("blocked", error_message="외부 발송 잠금 또는 연결 검증이 필요합니다.")
+        if provider.get("provider_type") == "oci_email_delivery" and _job_value(job, "recipient_suppressed", False):
+            return DeliveryResult("blocked", error_message="OCI suppression 목록에 등록된 수신자입니다.")
+        attempt = int(_job_value(job, "attempt_count", 0)) + 1
+        envelope = {key: _job_value(job, key) for key in ("queue_id","delivery_kind","sender_email","sender_display_name","reply_to_email","message_encoding","recipient_email","subject","body_text","body_html","attachments")}
+        if _job_value(job, "delivery_kind") == "auto_forward" or _job_value(job, "delivery_kind") == "out_of_office":
+            envelope["sender_email"] = _job_value(job, "sender_email_override") or envelope["sender_email"]
+            envelope["sender_display_name"] = _job_value(job, "sender_display_name_override") or envelope["sender_display_name"]
+            envelope["reply_to_email"] = _job_value(job, "reply_to_email_override") or envelope["reply_to_email"]
         try:
-            response_detail = self._send_via_provider(sending_row)
-        except Exception as exc:
-            max_retry_count = int(row["max_retry_count"] or 0)
-            retry_interval_sec = int(row["retry_interval_sec"] or 0)
-            should_retry = attempt_count < max_retry_count
-            status = "retry_pending" if should_retry else "failed"
-            next_retry_at = now + timedelta(seconds=retry_interval_sec) if should_retry else None
-            updated = self._mark_queue_result(
-                cursor,
-                sending_row,
-                status=status,
-                last_error=str(exc),
-                next_retry_at=next_retry_at,
-                sent_at=None,
-                response_detail=str(exc),
+            response = self.adapter.send(envelope, provider)
+            return DeliveryResult("sent", relay_response=mask_delivery_error(response))
+        except (RelayDeliveryError, MailTransportFailure) as exc:
+            maximum = int(provider.get("max_retry_count", 3))
+            error = mask_delivery_error(str(exc))
+            if exc.transient and attempt < maximum:
+                delay = int(provider.get("retry_interval_sec", 60)) * (2 ** (attempt - 1))
+                return DeliveryResult("retry_pending", error_message=error, next_attempt_at=datetime.now(UTC)+timedelta(seconds=delay))
+            return DeliveryResult("failed", error_message=error)
+
+class SmtpRelayAdapter:
+    def build_message(self, envelope: dict, provider: dict) -> EmailMessage:
+        message = EmailMessage()
+        display_name = (envelope.get("sender_display_name") or "").strip()
+        sender_email = envelope["sender_email"] if envelope.get("delivery_kind") in {"auto_forward", "out_of_office"} else (provider.get("from_address") or envelope["sender_email"])
+        message["From"] = Address(display_name=display_name, addr_spec=sender_email) if display_name else sender_email
+        message["To"] = envelope["recipient_email"]
+        message["Subject"] = envelope["subject"]
+        if envelope.get("reply_to_email"):
+            message["Reply-To"] = envelope["reply_to_email"]
+        charset = envelope.get("message_encoding") or "utf-8"
+        message.set_content(envelope["body_text"], charset=charset)
+        if envelope.get("body_html"):
+            message.add_alternative(envelope["body_html"], subtype="html", charset=charset)
+        for attachment in envelope.get("attachments") or []:
+            path = Path(str(attachment.get("path") or ""))
+            if not path.is_file():
+                raise RelayDeliveryError("첨부 파일을 찾을 수 없습니다.", transient=False)
+            content_type = str(attachment.get("content_type") or "application/octet-stream")
+            maintype, separator, subtype = content_type.partition("/")
+            if not separator or not maintype or not subtype:
+                maintype, subtype = "application", "octet-stream"
+            file_name = Path(str(attachment.get("file_name") or "attachment.bin").replace("\\", "/")).name[:255]
+            message.add_attachment(
+                path.read_bytes(),
+                maintype=maintype,
+                subtype=subtype,
+                filename=file_name,
             )
-            event_type = "mail.delivery.retry_pending" if should_retry else "mail.delivery.failed"
-            message = "외부 SMTP 발송 실패로 재시도가 예약되었습니다." if should_retry else "외부 SMTP 발송이 실패했습니다."
-            self._insert_event(cursor, queue_id=row["id"], event_type=event_type, message=message, payload={"error": str(exc), "attemptCount": attempt_count})
-            return updated
-
-        updated = self._mark_queue_result(
-            cursor,
-            sending_row,
-            status="sent",
-            last_error=None,
-            next_retry_at=None,
-            sent_at=now,
-            response_detail=response_detail,
-        )
-        self._insert_event(cursor, queue_id=row["id"], event_type="mail.delivery.sent", message="외부 SMTP 발송이 완료되었습니다.", payload={"attemptCount": attempt_count})
-        return updated
-
-    def _mark_queue_result(
-        self,
-        cursor,
-        row: dict[str, Any],
-        *,
-        status: str,
-        last_error: str | None,
-        next_retry_at: datetime | None,
-        sent_at: datetime | None,
-        response_detail: str | None,
-    ) -> dict[str, Any]:
-        now = self._now()
-        cursor.execute(
-            """
-            UPDATE mail_delivery_queue
-            SET status = %s,
-                last_error = %s,
-                next_retry_at = %s,
-                sent_at = %s,
-                updated_at = %s
-            WHERE id = %s
-            RETURNING *
-            """,
-            (status, last_error, next_retry_at, sent_at, now, row["id"]),
-        )
-        updated = cursor.fetchone()
-        if updated is None:
-            raise ValueError("외부 발송 큐 상태 저장에 실패했습니다.")
-        cursor.execute(
-            """
-            INSERT INTO mail_delivery_attempts (
-                id, queue_id, status, error_message, response_detail, attempted_at
-            )
-            VALUES (%s, %s, %s, %s, %s, %s)
-            """,
-            (self._new_id("mailattempt"), row["id"], status, last_error, response_detail, now),
-        )
-        return updated
-
-    def _send_via_provider(self, row: dict[str, Any]) -> str:
-        raw_provider_key = str(row.get("provider_key") or "").strip().lower()
-        provider_key = _PROVIDER_KEY if raw_provider_key == _LEGACY_PROVIDER_KEY else raw_provider_key
-        sender_domain = str(row["sender_domain"]).strip().lower()
-        requested_sender = str(row["sender_email"]).strip().lower()
-        sender_email = (
-            requested_sender
-            if requested_sender.endswith(f"@{sender_domain}")
-            else str(row["sender_address"]).strip().lower()
-        )
-        message = OutboundMessage(
-            sender_email=sender_email,
-            recipient_email=str(row["recipient_email"]).strip().lower(),
-            subject=str(row["subject"]),
-            body_text=str(row.get("body_text") or ""),
-            body_html=row.get("body_html"),
-            message_id=f"<{row['mail_id']}.{row['id']}@{sender_domain}>",
-        )
-
-        if provider_key == _PROVIDER_KEY:
-            receipt = self.self_hosted_transport.send(
-                message,
-                helo_name=str(row["helo_name"]),
-                timeout_sec=int(row.get("timeout_sec") or 15),
-            )
-        elif provider_key == "oci_email_delivery":
-            encrypted_password = str(row.get("encrypted_password") or "")
-            if not encrypted_password:
-                raise ValueError("OCI SMTP 자격증명이 설정되지 않았습니다.")
-            config = RelaySmtpConfig(
-                host=str(row.get("smtp_host") or ""),
-                port=int(row.get("smtp_port") or 587),
-                username=str(row.get("smtp_username") or ""),
-                password=self.security.decrypt_secret(encrypted_password),
-                timeout_sec=int(row.get("timeout_sec") or 20),
-            )
-            receipt = self.oci_transport.send(message, config=config)
-        else:
-            raise ValueError(f"지원하지 않는 발신 Provider입니다: {raw_provider_key}")
-
-        return (
-            f"provider={receipt.provider_key};endpoint={receipt.endpoint};"
-            f"remote_smtp_accepted={str(receipt.remote_smtp_accepted).lower()}"
-        )
-
-    def _resolve_smtp_hosts(self, domain: str) -> list[str]:
-        normalized = domain.strip().lower()
-        hosts: list[str] = []
-        if dns is not None:
-            try:
-                answers = dns.resolver.resolve(normalized, "MX")
-                ordered = sorted(answers, key=lambda item: int(item.preference))
-                for answer in ordered:
-                    candidate = str(answer.exchange).rstrip(".").lower()
-                    if candidate and candidate not in hosts:
-                        hosts.append(candidate)
-            except Exception:
-                pass
-        if normalized not in hosts:
-            hosts.append(normalized)
-        return hosts
-
-    def _fetch_provider(self, cursor, company_id: str) -> dict[str, Any]:
-        cursor.execute(
-            "SELECT domain FROM companies WHERE id = %s",
-            (company_id,),
-        )
-        company = cursor.fetchone()
-        if company is None:
-            raise ValueError("회사를 찾을 수 없습니다.")
-        return self.ensure_provider(cursor, company_id, company["domain"])
-
-    def _fetch_summary(self, cursor, company_id: str) -> MailDeliveryQueueSummary:
-        cursor.execute(
-            """
-            SELECT
-                COUNT(*) FILTER (WHERE status = 'queued') AS queued_count,
-                COUNT(*) FILTER (WHERE status = 'sending') AS sending_count,
-                COUNT(*) FILTER (WHERE status = 'sent') AS sent_count,
-                COUNT(*) FILTER (WHERE status = 'failed') AS failed_count,
-                COUNT(*) FILTER (WHERE status = 'retry_pending') AS retry_pending_count,
-                COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled_count
-            FROM mail_delivery_queue
-            WHERE company_id = %s
-            """,
-            (company_id,),
-        )
-        row = cursor.fetchone() or {}
-        return MailDeliveryQueueSummary(
-            queuedCount=int(row.get("queued_count") or 0),
-            sendingCount=int(row.get("sending_count") or 0),
-            sentCount=int(row.get("sent_count") or 0),
-            failedCount=int(row.get("failed_count") or 0),
-            retryPendingCount=int(row.get("retry_pending_count") or 0),
-            cancelledCount=int(row.get("cancelled_count") or 0),
-        )
-
-    def _fetch_attempts(self, cursor, queue_ids: list[str]) -> list[MailDeliveryAttemptItem]:
-        if not queue_ids:
-            return []
-        cursor.execute(
-            """
-            SELECT id, queue_id, status, error_message, response_detail, attempted_at
-            FROM mail_delivery_attempts
-            WHERE queue_id = ANY(%s)
-            ORDER BY attempted_at DESC
-            LIMIT 100
-            """,
-            (queue_ids,),
-        )
-        return [
-            MailDeliveryAttemptItem(
-                attemptId=row["id"],
-                queueId=row["queue_id"],
-                status=row["status"],
-                errorMessage=row["error_message"],
-                responseDetail=row["response_detail"],
-                attemptedAt=row["attempted_at"],
-            )
-            for row in cursor.fetchall()
-        ]
-
-    def _fetch_events(self, cursor, queue_ids: list[str]) -> list[MailDeliveryEventItem]:
-        if not queue_ids:
-            return []
-        cursor.execute(
-            """
-            SELECT id, queue_id, event_type, message, payload, created_at
-            FROM mail_delivery_events
-            WHERE queue_id = ANY(%s)
-            ORDER BY created_at DESC
-            LIMIT 100
-            """,
-            (queue_ids,),
-        )
-        return [
-            MailDeliveryEventItem(
-                eventId=row["id"],
-                queueId=row["queue_id"],
-                eventType=row["event_type"],
-                message=row["message"],
-                payload=row.get("payload") or {},
-                createdAt=row["created_at"],
-            )
-            for row in cursor.fetchall()
-        ]
-
-    def _insert_event(self, cursor, *, queue_id: str, event_type: str, message: str, payload: dict[str, Any]) -> None:
-        cursor.execute(
-            """
-            INSERT INTO mail_delivery_events (id, queue_id, event_type, message, payload, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            """,
-            (self._new_id("mailevent"), queue_id, event_type, message, Jsonb(payload), self._now()),
-        )
-
-    def _emit_observability(self, row: dict[str, Any]) -> None:
-        severity = SeverityLevel.INFO
-        event_type = "mail.delivery.sent"
-        if row["status"] == "retry_pending":
-            severity = SeverityLevel.WARN
-            event_type = "mail.delivery.retry_pending"
-        elif row["status"] == "failed":
-            severity = SeverityLevel.ERROR
-            event_type = "mail.delivery.failed"
-        elif row["status"] == "queued":
-            event_type = "mail.delivery.queue.created"
+        return message
 
         try:
             ObservabilityService().emit_event(

@@ -1,0 +1,12 @@
+[Unit]
+Description=Run MoaWorks SMTP certificate renewal twice daily
+ConditionVirtualization=wsl
+
+[Timer]
+OnCalendar=*-*-* 00,12:00:00
+RandomizedDelaySec=30m
+Persistent=true
+Unit=moaworks-mail-certificate-renew.service
+
+[Install]
+WantedBy=timers.target

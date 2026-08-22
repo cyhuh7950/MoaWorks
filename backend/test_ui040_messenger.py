@@ -351,6 +351,55 @@ class Ui040MessengerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "최대 크기"):
                 storage.stage(self.actor(), "large.bin", "application/octet-stream", b"12345")
 
+    def test_room_translation_locale_contract_is_typed_and_additive(self) -> None:
+        from app.schemas.mail_messenger import MessengerRoomCreateRequest, MessengerRoomTranslationRequest
+
+        created = MessengerRoomCreateRequest(roomName="번역방", participantUserIds=["user-b"], translationLocale="EN")
+        self.assertEqual(created.translationLocale, "en")
+        updated = MessengerRoomTranslationRequest(translationLocale="ko", expectedUpdatedAt=datetime.now(UTC))
+        self.assertEqual(updated.translationLocale, "ko")
+        with self.assertRaises(ValidationError):
+            MessengerRoomCreateRequest(roomName="번역방", participantUserIds=["user-b"], translationLocale="xx")
+
+        sql = (ROOT / "migrations" / "060_messenger_room_translation_locale.sql").read_text(encoding="utf-8")
+        self.assertIn("ADD COLUMN IF NOT EXISTS translation_locale", sql)
+        self.assertIn("DEFAULT 'ko'", sql)
+        self.assertNotIn("DROP TABLE", sql.upper())
+    def test_room_translation_locale_update_is_versioned_and_audited(self) -> None:
+        from app.schemas.mail_messenger import MessengerRoomTranslationRequest
+        from app.services.mail_messenger_service import MailMessengerService
+
+        updated_at = datetime.now(UTC)
+        statements: list[tuple[str, tuple]] = []
+        audits: list[tuple] = []
+
+        class Cursor:
+            def __enter__(self): return self
+            def __exit__(self, exc_type, exc, traceback): return False
+            def execute(self, sql, params=()): statements.append((" ".join(sql.split()), params))
+            def fetchone(self):
+                return {"id": "room-a", "created_by_user_id": "user-a", "updated_at": updated_at, "translation_locale": "ko"}
+
+        class Connection:
+            def __enter__(self): return self
+            def __exit__(self, exc_type, exc, traceback): return False
+            def cursor(self): return Cursor()
+            def commit(self): statements.append(("COMMIT", ()))
+
+        class Db:
+            def ensure_migrations_applied(self): return None
+            def connect(self): return Connection()
+
+        service = MailMessengerService()
+        service.db = Db()
+        service._write_messenger_audit = lambda *args: audits.append(args)
+        service.get_room = lambda actor, room_id: "updated-detail"
+        payload = MessengerRoomTranslationRequest(translationLocale="en", expectedUpdatedAt=updated_at)
+
+        self.assertEqual(service.update_room_translation(self.actor(), "room-a", payload), "updated-detail")
+        self.assertTrue(any(sql.startswith("UPDATE messenger_rooms SET translation_locale") for sql, _ in statements))
+        self.assertEqual(audits[0][3], "messenger.room.translation_locale_changed")
+        self.assertIn(("COMMIT", ()), statements)
     def test_routes_expose_favorite_participants_pagination_and_real_attachments(self) -> None:
         source = (ROOT / "app" / "api" / "routes" / "messenger.py").read_text(encoding="utf-8")
         for token in (
@@ -407,6 +456,16 @@ class Ui040MessengerTests(unittest.TestCase):
         for token in ("attachmentMeta", "attachments", "readBy", "recipientCount", "readCount", "unreadCount", "nextCursor"):
             self.assertIn(token, section)
         self.assertNotIn("storageKey", section)
+
+    def test_message_list_exposes_sender_configured_locale(self) -> None:
+        source = (ROOT / "app" / "services" / "mail_messenger_service.py").read_text(encoding="utf-8")
+        message_list_sql = source[source.index("def list_messages"):source.index("def stage_messenger_attachment")]
+        self.assertIn("user_workspace_preferences", message_list_sql)
+        self.assertIn("sender_locale", message_list_sql)
+        self.assertIn("senderLocale", source[source.index("def _to_message_view"):])
+        schema = (ROOT / "app" / "schemas" / "mail_messenger.py").read_text(encoding="utf-8")
+        message_schema = schema[schema.index("class MessengerMessageView"):schema.index("class MessengerMessageListResponse")]
+        self.assertIn("senderLocale", message_schema)
 
 
 if __name__ == "__main__":

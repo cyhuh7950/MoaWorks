@@ -711,6 +711,37 @@ button.secondary {
   gap: 6px;
 }
 
+/* Runtime panels contain several independently sized sections. Keep them in
+   normal document flow so status cards, tables and controls cannot overlap
+   when the viewport is shorter than the panel's content. */
+.ops-runtime-shell,
+.content-ops-shell {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+}
+
+.ops-runtime-shell > *,
+.content-ops-shell > * {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.ops-runtime-shell .ops-list-panel,
+.content-ops-shell .ops-list-panel {
+  min-height: 0;
+}
+
+.ops-runtime-shell .ops-scroll,
+.content-ops-shell .ops-scroll {
+  height: auto;
+  max-height: 280px;
+}
+
 .users-ops-shell {
   grid-template-rows: auto auto auto minmax(0, 1fr);
 }
@@ -765,6 +796,10 @@ button.secondary {
   gap: 6px;
 }
 
+.content-ops-shell .ops-toolbar-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
 .user-toolbar-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
@@ -793,6 +828,37 @@ button.secondary {
 
 .compact-field-wide {
   grid-column: span 2;
+}
+
+.ops-list-panel > form,
+.ops-list-panel > .ops-toolbar-grid,
+.ops-list-panel > label,
+.ops-list-panel > .split-panel {
+  min-width: 0;
+  width: 100%;
+}
+
+.ops-list-panel > form > label:not(.compact-field),
+.ops-list-panel > label:not(.compact-field) {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.ops-list-panel > form > label:not(.compact-field) input,
+.ops-list-panel > form > label:not(.compact-field) select,
+.ops-list-panel > form > label:not(.compact-field) textarea,
+.ops-list-panel > label:not(.compact-field) input,
+.ops-list-panel > label:not(.compact-field) select,
+.ops-list-panel > label:not(.compact-field) textarea {
+  width: 100%;
+  min-width: 0;
+}
+
+.content-ops-shell textarea {
+  min-height: 96px;
+  resize: vertical;
 }
 
 .permission-preview-panel {
@@ -883,10 +949,6 @@ button.secondary {
 
 .ops-scroll .data-table {
   min-width: 100%;
-}
-
-.content-ops-shell {
-  grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 .content-list-panel,

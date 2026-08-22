@@ -39,6 +39,8 @@ from app.schemas.mail_messenger import (
     MailMailboxSettingsResponse,
     MailSendRequest,
     MailSendResponse,
+    MailScheduledUpdateRequest,
+    MailScheduledActionResponse,
     MailUserDeliveryStatusResponse,
     MailStorageResponse,
     MailStatusResponse,
@@ -69,7 +71,12 @@ from app.schemas.mail_messenger import (
     MailTagView,
     MailboxSettingsRow,
 )
-from app.services.mail_messenger_service import MailMessengerService, MailPreferenceConflictError, MailSignatureConflictError
+from app.services.mail_messenger_service import (
+    MailFolderConflictError,
+    MailMessengerService,
+    MailPreferenceConflictError,
+    MailSignatureConflictError,
+)
 from app.services.mailbox_backup_service import MailboxBackupService
 from app.services.mailbox_scope import MailboxScope
 from app.services.mailbox_settings_service import (
@@ -104,6 +111,7 @@ from app.services.mail_external_service import (
     ExternalMailNotFoundError, ExternalMailForbiddenError,
 )
 from app.services.mail_delivery_operations import MailDeliveryOperations
+from app.services.resource_policy import ResourceNotFoundError
 
 
 router = APIRouter()
@@ -160,6 +168,20 @@ def _parse_mailbox_scope(mailbox_key: str) -> MailboxScope:
 
 
 def _handle_error(exc: Exception) -> None:
+    if isinstance(exc, ResourceNotFoundError):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "MAIL_NOT_FOUND", "userMessage": "대상을 찾을 수 없습니다.", "adminMessage": str(exc)},
+        ) from exc
+    if isinstance(exc, MailFolderConflictError):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "MAIL_FOLDER_NAME_CONFLICT",
+                "userMessage": str(exc),
+                "adminMessage": str(exc),
+            },
+        ) from exc
     if isinstance(exc, ExternalMailRateLimitedError):
         raise HTTPException(status_code=429, detail={"code":"MAIL_EXTERNAL_TEST_RATE_LIMITED","userMessage":str(exc)}) from exc
     if isinstance(exc, (ExternalMailConflictError, ExternalMailLimitError, ExternalMailTestRequiredError, ExternalMailCollectionBusyError)):
@@ -357,6 +379,15 @@ def list_inbox(query: MailListQuery = Depends(), user: AuthUserSummary = Depends
 def list_sent(query: MailListQuery = Depends(), user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailListResponse:
     try:
         return _service().list_sent(user, query)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.get("/scheduled", response_model=MailListResponse)
+def list_scheduled(query: MailListQuery = Depends(), user: AuthUserSummary = Depends(permission_required("mail:read"))) -> MailListResponse:
+    try:
+        return _service().list_scheduled(user, query)
     except Exception as exc:
         _handle_error(exc)
         raise
@@ -946,6 +977,42 @@ def send_mail(payload: MailSendRequest, user: AuthUserSummary = Depends(permissi
 def save_draft(payload: MailDraftRequest, user: AuthUserSummary = Depends(permission_required("mail:send"))) -> MailSendResponse:
     try:
         return _service().save_draft(user, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.put("/{mail_id}/scheduled", response_model=MailDetailResponse)
+def update_scheduled(mail_id: str, payload: MailScheduledUpdateRequest, user: AuthUserSummary = Depends(permission_required("mail:send"))) -> MailDetailResponse:
+    try:
+        return _service().update_scheduled_mail(user, mail_id, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.delete("/{mail_id}/scheduled", response_model=MailScheduledActionResponse)
+def cancel_scheduled(mail_id: str, user: AuthUserSummary = Depends(permission_required("mail:send"))) -> MailScheduledActionResponse:
+    try:
+        return _service().cancel_scheduled_mail(user, mail_id)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.post("/{mail_id}/scheduled/send-now", response_model=MailScheduledActionResponse)
+def send_scheduled_now(mail_id: str, user: AuthUserSummary = Depends(permission_required("mail:send"))) -> MailScheduledActionResponse:
+    try:
+        return _service().send_scheduled_mail_now(user, mail_id)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.post("/{mail_id}/scheduled/retry", response_model=MailScheduledActionResponse)
+def retry_scheduled(mail_id: str, user: AuthUserSummary = Depends(permission_required("mail:send"))) -> MailScheduledActionResponse:
+    try:
+        return _service().retry_scheduled_mail(user, mail_id)
     except Exception as exc:
         _handle_error(exc)
         raise

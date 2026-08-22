@@ -13,6 +13,8 @@ const panel = fs.existsSync(panelPath) ? fs.readFileSync(panelPath, "utf8") : ""
 const checks = [
   ["조직도 전용 컴포넌트", panel.includes("export function OrganizationPanel")],
   ["전용 부서 API", api.includes('"/workspace/organization/departments"')],
+  ["구성원 한 행 정보 구조", panel.includes("ui042-member__name") && panel.includes("ui042-member__department") && panel.includes("ui042-member__role") && panel.includes("ui042-member__email")],
+  ["구성원 4열 압축 레이아웃", /\.ui042-member\s*\{[^}]*grid-template-columns:\s*minmax\(90px,\s*\.7fr\)\s+minmax\(100px,\s*\.8fr\)\s+minmax\(90px,\s*\.7fr\)\s+minmax\(150px,\s*1\.3fr\)/.test(styles)],
   ["전용 구성원 API", api.includes('"/workspace/organization/members')],
   ["설계 응답 키", api.includes("departments: OrganizationDepartment[]") && api.includes("members: OrganizationMember[]") && panel.includes("response.departments") && panel.includes("response.members")],
   ["기존 directory API 보존", api.includes('"/workspace/directory"')],

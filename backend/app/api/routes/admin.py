@@ -21,14 +21,19 @@ from app.schemas.directory import (
     UserUpdateRequest,
     UserView,
 )
-from app.services.directory_store import DirectoryStore
+from app.services.directory_store import DirectoryStore, DirectoryUserEmailConflictError
+from app.services.mail_admin_operations import MailAdminOperations
 from app.services.domain_service import DomainService
 from app.services.org_import_service import OrgImportService
 from app.services.relay_service import RelayService
 from app.services.mail_delivery_operations import MailDeliveryOperations
+from app.services.mail_messenger_service import MailMessengerService
+from app.services.resource_policy import ResourceNotFoundError, ResourceStateError
 from app.schemas.mail_messenger import (
     MailDeliveryProviderTestRequest, MailDeliveryProviderUpdateRequest, MailDeliveryProviderView,
     MailDeliveryQueueDetailResponse, MailDeliveryQueueListResponse, MailDeliveryStatusResponse,
+    AdminMessengerRoomListResponse,
+    MessengerRoomDeleteResponse,
 )
 
 
@@ -95,7 +100,13 @@ def create_user(
     payload: UserCreateRequest,
     _: AuthUserSummary = Depends(require_admin),
 ) -> UserView:
-    return DirectoryStore().create_user(payload)
+    try:
+        return DirectoryStore().create_user(payload)
+    except DirectoryUserEmailConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "USER_EMAIL_CONFLICT", "userMessage": str(exc), "adminMessage": str(exc)},
+        ) from exc
 
 
 @router.patch("/users/{user_id}", response_model=UserView)
@@ -118,9 +129,26 @@ def delete_user(
 @router.post("/domains/verify", response_model=DomainVerifyResponse)
 def verify_domain(
     payload: DomainVerifyRequest,
-    _: AuthUserSummary = Depends(require_admin),
+    actor: AuthUserSummary = Depends(require_admin),
 ) -> DomainVerifyResponse:
-    return DomainService(DirectoryStore()).verify(payload.domain)
+    operations = MailAdminOperations().get_overview(actor)
+    domain = operations.get("domain") or {}
+    active_provider_key = domain.get("activeOutboundProvider")
+    providers = operations.get("providers") or []
+    active_provider = next(
+        (provider for provider in providers if provider.get("providerKey") == active_provider_key),
+        None,
+    ) or next(
+        (provider for provider in providers if provider.get("active")),
+        {},
+    )
+    return DomainService(DirectoryStore()).verify(
+        payload.domain,
+        managed_domain=domain.get("mailDomain") or payload.domain,
+        mail_host=domain.get("mailHost"),
+        inbound_mx_host=domain.get("inboundMxHost"),
+        dkim_selector=active_provider.get("dkimSelector"),
+    )
 
 
 @router.post("/relay/test", response_model=RelayTestResponse)
@@ -199,6 +227,8 @@ def _delivery_service() -> MailDeliveryOperations:
     return MailDeliveryOperations()
 
 def _delivery_error(exc: Exception):
+    if isinstance(exc, ResourceNotFoundError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code":"MAIL_DELIVERY_NOT_FOUND","userMessage":"대상을 찾을 수 없습니다.","adminMessage":str(exc)})
     if isinstance(exc, PermissionError):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={"code":"MAIL_DELIVERY_FORBIDDEN","userMessage":str(exc)})
     if isinstance(exc, ValueError):
@@ -234,3 +264,38 @@ def test_mail_delivery_provider(payload: MailDeliveryProviderTestRequest, user: 
 def update_mail_delivery_provider(payload: MailDeliveryProviderUpdateRequest, user: AuthUserSummary = Depends(require_admin)):
     try: return _delivery_service().update_provider(user,payload)
     except Exception as exc: _delivery_error(exc)
+
+
+@router.delete("/messenger/rooms/{room_id}", response_model=MessengerRoomDeleteResponse)
+def admin_delete_messenger_room(
+    room_id: str,
+    user: AuthUserSummary = Depends(require_admin),
+) -> MessengerRoomDeleteResponse:
+    try:
+        return MailMessengerService().delete_room(user, room_id, allow_admin=True)
+    except ResourceNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "MESSENGER_NOT_FOUND", "userMessage": "대상을 찾을 수 없습니다.", "adminMessage": str(exc)},
+        ) from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "MESSENGER_FORBIDDEN", "userMessage": str(exc)},
+        ) from exc
+
+
+@router.get("/messenger/rooms", response_model=AdminMessengerRoomListResponse)
+def list_admin_messenger_rooms(
+    status_filter: str = Query(default="all", alias="status"),
+    limit: int = Query(default=200, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: AuthUserSummary = Depends(require_admin),
+) -> AdminMessengerRoomListResponse:
+    try:
+        return MailMessengerService().list_admin_rooms(user, status_filter, limit, offset)
+    except ResourceStateError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "MESSENGER_STATE_INVALID", "userMessage": str(exc)},
+        ) from exc

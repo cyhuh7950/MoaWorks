@@ -40,6 +40,7 @@ const measure = async (name, markup, selector) => {
 };
 const mailMarkup = (mode) => `<form class="user-mail-compose-popup is-${mode}"><div class="user-mail-compose-titlebar"></div><div class="user-mail-compose-body"></div></form>`;
 const approvalMarkup = (mode) => `<div class="common-popup-backdrop"><section class="common-popup ui033-compose-popup is-${mode}"><header class="common-popup-header"></header><p class="common-popup-description"></p><div class="common-popup-body"><form class="ui033-compose"><div class="ui033-compose__tabs"></div><section class="ui033-compose__panel"><label><input></label><label class="ui033-compose__content"><textarea></textarea></label><section class="ui033-compose__attachments"><header></header><div></div><div class="ui033-file-list"></div></section></section><footer class="ui033-compose__footer"></footer></form></div></section></div>`;
+const translationMarkup = `<div class="common-popup-backdrop"><section class="common-popup user-mail-translation-popup is-normal"><header class="common-popup-header"></header><div class="common-popup-body"><section class="user-mail-translation-workspace"><header></header><div class="user-mail-translation-comparison"><article></article><article></article></div><footer></footer></section></div></section></div>`;
 
 await check("mail compose defaults to centered 960x760", async () => {
   const normal = rule(".user-mail-compose-popup");
@@ -70,6 +71,10 @@ await check("mail compose minimizes to a compact bottom-right titlebar", () => {
   assert.match(rule(".user-mail-compose-popup.is-minimized .user-mail-compose-body"), /display:\s*none/);
 });
 
+await check("mail compose maximize control exposes restore action in maximized state", () => {
+  assert.match(app, /setComposeWindow\(\(current\) => current === "maximized" \? "normal" : "maximized"\)/);
+  assert.match(app, /composeWindow === "maximized" \? "원래 크기" : "확대"/);
+});
 await check("mail compose body receives remaining vertical space", () => {
   assert.match(rule(".user-mail-compose-popup"), /grid-template-rows:\s*auto\s+minmax\(0,\s*1fr\)/);
   assert.match(rule(".user-mail-compose-body"), /overflow:\s*auto/);
@@ -77,14 +82,29 @@ await check("mail compose body receives remaining vertical space", () => {
   assert.match(app, /className="user-mail-compose-field is-body"[\s\S]*?<span>본문<\/span>[\s\S]*?aria-label="mail-compose-body"/);
 });
 
-await check("only approval compose opts into CommonPopup maximize", () => {
+await check("approval compose and mail translation comparison opt into CommonPopup maximize", () => {
   assert.match(popup, /maximizable\?:\s*boolean/);
   assert.match(popup, /floating\s*\|\|\s*maximizable/);
   const optIns = [...app.matchAll(/\bmaximizable(?:=\{true\})?/g)];
-  assert.equal(optIns.length, 1, "maximizable must be enabled exactly once");
+  assert.equal(optIns.length, 2, "maximizable must be enabled for the two approved workspaces");
   const composePopup = app.match(/<CommonPopup[\s\S]*?className="ui033-compose-popup"[\s\S]*?>/);
   assert.ok(composePopup, "approval compose popup missing");
   assert.match(composePopup[0], /\bmaximizable\b/);
+  const translationPopup = app.match(/<CommonPopup[^>]*title="메일 번역 미리보기"[^>]*className="user-mail-translation-popup"[^>]*>/);
+  assert.ok(translationPopup, "mail translation comparison popup missing");
+  assert.match(translationPopup[0], /\bmaximizable\b/);
+});
+
+await check("common popups escape transformed compose ancestors through a body portal", () => {
+  assert.match(popup, /import\s+\{[^}]*createPortal[^}]*\}\s+from\s+[\"']react-dom[\"']/s);
+  assert.match(popup, /createPortal\(popupContent,\s*document\.body\)/);
+});
+
+await check("mail translation comparison opens as a wide two-column workspace", async () => {
+  assert.match(rule(".common-popup.user-mail-translation-popup"), /width:\s*min\(1100px,\s*calc\(100vw\s*-\s*48px\)\)/);
+  assert.match(rule(".user-mail-translation-comparison"), /grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)/);
+  const measured = await measure("translationNormal", translationMarkup, ".user-mail-translation-popup");
+  assert.equal(measured.width, 1100);
 });
 
 await check("approval compose prioritizes a 300px body and bounded attachments", async () => {

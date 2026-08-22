@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from psycopg.types.json import Jsonb
 
@@ -70,6 +71,44 @@ class ObservabilityService:
                 self._enforce_limits(state)
                 self._store_state(state)
                 return self._inflate_notification(merged if merged else notification)
+
+    def record_metrics(self, *, company_id: str, metrics: dict[str, float], source: str = "operations-monitor") -> None:
+        event = EventEnvelope(
+            eventId=f"evt_{uuid4().hex}",
+            eventType="system.operational.metrics",
+            category=MonitoringCategory.SYSTEM,
+            severity=SeverityLevel.INFO,
+            resourceType="operational_metrics",
+            resourceId=company_id,
+            requestId=f"req_{uuid4().hex}",
+            dedupKey=f"system.operational.metrics:{company_id}",
+            title="운영 지표 수집",
+            message="운영 감시 지표를 수집했습니다.",
+            source=source,
+            companyId=company_id,
+            targets=["admin"],
+            visibility=Visibility.ADMIN,
+            payload={"metrics": metrics},
+        )
+        if self._use_file_backend:
+            with self._state_lock:
+                with self._process_state_lock():
+                    state = self._load_state()
+                    state["events"].append(event.model_dump(mode="json"))
+                    self._upsert_rules_and_alerts(state, event)
+                    self._enforce_limits(state)
+                    self._store_state(state)
+            return
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                self._insert_monitoring_event_row(cursor, event.model_dump(mode="json"))
+            connection.commit()
+        with self._state_lock:
+            with self._process_state_lock():
+                state = self._load_state()
+                self._upsert_rules_and_alerts(state, event)
+                self._store_state(state)
 
     def list_notifications(
         self,
@@ -237,7 +276,11 @@ class ObservabilityService:
             for item in events
             if item.get("category") == MonitoringCategory.MAIL.value
             and datetime.fromisoformat(item["occurredAt"]) >= now - timedelta(hours=24)
-            and (
+        ]
+        mail_failures_24h = [
+            item
+            for item in mail_events_24h
+            if (
                 str(item.get("eventType", "")).endswith("fail")
                 or str(item.get("eventType", "")) == "mail.relay.fail"
             )
@@ -252,11 +295,15 @@ class ObservabilityService:
                 or str(item.get("eventType", "")) == "mail.relay.fail"
             )
         ]
-        approval_backlog = sum(
-            1
-            for item in events
-            if item.get("category") == MonitoringCategory.APPROVAL.value
-            and str(item.get("eventType", "")) in {"approval.status.changed", "approval.submit"}
+        approval_backlog = (
+            sum(
+                1
+                for item in events
+                if item.get("category") == MonitoringCategory.APPROVAL.value
+                and str(item.get("eventType", "")) in {"approval.status.changed", "approval.submit"}
+            )
+            if self._use_file_backend
+            else self._count_submitted_approval_documents()
         )
         disk_status = next(
             (
@@ -268,7 +315,11 @@ class ObservabilityService:
         )
         alert_open = sum(1 for item in state["alerts"] if item.get("status") == AlertStatus.OPEN.value)
         return MonitoringOverview(
-            mailFailureRate24h=float(len(mail_events_24h)),
+            mailFailureRate24h=(
+                float(len(mail_failures_24h)) / float(len(mail_events_24h)) * 100.0
+                if mail_events_24h
+                else 0.0
+            ),
             approvalBacklogCount=approval_backlog,
             relayFailureCount1h=len(mail_events_1h),
             diskUsagePercent=float(disk_status),
@@ -309,11 +360,29 @@ class ObservabilityService:
                     return MonitoringRule(**item)
                 raise ValueError("대상 규칙이 존재하지 않습니다.")
 
-    def ack_alert(self, alert_id: str) -> MonitoringAlert:
-        return self._set_alert_status(alert_id, AlertStatus.ACKNOWLEDGED)
+    def ack_alert(self, alert_id: str, actor=None) -> MonitoringAlert:
+        alert = self._set_alert_status(alert_id, AlertStatus.ACKNOWLEDGED)
+        self._audit_alert_transition(alert, actor, "monitoring.alert.acknowledged")
+        return alert
 
-    def resolve_alert(self, alert_id: str) -> MonitoringAlert:
-        return self._set_alert_status(alert_id, AlertStatus.RESOLVED)
+    def resolve_alert(self, alert_id: str, actor=None) -> MonitoringAlert:
+        alert = self._set_alert_status(alert_id, AlertStatus.RESOLVED)
+        self._audit_alert_transition(alert, actor, "monitoring.alert.resolved")
+        return alert
+
+    def _audit_alert_transition(self, alert: MonitoringAlert, actor, event: str) -> None:
+        if actor is None or self._use_file_backend:
+            return
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO audit_logs(id,company_id,actor_user_id,actor_user_name,target_type,target_id,event,
+                    status_before,status_after,reason,created_at) VALUES(%s,%s,%s,%s,'monitoring_alert',%s,%s,NULL,%s,%s,%s)""",
+                    (f"audit_{uuid4().hex}", actor.companyId, actor.userId, actor.userName, alert.alertId, event,
+                     alert.status.value, "관리자 운영 경고 처리", _now()),
+                )
+            connection.commit()
 
     def _set_alert_status(self, alert_id: str, status: AlertStatus) -> MonitoringAlert:
         with self._state_lock:
@@ -842,6 +911,14 @@ class ObservabilityService:
             for row in rows
         ]
 
+    def _count_submitted_approval_documents(self) -> int:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) AS count FROM approval_documents WHERE status = 'submitted'")
+                row = cursor.fetchone()
+        return int(row["count"] if row else 0)
+
     def _is_visible(self, item: dict[str, Any], user_id: str, include_admin: bool) -> bool:
         visibility = item.get("visibility", Visibility.BOTH.value)
         recipients = item.get("recipientUserIds") or []
@@ -882,6 +959,40 @@ class ObservabilityService:
                 )
             elif rule["ruleId"] == "rule_disk_usage_percent":
                 self._upsert_alert_if_disk(state=state, rule=rule, event=event)
+            else:
+                self._upsert_alert_if_payload_metric(state=state, rule=rule, event=event)
+
+    def _upsert_alert_if_payload_metric(self, state: dict[str, Any], rule: dict[str, Any], event: EventEnvelope) -> None:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        metrics = payload.get("metrics", {})
+        if not isinstance(metrics, dict) or rule["metric"] not in metrics:
+            return
+        try:
+            current_value = float(metrics[rule["metric"]])
+            threshold = float(rule["threshold"])
+        except (TypeError, ValueError):
+            return
+        if not self._operator_matches(current_value, threshold, str(rule.get("operator", "gte"))):
+            return
+        self._append_or_update_alert(
+            state=state,
+            rule=rule,
+            metric=rule["metric"],
+            current_value=current_value,
+            threshold=threshold,
+            event=event,
+        )
+
+    @staticmethod
+    def _operator_matches(current: float, threshold: float, operator: str) -> bool:
+        return {
+            "gt": current > threshold,
+            "gte": current >= threshold,
+            "lt": current < threshold,
+            "lte": current <= threshold,
+            "eq": current == threshold,
+            "neq": current != threshold,
+        }.get(operator, False)
 
     def _upsert_alert_if_metric_exceeded(
         self,
@@ -944,7 +1055,7 @@ class ObservabilityService:
         now = _now().isoformat()
         window = int(rule["windowSec"])
         level = str(rule.get("level", SeverityLevel.WARN.value))
-        alert = next((item for item in state["alerts"] if item.get("ruleId") == rule_id and item.get("status") == AlertStatus.OPEN.value), None)
+        alert = next((item for item in state["alerts"] if item.get("ruleId") == rule_id and item.get("status") != AlertStatus.RESOLVED.value), None)
         payload = event.payload if event is not None and isinstance(event.payload, dict) else {}
         resource_type = event.resourceType if event else "system"
         resource_id = event.resourceId if event else "system_health"
@@ -960,7 +1071,7 @@ class ObservabilityService:
 
         state["alerts"].append(
             MonitoringAlert(
-                alertId=f"alert_{rule_id}",
+                alertId=f"alert_{rule_id}_{uuid4().hex[:12]}",
                 ruleId=rule_id,
                 metric=metric,
                 category=rule_metric_to_category(rule_id),
@@ -974,7 +1085,7 @@ class ObservabilityService:
                 message=payload.get("message", f"감시 규칙 {rule_id} 임계치 초과"),
                 requestId=(event.requestId if event else "system"),
                 detectedAt=_now(),
-            ).model_dump()
+            ).model_dump(mode="json")
         )
 
     @staticmethod
@@ -1044,7 +1155,9 @@ class ObservabilityService:
         raw.setdefault("notifications", [])
         raw.setdefault("events", [])
         raw.setdefault("alerts", [])
-        raw.setdefault("rules", self._default_rules())
+        raw.setdefault("rules", [])
+        existing_rule_ids = {item.get("ruleId") for item in raw["rules"]}
+        raw["rules"].extend(item for item in self._default_rules() if item["ruleId"] not in existing_rule_ids)
         raw["rules"] = self._ensure_unique_rule_ids(raw["rules"])
         self._state_cache = raw
         self._state_cache_mtime = self.state_file.stat().st_mtime
@@ -1113,6 +1226,123 @@ class ObservabilityService:
                 "threshold": 85,
                 "windowSec": 300,
                 "level": SeverityLevel.WARN.value,
+                "targetAudience": "admin",
+                "notifyChannels": ["admin-dashboard"],
+                "enabled": True,
+                "createdAt": now,
+                "updatedAt": now,
+            },
+            {
+                "ruleId": "rule_mail_inbound_queue_depth",
+                "metric": "mail_inbound_queue_depth",
+                "operator": "gte",
+                "threshold": 100,
+                "windowSec": 300,
+                "level": SeverityLevel.ERROR.value,
+                "targetAudience": "admin",
+                "notifyChannels": ["admin-dashboard"],
+                "enabled": True,
+                "createdAt": now,
+                "updatedAt": now,
+            },
+            {
+                "ruleId": "rule_disk_usage_warning_80",
+                "metric": "disk_usage_percent",
+                "operator": "gte",
+                "threshold": 80,
+                "windowSec": 300,
+                "level": SeverityLevel.WARN.value,
+                "targetAudience": "admin",
+                "notifyChannels": ["admin-dashboard"],
+                "enabled": True,
+                "createdAt": now,
+                "updatedAt": now,
+            },
+            {
+                "ruleId": "rule_disk_usage_critical_90",
+                "metric": "disk_usage_percent",
+                "operator": "gte",
+                "threshold": 90,
+                "windowSec": 300,
+                "level": SeverityLevel.CRITICAL.value,
+                "targetAudience": "admin",
+                "notifyChannels": ["admin-dashboard"],
+                "enabled": True,
+                "createdAt": now,
+                "updatedAt": now,
+            },
+            {
+                "ruleId": "rule_mail_outbound_queue_depth",
+                "metric": "mail_outbound_queue_depth",
+                "operator": "gte",
+                "threshold": 100,
+                "windowSec": 300,
+                "level": SeverityLevel.ERROR.value,
+                "targetAudience": "admin",
+                "notifyChannels": ["admin-dashboard"],
+                "enabled": True,
+                "createdAt": now,
+                "updatedAt": now,
+            },
+            {
+                "ruleId": "rule_oci_delivery_failure_count",
+                "metric": "oci_delivery_failure_count",
+                "operator": "gte",
+                "threshold": 1,
+                "windowSec": 3600,
+                "level": SeverityLevel.ERROR.value,
+                "targetAudience": "admin",
+                "notifyChannels": ["admin-dashboard"],
+                "enabled": True,
+                "createdAt": now,
+                "updatedAt": now,
+            },
+            {
+                "ruleId": "rule_database_unavailable",
+                "metric": "database_unavailable",
+                "operator": "gte",
+                "threshold": 1,
+                "windowSec": 60,
+                "level": SeverityLevel.CRITICAL.value,
+                "targetAudience": "admin",
+                "notifyChannels": ["admin-dashboard"],
+                "enabled": True,
+                "createdAt": now,
+                "updatedAt": now,
+            },
+            {
+                "ruleId": "rule_api_error_rate_percent",
+                "metric": "api_error_rate_percent",
+                "operator": "gte",
+                "threshold": 5,
+                "windowSec": 300,
+                "level": SeverityLevel.ERROR.value,
+                "targetAudience": "admin",
+                "notifyChannels": ["admin-dashboard"],
+                "enabled": True,
+                "createdAt": now,
+                "updatedAt": now,
+            },
+            {
+                "ruleId": "rule_security_anomaly_count",
+                "metric": "security_anomaly_count",
+                "operator": "gte",
+                "threshold": 1,
+                "windowSec": 300,
+                "level": SeverityLevel.CRITICAL.value,
+                "targetAudience": "admin",
+                "notifyChannels": ["admin-dashboard"],
+                "enabled": True,
+                "createdAt": now,
+                "updatedAt": now,
+            },
+            {
+                "ruleId": "rule_backup_age_hours",
+                "metric": "backup_age_hours",
+                "operator": "gte",
+                "threshold": 26,
+                "windowSec": 3600,
+                "level": SeverityLevel.ERROR.value,
                 "targetAudience": "admin",
                 "notifyChannels": ["admin-dashboard"],
                 "enabled": True,

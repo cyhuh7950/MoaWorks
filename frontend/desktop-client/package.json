@@ -2,7 +2,7 @@
   "name": "moaworks-desktop-client",
   "productName": "MoaWorks Desktop Client",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "main": "electron/main.js",
   "scripts": {
     "postinstall": "install-electron",
@@ -12,9 +12,20 @@
     "check:storage": "node --test test\\archive-service.test.js",
     "build": "node ./scripts/package-desktop-client.js",
     "package": "node ./scripts/package-desktop-client.js",
-    "check:storage": "node ./scripts/local-storage-smoke.js"
+    "package:portable": "node ./scripts/package-desktop-client.js",
+    "package:installer": "node ./scripts/prepare-installer-asar.js && electron-forge make --platform=win32 --arch=x64 && node ./scripts/create-installer-manifest.js"
   },
   "devDependencies": {
+    "@electron/asar": "4.2.1",
+    "@electron-forge/cli": "7.11.2",
+    "@electron-forge/maker-squirrel": "7.11.2",
     "electron": "43.2.0"
+  },
+  "dependencies": {
+    "electron-squirrel-startup": "1.0.1"
+  },
+  "overrides": {
+    "tar": "7.5.22",
+    "tmp": "0.2.7"
   }
 }

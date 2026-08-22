@@ -22,6 +22,20 @@ class Settings(BaseSettings):
     mail_layer_host: str = "mail-layer"
     mail_layer_smtp_port: int = 587
     mail_layer_imap_port: int = 993
+    mail_ingest_token: str = ""
+    mail_inbound_max_message_bytes: int = 25 * 1024 * 1024
+    admin_access_check_token: str = ""
+    admin_access_bootstrap_mode: str = "restricted"
+    admin_access_bootstrap_cidrs: list[str] = [
+        "127.0.0.0/8",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+    ]
+    oci_email_api_enabled: bool = False
+    oci_region: str = "ap-seoul-1"
+    oci_tenancy_id: str = ""
+    oci_compartment_id: str = ""
 
     storage_driver: str = "local"
     storage_local_path: str = "./data/storage"
@@ -40,6 +54,10 @@ class Settings(BaseSettings):
 
     watcher_enabled: bool = True
     watcher_interval_seconds: int = 60
+    operational_backup_worker_enabled: bool = True
+    operational_backup_poll_seconds: int = 60
+    operational_backup_root: str = "./data/backups"
+    operational_runtime_root: str = "./data/runtime"
 
     translation_enabled: bool = False
     translation_provider: str = "disabled"
@@ -91,6 +109,14 @@ class Settings(BaseSettings):
     @property
     def storage_path(self) -> Path:
         return Path(self.storage_local_path).resolve()
+
+    @property
+    def operational_backup_root_path(self) -> Path:
+        return Path(self.operational_backup_root).resolve()
+
+    @property
+    def operational_runtime_root_path(self) -> Path:
+        return Path(self.operational_runtime_root).resolve()
 
 
 settings = Settings()

@@ -1,0 +1,208 @@
+services:
+  server:
+    container_name: moaworks-server
+    image: moaworks-server-runtime:local
+    build:
+      context: ..
+      dockerfile: deploy/server.Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ../data:/app/data
+    expose:
+      - "8000"
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8510}:8000"
+    depends_on:
+      storage:
+        condition: service_started
+    networks:
+      - app_net
+      - pg_net
+      - proxy_net
+    restart: unless-stopped
+
+  admin-web:
+    container_name: moaworks-admin-web
+    build:
+      context: ..
+      dockerfile: deploy/admin-web.Dockerfile
+    expose:
+      - "3510"
+    environment:
+      ADMIN_ACCESS_CHECK_TOKEN: ${ADMIN_ACCESS_CHECK_TOKEN}
+      TRUSTED_PROXY_CIDR: ${TRUSTED_PROXY_CIDR:-172.16.0.0/12}
+    depends_on:
+      - server
+    networks:
+      - proxy_net
+    restart: unless-stopped
+
+  user-web:
+    container_name: moaworks-user-web
+    build:
+      context: ..
+      dockerfile: deploy/user-web.Dockerfile
+    expose:
+      - "3520"
+    depends_on:
+      - server
+    networks:
+      - proxy_net
+    restart: unless-stopped
+
+  mail-gateway:
+    container_name: moaworks-mail-gateway
+    build:
+      context: ..
+      dockerfile: deploy/mail-gateway/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      MAIL_HOSTNAME: ${MAIL_HOSTNAME}
+      MAIL_INGEST_URL: http://server:8000/api/v1/internal/mail/ingest
+      MAIL_INGEST_TOKEN: ${MAIL_INGEST_TOKEN}
+      SMTP_RELAY_DOMAINS: ${SMTP_RELAY_DOMAINS:-}
+      SMTP_RELAY_TRANSPORT_HOST: ${SMTP_RELAY_TRANSPORT_HOST:-}
+      SMTP_RELAY_TRANSPORT_PORT: ${SMTP_RELAY_TRANSPORT_PORT:-25}
+      SMTP_TLS_MODE: ${SMTP_TLS_MODE:-disabled}
+      SMTP_TLS_CERT_ROOT: /run/moaworks-mail-tls
+      SMTP_TLS_CERT_NAME: ${SMTP_TLS_CERT_NAME:-}
+      SMTP_TLS_CERT_FILE: ${SMTP_TLS_CERT_FILE:-}
+      SMTP_TLS_KEY_FILE: ${SMTP_TLS_KEY_FILE:-}
+      SMTP_TLS_CA_FILE: ${SMTP_TLS_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}
+    ports:
+      - "25:25"
+    volumes:
+      - mail-spool:/var/spool/postfix
+      - ${SMTP_TLS_LIVE_DIR:-/etc/ssl/certs}:/run/moaworks-mail-tls/live/${SMTP_TLS_CERT_NAME:-disabled}:ro
+      - ${SMTP_TLS_ARCHIVE_DIR:-/etc/ssl/certs}:/run/moaworks-mail-tls/archive/${SMTP_TLS_CERT_NAME:-disabled}:ro
+    depends_on:
+      server:
+        condition: service_started
+      rspamd:
+        condition: service_started
+      clamav:
+        condition: service_started
+    networks:
+      - app_net
+      - pg_net
+    restart: unless-stopped
+
+  rspamd:
+    container_name: moaworks-rspamd
+    image: rspamd/rspamd:3.11
+    volumes:
+      - ./mail-gateway/rspamd-worker-proxy.inc:/etc/rspamd/local.d/worker-proxy.inc:ro
+      - ./mail-gateway/rspamd-antivirus.conf:/etc/rspamd/local.d/antivirus.conf:ro
+    depends_on:
+      - clamav
+    networks:
+      - app_net
+    restart: unless-stopped
+
+  clamav:
+    container_name: moaworks-clamav
+    image: clamav/clamav-debian:1.4.3
+    volumes:
+      - clamav-db:/var/lib/clamav
+    networks:
+      - app_net
+    restart: unless-stopped
+
+  mail-layer:
+    container_name: moaworks-mail-layer
+    image: moaworks-server-runtime:local
+    command: ["python", "-m", "app.workers.mail_delivery_worker"]
+    env_file:
+      - ../.env
+    environment: &database-environment
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ../data:/app/data
+    networks:
+      - app_net
+      - pg_net
+    restart: unless-stopped
+
+  mail-external-worker:
+    container_name: moaworks-mail-external-worker
+    image: moaworks-server-runtime:local
+    command: ["python", "-m", "app.workers.mail_external_worker"]
+    env_file:
+      - ../.env
+    environment: *database-environment
+    volumes:
+      - ../data:/app/data
+    networks:
+      - app_net
+      - pg_net
+    restart: unless-stopped
+
+  mail-backup-worker:
+    container_name: moaworks-mail-backup-worker
+    image: moaworks-server-runtime:local
+    command: ["python", "-m", "app.workers.mail_backup_worker"]
+    env_file:
+      - ../.env
+    environment: *database-environment
+    volumes:
+      - ../data:/app/data
+    networks:
+      - app_net
+      - pg_net
+    restart: unless-stopped
+
+  mail-retention-worker:
+    container_name: moaworks-mail-retention-worker
+    image: moaworks-server-runtime:local
+    command: ["python", "-m", "app.workers.mail_retention_worker"]
+    env_file:
+      - ../.env
+    environment: *database-environment
+    volumes:
+      - ../data:/app/data
+    networks:
+      - app_net
+      - pg_net
+    restart: unless-stopped
+
+  storage:
+    container_name: moaworks-storage
+    image: alpine:3.20
+    command: ["sh", "-c", "mkdir -p /storage/runtime /storage/files && tail -f /dev/null"]
+    volumes:
+      - storage-data:/storage
+    networks:
+      - app_net
+    restart: unless-stopped
+
+volumes:
+  storage-data:
+  mail-spool:
+  clamav-db:
+
+networks:
+  app_net:
+    name: moaworks-app-net
+  pg_net:
+    external: true
+    name: postgres_env_default
+  proxy_net:
+    external: true
+    name: proxy-network

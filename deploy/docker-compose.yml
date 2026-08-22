@@ -35,6 +35,9 @@ services:
       VITE_PROXY_TARGET: http://server:8000
     ports:
       - "${FRONTEND_PORT:-3510}:3510"
+    environment:
+      ADMIN_ACCESS_CHECK_TOKEN: ${ADMIN_ACCESS_CHECK_TOKEN}
+      TRUSTED_PROXY_CIDR: ${TRUSTED_PROXY_CIDR:-172.16.0.0/12}
     depends_on:
       - server
 
@@ -49,6 +52,46 @@ services:
       - "${USER_WEB_PORT:-3520}:3520"
     depends_on:
       - server
+
+  mail-gateway:
+    build:
+      context: ..
+      dockerfile: deploy/mail-gateway/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-moaworks}
+      POSTGRES_USER: ${POSTGRES_USER:-moaworks}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      MAIL_HOSTNAME: ${MAIL_HOSTNAME:-mail.moaworks.local}
+      MAIL_INGEST_URL: http://server:8000/api/v1/internal/mail/ingest
+      MAIL_INGEST_TOKEN: ${MAIL_INGEST_TOKEN:-local-inbound-change-me}
+      SMTP_RELAY_DOMAINS: ${SMTP_RELAY_DOMAINS:-}
+      SMTP_RELAY_TRANSPORT_HOST: ${SMTP_RELAY_TRANSPORT_HOST:-}
+      SMTP_RELAY_TRANSPORT_PORT: ${SMTP_RELAY_TRANSPORT_PORT:-25}
+    ports:
+      - "${MAIL_SMTP_PORT:-2525}:25"
+    volumes:
+      - mail-spool:/var/spool/postfix
+    depends_on:
+      - server
+      - rspamd
+      - clamav
+
+  rspamd:
+    image: rspamd/rspamd:3.11
+    volumes:
+      - ./mail-gateway/rspamd-worker-proxy.inc:/etc/rspamd/local.d/worker-proxy.inc:ro
+      - ./mail-gateway/rspamd-antivirus.conf:/etc/rspamd/local.d/antivirus.conf:ro
+    depends_on:
+      - clamav
+
+  clamav:
+    image: clamav/clamav-debian:1.4.3
+    volumes:
+      - clamav-db:/var/lib/clamav
 
   mail-layer:
     build:
@@ -85,3 +128,5 @@ services:
 volumes:
   postgres-data:
   storage-data:
+  mail-spool:
+  clamav-db:

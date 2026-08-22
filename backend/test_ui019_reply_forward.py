@@ -92,6 +92,30 @@ class Ui019ReplyForwardTests(unittest.TestCase):
             self.assertEqual(storage.stored_path(cloned["storage_key"]).read_bytes(), b"source-bytes")
             self.assertEqual(storage.stored_path(original["storage_key"]).read_bytes(), b"source-bytes")
 
+    def test_inbound_attachment_can_be_downloaded_and_cloned_safely(self):
+        actor = self.actor()
+        digest = "a" * 64
+        with TemporaryDirectory() as directory:
+            storage = MailAttachmentStorage(Path(directory))
+            inbound_path = Path(directory) / "mail" / "inbound" / "aa" / digest / "attachment-0.bin"
+            inbound_path.parent.mkdir(parents=True)
+            inbound_path.write_bytes(b"inbound-bytes")
+            storage_key = f"mail/inbound/aa/{digest}/attachment-0.bin"
+
+            self.assertEqual(storage.stored_path(storage_key).read_bytes(), b"inbound-bytes")
+            cloned = storage.clone(
+                actor,
+                storage_key=storage_key,
+                file_name="received.txt",
+                content_type="text/plain",
+                size_bytes=len(b"inbound-bytes"),
+            )
+            self.assertEqual(storage.stored_path(cloned["storage_key"]).read_bytes(), b"inbound-bytes")
+
+        with TemporaryDirectory() as directory:
+            storage = MailAttachmentStorage(Path(directory))
+            with self.assertRaises(ValueError):
+                storage.stored_path("mail/inbound/aa/" + digest + "/../raw.eml")
     def test_source_attachment_query_rejects_partial_or_foreign_selection(self):
         service = MailMessengerService.__new__(MailMessengerService)
         service._fetch_accessible_mail = lambda cursor, actor, mail_id: {"mail_id": mail_id}

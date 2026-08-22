@@ -7,7 +7,14 @@ from uuid import uuid4
 
 from app.services.mail_attachment_storage import MailAttachmentStorage
 from app.services.mail_delivery_service import MailDeliveryWorker, SmtpRelayAdapter, mask_delivery_error
+from app.services.mail_transports import (
+    MailProviderRoutingAdapter,
+    OciEmailDeliveryTransport,
+    SelfHostedSmtpTransport,
+    resolve_mx_hosts,
+)
 from app.services.postgres_service import PostgresService
+from app.services.resource_policy import ResourceNotFoundError
 from app.services.security_service import SecurityService
 
 _CONNECTION_FIELDS = {
@@ -45,7 +52,11 @@ def prepare_provider_update(current: dict, values: dict, encrypt_secret) -> dict
 class MailDeliveryOperations:
     def __init__(self, db=None, adapter=None, storage=None):
         self.db = db or PostgresService()
-        self.adapter = adapter or SmtpRelayAdapter()
+        self.adapter = adapter or MailProviderRoutingAdapter(
+            self_hosted_transport=SelfHostedSmtpTransport(mx_resolver=resolve_mx_hosts),
+            oci_transport=OciEmailDeliveryTransport(),
+            legacy_relay_adapter=SmtpRelayAdapter(),
+        )
         self.storage = storage or MailAttachmentStorage()
         self.security = SecurityService()
 
@@ -105,7 +116,7 @@ class MailDeliveryOperations:
                 JOIN mail_messages m ON m.id=q.mail_id JOIN mail_recipients r ON r.id=q.recipient_id
                 WHERE q.id=%s AND q.company_id=%s""", (queue_id, actor.companyId))
                 row = cursor.fetchone()
-                if row is None: raise PermissionError("외부 전달 큐에 접근할 권한이 없습니다.")
+                if row is None: raise ResourceNotFoundError("외부 전달 큐를 찾을 수 없습니다.")
                 cursor.execute("SELECT attempt_number,result,error_message,relay_response,started_at,finished_at FROM mail_delivery_attempts WHERE queue_id=%s ORDER BY attempt_number DESC", (queue_id,))
                 attempts = cursor.fetchall()
                 cursor.execute("SELECT event,status_before,status_after,reason,created_at FROM audit_logs WHERE company_id=%s AND target_type='mail_delivery_queue' AND target_id=%s ORDER BY created_at DESC LIMIT 50", (actor.companyId, queue_id))
@@ -187,7 +198,9 @@ class MailDeliveryOperations:
                 self.heartbeat(cursor, worker_id, "working", now)
                 cursor.execute("""SELECT q.id AS queue_id,q.attempt_count,q.company_id,q.provider_config_id,q.mail_id,q.recipient_id,
                 q.delivery_kind,q.sender_email_override,q.sender_display_name_override,q.reply_to_email_override,
-                r.recipient_email,m.sender_email,m.sender_display_name,m.reply_to_email,m.message_encoding,m.subject,m.body_text,m.body_html
+                r.recipient_email,m.sender_email,m.sender_display_name,m.reply_to_email,m.message_encoding,m.subject,m.body_text,m.body_html,
+                EXISTS(SELECT 1 FROM mail_oci_suppressions s WHERE s.company_id=q.company_id
+                    AND LOWER(s.recipient_email)=LOWER(r.recipient_email) AND s.active=TRUE) AS recipient_suppressed
                 FROM mail_delivery_queue q JOIN mail_messages m ON m.id=q.mail_id
                 JOIN mail_recipients r ON r.id=q.recipient_id
                 WHERE (q.status IN ('queued','retry_pending') AND COALESCE(q.next_attempt_at,q.created_at)<=%s)
@@ -207,6 +220,7 @@ class MailDeliveryOperations:
                                        "path": str(self.storage.stored_path(row["storage_key"]))} for row in cursor.fetchall()]
                 provider = self._provider_by_id(cursor, job["provider_config_id"], job["company_id"])
                 provider["password"] = self.security.decrypt_secret(provider["encrypted_password"]) if provider["username"] else ""
+                provider["dkim_private_key"] = self.security.decrypt_secret(provider["encrypted_dkim_private_key"]) if provider.get("encrypted_dkim_private_key") else ""
             connection.commit()
         return job, provider
 
