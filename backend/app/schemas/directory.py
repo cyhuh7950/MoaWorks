@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from datetime import date, datetime
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -18,6 +18,8 @@ class CompanyRecord(BaseModel):
 class DepartmentRecord(BaseModel):
     id: str
     companyId: str
+    systemDepartmentCode: str | None = None
+    departmentCode: str | None = None
     name: str
     parentId: str | None = None
     status: str
@@ -44,6 +46,7 @@ class UserRecord(BaseModel):
     roleId: str
     status: str
     userType: str
+    mustChangePassword: bool = False
     createdAt: datetime
     updatedAt: datetime
 
@@ -108,6 +111,7 @@ class AuthUserSummary(BaseModel):
     userType: str
     status: str
     permissions: list[str]
+    mustChangePassword: bool = False
 
 
 class ApprovalStatus(str, Enum):
@@ -215,6 +219,23 @@ class ApprovalDocumentUpdateRequest(ApprovalDocumentCreateRequest):
         if len(values) != len(set(values)):
             raise ValueError("유지할 첨부를 중복 지정할 수 없습니다.")
         return values
+
+
+class ApprovalDocumentUpdateRequest(BaseModel):
+    title: str = Field(min_length=1)
+    content: str = Field(min_length=1)
+    approverUserIds: list[str] = Field(default_factory=list)
+
+
+class ApprovalApproverView(BaseModel):
+    userId: str
+    userName: str
+    userEmail: str
+    departmentName: str
+
+
+class ApprovalApproverListResponse(BaseModel):
+    users: list[ApprovalApproverView]
 
 
 class ApprovalSubmitResponse(BaseModel):
@@ -371,7 +392,7 @@ class DepartmentUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1)
     parentId: str | None = None
     sortOrder: int | None = None
-    status: Literal["active", "inactive"] | None = None
+    status: str | None = None
 
 
 class RoleCreateRequest(BaseModel):
@@ -389,11 +410,25 @@ class UserCreateRequest(BaseModel):
     name: str = Field(min_length=1)
     loginId: str | None = None
     email: str | None = None
-    password: str = Field(min_length=8)
+    password: str | None = Field(default=None, min_length=1)
     departmentId: str = Field(min_length=1)
     roleId: str = Field(min_length=1)
     status: str = Field(default="active")
     userType: str = Field(default="user")
+    isDepartmentHead: bool = False
+
+    @field_validator("loginId")
+    @classmethod
+    def validate_login_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("아이디를 입력해야 합니다.")
+        allowed = set("abcdefghijklmnopqrstuvwxyz0123456789._-")
+        if any(char not in allowed for char in normalized):
+            raise ValueError("아이디는 영문 소문자, 숫자, 점(.), 하이픈(-), 밑줄(_)만 사용할 수 있습니다.")
+        return normalized
 
     @field_validator("email")
     @classmethod
@@ -429,6 +464,7 @@ class UserUpdateRequest(BaseModel):
     departmentId: str | None = None
     roleId: str | None = None
     status: str | None = None
+    isDepartmentHead: bool | None = None
 
 
 class UserView(BaseModel):
@@ -442,10 +478,13 @@ class UserView(BaseModel):
     roleName: str
     status: str
     userType: str
+    isDepartmentHead: bool = False
+    isDepartmentHead: bool = False
     mailAccountEmail: str
     mailAccountStatus: str
     permissions: list[str]
     consistencyIssues: list[UserStatusIssue]
+    mustChangePassword: bool = False
 
 
 class DirectoryOverviewResponse(BaseModel):

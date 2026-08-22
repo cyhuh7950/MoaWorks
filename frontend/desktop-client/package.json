@@ -11,7 +11,8 @@
     "test:coverage": "node --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 test\\*.test.js",
     "check:storage": "node --test test\\archive-service.test.js",
     "build": "node ./scripts/package-desktop-client.js",
-    "package": "node ./scripts/package-desktop-client.js"
+    "package": "node ./scripts/package-desktop-client.js",
+    "check:storage": "node ./scripts/local-storage-smoke.js"
   },
   "devDependencies": {
     "electron": "43.2.0"

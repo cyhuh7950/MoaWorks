@@ -67,6 +67,7 @@ export type UserView = {
   roleName: string;
   status: string;
   userType: string;
+  isDepartmentHead: boolean;
   mailAccountEmail: string;
   mailAccountStatus: string;
   permissions: string[];
@@ -593,7 +594,7 @@ export async function deleteRole(token: string, roleId: string) {
 
 export async function createUser(
   token: string,
-  payload: { name: string; loginId: string; password: string; departmentId: string; roleId: string; status: string; userType?: string },
+  payload: { name: string; loginId: string; departmentId: string; roleId: string; status: string; userType?: string; isDepartmentHead?: boolean },
 ) {
   return request<UserView>("/admin/users", {
     method: "POST",
@@ -605,7 +606,7 @@ export async function createUser(
 export async function updateUser(
   token: string,
   userId: string,
-  payload: { name?: string; password?: string; departmentId?: string; roleId?: string; status?: string },
+  payload: { name?: string; password?: string; departmentId?: string; roleId?: string; status?: string; isDepartmentHead?: boolean },
 ) {
   return request<UserView>(`/admin/users/${userId}`, {
     method: "PATCH",
@@ -639,62 +640,33 @@ export async function testRelay(token: string, payload: { providerConfigId?: str
 
 
 export async function fetchMailDeliveryStatus(token: string): Promise<MailDeliveryStatusResponse> {
-  const response = await request<{
-    provider: { providerId: string; providerType: string; relayHost: string; relayPort: number; tlsMode: string; fromAddress: string | null; deliveryEnabled: boolean; lastTestStatus: string };
-    summary: Record<string, number>;
-  }>("/admin/mail-delivery/status", {
+  return request<MailDeliveryStatusResponse>("/mail/delivery/status", {
     headers: authHeaders(token),
   });
-  return {
-    provider: {
-      providerId: response.provider.providerId, companyId: "", providerKey: response.provider.providerType,
-      enabled: response.provider.deliveryEnabled, senderDomain: "", heloName: response.provider.relayHost,
-      senderAddress: response.provider.fromAddress ?? "", useTls: response.provider.tlsMode !== "none",
-      timeoutSec: 10, maxRetryCount: 0, retryIntervalSec: 0, createdAt: "", updatedAt: "",
-    },
-    summary: {
-      queuedCount: response.summary.queued ?? 0, sendingCount: response.summary.sending ?? 0,
-      sentCount: response.summary.sent ?? 0, failedCount: response.summary.failed ?? 0,
-      retryPendingCount: response.summary.retry_pending ?? 0, cancelledCount: response.summary.cancelled ?? 0,
-    },
-  };
 }
 
 export async function fetchMailDeliveryQueue(token: string): Promise<MailDeliveryQueueResponse> {
-  const response = await request<{ items: Array<{ queueId: string; mailId: string; recipientEmail: string; subject: string; status: string; attemptCount: number; nextAttemptAt: string | null; createdAt: string }>; total: number }>("/admin/mail-delivery/queue", {
+  return request<MailDeliveryQueueResponse>("/mail/delivery/queue", {
     headers: authHeaders(token),
   });
-  const status = await fetchMailDeliveryStatus(token);
-  return {
-    provider: status.provider, summary: status.summary,
-    queue: response.items.map((item) => ({
-      queueId: item.queueId, mailId: item.mailId, sender: "", recipient: item.recipientEmail,
-      subject: item.subject, provider: status.provider.providerKey, status: item.status,
-      attemptCount: item.attemptCount, lastError: null, nextRetryAt: item.nextAttemptAt,
-      sentAt: null, createdAt: item.createdAt, updatedAt: item.createdAt,
-    })),
-    attempts: [], events: [],
-  };
 }
 
 export async function testMailDelivery(
   token: string,
-  _payload: { recipient?: string; subject?: string; bodyText?: string },
+  payload: { recipient: string; subject?: string; bodyText?: string },
 ): Promise<MailSendResponse> {
-  const provider = await request<{ lastTestStatus: string }>("/admin/mail-delivery/provider/test", {
+  return request<MailSendResponse>("/mail/delivery/test", {
     method: "POST",
     headers: authHeaders(token),
-    body: JSON.stringify({ timeoutSeconds: 10 }),
+    body: JSON.stringify(payload),
   });
-  return { mailId: "provider-connection-test", status: provider.lastTestStatus, sentAt: null };
 }
 
 export async function retryMailDelivery(token: string, queueId: string) {
-  await request<{ item: MailDeliveryQueueItem }>(`/admin/mail-delivery/queue/${queueId}/retry`, {
+  return request<{ queueItem: MailDeliveryQueueItem; message: string }>(`/mail/delivery/${queueId}/retry`, {
     method: "POST",
     headers: authHeaders(token),
   });
-  return { message: "메일 전달 큐 재시도를 요청했습니다." };
 }
 
 export async function fetchMonitoringOverview(token: string): Promise<MonitoringOverview> {

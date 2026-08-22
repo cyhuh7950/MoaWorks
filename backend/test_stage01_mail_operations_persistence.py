@@ -54,6 +54,17 @@ class MailOperationsPersistenceTest(unittest.TestCase):
         self.assertNotIn("UPDATE users", statements)
         self.assertNotIn("UPDATE mail_accounts", statements)
 
+    def test_transport_migration_adds_encrypted_relay_fields(self) -> None:
+        migration = Path(__file__).parent / "migrations" / "022_mail_delivery_provider_transport.sql"
+
+        sql = migration.read_text(encoding="utf-8")
+
+        self.assertIn("smtp_host", sql)
+        self.assertIn("smtp_port", sql)
+        self.assertIn("smtp_username", sql)
+        self.assertIn("encrypted_password", sql)
+        self.assertNotIn("DROP TABLE", sql.upper())
+
     def test_provider_switch_pins_existing_queue_without_updating_queue_rows(self) -> None:
         cursor = RecordingCursor(
             queued_rows=[

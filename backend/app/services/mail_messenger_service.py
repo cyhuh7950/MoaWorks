@@ -15,24 +15,13 @@ from app.schemas.directory import AuthUserSummary
 from app.schemas.mail_messenger import (
     MailAttachmentMeta,
     MailAttachmentView,
-    MailBasicPreferencesResponse,
-    MailBasicPreferencesUpdateRequest,
-    MailSignatureBulkDeleteRequest,
-    MailSignatureCreateRequest,
-    MailSignaturePreferencesResponse,
-    MailSignaturePreferencesUpdateRequest,
-    MailSignatureUpdateRequest,
-    MailSignatureView,
-    ExternalDeliveryView,
     MailBulkRequest,
     MailBulkResponse,
     MailCategoryRequest,
+    MailDeliveryOutcomeSummary,
     MailDetailResponse,
     MailDraftRequest,
-    MailFolderCreateRequest,
-    MailFolderListResponse,
-    MailFolderUpdateRequest,
-    MailFolderView,
+    MailExternalDeliveryStatus,
     MailListQuery,
     MailRecentRecipient,
     MailRecentRecipientBulkDeleteRequest,
@@ -58,11 +47,12 @@ from app.schemas.mail_messenger import (
     MessengerReadResponse,
     MessengerRoomCreateRequest,
     MessengerRoomDetailResponse,
-    MessengerRoomFavoriteRequest,
+    MessengerRoomParticipantsUpdateRequest,
     MessengerRoomListResponse,
     MessengerRoomParticipantsRequest,
     MessengerRoomSummary,
 )
+from app.services.mail_delivery_service import MailDeliveryService
 from app.services.postgres_service import PostgresService
 from app.services.spam_settings_service import SpamDecision, SpamSettingsService, normalize_spam_email
 from app.services.mail_auto_classification_service import AutoClassificationTargetInUseError, MailAutoClassificationService
@@ -419,261 +409,15 @@ class MailMessengerService:
 
     def get_mail(self, actor: AuthUserSummary, mail_id: str, view: str = "inbox") -> MailDetailResponse:
         self.db.ensure_migrations_applied()
+        delivery_service = MailDeliveryService()
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
-                message = self._fetch_accessible_mail(cursor, actor, mail_id, view=view)
-                recipients = self._fetch_mail_recipients(
-                    cursor,
-                    actor,
-                    mail_id,
-                    is_sender_view=bool(message["is_sender_view"]),
-                )
+                message = self._fetch_accessible_mail(cursor, actor, mail_id)
+                is_sender_view = bool(message["is_sender_view"])
+                recipients = self._fetch_mail_recipients(cursor, actor, mail_id, is_sender_view=is_sender_view)
                 attachments = self._fetch_mail_attachments(cursor, mail_id)
-                external_deliveries = self._fetch_external_deliveries(cursor, mail_id) if message["is_sender_view"] else []
-                preferences = self._ensure_basic_preferences(cursor, actor)
-            connection.commit()
-        return self._to_mail_detail(message, recipients, attachments, external_deliveries, preferences)
-
-    def stage_attachment(
-        self,
-        actor: AuthUserSummary,
-        file_name: str,
-        content_type: str,
-        content: bytes,
-    ):
-        self.attachment_storage.cleanup_expired()
-        return self.attachment_storage.stage(actor, file_name, content_type, content)
-
-    def list_recent_recipients(self, actor: AuthUserSummary, limit: int = 20) -> MailRecentRecipientListResponse:
-        self.db.ensure_migrations_applied()
-        with self.db.connect() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT id, recipient_email AS email, recipient_name AS name,
-                           department_name, last_used_at, use_count
-                    FROM user_recent_mail_recipients
-                    WHERE company_id = %s AND owner_user_id = %s
-                    ORDER BY last_used_at DESC, id
-                    LIMIT %s
-                    """,
-                    (actor.companyId, actor.userId, limit),
-                )
-                recipients = [
-                    MailRecentRecipient(
-                        recipientId=row["id"],
-                        email=row["email"],
-                        name=row["name"],
-                        departmentName=row["department_name"],
-                        lastUsedAt=row["last_used_at"],
-                        useCount=row["use_count"],
-                    )
-                    for row in cursor.fetchall()
-                ]
-        return MailRecentRecipientListResponse(recipients=recipients)
-
-    def list_recent_recipient_settings(self, actor: AuthUserSummary, limit: int = 200) -> MailRecentRecipientSettingsResponse:
-        response = self.list_recent_recipients(actor, limit)
-        return MailRecentRecipientSettingsResponse(recipients=response.recipients, totalCount=len(response.recipients))
-
-    def delete_recent_recipient(self, actor: AuthUserSummary, recipient_id: str) -> MailRecentRecipientDeleteResponse:
-        payload = MailRecentRecipientBulkDeleteRequest(recipientIds=[recipient_id])
-        return self.bulk_delete_recent_recipients(actor, payload)
-
-    def bulk_delete_recent_recipients(
-        self,
-        actor: AuthUserSummary,
-        payload: MailRecentRecipientBulkDeleteRequest,
-    ) -> MailRecentRecipientDeleteResponse:
-        self.db.ensure_migrations_applied()
-        now = self._now()
-        with self.db.connect() as connection:
-            with connection.cursor() as cursor:
-                if payload.deleteAll:
-                    cursor.execute(
-                        """SELECT id FROM user_recent_mail_recipients
-                        WHERE company_id = %s AND owner_user_id = %s FOR UPDATE""",
-                        (actor.companyId, actor.userId),
-                    )
-                    locked_ids = [row["id"] for row in cursor.fetchall()]
-                else:
-                    requested_ids = payload.recipientIds or []
-                    cursor.execute(
-                        """SELECT id FROM user_recent_mail_recipients
-                        WHERE company_id = %s AND owner_user_id = %s AND id = ANY(%s)
-                        FOR UPDATE""",
-                        (actor.companyId, actor.userId, requested_ids),
-                    )
-                    locked_ids = [row["id"] for row in cursor.fetchall()]
-                    if len(locked_ids) != len(requested_ids):
-                        raise PermissionError("최근 주소를 삭제할 권한이 없습니다.")
-                requested_count = len(locked_ids) if payload.deleteAll else len(payload.recipientIds or [])
-                changed_count = 0
-                if locked_ids:
-                    cursor.execute(
-                        """DELETE FROM user_recent_mail_recipients
-                        WHERE company_id = %s AND owner_user_id = %s AND id = ANY(%s)""",
-                        (actor.companyId, actor.userId, locked_ids),
-                    )
-                    changed_count = cursor.rowcount
-                self._write_recent_recipient_audit(
-                    cursor, actor, "mail.recent_recipients.deleted", changed_count, now
-                )
-            connection.commit()
-        return MailRecentRecipientDeleteResponse(
-            requestedCount=requested_count,
-            changedCount=changed_count,
-        )
-
-    def _write_recent_recipient_audit(
-        self,
-        cursor,
-        actor: AuthUserSummary,
-        event: str,
-        count: int,
-        now: datetime,
-    ) -> None:
-        reason = json.dumps({"count": count}, ensure_ascii=True, separators=(",", ":"))
-        cursor.execute(
-            """INSERT INTO audit_logs (
-                id, company_id, actor_user_id, actor_user_name, target_type, target_id,
-                event, status_before, status_after, reason, created_at
-            ) VALUES (%s,%s,%s,%s,'mail_recent_recipients',%s,%s,NULL,NULL,%s,%s)""",
-            (self._new_id("audit"), actor.companyId, actor.userId, actor.userName, actor.userId, event, reason, now),
-        )
-
-    def _upsert_recent_recipients(
-        self,
-        cursor,
-        *,
-        company_id: str,
-        owner_user_id: str,
-        recipient_emails: list[str],
-        now: datetime,
-    ) -> None:
-        normalized = list(dict.fromkeys(email.strip().lower() for email in recipient_emails if email.strip()))
-        if not normalized:
-            return
-        cursor.execute(
-            """SELECT LOWER(u.email) AS email, u.name, d.name AS department_name
-            FROM users u LEFT JOIN departments d ON d.id = u.department_id
-            WHERE u.company_id = %s AND LOWER(u.email) = ANY(%s)""",
-            (company_id, normalized),
-        )
-        directory = {row["email"]: row for row in cursor.fetchall()}
-        for email in normalized:
-            person = directory.get(email, {})
-            cursor.execute(
-                """INSERT INTO user_recent_mail_recipients (
-                    id, company_id, owner_user_id, recipient_email, recipient_name,
-                    department_name, last_used_at, use_count, created_at, updated_at
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,1,%s,%s)
-                ON CONFLICT (company_id, owner_user_id, (LOWER(recipient_email))) DO UPDATE SET
-                    recipient_name = COALESCE(EXCLUDED.recipient_name, user_recent_mail_recipients.recipient_name),
-                    department_name = COALESCE(EXCLUDED.department_name, user_recent_mail_recipients.department_name),
-                    last_used_at = EXCLUDED.last_used_at,
-                    use_count = user_recent_mail_recipients.use_count + 1,
-                    updated_at = EXCLUDED.updated_at""",
-                (
-                    self._new_id("recent"), company_id, owner_user_id, email,
-                    person.get("name"), person.get("department_name"), now, now, now,
-                ),
-            )
-        cursor.execute(
-            """DELETE FROM user_recent_mail_recipients WHERE id IN (
-                SELECT id FROM user_recent_mail_recipients
-                WHERE company_id = %s AND owner_user_id = %s
-                ORDER BY last_used_at DESC, id OFFSET 200
-            )""",
-            (company_id, owner_user_id),
-        )
-
-    def download_attachment(self, actor: AuthUserSummary, mail_id: str, attachment_id: str) -> dict:
-        self.db.ensure_migrations_applied()
-        with self.db.connect() as connection:
-            with connection.cursor() as cursor:
-                self._fetch_accessible_mail(cursor, actor, mail_id)
-                cursor.execute(
-                    """
-                    SELECT id, file_name, content_type, size_bytes, storage_key
-                    FROM mail_attachments
-                    WHERE id = %s AND message_id = %s
-                    """,
-                    (attachment_id, mail_id),
-                )
-                row = cursor.fetchone()
-        if row is None:
-            raise PermissionError("첨부 파일에 접근할 권한이 없습니다.")
-        path = self.attachment_storage.stored_path(row["storage_key"])
-        return {
-            "path": path,
-            "fileName": row["file_name"],
-            "contentType": row["content_type"],
-            "sizeBytes": row["size_bytes"],
-        }
-
-    def get_basic_preferences(self, actor: AuthUserSummary) -> MailBasicPreferencesResponse:
-        self.db.ensure_migrations_applied()
-        with self.db.connect() as connection:
-            with connection.cursor() as cursor:
-                row = self._ensure_basic_preferences(cursor, actor)
-            connection.commit()
-        return self._to_basic_preferences(row)
-
-    def update_basic_preferences(self, actor: AuthUserSummary, payload: MailBasicPreferencesUpdateRequest) -> MailBasicPreferencesResponse:
-        self.db.ensure_migrations_applied()
-        now = self._now()
-        values = payload.model_dump(exclude={"expectedVersion"})
-        columns = {
-            "senderDisplayMode": "sender_display_mode", "blockRemoteImages": "block_remote_images",
-            "disableRiskyTags": "disable_risky_tags", "showRouteCountry": "show_route_country",
-            "includeSpamTrashInSearch": "include_spam_trash_in_search", "showListPreview": "show_list_preview",
-            "recipientInputMode": "recipient_input_mode", "confirmBeforeSend": "confirm_before_send",
-            "saveSentCopy": "save_sent_copy", "readReceiptEnabled": "read_receipt_enabled",
-            "editorMode": "editor_mode", "composeMode": "compose_mode", "messageEncoding": "message_encoding",
-            "draftReminderEnabled": "draft_reminder_enabled", "senderDisplayName": "sender_display_name",
-            "replyToEmail": "reply_to_email", "vcardEnabled": "vcard_enabled",
-        }
-        with self.db.connect() as connection:
-            with connection.cursor() as cursor:
-                before = self._ensure_basic_preferences(cursor, actor)
-                changed = [key for key, column in columns.items() if before[column] != values[key]]
-                assignments = ", ".join(f"{column} = %s" for column in columns.values())
-                cursor.execute(
-                    f"""UPDATE user_mail_basic_preferences SET {assignments}, version = version + 1, updated_at = %s
-                    WHERE company_id = %s AND owner_user_id = %s AND version = %s RETURNING *""",
-                    tuple(values[key] for key in columns) + (now, actor.companyId, actor.userId, payload.expectedVersion),
-                )
-                row = cursor.fetchone()
-                if row is None:
-                    raise MailPreferenceConflictError("다른 위치에서 설정이 변경되었습니다. 최신값을 다시 불러오세요.")
-                self._write_preference_audit(cursor, actor, "mail.preferences.basic.update", changed, now)
-            connection.commit()
-        return self._to_basic_preferences(row)
-
-    def reset_basic_preferences(self, actor: AuthUserSummary) -> MailBasicPreferencesResponse:
-        self.db.ensure_migrations_applied()
-        now = self._now()
-        with self.db.connect() as connection:
-            with connection.cursor() as cursor:
-                self._ensure_basic_preferences(cursor, actor)
-                cursor.execute(
-                    """UPDATE user_mail_basic_preferences SET
-                    sender_display_mode = 'name_email', block_remote_images = TRUE, disable_risky_tags = TRUE,
-                    show_route_country = FALSE, include_spam_trash_in_search = FALSE, show_list_preview = TRUE,
-                    recipient_input_mode = 'autocomplete', confirm_before_send = TRUE, save_sent_copy = TRUE,
-                    read_receipt_enabled = TRUE, editor_mode = 'html', compose_mode = 'normal',
-                    message_encoding = 'utf-8', draft_reminder_enabled = FALSE, sender_display_name = '',
-                    reply_to_email = NULL, vcard_enabled = FALSE, version = version + 1, updated_at = %s
-                    WHERE company_id = %s AND owner_user_id = %s RETURNING *""",
-                    (now, actor.companyId, actor.userId),
-                )
-                row = cursor.fetchone()
-                if row is None:
-                    raise PermissionError("메일 설정을 초기화할 권한이 없습니다.")
-                self._write_preference_audit(cursor, actor, "mail.preferences.basic.reset", ["defaults"], now)
-            connection.commit()
-        return self._to_basic_preferences(row)
+                external_deliveries = delivery_service.list_mail_external_deliveries(cursor, mail_id) if is_sender_view else []
+        return self._to_mail_detail(message, recipients, attachments, external_deliveries)
 
     def send_mail(self, actor: AuthUserSummary, payload: MailSendRequest) -> MailSendResponse:
         if not payload.to and not payload.cc and not payload.bcc:
@@ -1783,6 +1527,17 @@ class MailMessengerService:
             ),
         )
 
+    def _write_mail_audit(self, cursor, actor: AuthUserSummary, target_id: str, event_type: str, payload: dict) -> None:
+        cursor.execute(
+            """INSERT INTO audit_logs (
+                id, company_id, actor_user_id, actor_user_name, target_type, target_id,
+                event, status_before, status_after, reason, created_at
+            ) VALUES (%s, %s, %s, %s, 'mail', %s, %s, NULL, 'success', %s, %s)""",
+            (
+                self._new_id("audit"), actor.companyId, actor.userId, actor.userName,
+                target_id, event_type, json.dumps(payload, ensure_ascii=False), self._now(),
+            ),
+        )
     def list_rooms(self, actor: AuthUserSummary) -> MessengerRoomListResponse:
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection, connection.cursor() as cursor:
@@ -1857,7 +1612,36 @@ class MailMessengerService:
             summary = self._room_row_to_summary_with_participants(cursor, actor, room)
         return MessengerRoomDetailResponse(**summary.model_dump(), participants=participants)
 
-    def update_room_favorite(self, actor: AuthUserSummary, room_id: str, payload: MessengerRoomFavoriteRequest) -> MessengerRoomDetailResponse:
+    def update_room_participants(
+        self,
+        actor: AuthUserSummary,
+        room_id: str,
+        payload: MessengerRoomParticipantsUpdateRequest,
+    ) -> MessengerRoomDetailResponse:
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        participant_ids = self._dedupe([actor.userId, *payload.participantUserIds])
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                room = self._fetch_accessible_room(cursor, actor, room_id)
+                if room["created_by_user_id"] != actor.userId:
+                    raise PermissionError("대화방 생성자만 참여자를 변경할 수 있습니다.")
+                users = self._fetch_company_users(cursor, actor.companyId, participant_ids)
+                if set(users.keys()) != set(participant_ids) or any(item["status"] != "active" for item in users.values()):
+                    raise ValueError("참여자는 활성 사용자만 선택할 수 있습니다.")
+                cursor.execute("DELETE FROM messenger_room_members WHERE room_id = %s", (room_id,))
+                for user_id in participant_ids:
+                    cursor.execute(
+                        """
+                        INSERT INTO messenger_room_members (id, room_id, user_id, joined_at)
+                        VALUES (%s, %s, %s, %s)
+                        """,
+                        (self._new_id("member"), room_id, user_id, now),
+                    )
+                cursor.execute("UPDATE messenger_rooms SET updated_at = %s WHERE id = %s", (now, room_id))
+            connection.commit()
+        return self.get_room(actor, room_id)
+    def list_messages(self, actor: AuthUserSummary, room_id: str) -> MessengerMessageListResponse:
         self.db.ensure_migrations_applied()
         now = self._now()
         with self.db.connect() as connection, connection.cursor() as cursor:
@@ -2070,81 +1854,79 @@ class MailMessengerService:
 
     def _save_mail(self, actor: AuthUserSummary, payload: MailSendRequest | MailDraftRequest, *, status_value: str) -> MailSendResponse:
         self.db.ensure_migrations_applied()
-        resolved_attachments = [self.attachment_storage.resolve(actor, item) for item in payload.attachments]
-        if len(resolved_attachments) > settings.mail_attachment_max_files:
-            raise ValueError("첨부 파일 개수 제한을 초과했습니다.")
-        if len({item["upload_id"] for item in resolved_attachments}) != len(resolved_attachments):
-            raise ValueError("같은 첨부 파일을 중복 사용할 수 없습니다.")
-        if sum(item["size_bytes"] for item in resolved_attachments) > settings.mail_attachment_max_total_bytes:
-            raise ValueError("첨부 파일의 전체 용량 제한을 초과했습니다.")
-
+        delivery_service = MailDeliveryService()
         now = self._now()
         mail_id = self._new_id("mailmsg")
         sent_at = now if status_value == "sent" else None
-        scheduled_at = payload.scheduledAt if status_value == "scheduled" else None
-        internal_by_email: dict[str, str] = {}
-        external_emails: set[str] = set()
-        provider = None
+        received_at = now if status_value == "sent" else None
+        queued_rows: list[dict] = []
+        internal_count = 0
+        external_count = 0
+        provider: dict | None = None
+
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
                 account = self._fetch_mail_account(cursor, actor.userId)
-                if payload.sourceMailId:
-                    if payload.copiedAttachmentIds:
-                        source_attachments = self._fetch_source_attachments(cursor, actor, payload.sourceMailId, payload.copiedAttachmentIds)
-                        for source_attachment in source_attachments:
-                            resolved_attachments.append(self.attachment_storage.clone(
-                                actor, storage_key=source_attachment["storage_key"],
-                                file_name=source_attachment["file_name"], content_type=source_attachment["content_type"],
-                                size_bytes=source_attachment["size_bytes"],
-                            ))
-                    else:
-                        self._fetch_accessible_mail(cursor, actor, payload.sourceMailId)
-                if len(resolved_attachments) > settings.mail_attachment_max_files:
-                    raise ValueError("첨부 파일 개수 제한을 초과했습니다.")
-                if sum(item["size_bytes"] for item in resolved_attachments) > settings.mail_attachment_max_total_bytes:
-                    raise ValueError("첨부 파일의 전체 용량 제한을 초과했습니다.")
-
-                recipient_pairs = [("to", item) for item in payload.to] + [("cc", item) for item in payload.cc] + [("bcc", item) for item in payload.bcc]
-                if status_value != "draft":
-                    cursor.execute("SELECT domain FROM companies WHERE id = %s", (actor.companyId,))
-                    company = cursor.fetchone()
-                    cursor.execute("SELECT LOWER(email) AS email, id FROM users WHERE company_id = %s AND status = 'active'", (actor.companyId,))
-                    active_users = {row["email"]: row["id"] for row in cursor.fetchall()}
-                    classification = MailDeliveryPolicy().classify(company["domain"], active_users, recipient_pairs)
-                    internal_by_email = {email: user_id for _, email, user_id in classification.internal}
-                    external_emails = {email for _, email in classification.external}
-                    cursor.execute("SELECT * FROM mail_provider_configs WHERE id = %s AND company_id = %s", (account["provider_config_id"], actor.companyId))
-                    provider = cursor.fetchone()
-                    if external_emails and provider is None:
-                        raise ValueError("외부 발송 provider를 찾을 수 없습니다.")
-
-                preferences = self._ensure_basic_preferences(cursor, actor)
-                signature = self._fetch_enabled_signature(cursor, actor)
-                final_body_text, final_body_html = self._compose_signature_body(payload.bodyText, payload.bodyHtml, signature)
+                company = self._fetch_company_row(cursor, actor.companyId)
+                company_domain = company["domain"].strip().lower()
                 cursor.execute(
-                    """INSERT INTO mail_messages (
+                    """
+                    INSERT INTO mail_messages (
                         id, company_id, sender_user_id, sender_account_id, sender_email,
-                        subject, body_text, body_html, status, sent_at, scheduled_at, created_at,
-                        updated_at, retention_expires_at, attachment_count, source_message_id, source_action,
-                        sender_display_name, reply_to_email, message_encoding, sender_copy_saved, read_receipt_requested
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                    (mail_id, actor.companyId, actor.userId, account["id"], account["email"],
-                     payload.subject.strip(), final_body_text, final_body_html, status_value, sent_at, scheduled_at,
-                     now, now, now + timedelta(days=30), len(resolved_attachments), payload.sourceMailId,
-                     None if payload.composeAction == "new" else payload.composeAction,
-                     preferences["sender_display_name"], preferences["reply_to_email"], preferences["message_encoding"],
-                     preferences["save_sent_copy"], preferences["read_receipt_enabled"]),
+                        subject, body_text, body_html, status, sent_at, created_at,
+                        updated_at, retention_expires_at, attachment_count
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        mail_id,
+                        actor.companyId,
+                        actor.userId,
+                        account["id"],
+                        account["email"],
+                        payload.subject.strip(),
+                        payload.bodyText,
+                        payload.bodyHtml,
+                        status_value,
+                        sent_at,
+                        now,
+                        now,
+                        now + timedelta(days=30),
+                        len(payload.attachments),
+                    ),
                 )
+                recipient_pairs = [("to", item) for item in payload.to] + [("cc", item) for item in payload.cc] + [("bcc", item) for item in payload.bcc]
+                external_recipients: list[str] = []
                 for kind, email in recipient_pairs:
-                    recipient_user_id = internal_by_email.get(email) if status_value != "draft" else self._resolve_user_id_by_email(cursor, actor.companyId, email)
-                    recipient_id = self._new_id("rcpt")
-                    spam_decision = SpamDecision("inbox")
-                    if status_value == "sent" and recipient_user_id:
-                        spam_decision = self._evaluate_recipient_spam(
-                            cursor,
-                            actor,
-                            recipient_user_id,
-                            account["email"],
+                    recipient_user_id = self._resolve_user_id_by_email(cursor, actor.companyId, email)
+                    is_internal_domain = email.lower().endswith(f"@{company_domain}")
+                    if is_internal_domain:
+                        if recipient_user_id is None:
+                            raise ValueError("회사 도메인 수신자 중 등록되지 않은 사용자가 있습니다.")
+                        internal_count += 1
+                    else:
+                        external_count += 1
+                        external_recipients.append(email)
+                    cursor.execute(
+                        """
+                        INSERT INTO mail_recipients (
+                            id, message_id, recipient_user_id, recipient_email,
+                            recipient_kind, is_read, is_starred, received_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (self._new_id("rcpt"), mail_id, recipient_user_id, email, kind, False, False, received_at),
+                    )
+                for attachment in payload.attachments:
+                    cursor.execute(
+                        """
+                        INSERT INTO mail_attachments (
+                            id, message_id, file_name, content_type, size_bytes, storage_key, created_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            self._new_id("attach"),
                             mail_id,
                         )
                     cursor.execute(
@@ -2157,305 +1939,46 @@ class MailMessengerService:
                          spam_decision.decision == "spam",
                          now if spam_decision.decision == "spam" else None),
                     )
-                    if status_value == "sent" and recipient_user_id:
-                        self._write_spam_classification_audit(
-                            cursor,
-                            actor=actor,
-                            mail_id=mail_id,
-                            recipient_user_id=recipient_user_id,
-                            decision=spam_decision,
-                            now=now,
-                        )
-                        if spam_decision.decision != "spam":
-                            self._apply_auto_classification(
-                                cursor, company_id=actor.companyId, recipient_user_id=recipient_user_id,
-                                actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id,
-                                recipient_id=recipient_id, sender_email=account["email"], recipient_email=email,
-                                subject=payload.subject.strip(), body=final_body_text,
-                                has_attachment=bool(resolved_attachments), now=now,
-                            )
-                            self._apply_auto_forwarding(
-                                cursor, company_id=actor.companyId, recipient_user_id=recipient_user_id,
-                                actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id,
-                                recipient_id=recipient_id, sender_email=account["email"], recipient_email=email,
-                                delivery_source="direct", subject=payload.subject.strip(), body=final_body_text,
-                                has_attachment=bool(resolved_attachments), now=now,
-                            )
-                            self._apply_out_of_office(
-                                cursor, company_id=actor.companyId, recipient_user_id=recipient_user_id,
-                                actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id,
-                                recipient_id=recipient_id, sender_email=account["email"], delivery_source="direct",
-                                is_auto_generated=False, is_spam=False, now=now,
-                            )
-                    if status_value == "sent" and email in external_emails:
-                        queue_status = "queued" if provider["delivery_enabled"] and provider["last_test_status"] == "success" else "blocked"
-                        queue_id = self._new_id("delivery")
-                        cursor.execute(
-                            """INSERT INTO mail_delivery_queue (
-                                id, company_id, provider_config_id, mail_id, recipient_id, status,
-                                attempt_count, next_attempt_at, created_at, updated_at
-                            ) VALUES (%s,%s,%s,%s,%s,%s,0,%s,%s,%s)""",
-                            (queue_id, actor.companyId, provider["id"], mail_id, recipient_id,
-                             queue_status, now if queue_status == "queued" else None, now, now),
-                        )
-                        self._write_mail_delivery_audit(
-                            cursor, company_id=actor.companyId, actor_user_id=actor.userId,
-                            actor_user_name=actor.userName, queue_id=queue_id, event=f"mail.delivery.{queue_status}",
-                            status_before=None, status_after=queue_status, now=now,
-                        )
                 if status_value == "sent":
-                    self._upsert_recent_recipients(
-                        cursor,
-                        company_id=actor.companyId,
-                        owner_user_id=actor.userId,
-                        recipient_emails=[email for _, email in recipient_pairs],
-                        now=now,
-                    )
-                for attachment in resolved_attachments:
-                    cursor.execute(
-                        """INSERT INTO mail_attachments (
-                            id, message_id, file_name, content_type, size_bytes, storage_key, created_at
-                        ) VALUES (%s,%s,%s,%s,%s,%s,%s)""",
-                        (self._new_id("attach"), mail_id, attachment["file_name"], attachment["content_type"],
-                         attachment["size_bytes"], attachment["storage_key"], now),
-                    )
-                event = {"draft": "mail.draft.saved", "scheduled": "mail.scheduled", "sent": "mail.sent"}[status_value]
-                self._write_mail_event_audit(
-                    cursor, company_id=actor.companyId, actor_user_id=actor.userId, actor_user_name=actor.userName,
-                    mail_id=mail_id, event=event, status_before=None, status_after=status_value, now=now,
-                    reason="UI-018 mail compose" if payload.composeAction == "new" else f"UI-019 {payload.composeAction}",
+                    provider = delivery_service.ensure_provider(cursor, actor.companyId, company_domain)
+                    if external_recipients and not provider["enabled"]:
+                        raise ValueError("자체 SMTP 엔진이 비활성화되어 외부 수신자에게 발송할 수 없습니다.")
+                    if external_recipients:
+                        queued_rows = delivery_service.enqueue_external_deliveries(
+                            cursor=cursor,
+                            actor=actor,
+                            provider=provider,
+                            mail_id=mail_id,
+                            sender_email=account["email"],
+                            subject=payload.subject.strip(),
+                            body_text=payload.bodyText,
+                            body_html=payload.bodyHtml,
+                            recipients=external_recipients,
+                        )
+                self._write_mail_audit(
+                    cursor,
+                    actor,
+                    mail_id,
+                    "mail.sent" if status_value == "sent" else "mail.draft.saved",
+                    {"status": status_value, "recipientCount": len(recipient_pairs)},
                 )
             connection.commit()
-        for attachment in resolved_attachments:
-            try:
-                self.attachment_storage.mark_attached(attachment["upload_id"])
-            except (OSError, ValueError):
-                logger.exception("Mail attachment state update failed after commit: mail_id=%s upload_id=%s", mail_id, attachment["upload_id"])
-        is_enabled = bool(provider and provider["delivery_enabled"] and provider["last_test_status"] == "success")
-        return MailSendResponse(
-            mailId=mail_id, status=status_value, sentAt=sent_at, scheduledAt=scheduled_at,
-            internalCount=len(internal_by_email), externalCount=len(external_emails),
-            queuedCount=len(external_emails) if status_value == "sent" and is_enabled else 0,
-            blockedCount=len(external_emails) if status_value == "sent" and not is_enabled else 0,
-        )
 
-    def _evaluate_recipient_spam(
-        self,
-        cursor,
-        actor: AuthUserSummary,
-        recipient_user_id: str,
-        sender_email: str,
-        mail_id: str,
-    ) -> SpamDecision:
-        return self._evaluate_recipient_spam_for_company(
-            cursor,
-            actor.companyId,
-            recipient_user_id,
-            sender_email,
-            mail_id,
-        )
-
-    def _apply_auto_classification(
-        self, cursor, *, company_id: str, recipient_user_id: str,
-        actor_user_id: str, actor_user_name: str, mail_id: str, recipient_id: str,
-        sender_email: str, recipient_email: str, subject: str, body: str,
-        has_attachment: bool, now: datetime,
-    ):
-        normalized_sender = normalize_spam_email(sender_email)
-        return self.auto_classification.apply_recipient(
-            cursor,
-            company_id=company_id,
-            user_id=recipient_user_id,
-            actor_user_id=actor_user_id,
-            actor_user_name=actor_user_name,
-            mail_id=mail_id,
-            recipient_id=recipient_id,
-            context={
-                "sender_email": normalized_sender,
-                "sender_domain": normalized_sender.rsplit("@", 1)[1],
-                "recipient_email": normalize_spam_email(recipient_email),
-                "subject": subject,
-                "body": body,
-                "has_attachment": has_attachment,
-            },
-            now=now,
-        )
-
-    def _apply_auto_forwarding(
-        self, cursor, *, company_id: str, recipient_user_id: str,
-        actor_user_id: str, actor_user_name: str, mail_id: str, recipient_id: str,
-        sender_email: str, recipient_email: str, delivery_source: str, now: datetime,
-        subject: str = "", body: str = "", has_attachment: bool = False,
-    ):
-        if delivery_source != "direct":
-            return None
-
-        def classify_internal(target_user_id: str, forwarded_recipient_id: str, target_email: str) -> None:
-            decision = self._evaluate_recipient_spam_for_company(cursor, company_id, target_user_id, sender_email, mail_id)
-            cursor.execute(
-                "UPDATE mail_recipients SET is_spam=%s,spam_marked_at=%s WHERE id=%s AND recipient_user_id=%s AND delivery_source='auto_forward'",
-                (decision.decision == "spam", now if decision.decision == "spam" else None, forwarded_recipient_id, target_user_id),
+        delivery_summary = None
+        if status_value == "sent":
+            provider_key = provider["provider_key"] if provider else "self_hosted_smtp"
+            provider_enabled = bool(provider["enabled"]) if provider else False
+            delivery_summary = MailDeliveryOutcomeSummary(
+                provider=provider_key,
+                engineEnabled=provider_enabled,
+                internalRecipientCount=internal_count,
+                externalRecipientCount=external_count,
+                queuedCount=len(queued_rows),
+                sentCount=0,
+                failedCount=0,
+                retryPendingCount=0,
             )
-            self._write_spam_classification_audit_for_actor(
-                cursor, company_id=company_id, actor_user_id=actor_user_id, actor_user_name=actor_user_name,
-                mail_id=mail_id, recipient_user_id=target_user_id, decision=decision, now=now,
-            )
-            if decision.decision != "spam":
-                self._apply_auto_classification(
-                    cursor, company_id=company_id, recipient_user_id=target_user_id,
-                    actor_user_id=actor_user_id, actor_user_name=actor_user_name, mail_id=mail_id,
-                    recipient_id=forwarded_recipient_id, sender_email=sender_email, recipient_email=target_email,
-                    subject=subject, body=body, has_attachment=has_attachment, now=now,
-                )
-
-        return self.auto_forwarding.apply_recipient(
-            cursor, company_id=company_id, user_id=recipient_user_id,
-            actor_user_id=actor_user_id, actor_user_name=actor_user_name,
-            mail_id=mail_id, recipient_id=recipient_id, sender_email=sender_email,
-            now=now, classify_internal=classify_internal,
-        )
-
-    def _apply_out_of_office(
-        self, cursor, *, company_id: str, recipient_user_id: str,
-        actor_user_id: str, actor_user_name: str, mail_id: str, recipient_id: str,
-        sender_email: str, delivery_source: str, is_auto_generated: bool,
-        is_spam: bool, now: datetime,
-    ):
-        if delivery_source != "direct" or is_spam:
-            return None
-        return self.out_of_office.apply_recipient(
-            cursor, company_id=company_id, user_id=recipient_user_id,
-            actor_user_id=actor_user_id, actor_user_name=actor_user_name,
-            mail_id=mail_id, recipient_id=recipient_id, sender_email=sender_email,
-            delivery_source=delivery_source, is_auto_generated=is_auto_generated,
-            is_spam=is_spam, now=now,
-        )
-
-    def _evaluate_recipient_spam_for_company(
-        self,
-        cursor,
-        company_id: str,
-        recipient_user_id: str,
-        sender_email: str,
-        mail_id: str,
-    ) -> SpamDecision:
-        cursor.execute("SAVEPOINT spam_evaluation")
-        try:
-            return self.spam_settings.evaluate_sender(
-                cursor,
-                company_id,
-                recipient_user_id,
-                sender_email,
-            )
-        except Exception:
-            try:
-                cursor.execute("ROLLBACK TO SAVEPOINT spam_evaluation")
-            except Exception:
-                raise
-            logger.exception(
-                "Spam evaluation failed open: company_id=%s recipient_user_id=%s mail_id=%s",
-                company_id,
-                recipient_user_id,
-                mail_id,
-            )
-            return SpamDecision("inbox")
-        finally:
-            cursor.execute("RELEASE SAVEPOINT spam_evaluation")
-
-    def _write_spam_classification_audit(
-        self,
-        cursor,
-        *,
-        actor: AuthUserSummary,
-        mail_id: str,
-        recipient_user_id: str,
-        decision: SpamDecision,
-        now: datetime,
-    ) -> None:
-        self._write_spam_classification_audit_for_actor(
-            cursor,
-            company_id=actor.companyId,
-            actor_user_id=actor.userId,
-            actor_user_name=actor.userName,
-            mail_id=mail_id,
-            recipient_user_id=recipient_user_id,
-            decision=decision,
-            now=now,
-        )
-
-    def _write_spam_classification_audit_for_actor(
-        self,
-        cursor,
-        *,
-        company_id: str,
-        actor_user_id: str,
-        actor_user_name: str,
-        mail_id: str,
-        recipient_user_id: str,
-        decision: SpamDecision,
-        now: datetime,
-    ) -> None:
-        reason = json.dumps(
-            {"recipientUserId": recipient_user_id, "matchedRuleId": decision.matchedRuleId},
-            ensure_ascii=True,
-            separators=(",", ":"),
-        )
-        cursor.execute(
-            """INSERT INTO audit_logs (
-                id, company_id, actor_user_id, actor_user_name, target_type, target_id,
-                event, status_before, status_after, reason, created_at
-            ) VALUES (%s,%s,%s,%s,'mail',%s,'mail.spam.message.classified',NULL,%s,%s,%s)""",
-            (self._new_id("audit"), company_id, actor_user_id, actor_user_name, mail_id, decision.decision, reason, now),
-        )
-
-    def _write_mail_delivery_audit(
-        self, cursor, *, company_id: str, actor_user_id: str | None, actor_user_name: str,
-        queue_id: str, event: str, status_before: str | None, status_after: str, now: datetime,
-        reason: str = "UI-021 transaction outbox",
-    ) -> None:
-        cursor.execute(
-            """INSERT INTO audit_logs (
-                id, company_id, actor_user_id, actor_user_name, target_type, target_id,
-                event, status_before, status_after, reason, created_at
-            ) VALUES (%s,%s,%s,%s,'mail_delivery_queue',%s,%s,%s,%s,%s,%s)""",
-            (self._new_id("audit"), company_id, actor_user_id, actor_user_name, queue_id,
-             event, status_before, status_after, reason, now),
-        )
-
-    def _write_mail_event_audit(
-        self,
-        cursor,
-        *,
-        company_id: str,
-        actor_user_id: str,
-        actor_user_name: str,
-        mail_id: str,
-        event: str,
-        status_before: str | None,
-        status_after: str,
-        now: datetime,
-        reason: str = "UI-018 mail compose",
-    ) -> None:
-        cursor.execute(
-            """
-            INSERT INTO audit_logs (
-                id, company_id, actor_user_id, actor_user_name, target_type, target_id,
-                event, status_before, status_after, reason, created_at
-            ) VALUES (%s, %s, %s, %s, 'mail', %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                self._new_id("audit"),
-                company_id,
-                actor_user_id,
-                actor_user_name,
-                mail_id,
-                event,
-                status_before,
-                status_after,
-                reason,
-                now,
-            ),
-        )
+        return MailSendResponse(mailId=mail_id, status=status_value, sentAt=sent_at, deliverySummary=delivery_summary)
 
     def _fetch_mail_account(self, cursor, user_id: str) -> dict:
         cursor.execute("SELECT id, email, status, provider_config_id FROM mail_accounts WHERE user_id = %s", (user_id,))
@@ -2466,35 +1989,41 @@ class MailMessengerService:
             raise PermissionError("메일 계정이 활성 상태가 아닙니다.")
         return row
 
-    def _fetch_accessible_mail(self, cursor, actor: AuthUserSummary, mail_id: str, *, view: str = "inbox") -> dict:
-        allowed_views = {"inbox", "folder", "tag", "spam", "trash", "sent", "draft"}
-        if view not in allowed_views:
-            raise ValueError("지원하지 않는 메일 상세 문맥입니다.")
-        sender_state = "m.sender_deleted_at IS NOT NULL AND m.sender_purged_at IS NULL" if view == "trash" else "m.sender_deleted_at IS NULL AND m.sender_purged_at IS NULL"
-        if view == "trash":
-            recipient_state = "r.deleted_at IS NOT NULL AND r.purged_at IS NULL"
-        elif view == "spam":
-            recipient_state = "r.deleted_at IS NULL AND r.purged_at IS NULL AND r.is_spam = TRUE"
-        elif view == "inbox":
-            recipient_state = "r.deleted_at IS NULL AND r.purged_at IS NULL AND r.is_spam = FALSE AND r.folder_id IS NULL"
-        else:
-            recipient_state = "r.deleted_at IS NULL AND r.purged_at IS NULL"
+
+    def _fetch_company_row(self, cursor, company_id: str) -> dict:
+        cursor.execute("SELECT id, name, domain FROM companies WHERE id = %s", (company_id,))
+        row = cursor.fetchone()
+        if row is None:
+            raise ValueError("회사를 찾을 수 없습니다.")
+        return row
+
+    def _fetch_accessible_mail(self, cursor, actor: AuthUserSummary, mail_id: str) -> dict:
         cursor.execute(
             f"""
             SELECT DISTINCT
-                m.id AS mail_id, m.company_id, m.sender_user_id, m.sender_account_id AS account_id,
-                m.sender_email, m.sender_display_name, m.subject, m.body_text, m.body_html, m.status, m.sent_at, m.scheduled_at,
-                m.created_at, m.updated_at, m.retention_expires_at, m.attachment_count,
-                m.read_receipt_requested,
-                (m.sender_user_id = %s AND {sender_state}) AS is_sender_view
+                m.id AS mail_id,
+                m.company_id,
+                m.sender_user_id,
+                m.sender_account_id AS account_id,
+                m.sender_email,
+                m.subject,
+                m.body_text,
+                m.body_html,
+                m.status,
+                m.sent_at,
+                m.created_at,
+                m.updated_at,
+                m.retention_expires_at,
+                m.attachment_count,
+                (m.sender_user_id = %s) AS is_sender_view
             FROM mail_messages m
             LEFT JOIN mail_recipients r ON r.message_id = m.id
             WHERE m.id = %s AND m.company_id = %s
               AND (
-                (m.sender_user_id = %s AND {sender_state})
+                (m.sender_user_id = %s AND m.sender_deleted_at IS NULL)
                 OR (
                   (r.recipient_user_id = %s OR LOWER(r.recipient_email) = %s)
-                  AND {recipient_state}
+                  AND r.deleted_at IS NULL
                 )
               )
             """,
@@ -2504,6 +2033,7 @@ class MailMessengerService:
         if row is None:
             raise PermissionError("메일을 조회할 권한이 없습니다.")
         return row
+
     def _fetch_mail_recipients(
         self,
         cursor,
@@ -2517,7 +2047,6 @@ class MailMessengerService:
             SELECT recipient_email, recipient_user_id, recipient_kind, is_read, is_starred, received_at, read_at
             FROM mail_recipients
             WHERE message_id = %s
-              AND delivery_source = 'direct'
               AND (
                 recipient_kind <> 'bcc'
                 OR %s
@@ -2541,53 +2070,10 @@ class MailMessengerService:
             for row in cursor.fetchall()
         ]
 
-    def _fetch_source_attachments(
-        self,
-        cursor,
-        actor: AuthUserSummary,
-        source_mail_id: str,
-        attachment_ids: list[str],
-    ) -> list[dict]:
-        self._fetch_accessible_mail(cursor, actor, source_mail_id)
-        if not attachment_ids:
-            return []
-        cursor.execute(
-            """
-            SELECT id, file_name, content_type, size_bytes, storage_key
-            FROM mail_attachments
-            WHERE message_id = %s
-              AND id = ANY(%s)
-            """,
-            (source_mail_id, attachment_ids),
-        )
-        rows = cursor.fetchall()
-        by_id = {row["id"]: row for row in rows}
-        if len(by_id) != len(attachment_ids) or any(attachment_id not in by_id for attachment_id in attachment_ids):
-            raise PermissionError("전달할 원문 첨부에 접근할 권한이 없습니다.")
-        if any(not row["storage_key"] for row in rows):
-            raise ValueError("원문 첨부 파일 저장 상태가 올바르지 않습니다.")
-        return [by_id[attachment_id] for attachment_id in attachment_ids]
-
-    def _fetch_external_deliveries(self, cursor, mail_id: str) -> list[ExternalDeliveryView]:
-        cursor.execute(
-            """SELECT r.recipient_email, r.recipient_kind, q.status, q.attempt_count, q.next_attempt_at, q.sent_at
-            FROM mail_delivery_queue q JOIN mail_recipients r ON r.id = q.recipient_id
-            WHERE q.mail_id = %s AND r.delivery_source = 'direct' ORDER BY r.recipient_kind, r.recipient_email""",
-            (mail_id,),
-        )
-        return [
-            ExternalDeliveryView(
-                recipientEmail=row["recipient_email"], recipientKind=row["recipient_kind"],
-                status=row["status"], attemptCount=row["attempt_count"],
-                nextAttemptAt=row["next_attempt_at"], sentAt=row["sent_at"],
-            )
-            for row in cursor.fetchall()
-        ]
-
     def _fetch_mail_attachments(self, cursor, mail_id: str) -> list[MailAttachmentView]:
         cursor.execute(
             """
-            SELECT id, file_name, content_type, size_bytes
+            SELECT file_name, content_type, size_bytes
             FROM mail_attachments
             WHERE message_id = %s
             ORDER BY created_at ASC
@@ -2596,7 +2082,6 @@ class MailMessengerService:
         )
         return [
             MailAttachmentView(
-                attachmentId=row["id"],
                 fileName=row["file_name"],
                 contentType=row["content_type"],
                 sizeBytes=row["size_bytes"],
@@ -2733,9 +2218,8 @@ class MailMessengerService:
         self,
         message: dict,
         recipients: list[MailRecipientView],
-        attachments: list[MailAttachmentMeta | MailAttachmentView],
-        external_deliveries: list[ExternalDeliveryView] | None = None,
-        preferences: dict | None = None,
+        attachments: list[MailAttachmentMeta],
+        external_deliveries: list[dict],
     ) -> MailDetailResponse:
         return MailDetailResponse(
             mailId=message["mail_id"],
@@ -2759,15 +2243,19 @@ class MailMessengerService:
                 "disableRiskyTags": True if preferences is None else bool(preferences["disable_risky_tags"]),
             },
             recipients=recipients,
-            externalDeliveries=external_deliveries or [],
-            attachments=[
-                MailAttachmentView(
-                    attachmentId=getattr(item, "attachmentId", None),
-                    fileName=item.fileName,
-                    contentType=item.contentType,
-                    sizeBytes=item.sizeBytes,
+            attachments=attachments,
+            externalDeliveries=[
+                MailExternalDeliveryStatus(
+                    queueId=row["id"],
+                    recipient=row["recipient_email"],
+                    provider=row["provider_key"],
+                    status=row["status"],
+                    attemptCount=int(row["attempt_count"] or 0),
+                    lastError=row.get("last_error"),
+                    nextRetryAt=row.get("next_retry_at"),
+                    sentAt=row.get("sent_at"),
                 )
-                for item in attachments
+                for row in external_deliveries
             ],
         )
 

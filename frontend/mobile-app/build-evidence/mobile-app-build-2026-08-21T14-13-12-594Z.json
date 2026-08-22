@@ -1,0 +1,116 @@
+{
+  "executedAt": "2026-08-21T14:13:12.596Z",
+  "projectRoot": "C:\\Users\\cyhuh\\Desktop\\D Driver\\Project\\MoaWorks\\frontend\\mobile-app",
+  "runId": "2026-08-21T14-13-12-594Z",
+  "mode": "android",
+  "checks": [
+    {
+      "key": "node",
+      "status": true,
+      "path": "C:\\Program Files\\nodejs\\node.exe"
+    },
+    {
+      "key": "npm",
+      "status": true,
+      "path": "C:\\Program Files\\nodejs\\npm"
+    },
+    {
+      "key": "npx",
+      "status": true,
+      "path": "C:\\Program Files\\nodejs\\npx"
+    },
+    {
+      "key": "app_entry_file",
+      "status": true,
+      "path": "App.tsx"
+    },
+    {
+      "key": "android_entry_file",
+      "status": true,
+      "path": "index.js"
+    },
+    {
+      "key": "app_registry_config",
+      "status": true,
+      "path": "app.json"
+    },
+    {
+      "key": "node_modules",
+      "status": true,
+      "path": "node_modules"
+    },
+    {
+      "key": "react_native_binary",
+      "status": true,
+      "path": "C:\\Users\\cyhuh\\Desktop\\D Driver\\Project\\MoaWorks\\frontend\\mobile-app\\node_modules\\.bin\\react-native"
+    },
+    {
+      "key": "android_project",
+      "status": true,
+      "path": "android"
+    },
+    {
+      "key": "metro_config_or_default",
+      "status": true,
+      "path": "metro.config.js(optional)"
+    },
+    {
+      "key": "home_card_alerts",
+      "status": true,
+      "marker": "id: \"alerts\""
+    },
+    {
+      "key": "home_card_approval",
+      "status": true,
+      "marker": "id: \"approval\""
+    },
+    {
+      "key": "home_card_chat",
+      "status": true,
+      "marker": "id: \"chat\""
+    },
+    {
+      "key": "home_card_mail",
+      "status": true,
+      "marker": "id: \"mail\""
+    },
+    {
+      "key": "home_card_accessibility",
+      "status": true,
+      "marker": "accessibilityLabel={`${item.title} 화면 열기`}"
+    },
+    {
+      "key": "home_today_schedule",
+      "status": true,
+      "marker": "오늘 일정"
+    },
+    {
+      "key": "home_recent_chat",
+      "status": true,
+      "marker": "최근 대화"
+    }
+  ],
+  "commands": [
+    {
+      "command": "C:\\Program Files\\nodejs\\node.exe C:\\Users\\cyhuh\\Desktop\\D Driver\\Project\\MoaWorks\\frontend\\mobile-app\\node_modules\\react-native\\cli.js bundle --platform android --dev false --entry-file index.js --bundle-output C:\\Users\\cyhuh\\Desktop\\D Driver\\Project\\MoaWorks\\frontend\\mobile-app\\build-evidence\\bundle-2026-08-21T14-13-12-594Z.js --assets-dest C:\\Users\\cyhuh\\Desktop\\D Driver\\Project\\MoaWorks\\frontend\\mobile-app\\build-evidence --reset-cache",
+      "status": 0,
+      "stdout": "warning: the transform cache was reset.\n                Welcome to Metro v0.80.12\n              Fast - Scalable - Integrated\n\n\ntransform[stderr]: (node:3880) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\ntransform[stderr]: (Use `node --trace-warnings ...` to show where the warning was created)\ntransform[stderr]: (node:16932) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\ntransform[stderr]: (Use `node --trace-warnings ...` to show where the warning was created)\ntransform[stderr]: (node:38236) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\ntransform[stderr]: (Use `node --trace-warnings ...` to show where the warning was created)\ntransform[stderr]: (node:30672) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\ntransform[stderr]: (Use `node --trace-warnings ...` to show where the warning was created)\ntransform[stderr]: (node:7908) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\ntransform[stderr]: (Use `node --trace-warnings ...` to show where the warning was created)\ntransform[stderr]: (node:25936) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\ntransform[stderr]: (Use `node --trace-warnings ...` to show where the warning was created)\ntransform[stderr]: (node:2504) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\ntransform[stderr]: (Use `node --trace-warnings ...` to show where the warning was created)\ntransform[stderr]: (node:12040) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\ntransform[stderr]: (Use `node --trace-warnings ...` to show where the warning was created)\ntransform[stderr]: (node:36636) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\ntransform[stderr]: (Use `node --trace-warnings ...` to show where the warning was created)\ntransform[stderr]: (node:31144) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\ntransform[stderr]: (Use `node --trace-warnings ...` to show where the warning was created)\ninfo Writing bundle output to: C:\\Users\\cyhuh\\Desktop\\D Driver\\Project\\MoaWorks\\frontend\\mobile-app\\build-evidence\\bundle-2026-08-21T14-13-12-594Z.js\ninfo Done writing bundle output\n",
+      "stderr": ""
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "build-evidence\\bundle-2026-08-21T14-13-12-594Z.js",
+      "size": 936936,
+      "sha256": "39531a4f1aa43df9e58cfb9a70c139a2e7d1eca10d33740934150c936102c0c1"
+    },
+    {
+      "path": "build-evidence\\mobile-app-build-2026-08-21T14-13-12-594Z.log",
+      "size": 1174,
+      "sha256": "1835e8b5df826508007b4768dc5825f67e331c2793611207fe4559096af23291"
+    }
+  ],
+  "status": "success",
+  "blockerCode": null,
+  "blockerMessage": ""
+}

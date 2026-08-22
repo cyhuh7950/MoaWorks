@@ -639,6 +639,70 @@ button.secondary {
   padding: 8px;
 }
 
+/* 관리자 운영 화면은 넓은 상태 카드를 유지하되, 동작 버튼과 설명은 겹치지 않게 고정한다. */
+.console-shell .ops-panel button,
+.console-shell .operations-modal button,
+.console-shell .management-modal button {
+  border-radius: 8px;
+  min-height: 32px;
+  white-space: nowrap;
+}
+
+.console-shell .ops-head-actions,
+.console-shell .ops-head .actions,
+.console-shell .compact-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.console-shell .overview-grid {
+  align-items: stretch;
+  gap: 12px;
+}
+
+.console-shell .status-card {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.console-shell .status-card p,
+.console-shell .status-card .mini-stat {
+  display: block;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.console-shell .operations-modal {
+  width: min(760px, calc(100vw - 32px));
+  max-height: min(720px, calc(100vh - 32px));
+  overflow: auto;
+}
+
+.console-shell .operations-modal .ops-toolbar-grid,
+.console-shell .operations-modal .compact-form {
+  min-width: 0;
+  gap: 12px;
+}
+
+.console-shell .operations-modal textarea,
+.console-shell .content-editor-modal textarea {
+  min-height: 140px;
+  resize: vertical;
+}
+
+@media (max-width: 900px) {
+  .console-shell .overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .console-shell .operations-modal {
+    width: calc(100vw - 20px);
+  }
+}
+
 .ops-shell {
   height: 100%;
   min-height: 0;

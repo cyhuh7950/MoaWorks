@@ -1,0 +1,64 @@
+{
+  "executedAt": "2026-06-23T18:42:08.356Z",
+  "projectRoot": "D:\\Project\\MoaWorks\\frontend\\mobile-app",
+  "runId": "2026-06-23T18-42-08-354Z",
+  "mode": "android",
+  "checks": [
+    {
+      "key": "node",
+      "status": true,
+      "path": "C:\\Program Files\\nodejs\\node.exe"
+    },
+    {
+      "key": "npm",
+      "status": true,
+      "path": "C:\\Program Files\\nodejs\\npm"
+    },
+    {
+      "key": "app_entry_file",
+      "status": true,
+      "path": "App.tsx"
+    },
+    {
+      "key": "android_entry_file",
+      "status": true,
+      "path": "index.js"
+    },
+    {
+      "key": "app_registry_config",
+      "status": true,
+      "path": "app.json"
+    },
+    {
+      "key": "node_modules",
+      "status": false,
+      "path": "node_modules"
+    },
+    {
+      "key": "react_native_binary",
+      "status": false,
+      "path": ""
+    },
+    {
+      "key": "android_project",
+      "status": false,
+      "path": "android"
+    },
+    {
+      "key": "metro_config_or_default",
+      "status": true,
+      "path": "metro.config.js(optional)"
+    }
+  ],
+  "commands": [],
+  "artifacts": [
+    {
+      "path": "build-evidence\\mobile-app-build-2026-06-23T18-42-08-354Z.log",
+      "size": 703,
+      "sha256": "03c37163f5eb7be97b0994cdffda1ed6d98075dbd37bbcfb9c1984e79006f678"
+    }
+  ],
+  "status": "blocked",
+  "blockerCode": "MOBILE_BUILD_PREREQUISITE_MISSING",
+  "blockerMessage": "Missing required prereqs: node_modules, react_native_binary, android_project"
+}

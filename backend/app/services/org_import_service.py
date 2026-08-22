@@ -3,10 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from io import BytesIO
 import json
-from pathlib import Path
-import secrets
 from uuid import uuid4
-from zipfile import BadZipFile, ZipFile
 
 from openpyxl import Workbook, load_workbook
 
@@ -26,12 +23,6 @@ from app.services.security_service import SecurityService
 
 
 class OrgImportService:
-    MAX_UPLOAD_BYTES = 10 * 1024 * 1024
-    MAX_ZIP_ENTRIES = 128
-    MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
-    MAX_DATA_ROWS = 10_000
-    XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    ALLOWED_MIME_TYPES = frozenset({XLSX_MIME_TYPE, "application/octet-stream"})
     DEPARTMENT_HEADERS = ["department_code", "department_name", "parent_department_code", "sort_order", "status"]
     USER_HEADERS = ["login_id", "name", "department_code", "role_code", "status"]
     DEFAULT_DEACTIVATION_SCOPE = "uploaded_departments_only"
@@ -62,30 +53,9 @@ class OrgImportService:
         workbook.save(buffer)
         return buffer.getvalue()
 
-    def validate_file_metadata(self, file_name: str, content_type: str | None) -> None:
-        if Path(file_name or "").suffix.lower() != ".xlsx":
-            raise ValueError("조직 일괄 등록은 .xlsx 파일만 지원합니다.")
-        normalized_content_type = str(content_type or "").split(";", 1)[0].strip().lower()
-        if normalized_content_type not in self.ALLOWED_MIME_TYPES:
-            raise ValueError("지원하지 않는 엑셀 파일 형식입니다.")
-
-    def validate_workbook_archive(self, content: bytes) -> None:
-        if len(content) > self.MAX_UPLOAD_BYTES:
-            raise ValueError("업로드 파일은 10 MiB 이하여야 합니다.")
-        try:
-            with ZipFile(BytesIO(content)) as archive:
-                entries = archive.infolist()
-                if len(entries) > self.MAX_ZIP_ENTRIES:
-                    raise ValueError("엑셀 내부 파일 항목 수가 허용 범위를 초과했습니다.")
-                uncompressed_bytes = sum(max(0, int(entry.file_size)) for entry in entries)
-                if uncompressed_bytes > self.MAX_UNCOMPRESSED_BYTES:
-                    raise ValueError("엑셀 압축 해제 예상 크기가 허용 범위를 초과했습니다.")
-        except BadZipFile as exc:
-            raise ValueError("올바른 .xlsx 파일이 아닙니다.") from exc
-
     def validate_upload(self, actor: AuthUserSummary, file_name: str, content: bytes, deactivation_scope: str | None = None) -> OrgImportBatchResponse:
-        departments, users = self._parse_workbook(content)
         self.db.ensure_migrations_applied()
+        departments, users = self._parse_workbook(content)
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
                 analysis = self._analyze_import(cursor, departments, users, actor=actor, deactivation_scope=deactivation_scope)
@@ -302,20 +272,21 @@ class OrgImportService:
                             """
                             INSERT INTO users (
                                 id, company_id, email, name, password_hash, department_id, role_id,
-                                status, user_type, created_at, updated_at
+                                status, user_type, must_change_password, created_at, updated_at
                             )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             """,
                             (
                                 user_id,
                                 analysis["company_id"],
                                 email,
                                 user["name"],
-                                self.security.hash_password(secrets.token_urlsafe(32)),
+                                self.security.hash_password(user["loginId"]),
                                 department_id,
                                 user["roleId"],
-                                "inactive",
+                                user["status"],
                                 "user",
+                                True,
                                 now,
                                 now,
                             ),
@@ -332,7 +303,7 @@ class OrgImportService:
                                 user_id,
                                 email,
                                 2048,
-                                "inactive",
+                                "active" if user["status"] == "active" else "inactive",
                                 analysis["provider_id"],
                                 now,
                                 now,
@@ -441,25 +412,19 @@ class OrgImportService:
         return self._row_to_batch_response(row)
 
     def _parse_workbook(self, content: bytes) -> tuple[list[dict], list[dict]]:
-        self.validate_workbook_archive(content)
         try:
-            workbook = load_workbook(filename=BytesIO(content), data_only=True, read_only=True)
+            workbook = load_workbook(filename=BytesIO(content), data_only=True)
         except Exception as exc:  # noqa: BLE001
-            raise ValueError("엑셀 파일을 읽지 못했습니다. 올바른 템플릿인지 확인하세요.") from exc
+            raise ValueError(f"엑셀 파일을 읽지 못했습니다: {exc}") from exc
 
-        try:
-            if "departments" not in workbook.sheetnames or "users" not in workbook.sheetnames:
-                raise ValueError("엑셀 파일에는 departments, users 시트가 모두 있어야 합니다.")
+        if "departments" not in workbook.sheetnames or "users" not in workbook.sheetnames:
+            raise ValueError("엑셀 파일에는 departments, users 시트가 모두 있어야 합니다.")
 
-            department_rows = self._read_sheet_rows(workbook["departments"], self.DEPARTMENT_HEADERS)
-            user_rows = self._read_sheet_rows(workbook["users"], self.USER_HEADERS)
-            return department_rows, user_rows
-        finally:
-            workbook.close()
+        department_rows = self._read_sheet_rows(workbook["departments"], self.DEPARTMENT_HEADERS)
+        user_rows = self._read_sheet_rows(workbook["users"], self.USER_HEADERS)
+        return department_rows, user_rows
 
     def _read_sheet_rows(self, worksheet, expected_headers: list[str]) -> list[dict]:
-        if int(worksheet.max_row or 0) > self.MAX_DATA_ROWS + 1:
-            raise ValueError(f"{worksheet.title} 시트의 데이터 행은 10,000행 이하여야 합니다.")
         header_cells = next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True), None)
         if header_cells is None:
             raise ValueError(f"{worksheet.title} 시트 헤더를 찾을 수 없습니다.")
@@ -496,7 +461,7 @@ class OrgImportService:
         roles = cursor.fetchall()
         cursor.execute(
             """
-            SELECT u.id, u.email, u.name, u.status, u.user_type, u.department_id, u.role_id,
+            SELECT u.id, u.email, u.name, u.status, u.user_type, u.department_id, u.role_id, u.must_change_password,
                    d.name AS department_name, d.department_code, d.system_department_code, r.name AS role_name
             FROM users u
             JOIN departments d ON d.id = u.department_id

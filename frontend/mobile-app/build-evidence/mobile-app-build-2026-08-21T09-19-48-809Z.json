@@ -1,0 +1,76 @@
+{
+  "executedAt": "2026-08-21T09:19:48.810Z",
+  "projectRoot": "C:\\Users\\cyhuh\\Desktop\\D Driver\\Project\\MoaWorks\\frontend\\mobile-app",
+  "runId": "2026-08-21T09-19-48-809Z",
+  "mode": "android",
+  "checks": [
+    {
+      "key": "node",
+      "status": true,
+      "path": "C:\\Program Files\\nodejs\\node.exe"
+    },
+    {
+      "key": "npm",
+      "status": true,
+      "path": "C:\\Program Files\\nodejs\\npm"
+    },
+    {
+      "key": "npx",
+      "status": true,
+      "path": "C:\\Program Files\\nodejs\\npx"
+    },
+    {
+      "key": "app_entry_file",
+      "status": true,
+      "path": "App.tsx"
+    },
+    {
+      "key": "android_entry_file",
+      "status": true,
+      "path": "index.js"
+    },
+    {
+      "key": "app_registry_config",
+      "status": true,
+      "path": "app.json"
+    },
+    {
+      "key": "node_modules",
+      "status": true,
+      "path": "node_modules"
+    },
+    {
+      "key": "react_native_binary",
+      "status": true,
+      "path": "C:\\Users\\cyhuh\\Desktop\\D Driver\\Project\\MoaWorks\\frontend\\mobile-app\\node_modules\\.bin\\react-native"
+    },
+    {
+      "key": "android_project",
+      "status": true,
+      "path": "android"
+    },
+    {
+      "key": "metro_config_or_default",
+      "status": true,
+      "path": "metro.config.js(optional)"
+    }
+  ],
+  "commands": [
+    {
+      "command": "npx.cmd react-native bundle --platform android --dev false --entry-file index.js --bundle-output C:\\Users\\cyhuh\\Desktop\\D Driver\\Project\\MoaWorks\\frontend\\mobile-app\\build-evidence\\bundle-2026-08-21T09-19-48-809Z.js --assets-dest C:\\Users\\cyhuh\\Desktop\\D Driver\\Project\\MoaWorks\\frontend\\mobile-app\\build-evidence --reset-cache",
+      "status": 1,
+      "stdout": "warning: the transform cache was reset.\n                Welcome to Metro v0.80.12\n              Fast - Scalable - Integrated\n\n\ntransform[stderr]: (node:33388) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\ntransform[stderr]: (Use `node --trace-warnings ...` to show where the warning was created)\ntransform[stderr]: (node:15436) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\ntransform[stderr]: (Use `node --trace-warnings ...` to show where the warning was created)\ntransform[stderr]: (node:20248) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\ntransform[stderr]: (Use `node --trace-warnings ...` to show where the warning was created)\ntransform[stderr]: (node:4364) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\ntransform[stderr]: (Use `node --trace-warnings ...` to show where the warning was created)\ntransform[stderr]: (node:4584) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\ntransform[stderr]: (Use `node --trace-warnings ...` to show where the warning was created)\ntransform[stderr]: (node:8760) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\ntransform[stderr]: (Use `node --trace-warnings ...` to show where the warning was created)\ntransform[stderr]: (node:32488) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\ntransform[stderr]: (Use `node --trace-warnings ...` to show where the warning was created)\ntransform[stderr]: (node:4140) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\ntransform[stderr]: (Use `node --trace-warnings ...` to show where the warning was created)\ntransform[stderr]: (node:26532) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\ntransform[stderr]: (Use `node --trace-warnings ...` to show where the warning was created)\ntransform[stderr]: (node:32836) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\ntransform[stderr]: (Use `node --trace-warnings ...` to show where the warning was created)\ninfo Writing bundle output to: C:\\Users\\cyhuh\\Desktop\\D\nError: EISDIR: illegal operation on a directory, open 'C:\\Users\\cyhuh\\Desktop\\D'\ninfo Run CLI with --verbose flag for more details.\n",
+      "stderr": "error EISDIR: illegal operation on a directory, open 'C:\\Users\\cyhuh\\Desktop\\D'.\n"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "build-evidence\\mobile-app-build-2026-08-21T09-19-48-809Z.log",
+      "size": 919,
+      "sha256": "88e9e0a686bc2f5c4d7193d5d51bfa936beb611970d20aa72a0bfcbc04a7ad5d"
+    }
+  ],
+  "status": "blocked",
+  "blockerCode": "MOBILE_BUILD_COMMAND_FAILED",
+  "blockerMessage": "npx react-native bundle failed with exit code 1"
+}

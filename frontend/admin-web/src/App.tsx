@@ -31,7 +31,6 @@ import {
   fetchMonitoringOverview,
   fetchApprovalAuditLogs,
   fetchOrgImportBatch,
-  fetchPublicUiContract,
   fetchUiContract,
   getStoredToken,
   initializeSetup,
@@ -121,11 +120,11 @@ type UserForm = {
   userId: string;
   name: string;
   loginId: string;
-  password: string;
   departmentId: string;
   roleId: string;
   status: string;
   userType: string;
+  isDepartmentHead: boolean;
 };
 
 type ManagementDialog = "user" | "department" | "role" | "orgImport" | null;
@@ -148,11 +147,11 @@ const initialUserForm: UserForm = {
   userId: "",
   name: "",
   loginId: "",
-  password: "",
   departmentId: "",
   roleId: "",
   status: "active",
   userType: "user",
+  isDepartmentHead: false,
 };
 
 const ORG_IMPORT_DEACTIVATION_CONFIRMATION_TEXT = "누락 사용자 비활성화에 동의합니다.";
@@ -695,8 +694,6 @@ export default function App() {
   const [translationLoading, setTranslationLoading] = useState(false);
   const [form, setForm] = useState<SetupForm>(initialForm);
   const [loginForm, setLoginForm] = useState<LoginForm>({ loginId: "", password: "" });
-  const [publicUiContractState, setPublicUiContractState] = useState<PublicUiContractState>("pending");
-  const [publicUiContractError, setPublicUiContractError] = useState("");
   const [userForm, setUserForm] = useState<UserForm>(initialUserForm);
   const [userSearch, setUserSearch] = useState("");
   const [userStatusFilter, setUserStatusFilter] = useState("visible");
@@ -1302,7 +1299,7 @@ export default function App() {
         return;
       }
       const response = await login({
-        email: buildCompanyLoginEmail(loginForm.loginId, companyDomain),
+        email: buildCompanyLoginEmail(loginForm.loginId, uiContractDraft.company.domain),
         password: loginForm.password,
       });
       storeToken(response.accessToken);
@@ -1471,23 +1468,23 @@ export default function App() {
       if (userForm.userId) {
         await updateUser(token, userForm.userId, {
           name: userForm.name,
-          ...(userForm.password ? { password: userForm.password } : {}),
           departmentId: userForm.departmentId,
           roleId: userForm.roleId,
           status: userForm.status,
+          isDepartmentHead: userForm.isDepartmentHead,
         });
         setMessage("사용자 정보가 수정되었습니다.");
       } else {
         await createUser(token, {
           name: userForm.name,
           loginId: userForm.loginId,
-          password: userForm.password,
           departmentId: userForm.departmentId,
           roleId: userForm.roleId,
           status: userForm.status,
           userType: "user",
+          isDepartmentHead: userForm.isDepartmentHead,
         });
-        setMessage("사용자가 생성되었습니다. 입력한 초기 비밀번호를 사용자에게 안전하게 전달하세요.");
+        setMessage("사용자가 생성되었고, 초기 비밀번호는 아이디와 동일하게 설정되었습니다.");
       }
       setUserForm((current) => ({
         ...initialUserForm,
@@ -1675,11 +1672,11 @@ export default function App() {
       userId: user.userId,
       name: user.userName,
       loginId: user.userEmail.split("@")[0] || "",
-      password: "",
       departmentId: user.departmentId,
       roleId: user.roleId,
       status: user.status === "deleted" ? "inactive" : user.status,
       userType: user.userType,
+      isDepartmentHead: user.isDepartmentHead,
     } : {
       ...initialUserForm,
       departmentId: activeDepartments.find((item) => item.status === "active")?.id || activeDepartments[0]?.id || "",
@@ -1796,13 +1793,15 @@ export default function App() {
     setErrors([]);
     try {
       const response = await testMailDelivery(token, {
-        subject: "MoaWorks 메일 제공자 연결 테스트",
+        recipient: relayRecipient,
+        subject: "MoaWorks 자체 SMTP 테스트",
+        bodyText: "MoaWorks 자체 SMTP 엔진 테스트 메일입니다.",
       });
       setMailDeliveryTestResult(response);
-      setMessage(`메일 제공자 연결 테스트 결과: ${response.status}`);
+      setMessage(`자체 SMTP 테스트 결과: ${response.status}`);
       await refreshMailDelivery();
     } catch (error) {
-      setErrors([error instanceof Error ? error.message : "메일 제공자 연결 테스트 실패"]);
+      setErrors([error instanceof Error ? error.message : "자체 SMTP 테스트 실패"]);
     } finally {
       setLoading(false);
     }
@@ -1823,8 +1822,7 @@ export default function App() {
     }
   }
 
-  const isPublicLoginContractPending = health?.initialized === true && !token && publicUiContractState === "pending";
-  const isHealthPending = health === null || isPublicLoginContractPending;
+  const isHealthPending = health === null;
   const initialized = health?.initialized === true;
   const showSetupWizard = health?.initialized === false;
   const showLoginPanel = initialized && (!token || !overview) && (Boolean(token) || publicUiContractState !== "pending");
@@ -2166,12 +2164,8 @@ export default function App() {
                     <input value={userForm.name} onChange={(e) => setUserForm({ ...userForm, name: e.target.value })} />
                   </label>
                   <label className="compact-field">
-                    <span>아이디 <InlineHint label="회사 도메인과 결합해 이메일 주소를 자동 구성합니다." /></span>
+                    <span>아이디 <InlineHint label="이메일과 초기 비밀번호는 아이디 기준으로 자동 구성됩니다." /></span>
                     <input value={userForm.loginId} disabled={Boolean(userForm.userId)} onChange={(e) => setUserForm({ ...userForm, loginId: e.target.value.toLowerCase() })} placeholder="hong.gildong" />
-                  </label>
-                  <label className="compact-field">
-                    <span>{userForm.userId ? "새 비밀번호(선택)" : "초기 비밀번호"} <InlineHint label="8자 이상으로 설정하고 사용자에게 별도 보안 채널로 전달하세요." /></span>
-                    <input type="password" minLength={8} required={!userForm.userId} value={userForm.password} onChange={(e) => setUserForm({ ...userForm, password: e.target.value })} autoComplete="new-password" />
                   </label>
                   <label className="compact-field">
                     <span>자동 생성 이메일</span>
@@ -2181,6 +2175,13 @@ export default function App() {
                     <span>부서</span>
                     <select value={userForm.departmentId} onChange={(e) => setUserForm({ ...userForm, departmentId: e.target.value })}>
                       {activeDepartments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                    </select>
+                  </label>
+                  <label className="compact-field user-department-head-field">
+                    <span>부서장 여부 <InlineHint label="부서당 한 명만 부서장으로 지정됩니다. 새 부서장을 지정하면 기존 지정은 해제됩니다." /></span>
+                    <select value={userForm.isDepartmentHead ? "yes" : "no"} onChange={(event) => setUserForm({ ...userForm, isDepartmentHead: event.target.value === "yes" })}>
+                      <option value="no">아니오</option>
+                      <option value="yes">예</option>
                     </select>
                   </label>
                   <label className="compact-field">
@@ -2334,9 +2335,9 @@ export default function App() {
               ) : null}
               <div className="ops-list-panel">
                 <div className="ops-list-head"><strong>사용자 목록</strong><span className="muted">행을 더블클릭하면 상세·수정 창이 열립니다.</span></div>
-                <div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th><input type="checkbox" aria-label="현재 사용자 결과 전체 선택" checked={filteredUsers.length > 0 && filteredUsers.every((item) => selectedUserIds.includes(item.userId))} onChange={(event) => setSelectedUserIds(event.target.checked ? filteredUsers.map((item) => item.userId) : [])} /></th><th>이름</th><th>아이디/이메일</th><th>부서</th><th>권한 역할</th><th>사용자 상태</th><th>메일 상태</th><th>정합성</th></tr></thead><tbody>
-                  {filteredUsers.map((item) => <tr key={item.userId} onDoubleClick={() => openUserDialog(item)} className="management-list-row"><td><input type="checkbox" aria-label={`${item.userName} 선택`} checked={selectedUserIds.includes(item.userId)} onChange={(event) => toggleSelection(selectedUserIds, item.userId, event.target.checked, setSelectedUserIds)} onClick={(event) => event.stopPropagation()} /></td><td>{item.userName}</td><td>{item.userEmail}</td><td>{item.departmentName}</td><td>{item.roleName}</td><td><span className={`badge ${item.status === "active" ? "badge-ok" : item.status === "deleted" ? "badge-danger" : "badge-warning"}`}>{item.status}</span></td><td>{item.mailAccountStatus}</td><td>{item.consistencyIssues.length === 0 ? "정상" : item.consistencyIssues.map((issue) => issue.code).join(", ")}</td></tr>)}
-                  {filteredUsers.length === 0 ? <tr><td colSpan={8}>조건에 맞는 사용자가 없습니다.</td></tr> : null}
+                <div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th><input type="checkbox" aria-label="현재 사용자 결과 전체 선택" checked={filteredUsers.length > 0 && filteredUsers.every((item) => selectedUserIds.includes(item.userId))} onChange={(event) => setSelectedUserIds(event.target.checked ? filteredUsers.map((item) => item.userId) : [])} /></th><th>이름</th><th>아이디/이메일</th><th>부서</th><th>부서장</th><th>권한 역할</th><th>사용자 상태</th><th>메일 상태</th><th>정합성</th></tr></thead><tbody>
+                  {filteredUsers.map((item) => <tr key={item.userId} onDoubleClick={() => openUserDialog(item)} className="management-list-row"><td><input type="checkbox" aria-label={`${item.userName} 선택`} checked={selectedUserIds.includes(item.userId)} onChange={(event) => toggleSelection(selectedUserIds, item.userId, event.target.checked, setSelectedUserIds)} onClick={(event) => event.stopPropagation()} /></td><td>{item.userName}</td><td>{item.userEmail}</td><td>{item.departmentName}</td><td>{item.isDepartmentHead ? <span className="badge badge-ok">부서장</span> : "-"}</td><td>{item.roleName}</td><td><span className={`badge ${item.status === "active" ? "badge-ok" : item.status === "deleted" ? "badge-danger" : "badge-warning"}`}>{item.status}</span></td><td>{item.mailAccountStatus}</td><td>{item.consistencyIssues.length === 0 ? "정상" : item.consistencyIssues.map((issue) => issue.code).join(", ")}</td></tr>)}
+                  {filteredUsers.length === 0 ? <tr><td colSpan={9}>조건에 맞는 사용자가 없습니다.</td></tr> : null}
                 </tbody></table></div>
               </div>
             </div>
@@ -2372,7 +2373,7 @@ export default function App() {
         );      case "service":
         return <section className="panel ops-panel"><div className="ops-shell"><div className="panel-head ops-head"><h2>서비스 운영</h2><div className="actions compact-actions"><button type="button" onClick={() => setOperationsDialog("domain")}>도메인 검증 실행</button><button type="button" className="secondary" onClick={() => setOperationsDialog("relay")}>Relay 테스트 실행</button></div></div><div className="overview-grid"><article className="status-card"><strong>운영 점검</strong><span className="mini-stat">열린 경고 {monitoringOverview?.alertOpenCount ?? 0}건</span></article><article className="status-card"><strong>Relay 상태</strong><span className="mini-stat">{relayResult?.status ?? "최근 실행 없음"}</span></article></div><div className="ops-list-panel"><div className="ops-list-head"><strong>도메인 검증 이력</strong><span className="muted">행을 더블클릭하면 실행 결과를 확인합니다.</span></div><div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>유형</th><th>대상</th><th>상태</th><th>결과</th></tr></thead><tbody>{(domainResult?.checks ?? []).map((item) => <tr key={`${item.recordType}-${item.host}`} onDoubleClick={() => { setOperationDetail({ title: "도메인 검증 상세", lines: [item.recordType, item.host, item.message, item.status] }); setOperationsDialog("audit"); }}><td>{item.recordType}</td><td>{item.host}</td><td>{item.status}</td><td>{item.message}</td></tr>)}{!domainResult ? <tr><td colSpan={4}>검증 이력이 없습니다.</td></tr> : null}</tbody></table></div></div></div></section>;
       case "mail":
-        return <section className="panel ops-panel"><div className="ops-shell"><div className="panel-head ops-head"><h2>메일 설정</h2><div className="actions compact-actions"><button type="button" onClick={() => setOperationsDialog("mailTest")}>제공자 연결 테스트</button><button type="button" className="secondary" onClick={() => setOperationsDialog("provider")}>제공자 설정</button><button type="button" className="secondary" onClick={() => void refreshMailDelivery()}>새로고침</button></div></div><div className="overview-grid"><article className="status-card"><strong>Provider</strong><span className="mini-stat">{mailDeliveryStatus?.provider.providerKey ?? "self_hosted_smtp"}</span></article><article className="status-card"><strong>발송 큐</strong><span className="mini-stat">queued {mailDeliveryStatus?.summary.queuedCount ?? 0} / failed {mailDeliveryStatus?.summary.failedCount ?? 0}</span></article></div><div className="ops-list-panel"><div className="ops-list-head"><strong>최근 전달 이력</strong></div><div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>수신자</th><th>제목</th><th>상태</th><th>재시도</th></tr></thead><tbody>{(mailDeliveryQueue?.queue ?? []).map((item) => <tr key={item.queueId} onDoubleClick={() => { setOperationDetail({ title: "전달 상세", lines: [item.recipient, item.subject, item.status, `재시도 ${item.attemptCount}`, item.lastError ?? "오류 없음"] }); setOperationsDialog("audit"); }}><td>{item.recipient}</td><td>{item.subject}</td><td>{item.status}</td><td>{item.attemptCount}</td></tr>)}{(mailDeliveryQueue?.queue?.length ?? 0) === 0 ? <tr><td colSpan={4}>전달 이력이 없습니다.</td></tr> : null}</tbody></table></div></div></div></section>;
+        return <section className="panel ops-panel"><div className="ops-shell"><div className="panel-head ops-head"><h2>메일 설정</h2><div className="actions compact-actions"><button type="button" onClick={() => setOperationsDialog("mailTest")}>테스트 발송</button><button type="button" className="secondary" onClick={() => setOperationsDialog("provider")}>제공자 설정</button><button type="button" className="secondary" onClick={() => void refreshMailDelivery()}>새로고침</button></div></div><div className="overview-grid"><article className="status-card"><strong>Provider</strong><span className="mini-stat">{mailDeliveryStatus?.provider.providerKey ?? "self_hosted_smtp"}</span></article><article className="status-card"><strong>발송 큐</strong><span className="mini-stat">queued {mailDeliveryStatus?.summary.queuedCount ?? 0} / failed {mailDeliveryStatus?.summary.failedCount ?? 0}</span></article></div><div className="ops-list-panel"><div className="ops-list-head"><strong>최근 전달 이력</strong></div><div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>수신자</th><th>제목</th><th>상태</th><th>재시도</th></tr></thead><tbody>{(mailDeliveryQueue?.queue ?? []).map((item) => <tr key={item.queueId} onDoubleClick={() => { setOperationDetail({ title: "전달 상세", lines: [item.recipient, item.subject, item.status, `재시도 ${item.attemptCount}`, item.lastError ?? "오류 없음"] }); setOperationsDialog("audit"); }}><td>{item.recipient}</td><td>{item.subject}</td><td>{item.status}</td><td>{item.attemptCount}</td></tr>)}{(mailDeliveryQueue?.queue?.length ?? 0) === 0 ? <tr><td colSpan={4}>전달 이력이 없습니다.</td></tr> : null}</tbody></table></div></div></div></section>;
       case "storage":
         return (
           <section className="panel">
@@ -2807,7 +2808,7 @@ export default function App() {
                 {copy.adminEmail}
                 <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 10, alignItems: "center" }}>
                   <input value={loginForm.loginId} onChange={(e) => setLoginForm({ ...loginForm, loginId: normalizeLoginIdInput(e.target.value) })} placeholder="admin" />
-                  <span style={{ height: 40, display: "inline-flex", alignItems: "center", padding: "0 12px", borderRadius: 12, border: "1px solid #dbe4ec", background: "#f8fafc", color: "#475569", fontSize: 13, fontWeight: 700 }}>@{publicUiContractState === "ready" ? uiContractDraft.company.domain : "도메인 확인 필요"}</span>
+                  <span style={{ height: 40, display: "inline-flex", alignItems: "center", padding: "0 12px", borderRadius: 12, border: "1px solid #dbe4ec", background: "#f8fafc", color: "#475569", fontSize: 13, fontWeight: 700 }}>@{uiContractDraft.company.domain}</span>
                 </div>
               </label>
               <label>
@@ -3139,10 +3140,10 @@ export default function App() {
             {operationsDialog ? (
               <div className="management-modal-backdrop" role="presentation" onClick={() => !loading && setOperationsDialog(null)}>
                 <section className="management-modal operations-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-                  <div className="management-modal-head"><strong>{operationsDialog === "domain" ? "도메인 검증 실행" : operationsDialog === "relay" ? "Relay 테스트 실행" : operationsDialog === "mailTest" ? "제공자 연결 테스트" : operationsDialog === "provider" ? "메일 제공자 설정" : operationsDialog === "storage" ? "운영 점검 실행" : operationsDialog === "brand" ? "브랜드/화면 설정 편집" : operationsDialog === "language" ? "다국어/메시지 설정" : operationsDialog === "help" ? "도움말/정책 상세" : "감사 로그 상세"}</strong><button type="button" className="secondary" onClick={() => setOperationsDialog(null)}>닫기</button></div>
+                  <div className="management-modal-head"><strong>{operationsDialog === "domain" ? "도메인 검증 실행" : operationsDialog === "relay" ? "Relay 테스트 실행" : operationsDialog === "mailTest" ? "테스트 발송" : operationsDialog === "provider" ? "메일 제공자 설정" : operationsDialog === "storage" ? "운영 점검 실행" : operationsDialog === "brand" ? "브랜드/화면 설정 편집" : operationsDialog === "language" ? "다국어/메시지 설정" : operationsDialog === "help" ? "도움말/정책 상세" : "감사 로그 상세"}</strong><button type="button" className="secondary" onClick={() => setOperationsDialog(null)}>닫기</button></div>
                   {operationsDialog === "domain" ? <form className="compact-form" onSubmit={(event) => { void handleDomainVerify(event); setOperationsDialog(null); }}><label>검증 도메인<input value={domainInput} onChange={(event) => setDomainInput(event.target.value)} /></label><button type="submit" disabled={loading}>검증 실행</button></form> : null}
                   {operationsDialog === "relay" ? <form className="compact-form" onSubmit={(event) => { void handleRelayTest(event); setOperationsDialog(null); }}><label>테스트 수신자<input type="email" value={relayRecipient} onChange={(event) => setRelayRecipient(event.target.value)} /></label><button type="submit" disabled={loading}>Relay 테스트</button></form> : null}
-                  {operationsDialog === "mailTest" ? <form className="compact-form" onSubmit={(event) => { void handleMailDeliveryTest(event); setOperationsDialog(null); }}><label>제공자 연결 테스트 대상(입력 미사용)<input type="email" value={relayRecipient} onChange={(event) => setRelayRecipient(event.target.value)} /></label><button type="submit" disabled={loading}>제공자 연결 테스트</button></form> : null}
+                  {operationsDialog === "mailTest" ? <form className="compact-form" onSubmit={(event) => { void handleMailDeliveryTest(event); setOperationsDialog(null); }}><label>테스트 발송 수신자<input type="email" value={relayRecipient} onChange={(event) => setRelayRecipient(event.target.value)} /></label><button type="submit" disabled={loading}>테스트 발송</button></form> : null}
                   {operationsDialog === "provider" ? <div className="stack-list"><span className="mini-stat">Provider {mailDeliveryStatus?.provider.providerKey ?? "self_hosted_smtp"}</span><span className="mini-stat">발신 주소 {mailDeliveryStatus?.provider.senderAddress ?? "-"}</span><button type="button" onClick={() => { void refreshMailDelivery(); setOperationsDialog(null); }}>저장값 다시 불러오기</button></div> : null}
                   {operationsDialog === "storage" ? <div className="stack-list"><span className="mini-stat">저장소 {health?.components.storage?.status ?? "unknown"}</span><span className="mini-stat">DB {health?.components.db?.status ?? "unknown"}</span><button type="button" onClick={() => { void refreshDirectory(); void refreshMonitoring(); setOperationsDialog(null); }}>점검 실행</button></div> : null}
                   {operationsDialog === "brand" ? <div className="stack-list"><span className="mini-stat">회사명/도메인은 초기 설정 원천의 읽기 전용 값입니다.</span><button type="button" onClick={() => { void handleUiContractSave(); setOperationsDialog(null); }}>현재 설정 저장</button><button type="button" className="secondary" onClick={() => void reloadUiContract()}>저장값 다시 불러오기</button></div> : null}

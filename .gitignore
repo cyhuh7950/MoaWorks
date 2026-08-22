@@ -7,17 +7,14 @@ venv/
 node_modules/
 dist/
 build/
-frontend/mobile-app/android/.gradle/
-frontend/mobile-app/build-evidence/*.apk
-frontend/mobile-app/build-evidence/*.aab
-frontend/mobile-app/build-evidence/*.bundle
-frontend/desktop-client/build-evidence/*.zip
-frontend/desktop-client/build-evidence/runtime-verify-*/
-frontend/desktop-client/build-evidence/archive-verification/
+.gradle/
+.worktrees/
+.claude/
 .next/
 .turbo/
 
 coverage/
+.coverage
 htmlcov/
 .pytest_cache/
 .mypy_cache/

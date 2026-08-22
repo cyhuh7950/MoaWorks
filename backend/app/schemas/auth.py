@@ -28,11 +28,11 @@ class CurrentUserResponse(BaseModel):
 
 
 class PasswordChangeRequest(BaseModel):
-    currentPassword: str = Field(min_length=1, max_length=128)
-    newPassword: str = Field(min_length=8, max_length=128)
+    currentPassword: str = Field(min_length=1)
+    newPassword: str = Field(min_length=8)
 
     @model_validator(mode="after")
-    def require_new_value(self):
+    def validate_password_change(self) -> "PasswordChangeRequest":
         if self.currentPassword == self.newPassword:
             raise ValueError("새 비밀번호는 현재 비밀번호와 달라야 합니다.")
         return self

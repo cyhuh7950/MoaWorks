@@ -1,0 +1,35 @@
+{
+  "executedAt": "2026-06-30T12:54:24.850Z",
+  "projectRoot": "D:\\Project\\MoaWorks\\frontend\\desktop-client",
+  "bundleDir": "build-evidence\\desktop-client-package-2026-06-30T12-53-47-017Z",
+  "portableDir": "build-evidence\\desktop-client-package-2026-06-30T12-53-47-017Z-portable",
+  "portableExePath": "build-evidence\\desktop-client-package-2026-06-30T12-53-47-017Z-portable\\MoaWorks Desktop Client.exe",
+  "portableExeSha256": "217c7abc77aaa868b9423ff3e6e8f40f62633ccc4121786fac64e481aef3429d",
+  "archivePath": "build-evidence\\desktop-client-package-2026-06-30T12-53-47-017Z.tar.gz",
+  "archiveSha256": "ba55abf6321272ca25e79452b173ebe0100ae0e6275619dcf135879e1f6bc9fb",
+  "artifacts": [
+    {
+      "path": "build-evidence\\desktop-client-package-2026-06-30T12-53-47-017Z\\index.html",
+      "size": 77513,
+      "sha256": "c759c151adddc865dbafb7c6a1a25877d0df4853289caf7d761edfd93e4a41bf"
+    },
+    {
+      "path": "build-evidence\\desktop-client-package-2026-06-30T12-53-47-017Z\\package.json",
+      "size": 387,
+      "sha256": "8807f2a2d4f75c1b74e01f3679a2786f0ac4f8fcdb1ee53e539d3121f121fe3a"
+    },
+    {
+      "path": "build-evidence\\desktop-client-package-2026-06-30T12-53-47-017Z\\README.md",
+      "size": 1034,
+      "sha256": "b3b2b4b3bcc8bfc4a9127dc8fa85138bb6a24cbca4f05464218c24177b3a5b7d"
+    },
+    {
+      "path": "build-evidence\\desktop-client-package-2026-06-30T12-53-47-017Z\\electron\\main.js",
+      "size": 609,
+      "sha256": "af031f5ef1218721fb35199aeea8092080d77a2c712c6586f5f26a93cf3ecd03"
+    }
+  ],
+  "nodeModulesPresent": true,
+  "electronBinaryPresent": true,
+  "status": "success"
+}

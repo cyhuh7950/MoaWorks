@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, Button, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
 type AuthUser = {
   userId: string;
@@ -57,6 +57,8 @@ type MailSummary = {
   receivedAt: string | null;
   retentionExpiresAt: string | null;
   attachmentCount: number;
+  preview?: string | null;
+  snippet?: string | null;
 };
 
 type MailDetail = {
@@ -113,11 +115,154 @@ type MessengerMessage = {
 };
 
 type AppLocale = "ko-KR" | "en-US" | "ja-JP" | "zh-CN" | "es-ES" | "fr-FR" | "de-DE";
-type MobileTab = "home" | "mail" | "approval" | "chat";
+type MobileTab = "home" | "mail" | "approval" | "chat" | "calendar" | "more";
+type ScreenKey = MobileTab | "directory" | "ai" | "search" | "settings";
+type LlmProvider = "CEREBRAS" | "GROQ" | "MISTRAL" | "OPENAI" | "UPSTAGE" | "GEMINI" | "OPENROUTER" | "ANTHROPIC" | "OLLAMA";
+type IconName = "home" | "mail" | "approval" | "chat" | "calendar" | "directory" | "ai" | "search" | "settings" | "more";
+
+const iconGlyphs: Record<IconName, string> = {
+  home: "⌂",
+  mail: "✉",
+  approval: "✓",
+  chat: "◌",
+  calendar: "▣",
+  directory: "♙",
+  ai: "✦",
+  search: "⌕",
+  settings: "⚙",
+  more: "•••",
+};
+
+function MoaIcon({ name, color = "#0f766e", size = 18 }: { name: IconName; color?: string; size?: number }) {
+  return <Text accessibilityLabel={`${name} 아이콘`} style={{ color, fontSize: size, lineHeight: size + 2, fontWeight: "800", textAlign: "center" }}>{iconGlyphs[name]}</Text>;
+}
+
+const llmProviders: LlmProvider[] = ["CEREBRAS", "GROQ", "MISTRAL", "OPENAI", "UPSTAGE", "GEMINI", "OPENROUTER", "ANTHROPIC", "OLLAMA"];
+const directorySamples = [
+  { name: "김민준", team: "전략기획본부", role: "일반 사용자", email: "mj.kim@moaworks.sinsan.kr" },
+  { name: "박지현", team: "전략기획본부", role: "부서장", email: "jh.park@moaworks.sinsan.kr" },
+  { name: "Alex Kim", team: "IT전략팀", role: "일반 사용자", email: "alex.kim@moaworks.sinsan.kr" },
+  { name: "Sophia Chen", team: "전략기획본부", role: "일반 사용자", email: "sophia.chen@moaworks.sinsan.kr" },
+];
+
+// 개발 빌드에서만 사용하는 화면 검증용 메일 데이터입니다. 운영 API/인증 경로에는 포함되지 않습니다.
+const developmentMailSamples: MailSummary[] = [
+  {
+    mailId: "dev-mail-001",
+    accountId: "development-account",
+    senderEmail: "admin@moaworks.sinsan.kr",
+    subject: "MoaWorks 모바일 메일 테스트",
+    status: "received",
+    isRead: false,
+    isStarred: true,
+    sentAt: null,
+    receivedAt: "2026-08-22T09:00:00+09:00",
+    retentionExpiresAt: null,
+    attachmentCount: 1,
+    preview: "모바일 메일 목록과 상세 화면을 확인해 주세요.",
+  },
+  {
+    mailId: "dev-mail-002",
+    accountId: "development-account",
+    senderEmail: "alex.kim@moaworks.sinsan.kr",
+    subject: "회의 일정 안내",
+    status: "received",
+    isRead: true,
+    isStarred: false,
+    sentAt: null,
+    receivedAt: "2026-08-21T16:30:00+09:00",
+    retentionExpiresAt: null,
+    attachmentCount: 0,
+    preview: "다음 주 회의 일정을 공유드립니다.",
+  },
+];
+
+const developmentMailDetails: Record<string, MailDetail> = {
+  "dev-mail-001": {
+    mailId: "dev-mail-001",
+    accountId: "development-account",
+    senderUserId: "admin",
+    senderEmail: "admin@moaworks.sinsan.kr",
+    subject: "MoaWorks 모바일 메일 테스트",
+    bodyText: "모바일 메일 목록과 상세 화면을 확인해 주세요.\n첨부파일 1개가 포함된 테스트 메일입니다.",
+    bodyHtml: null,
+    status: "received",
+    sentAt: null,
+    createdAt: "2026-08-22T09:00:00+09:00",
+    updatedAt: "2026-08-22T09:00:00+09:00",
+    retentionExpiresAt: null,
+    attachmentCount: 1,
+    recipients: [{ recipientEmail: "development@moaworks.local", recipientUserId: "development-user", recipientKind: "to", isRead: false, isStarred: true, receivedAt: "2026-08-22T09:00:00+09:00", readAt: null }],
+  },
+  "dev-mail-002": {
+    mailId: "dev-mail-002",
+    accountId: "development-account",
+    senderUserId: "alex-kim",
+    senderEmail: "alex.kim@moaworks.sinsan.kr",
+    subject: "회의 일정 안내",
+    bodyText: "다음 주 회의 일정을 공유드립니다.",
+    bodyHtml: null,
+    status: "received",
+    sentAt: null,
+    createdAt: "2026-08-21T16:30:00+09:00",
+    updatedAt: "2026-08-21T16:30:00+09:00",
+    retentionExpiresAt: null,
+    attachmentCount: 0,
+    recipients: [{ recipientEmail: "development@moaworks.local", recipientUserId: "development-user", recipientKind: "to", isRead: true, isStarred: false, receivedAt: "2026-08-21T16:30:00+09:00", readAt: "2026-08-21T16:35:00+09:00" }],
+  },
+};
+
+// 개발 빌드에서 결재·메신저 화면의 기본 흐름을 확인하기 위한 최소 fixture입니다.
+// 운영 빌드에서는 이 데이터가 사용되지 않고 기존 API 응답만 사용합니다.
+const developmentApprovalSamples: Approval[] = [
+  {
+    id: "dev-approval-001",
+    title: "모바일 결재 테스트",
+    content: "승인·반려 흐름을 확인해 주세요.",
+    creatorUserId: "development-user",
+    creatorUserName: "개발 테스트 사용자",
+    status: "submitted",
+    currentLineIndex: 1,
+    lines: [{ sequence: 1, approverUserId: "development-user", approverUserName: "개발 테스트 사용자", status: "pending" }],
+  },
+];
+
+const developmentRoomSamples: MessengerRoom[] = [
+  {
+    roomId: "dev-room-001",
+    roomType: "group",
+    roomName: "MoaWorks 모바일 대화",
+    participantIds: ["development-user", "alex-kim"],
+    lastMessage: "모바일 메신저 화면을 확인해 주세요.",
+    lastMessageAt: "2026-08-22T09:10:00+09:00",
+    unreadCount: 1,
+    readState: "unread",
+    createdAt: "2026-08-22T09:00:00+09:00",
+    updatedAt: "2026-08-22T09:10:00+09:00",
+    retentionExpiresAt: null,
+  },
+];
+
+const developmentMessageSamples: MessengerMessage[] = [
+  {
+    messageId: "dev-message-001",
+    roomId: "dev-room-001",
+    senderUserId: "alex-kim",
+    senderUserName: "Alex Kim",
+    messageType: "text",
+    body: "모바일 메신저 화면을 확인해 주세요.",
+    attachmentMeta: [],
+    createdAt: "2026-08-22T09:10:00+09:00",
+    retentionExpiresAt: null,
+    readBy: [],
+    readState: "unread",
+  },
+];
 
 const supportedLocales: AppLocale[] = ["ko-KR", "en-US", "ja-JP", "zh-CN", "es-ES", "fr-FR", "de-DE"];
 const supportedTimezones = ["Asia/Seoul", "Asia/Tokyo", "America/New_York", "America/Chicago", "Europe/Paris", "Europe/Berlin"];
 const fallbackApiBase = "https://api.moaworks.sinsan.kr/api/v1";
+const developmentAuthBypassEnabled = __DEV__;
 const notificationPolicy = {
   retryMax: 3,
   retryDelayMs: 400,
@@ -208,12 +353,43 @@ export default function App() {
   const [selectedMailId, setSelectedMailId] = useState("");
   const [selectedMailDetail, setSelectedMailDetail] = useState<MailDetail | null>(null);
   const [mailError, setMailError] = useState("");
+  const [mailQuery, setMailQuery] = useState("");
+  const [mailFilter, setMailFilter] = useState<"all" | "unread" | "starred">("all");
   const [rooms, setRooms] = useState<MessengerRoom[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState("");
   const [roomMessages, setRoomMessages] = useState<MessengerMessage[]>([]);
   const [chatDraft, setChatDraft] = useState("");
   const [chatError, setChatError] = useState("");
+  const [moreScreen, setMoreScreen] = useState<Exclude<ScreenKey, MobileTab>>("directory");
+  const [directoryQuery, setDirectoryQuery] = useState("");
+  const [llmProvider, setLlmProvider] = useState<LlmProvider>("GROQ");
+  const [llmApiKey, setLlmApiKey] = useState("");
+  const [llmConnected, setLlmConnected] = useState(false);
+  const [screenDensity, setScreenDensity] = useState<"standard" | "compact">("standard");
+  const [aiDraft, setAiDraft] = useState("");
+  const [aiMessages, setAiMessages] = useState<Array<{ role: "user" | "assistant"; body: string }>>([]);
   const activeTabError = activeTab === "mail" ? mailError : activeTab === "chat" ? chatError : "";
+
+  function connectLlm() {
+    if (!llmApiKey.trim()) {
+      setMessage("LLM API 키를 입력한 뒤 연결 테스트를 실행하세요.");
+      setLlmConnected(false);
+      return;
+    }
+    setLlmConnected(true);
+    setMessage(`${llmProvider} 연결 정보가 이 기기에서 준비되었습니다.`);
+  }
+
+  function askAi() {
+    const prompt = aiDraft.trim();
+    if (!prompt) return;
+    setAiMessages((current) => [...current, { role: "user", body: prompt }, { role: "assistant", body: llmConnected ? `${llmProvider} 연결 후 답변이 표시됩니다.` : "먼저 개인 LLM API 키를 연결해 주세요." }]);
+    setAiDraft("");
+  }
+
+  function saveAppSettings() {
+    setMessage("서버·화면 설정이 현재 앱 세션에 적용되었습니다.");
+  }
 
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${apiBase}${path}`, {
@@ -285,10 +461,31 @@ export default function App() {
   }
 
   async function doLogin() {
+    if (developmentAuthBypassEnabled) {
+      const developmentUser: AuthUser = {
+        userId: "development-user",
+        userName: "개발 테스트 사용자",
+        roleName: "개발자",
+        userEmail: "development@moaworks.local",
+        permissions: ["mobile:read", "mobile:write"],
+      };
+      setToken("development-only-session");
+      setMe(developmentUser);
+      setDocuments(developmentApprovalSamples);
+      setNotifications([]);
+      setNotificationSummary({ unreadCount: 0, severityCount: { INFO: 0, WARN: 0, ERROR: 0, CRITICAL: 0 } });
+      setMailItems(developmentMailSamples);
+      setRooms(developmentRoomSamples);
+      setSelectedRoomId("dev-room-001");
+      setRoomMessages(developmentMessageSamples);
+      setMessage("개발 빌드 인증 우회가 활성화되었습니다.");
+      return;
+    }
     try {
+      const loginEmail = email.includes("@") ? email.trim() : `${email.trim()}@moaworks.sinsan.kr`;
       const login = await request<{ accessToken: string; user: AuthUser }>("/auth/login", {
         method: "POST",
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: loginEmail, password }),
       });
       setToken(login.accessToken);
       setMessage("로그인 성공");
@@ -306,6 +503,11 @@ export default function App() {
   }
 
   async function loadApprovals(activeToken: string = token) {
+    if (developmentAuthBypassEnabled) {
+      setDocuments(developmentApprovalSamples);
+      setMessage("");
+      return;
+    }
     try {
       const body = await request<{ documents: Approval[] }>("/approvals", {
         headers: { Authorization: `Bearer ${activeToken}` },
@@ -319,6 +521,14 @@ export default function App() {
 
   async function loadMail(activeToken: string = token, preferredMailId?: string) {
     if (!activeToken) return;
+    if (developmentAuthBypassEnabled) {
+      const targetMailId = preferredMailId || selectedMailId || developmentMailSamples[0]?.mailId || "";
+      setMailItems(developmentMailSamples);
+      setSelectedMailId(targetMailId);
+      setSelectedMailDetail(targetMailId ? developmentMailDetails[targetMailId] ?? null : null);
+      setMailError("");
+      return;
+    }
     try {
       const inbox = await request<{ mails: MailSummary[] }>("/mail/inbox", {
         headers: { Authorization: `Bearer ${activeToken}` },
@@ -346,6 +556,13 @@ export default function App() {
 
   async function openMail(mailId: string, activeToken: string = token) {
     if (!activeToken) return;
+    if (developmentAuthBypassEnabled) {
+      setSelectedMailId(mailId);
+      setSelectedMailDetail(developmentMailDetails[mailId] ?? null);
+      setMailItems((current) => current.map((item) => (item.mailId === mailId ? { ...item, isRead: true } : item)));
+      setMailError("");
+      return;
+    }
     try {
       await request(`/mail/${mailId}/read`, {
         method: "POST",
@@ -367,6 +584,10 @@ export default function App() {
 
   async function toggleMailStarState(mailId: string, activeToken: string = token) {
     if (!activeToken) return;
+    if (developmentAuthBypassEnabled) {
+      setMailItems((current) => current.map((item) => (item.mailId === mailId ? { ...item, isStarred: !item.isStarred } : item)));
+      return;
+    }
     try {
       await request(`/mail/${mailId}/star`, {
         method: "POST",
@@ -382,6 +603,14 @@ export default function App() {
 
   async function loadRooms(activeToken: string = token, preferredRoomId?: string) {
     if (!activeToken) return;
+    if (developmentAuthBypassEnabled) {
+      const roomId = preferredRoomId || selectedRoomId || developmentRoomSamples[0]?.roomId || "";
+      setRooms(developmentRoomSamples);
+      setSelectedRoomId(roomId);
+      setRoomMessages(roomId ? developmentMessageSamples.filter((item) => item.roomId === roomId) : []);
+      setChatError("");
+      return;
+    }
     try {
       const body = await request<{ rooms: MessengerRoom[] }>("/messenger/rooms", {
         headers: { Authorization: `Bearer ${activeToken}` },
@@ -409,6 +638,13 @@ export default function App() {
 
   async function openRoom(roomId: string, activeToken: string = token) {
     if (!activeToken) return;
+    if (developmentAuthBypassEnabled) {
+      setSelectedRoomId(roomId);
+      setRoomMessages(developmentMessageSamples.filter((item) => item.roomId === roomId));
+      setRooms((current) => current.map((item) => (item.roomId === roomId ? { ...item, unreadCount: 0 } : item)));
+      setChatError("");
+      return;
+    }
     try {
       await request(`/messenger/rooms/${roomId}/read`, {
         method: "POST",
@@ -430,6 +666,24 @@ export default function App() {
 
   async function sendChatMessage() {
     if (!token || !selectedRoomId || !chatDraft.trim()) return;
+    if (developmentAuthBypassEnabled) {
+      const body = chatDraft.trim();
+      setRoomMessages((current) => [...current, {
+        messageId: `dev-message-${Date.now()}`,
+        roomId: selectedRoomId,
+        senderUserId: "development-user",
+        senderUserName: "개발 테스트 사용자",
+        messageType: "text",
+        body,
+        attachmentMeta: [],
+        createdAt: new Date().toISOString(),
+        retentionExpiresAt: null,
+        readBy: [],
+        readState: "read",
+      }]);
+      setChatDraft("");
+      return;
+    }
     try {
       await request(`/messenger/rooms/${selectedRoomId}/messages`, {
         method: "POST",
@@ -588,48 +842,82 @@ export default function App() {
     const rightIndex = uiContract.homeCardOrder.indexOf(right.id);
     return (leftIndex === -1 ? 999 : leftIndex) - (rightIndex === -1 ? 999 : rightIndex);
   });
+  const visibleMailItems = mailItems.filter((item) => {
+    const normalizedQuery = mailQuery.trim().toLowerCase();
+    const matchesQuery = !normalizedQuery || `${item.senderEmail} ${item.subject}`.toLowerCase().includes(normalizedQuery);
+    const matchesFilter = mailFilter === "all" || (mailFilter === "unread" ? !item.isRead : item.isStarred);
+    return matchesQuery && matchesFilter;
+  });
+  const activeTabLabel = activeTab === "home" ? "홈" : activeTab === "mail" ? "메일" : activeTab === "approval" ? "결재" : activeTab === "chat" ? "메신저" : activeTab === "calendar" ? "일정" : "더보기";
 
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.container}>
+      {me ? (
+        <View style={styles.mobileShellHeader}>
+          <View>
+            <Text style={styles.shellBrand}>MoaWorks</Text>
+            <Text style={styles.shellTitle}>{activeTabLabel}</Text>
+          </View>
+          <View style={styles.shellHeaderActions}>
+            <Text style={styles.shellHeaderChip}>알림 {notificationSummary?.unreadCount ?? 0}</Text>
+            <Text style={styles.shellHeaderActionText}>⋯</Text>
+          </View>
+        </View>
+      ) : null}
+      <ScrollView contentContainerStyle={[styles.container, screenDensity === "compact" ? styles.containerCompact : null]}>
         <View style={styles.hero}>
           <Text style={styles.heroKicker}>MoaWorks Mobile</Text>
-          <Text style={styles.heroTitle}>사용자 업무 포털 모바일 메인</Text>
+          <Text style={styles.heroTitle}>{me ? "오늘의 업무" : "사용자 업무 포털"}</Text>
           <Text style={styles.heroDesc}>
-            알림, 결재, 메일, 최근 대화를 빠르게 확인하는 모바일 업무 화면입니다.
+            {me ? "필요한 업무를 한 화면에서 빠르게 확인하세요." : "메일, 결재, 메신저를 한 곳에서 이어가는 업무 포털입니다."}
           </Text>
 
           {!me ? (
             <>
-              <Text style={styles.sectionLabel}>이메일</Text>
-              <TextInput
-                style={styles.input}
-                value={email}
-                onChangeText={setEmail}
-                autoCapitalize="none"
-                autoCorrect={false}
-                autoComplete="off"
-                keyboardType="email-address"
-                returnKeyType="next"
-                blurOnSubmit={false}
-                onSubmitEditing={() => passwordInputRef.current?.focus()}
-              />
+              <Text style={styles.sectionLabel}>아이디</Text>
+              <View style={styles.loginField}>
+                <MoaIcon name="directory" color="#99f6e4" size={20} />
+                <TextInput
+                  style={styles.loginInput}
+                  value={email}
+                  onChangeText={setEmail}
+                  accessibilityLabel="아이디 또는 이메일"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  autoComplete="off"
+                  keyboardType="default"
+                  placeholder="아이디 또는 이메일"
+                  placeholderTextColor="#94a3b8"
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => passwordInputRef.current?.focus()}
+                />
+              </View>
               <Text style={styles.sectionLabel}>비밀번호</Text>
-              <TextInput
-                ref={passwordInputRef}
-                style={styles.input}
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry
-                autoCorrect={false}
-                autoComplete="off"
-                returnKeyType="done"
-                onSubmitEditing={() => {
-                  void doLogin();
-                }}
-              />
+              <View style={styles.loginField}>
+                <MoaIcon name="settings" color="#99f6e4" size={20} />
+                <TextInput
+                  ref={passwordInputRef}
+                  style={styles.loginInput}
+                  value={password}
+                  onChangeText={setPassword}
+                  accessibilityLabel="비밀번호"
+                  secureTextEntry
+                  autoCorrect={false}
+                  autoComplete="off"
+                  placeholder="비밀번호"
+                  placeholderTextColor="#94a3b8"
+                  returnKeyType="done"
+                  onSubmitEditing={() => {
+                    void doLogin();
+                  }}
+                />
+              </View>
               <View style={styles.buttonBlock}>
-                <Button title="업무 포털 로그인" onPress={doLogin} />
+                <Pressable accessibilityRole="button" accessibilityLabel="업무 포털 로그인" onPress={() => { void doLogin(); }} style={styles.loginButton}>
+                  <MoaIcon name="home" color="#ffffff" size={20} />
+                  <Text style={styles.loginButtonText}>업무 포털 로그인</Text>
+                </Pressable>
               </View>
             </>
           ) : (
@@ -640,6 +928,18 @@ export default function App() {
               <Text style={styles.loggedInHeroText}>
                 알림 {notificationSummary?.unreadCount ?? 0}건 / 대기 결재 {documents.filter((item) => item.status === "submitted").length}건
               </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="로그아웃"
+                onPress={() => {
+                  setToken("");
+                  setMe(null);
+                  setMessage("로그아웃되었습니다.");
+                }}
+                style={styles.heroLogoutButton}
+              >
+                <Text style={styles.heroLogoutText}>로그아웃</Text>
+              </Pressable>
             </View>
           )}
           {message ? <Text style={styles.message}>{message}</Text> : null}
@@ -647,80 +947,69 @@ export default function App() {
 
         {me ? (
           <>
-            <View style={styles.metricsGrid}>
-              {summaryCards.map((item) => (
-                <View key={item.title} style={[styles.metricCard, item.tone]}>
-                  <Text style={styles.metricLabel}>{item.title}</Text>
-                  <Text style={styles.metricValue}>{item.value}</Text>
-                  <Text style={styles.metricDesc}>{item.desc}</Text>
+            {activeTab !== "home" ? (
+              <View style={styles.homeSummaryGrid}>
+                {summaryCards.map((item) => (
+                  <View key={item.title} style={[styles.homeSummaryCard, item.tone]}>
+                    <Text style={styles.homeSummaryLabel}>{item.title}</Text>
+                    <Text style={styles.homeSummaryValue}>{item.value}</Text>
+                    <Text style={styles.homeSummaryDesc}>{item.desc}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+
+            {activeTab === "more" || activeTabError ? (
+              <View style={styles.surfaceCard}>
+              {activeTab === "more" ? (
+                <View style={styles.mobileSubNav}>
+                  {[{ id: "directory", label: "주소록", icon: "directory" }, { id: "ai", label: "AI 채팅", icon: "ai" }, { id: "search", label: "업무 검색", icon: "search" }, { id: "settings", label: "설정", icon: "settings" }].map((item) => (
+                    <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} onPress={() => setMoreScreen(item.id as Exclude<ScreenKey, MobileTab>)} style={[styles.mobileSubTab, moreScreen === item.id ? styles.mobileSubTabActive : styles.mobileSubTabIdle]}><MoaIcon name={item.icon as IconName} color={moreScreen === item.id ? "#ffffff" : "#0f766e"} /><Text style={[styles.mobileTabLabel, moreScreen === item.id ? styles.mobileTabLabelActive : null]}>{item.label}</Text></Pressable>
+                  ))}
                 </View>
-              ))}
-            </View>
-
-            <View style={styles.surfaceCard}>
-              <Text style={styles.surfaceKicker}>빠른 이동</Text>
-              <Text style={styles.surfaceTitle}>모바일 주요 업무 탭</Text>
-              <View style={styles.mobileTabRow}>
-                {[
-                  { id: "home", label: "홈" },
-                  { id: "mail", label: "메일" },
-                  { id: "approval", label: "결재" },
-                  { id: "chat", label: "메신저" },
-                ].map((item) => (
-                  <Text
-                    key={item.id}
-                    onPress={() => handleTabPress(item.id as MobileTab)}
-                    style={[styles.mobileTab, activeTab === item.id ? styles.mobileTabActive : styles.mobileTabIdle]}
-                  >
-                    {item.label}
-                  </Text>
-                ))}
-              </View>
-              <Text style={styles.surfaceHint}>정책 본문은 메인에 두지 않고 {uiContract.helpText} 경로만 제공합니다.</Text>
+              ) : null}
               {activeTabError ? <Text style={styles.error}>{activeTabError}</Text> : null}
-            </View>
-
-            <View style={styles.surfaceCard}>
-              <Text style={styles.surfaceKicker}>공통 기준</Text>
-              <Text style={styles.surfaceTitle}>브랜드 / 상태 / Help 경로</Text>
-              <View style={styles.quickGrid}>
-                {brandTokens.map((item) => (
-                  <View key={item.title} style={styles.listCard}>
-                    <View style={{ width: 44, height: 44, borderRadius: 16, backgroundColor: item.color }} />
-                    <Text style={styles.listKicker}>{item.title}</Text>
-                    <Text style={styles.listBody}>{item.body}</Text>
-                  </View>
-                ))}
               </View>
-              <View style={styles.quickGrid}>
-                {statusSignals.map((item) => (
-                  <View key={item.title} style={[styles.quickCard, item.tone]}>
-                    <Text style={styles.quickCardTitle}>{item.title}</Text>
-                    <Text style={styles.quickCardNote}>{item.body}</Text>
-                  </View>
-                ))}
-              </View>
-              <View style={styles.quickGrid}>
-                {mobileContracts.map((item) => (
-                  <View key={item.title} style={styles.listCard}>
-                    <Text style={styles.listKicker}>{item.title}</Text>
-                    <Text style={styles.listBody}>{item.body}</Text>
-                  </View>
-                ))}
-              </View>
-            </View>
+            ) : null}
 
             {activeTab === "home" ? (
               <View style={styles.surfaceCard}>
                 <Text style={styles.surfaceKicker}>홈</Text>
-                <Text style={styles.surfaceTitle}>알림 / 대기 결재 / 최근 대화 / 오늘 일정</Text>
+                <Text style={styles.surfaceTitle}>오늘의 업무를 빠르게 확인하세요</Text>
                 <View style={styles.quickGrid}>
                   {homeQuickCards.map((item) => (
-                    <View key={item.title} style={[styles.quickCard, item.tone]}>
+                    <Pressable
+                      key={item.title}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${item.title} 화면 열기`}
+                      onPress={() => {
+                        const nextTab: MobileTab = item.id === "mail" ? "mail" : item.id === "approval" ? "approval" : item.id === "chat" ? "chat" : "home";
+                        if (nextTab !== "home") setActiveTab(nextTab);
+                      }}
+                      style={[styles.quickCard, item.tone]}
+                    >
                       <Text style={styles.quickCardTitle}>{item.title}</Text>
                       <Text style={styles.quickCardNote}>{item.note}</Text>
-                    </View>
+                    </Pressable>
                   ))}
+                </View>
+                <View style={styles.homeDetailGrid}>
+                  <View style={styles.homeDetailCard}>
+                    <Text style={styles.listKicker}>오늘 일정</Text>
+                    <Text style={styles.listTitle}>주간회의</Text>
+                    <Text style={styles.listBody}>오늘 · 10:00 · 회의실 A</Text>
+                    <Text style={styles.listBody}>일정 메뉴에서 월간 달력과 상세 내용을 확인하세요.</Text>
+                  </View>
+                  <View style={styles.homeDetailCard}>
+                    <Text style={styles.listKicker}>최근 대화</Text>
+                    {rooms.slice(0, 2).map((room) => (
+                      <Pressable key={room.roomId} accessibilityRole="button" accessibilityLabel={`${room.roomName} 대화 열기`} onPress={() => { setActiveTab("chat"); void openRoom(room.roomId); }} style={styles.homeRecentRow}>
+                        <Text style={styles.listTitle}>{room.roomName}</Text>
+                        <Text style={styles.listBody}>{room.lastMessage || "최근 메시지 없음"}</Text>
+                      </Pressable>
+                    ))}
+                    {rooms.length === 0 ? <Text style={styles.emptyState}>최근 대화가 없습니다.</Text> : null}
+                  </View>
                 </View>
               </View>
             ) : null}
@@ -728,32 +1017,52 @@ export default function App() {
             {activeTab === "mail" ? (
               <View style={styles.surfaceCard}>
                 <Text style={styles.surfaceKicker}>메일</Text>
-                <Text style={styles.surfaceTitle}>중요 메일 / 안 읽은 메일 / 빠른 답장</Text>
-                <View style={styles.quickGrid}>
-                  {[
-                    { title: "중요 메일", note: "대표 검토 요청 우선", tone: styles.quickSand },
-                    { title: "안 읽은 메일", note: `${mailItems.filter((item) => !item.isRead).length}건`, tone: styles.quickTeal },
-                  ].map((item) => (
-                    <View key={item.title} style={[styles.quickCard, item.tone]}>
-                      <Text style={styles.quickCardTitle}>{item.title}</Text>
-                      <Text style={styles.quickCardNote}>{item.note}</Text>
-                    </View>
+                <Text style={styles.surfaceTitle}>받은편지함</Text>
+                <TextInput
+                  accessibilityLabel="메일 검색"
+                  style={styles.input}
+                  value={mailQuery}
+                  onChangeText={setMailQuery}
+                  placeholder="보낸 사람 또는 제목 검색"
+                  autoCapitalize="none"
+                />
+                <View style={styles.mobileSubNav}>
+                  {(["all", "unread", "starred"] as const).map((filter) => (
+                    <Pressable
+                      key={filter}
+                      accessibilityRole="button"
+                      accessibilityLabel={filter === "all" ? "전체 메일" : filter === "unread" ? "읽지 않은 메일" : "중요 메일"}
+                      onPress={() => setMailFilter(filter)}
+                      style={[styles.mobileSubTab, mailFilter === filter ? styles.mobileSubTabActive : styles.mobileSubTabIdle]}
+                    >
+                      <Text style={mailFilter === filter ? styles.mobileTabLabelActive : styles.mobileTabLabel}>{filter === "all" ? "전체" : filter === "unread" ? "안 읽음" : "중요"}</Text>
+                    </Pressable>
                   ))}
                 </View>
-                {mailItems.map((item) => (
-                  <View key={item.mailId} style={styles.listCard}>
-                    <Text style={styles.listKicker}>중요 메일</Text>
-                    <Text style={styles.listTitle}>{item.subject}</Text>
-                    <Text style={styles.listBody}>{item.senderEmail} · {formatStamp(item.receivedAt || item.sentAt)}</Text>
-                    <View style={styles.mobileTabRow}>
-                      <Text onPress={() => { void openMail(item.mailId); }} style={[styles.mobileTab, styles.mobileTabIdle]}>열기</Text>
-                      <Text onPress={() => { void toggleMailStarState(item.mailId); }} style={[styles.mobileTab, styles.mobileTabIdle]}>
-                        {item.isStarred ? "중요 해제" : "중요"}
-                      </Text>
-                      {quickReplySamples.map((action) => <Text key={`${item.mailId}-${action}`} style={[styles.mobileTab, styles.mobileTabIdle]}>{action}</Text>)}
-                    </View>
-                  </View>
-                ))}
+                <View accessibilityLabel="메일 목록" style={styles.mailList}>
+                  {visibleMailItems.map((item) => (
+                    <Pressable
+                      key={item.mailId}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${item.senderEmail} ${item.subject} 메일 열기`}
+                      onPress={() => { void openMail(item.mailId); }}
+                      style={[styles.mailRow, !item.isRead ? styles.mailRowUnread : null, selectedMailId === item.mailId ? styles.mailRowSelected : null]}
+                    >
+                      <View style={styles.mailRowMain}>
+                        <View style={styles.mailRowTop}>
+                          <Text style={[styles.mailSender, !item.isRead ? styles.mailUnreadText : null]} numberOfLines={1}>{item.senderEmail}</Text>
+                          {item.isStarred ? <Text accessibilityLabel="중요 메일" style={styles.mailStar}>★</Text> : null}
+                          <Text style={styles.mailDate}>{formatStamp(item.receivedAt || item.sentAt)}</Text>
+                        </View>
+                        <View style={styles.mailRowBottom}>
+                          <Text style={[styles.mailSubject, !item.isRead ? styles.mailUnreadText : null]} numberOfLines={1}>{item.subject || "(제목 없음)"}</Text>
+                          <Text style={styles.mailPreview} numberOfLines={1}>{item.preview || item.snippet || "본문 미리보기 없음"}</Text>
+                        </View>
+                      </View>
+                    </Pressable>
+                  ))}
+                </View>
+                {visibleMailItems.length === 0 ? <Text style={styles.emptyState}>조건에 맞는 메일이 없습니다.</Text> : null}
                 {selectedMailDetail ? (
                   <View style={styles.listCard}>
                     <Text style={styles.listKicker}>메일 상세</Text>
@@ -837,6 +1146,51 @@ export default function App() {
               </View>
             ) : null}
 
+            {activeTab === "calendar" ? (
+              <View style={styles.surfaceCard}>
+                <Text style={styles.surfaceKicker}>일정</Text>
+                <Text style={styles.surfaceTitle}>오늘의 일정</Text>
+                <View style={styles.calendarHeader}><Text style={styles.calendarMonth}>2026년 8월</Text><Text style={styles.surfaceHint}>내 일정 · 회사 일정</Text></View>
+                <View style={styles.calendarGrid}>{["월", "화", "수", "목", "금", "토", "일"].map((day) => <Text key={day} style={styles.calendarDay}>{day}</Text>)}{Array.from({ length: 14 }, (_, index) => <View key={index} style={[styles.calendarCell, index === 7 ? styles.calendarCellActive : null]}><Text style={styles.calendarDate}>{index + 1}</Text>{index === 7 ? <Text style={styles.calendarEvent}>주간회의</Text> : null}</View>)}</View>
+                <Text style={styles.emptyState}>일정을 선택하면 상세 내용을 확인할 수 있습니다.</Text>
+              </View>
+            ) : null}
+
+            {activeTab === "more" && moreScreen === "directory" ? (
+              <View style={styles.surfaceCard}>
+                <Text style={styles.surfaceKicker}>주소록</Text>
+                <Text style={styles.surfaceTitle}>사원 정보 검색</Text>
+                <TextInput style={styles.input} value={directoryQuery} onChangeText={setDirectoryQuery} placeholder="이름, 부서, 이메일 검색" />
+                {directorySamples.filter((item) => `${item.name}${item.team}${item.email}`.toLowerCase().includes(directoryQuery.toLowerCase())).map((item) => <View key={item.email} style={styles.directoryCard}><View style={styles.avatar}><Text style={styles.avatarText}>{item.name.slice(0, 1)}</Text></View><View style={styles.directoryInfo}><Text style={styles.listTitle}>{item.name}</Text><Text style={styles.listBody}>{item.team} · {item.role}</Text><Text style={styles.listBody}>{item.email}</Text></View></View>)}
+              </View>
+            ) : null}
+
+            {activeTab === "more" && moreScreen === "ai" ? (
+              <View style={styles.surfaceCard}>
+                <Text style={styles.surfaceKicker}>AI 채팅</Text>
+                <Text style={styles.surfaceTitle}>연결된 LLM에게 질문하고 검색</Text>
+                <Text style={styles.surfaceHint}>개인 API 키는 이 화면에서만 입력하며, 실제 Provider 호출은 서버 보안 프록시로 연결합니다.</Text>
+                {aiMessages.map((item, index) => <View key={`${item.role}-${index}`} style={[styles.aiBubble, item.role === "user" ? styles.aiUserBubble : styles.aiAssistantBubble]}><Text style={styles.aiRole}>{item.role === "user" ? "나" : llmProvider}</Text><Text style={styles.listBody}>{item.body}</Text></View>)}
+                <TextInput style={[styles.input, styles.textarea]} value={aiDraft} onChangeText={setAiDraft} placeholder="질문을 입력하세요." multiline />
+                <Button title="질문 보내기" onPress={askAi} />
+              </View>
+            ) : null}
+
+            {activeTab === "more" && moreScreen === "search" ? (
+              <View style={styles.surfaceCard}><Text style={styles.surfaceKicker}>업무 검색</Text><Text style={styles.surfaceTitle}>메일·결재·메신저 통합 검색</Text><TextInput style={styles.input} placeholder="검색어를 입력하세요." /><Text style={styles.emptyState}>검색어를 입력하면 관련 업무가 표시됩니다.</Text></View>
+            ) : null}
+
+            {activeTab === "more" && moreScreen === "settings" ? (
+              <View style={styles.surfaceCard}>
+                <Text style={styles.surfaceKicker}>설정</Text><Text style={styles.surfaceTitle}>앱 기본 설정</Text>
+                <Text style={styles.sectionLabel}>연결 서버</Text><TextInput style={styles.input} value={apiBase} onChangeText={setApiBase} autoCapitalize="none" />
+                <Text style={styles.sectionLabel}>화면 언어</Text><Text style={styles.settingsValue}>{locale}</Text><Text style={styles.sectionLabel}>시간대</Text><Text style={styles.settingsValue}>{timezone}</Text>
+                <Text style={styles.sectionLabel}>화면 밀도</Text><View style={styles.providerRow}><Text onPress={() => setScreenDensity("standard")} style={[styles.providerChip, screenDensity === "standard" ? styles.providerChipActive : null]}>표준</Text><Text onPress={() => setScreenDensity("compact")} style={[styles.providerChip, screenDensity === "compact" ? styles.providerChipActive : null]}>간결</Text></View>
+                <Text style={styles.sectionLabel}>LLM Provider</Text><View style={styles.providerRow}>{llmProviders.map((provider) => <Text key={provider} onPress={() => setLlmProvider(provider)} style={[styles.providerChip, llmProvider === provider ? styles.providerChipActive : null]}>{provider}</Text>)}</View>
+                <TextInput style={styles.input} value={llmApiKey} onChangeText={setLlmApiKey} placeholder="개인 LLM API 키" secureTextEntry autoCapitalize="none" /><Button title={llmConnected ? "연결됨 · 다시 테스트" : "LLM 연결 테스트"} onPress={connectLlm} /><Button title="설정 저장" onPress={saveAppSettings} />
+              </View>
+            ) : null}
+
             <View style={styles.surfaceCard}>
               <Text style={styles.surfaceKicker}>알림</Text>
               <Text style={styles.surfaceTitle}>빠른 확인과 폴백</Text>
@@ -902,8 +1256,8 @@ export default function App() {
                     setMe(null);
                     setMessage("로그아웃되었습니다.");
                     setSelectedMailDetail(null);
-                    setSelectedRoom(null);
-                    setSelectedRoomMessages([]);
+                    setSelectedRoomId("");
+                    setRoomMessages([]);
                   }}
                 />
               </View>
@@ -991,6 +1345,16 @@ export default function App() {
           </>
         ) : null}
       </ScrollView>
+      {me ? (
+        <View style={styles.mobileBottomNav}>
+          {[{ id: "home", label: "홈", icon: "home" }, { id: "mail", label: "메일", icon: "mail" }, { id: "approval", label: "결재", icon: "approval" }, { id: "chat", label: "메신저", icon: "chat" }, { id: "calendar", label: "일정", icon: "calendar" }, { id: "more", label: "더보기", icon: "more" }].map((item) => (
+            <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} onPress={() => handleTabPress(item.id as MobileTab)} style={[styles.mobileBottomNavItem, activeTab === item.id ? styles.mobileBottomNavItemActive : null]}>
+              <MoaIcon name={item.icon as IconName} color={activeTab === item.id ? "#ffffff" : "#475569"} size={18} />
+              <Text style={[styles.mobileBottomNavLabel, activeTab === item.id ? styles.mobileBottomNavLabelActive : null]}>{item.label}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -1000,9 +1364,83 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#eef4f3",
   },
+  mobileShellHeader: {
+    backgroundColor: "#0f172a",
+    paddingHorizontal: 18,
+    paddingTop: 10,
+    paddingBottom: 12,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  shellBrand: {
+    color: "#67e8f9",
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 1,
+  },
+  shellTitle: {
+    color: "#ffffff",
+    fontSize: 18,
+    fontWeight: "800",
+    marginTop: 3,
+  },
+  shellHeaderActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  shellHeaderChip: {
+    color: "#ffffff",
+    fontSize: 11,
+    fontWeight: "800",
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(153,246,228,0.45)",
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  shellHeaderActionText: {
+    color: "#ffffff",
+    fontSize: 22,
+    fontWeight: "800",
+  },
+  mobileBottomNav: {
+    backgroundColor: "#ffffff",
+    borderTopWidth: 1,
+    borderTopColor: "#dbe4ec",
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    paddingBottom: 10,
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  mobileBottomNavItem: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
+  mobileBottomNavItemActive: {
+    backgroundColor: "#0f766e",
+  },
+  mobileBottomNavLabel: {
+    color: "#475569",
+    fontSize: 10,
+    fontWeight: "800",
+    marginTop: 2,
+  },
+  mobileBottomNavLabelActive: {
+    color: "#ffffff",
+  },
   container: {
     padding: 18,
+    paddingBottom: 96,
     gap: 18,
+  },
+  containerCompact: {
+    padding: 12,
+    gap: 12,
   },
   hero: {
     borderRadius: 30,
@@ -1067,8 +1505,46 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     color: "#0f172a",
   },
+  loginField: {
+    marginTop: 8,
+    minHeight: 52,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(153,246,228,0.35)",
+    backgroundColor: "rgba(255,255,255,0.10)",
+    paddingHorizontal: 14,
+  },
+  loginInput: {
+    flex: 1,
+    minHeight: 50,
+    paddingVertical: 10,
+    color: "#f8fafc",
+    fontSize: 15,
+  },
   buttonBlock: {
     marginTop: 16,
+  },
+  loginButton: {
+    minHeight: 52,
+    borderRadius: 16,
+    backgroundColor: "#0f766e",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    shadowColor: "#000000",
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  loginButtonText: {
+    color: "#ffffff",
+    fontSize: 15,
+    fontWeight: "800",
   },
   userName: {
     marginTop: 12,
@@ -1101,8 +1577,51 @@ const styles = StyleSheet.create({
     color: "rgba(248,250,252,0.82)",
     lineHeight: 20,
   },
+  heroLogoutButton: {
+    alignSelf: "flex-start",
+    marginTop: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(153,246,228,0.45)",
+  },
+  heroLogoutText: {
+    color: "#99f6e4",
+    fontSize: 12,
+    fontWeight: "800",
+  },
   metricsGrid: {
     gap: 14,
+  },
+  homeSummaryGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  homeSummaryCard: {
+    flexGrow: 1,
+    flexBasis: "46%",
+    minHeight: 112,
+    borderRadius: 18,
+    padding: 14,
+  },
+  homeSummaryLabel: {
+    color: "rgba(248,250,252,0.8)",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  homeSummaryValue: {
+    marginTop: 8,
+    color: "#ffffff",
+    fontSize: 24,
+    fontWeight: "800",
+  },
+  homeSummaryDesc: {
+    marginTop: 4,
+    color: "rgba(248,250,252,0.78)",
+    fontSize: 11,
+    lineHeight: 16,
   },
   mobileTabRow: {
     flexDirection: "row",
@@ -1116,6 +1635,10 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     fontWeight: "800",
     overflow: "hidden",
+    minWidth: 76,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 3,
   },
   mobileTabActive: {
     backgroundColor: "#0f766e",
@@ -1126,6 +1649,14 @@ const styles = StyleSheet.create({
     color: "#334155",
     borderWidth: 1,
     borderColor: "#dbe4ec",
+  },
+  mobileTabLabel: {
+    color: "#334155",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  mobileTabLabelActive: {
+    color: "#ffffff",
   },
   quickGrid: {
     marginTop: 16,
@@ -1284,6 +1815,68 @@ const styles = StyleSheet.create({
     color: "#475569",
     lineHeight: 21,
   },
+  mailList: {
+    marginTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: "#dbe4ec",
+  },
+  mailRow: {
+    minHeight: 68,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#e2e8f0",
+    backgroundColor: "#ffffff",
+  },
+  mailRowUnread: {
+    backgroundColor: "#f0fdfa",
+  },
+  mailRowSelected: {
+    borderLeftWidth: 3,
+    borderLeftColor: "#0f766e",
+  },
+  mailRowMain: {
+    flex: 1,
+    gap: 5,
+  },
+  mailRowTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  mailRowBottom: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  mailSender: {
+    flex: 1,
+    color: "#475569",
+    fontSize: 12,
+  },
+  mailUnreadText: {
+    color: "#0f172a",
+    fontWeight: "800",
+  },
+  mailStar: {
+    color: "#b45309",
+    fontSize: 13,
+  },
+  mailDate: {
+    color: "#64748b",
+    fontSize: 10,
+  },
+  mailSubject: {
+    maxWidth: "48%",
+    color: "#334155",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  mailPreview: {
+    flex: 1,
+    color: "#64748b",
+    fontSize: 11,
+  },
   statusPill: {
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -1344,5 +1937,147 @@ const styles = StyleSheet.create({
   },
   buttonHalf: {
     flex: 1,
+  },
+  mobileSubNav: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 14,
+  },
+  mobileSubTab: {
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    overflow: "hidden",
+    fontWeight: "700",
+  },
+  mobileSubTabActive: {
+    backgroundColor: "#0f766e",
+    color: "#ffffff",
+  },
+  mobileSubTabIdle: {
+    backgroundColor: "#f1f5f9",
+    color: "#334155",
+  },
+  directoryCard: {
+    marginTop: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    padding: 14,
+    borderRadius: 18,
+    backgroundColor: "#f8fafc",
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+  },
+  avatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#0f766e",
+  },
+  avatarText: {
+    color: "#ffffff",
+    fontWeight: "800",
+    fontSize: 16,
+  },
+  directoryInfo: {
+    flex: 1,
+    gap: 4,
+  },
+  calendarHeader: {
+    marginTop: 14,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  calendarMonth: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#0f172a",
+  },
+  calendarGrid: {
+    marginTop: 14,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  calendarDay: {
+    width: "13.5%",
+    textAlign: "center",
+    color: "#64748b",
+    fontWeight: "700",
+  },
+  calendarCell: {
+    width: "13.5%",
+    minHeight: 58,
+    padding: 8,
+    borderRadius: 12,
+    backgroundColor: "#f8fafc",
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+  },
+  calendarCellActive: {
+    backgroundColor: "#ccfbf1",
+    borderColor: "#5eead4",
+  },
+  calendarDate: {
+    color: "#334155",
+    fontWeight: "700",
+  },
+  calendarEvent: {
+    marginTop: 5,
+    color: "#0f766e",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  aiBubble: {
+    marginTop: 12,
+    borderRadius: 18,
+    padding: 14,
+  },
+  aiUserBubble: {
+    backgroundColor: "#ecfeff",
+    borderWidth: 1,
+    borderColor: "#99f6e4",
+  },
+  aiAssistantBubble: {
+    backgroundColor: "#eff6ff",
+    borderWidth: 1,
+    borderColor: "#bfdbfe",
+  },
+  aiRole: {
+    marginBottom: 6,
+    color: "#0f766e",
+    fontWeight: "800",
+  },
+  providerRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  providerChip: {
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    overflow: "hidden",
+    backgroundColor: "#f1f5f9",
+    color: "#334155",
+    fontWeight: "700",
+  },
+  providerChipActive: {
+    backgroundColor: "#0f766e",
+    color: "#ffffff",
+  },
+  settingsValue: {
+    marginTop: 8,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: "#f1f5f9",
+    color: "#334155",
   },
 });

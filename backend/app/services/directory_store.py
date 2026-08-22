@@ -7,16 +7,8 @@ from zoneinfo import ZoneInfo
 
 from app.schemas.directory import (
     ApprovalActionReason,
-    ApprovalAttachmentView,
-    ApprovalAttachmentMeta,
-    ApprovalAttachmentUploadResponse,
     ApprovalApproverListResponse,
     ApprovalApproverView,
-    ApprovalBasicPreferenceResponse,
-    ApprovalDelegationCreateRequest,
-    ApprovalDelegationListResponse,
-    ApprovalDelegationUpdateRequest,
-    ApprovalDelegationView,
     ApprovalCreateResponse,
     ApprovalDocumentCreateRequest,
     ApprovalDocumentDetailResponse,
@@ -32,6 +24,7 @@ from app.schemas.directory import (
     CompanyRecord,
     DepartmentUpdateRequest,
     DepartmentRecord,
+    DepartmentUpdateRequest,
     DirectoryOverviewResponse,
     MailAccountRecord,
     MailProviderConfigRecord,
@@ -121,10 +114,12 @@ class DirectoryStore:
                 )
                 cursor.execute(
                     """
-                    INSERT INTO departments (id, company_id, name, parent_id, status, sort_order, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO departments (
+                        id, company_id, system_department_code, department_code, name, parent_id, status, sort_order, created_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (department_id, company_id, "본사", None, "active", 100, now),
+                    (department_id, company_id, self._new_system_department_code(), "HQ", "본사", None, "active", 100, now),
                 )
                 cursor.execute(
                     """
@@ -309,7 +304,7 @@ class DirectoryStore:
                 provider_row = self._fetch_provider_row(cursor)
                 cursor.execute(
                     """
-                    SELECT id, company_id, name, parent_id, status, sort_order, created_at
+                    SELECT id, company_id, system_department_code, department_code, name, parent_id, status, sort_order, created_at
                     FROM departments
                     ORDER BY sort_order ASC, created_at ASC
                     """
@@ -332,6 +327,8 @@ class DirectoryStore:
                         u.email AS user_email,
                         u.status AS user_status,
                         u.user_type,
+                        u.is_department_head,
+                        u.must_change_password,
                         d.id AS department_id,
                         d.name AS department_name,
                         r.id AS role_id,
@@ -362,14 +359,14 @@ class DirectoryStore:
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
-                row = self._fetch_user_access_row(cursor, "u.email = %s", (email.strip().lower(),))
+                row = self._fetch_user_access_row(cursor, "LOWER(u.email) = %s", (email.strip().lower(),))
 
         if row is None:
             if not self.is_initialized():
                 raise ValueError("초기 설정이 완료되지 않았습니다.")
-            raise ValueError("로그인 정보가 올바르지 않습니다.")
+            raise ValueError("아이디 또는 비밀번호가 올바르지 않습니다.")
         if not self.security.verify_password(password, row["password_hash"]):
-            raise ValueError("로그인 정보가 올바르지 않습니다.")
+            raise ValueError("아이디 또는 비밀번호가 올바르지 않습니다.")
 
         self._assert_user_accessible(row)
         return self._row_to_auth_summary(row)
@@ -394,16 +391,18 @@ class DirectoryStore:
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
                 if parent_id is not None:
-                    cursor.execute("SELECT 1 FROM departments WHERE id = %s", (parent_id,))
-                    if cursor.fetchone() is None:
-                        raise ValueError("대상 부서를 찾을 수 없습니다.")
+                    parent = self._fetch_required_department(cursor, parent_id)
+                    if parent["status"] == "deleted":
+                        raise ValueError("삭제된 부서는 상위 부서로 선택할 수 없습니다.")
                 cursor.execute(
                     """
-                    INSERT INTO departments (id, company_id, name, parent_id, status, sort_order, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id, company_id, name, parent_id, status, sort_order, created_at
+                    INSERT INTO departments (
+                        id, company_id, system_department_code, department_code, name, parent_id, status, sort_order, created_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id, company_id, system_department_code, department_code, name, parent_id, status, sort_order, created_at
                     """,
-                    (department_id, company.id, name.strip(), parent_id, "active", sort_order, now),
+                    (department_id, company.id, self._new_system_department_code(), None, name.strip(), parent_id, "active", sort_order, now),
                 )
                 row = cursor.fetchone()
             connection.commit()
@@ -427,17 +426,30 @@ class DirectoryStore:
                 cursor.execute(
                     """
                     UPDATE departments
-                    SET name = %s, parent_id = %s, status = %s, sort_order = %s
+                    SET name = %s,
+                        parent_id = %s,
+                        status = %s,
+                        sort_order = %s
                     WHERE id = %s
-                    RETURNING id, company_id, name, parent_id, status, sort_order, created_at
+                    RETURNING id, company_id, system_department_code, department_code, name, parent_id, status, sort_order, created_at
                     """,
                     (next_name, next_parent_id, next_status, next_sort_order, department_id),
                 )
                 row = cursor.fetchone()
-                self._insert_audit(cursor=cursor, company_id=current["company_id"], actor_user_id=None,
-                                   actor_user_name="system", target_type="department", target_id=department_id,
-                                   event="directory.department_updated", status_before=current["status"],
-                                   status_after=next_status, reason=None)
+                if row is None:
+                    raise ValueError("대상 부서를 찾을 수 없습니다.")
+                self._insert_audit(
+                    cursor=cursor,
+                    company_id=current["company_id"],
+                    actor_user_id=None,
+                    actor_user_name="system",
+                    target_type="department",
+                    target_id=department_id,
+                    event="directory.department_updated",
+                    status_before=current["status"],
+                    status_after=next_status,
+                    reason=None,
+                )
             connection.commit()
         return self._to_department_record(row)
 
@@ -450,21 +462,40 @@ class DirectoryStore:
                     raise ValueError("이미 삭제된 부서입니다.")
                 if current["parent_id"] is None or current["name"] == "본사":
                     raise ValueError("기본 부서는 삭제할 수 없습니다.")
-                cursor.execute("SELECT 1 FROM departments WHERE parent_id = %s AND status != 'deleted' LIMIT 1", (department_id,))
+                cursor.execute(
+                    "SELECT 1 FROM departments WHERE parent_id = %s AND status != 'deleted' LIMIT 1",
+                    (department_id,),
+                )
                 if cursor.fetchone() is not None:
                     raise ValueError("하위 부서가 있어 삭제할 수 없습니다.")
-                cursor.execute("SELECT 1 FROM users WHERE department_id = %s AND status != 'deleted' LIMIT 1", (department_id,))
+                cursor.execute(
+                    "SELECT 1 FROM users WHERE department_id = %s AND status != 'deleted' LIMIT 1",
+                    (department_id,),
+                )
                 if cursor.fetchone() is not None:
                     raise ValueError("소속 사용자가 있어 삭제할 수 없습니다.")
                 cursor.execute(
-                    "UPDATE departments SET status = 'deleted' WHERE id = %s RETURNING id, company_id, name, parent_id, status, sort_order, created_at",
+                    """
+                    UPDATE departments
+                    SET status = 'deleted'
+                    WHERE id = %s
+                    RETURNING id, company_id, system_department_code, department_code, name, parent_id, status, sort_order, created_at
+                    """,
                     (department_id,),
                 )
                 row = cursor.fetchone()
-                self._insert_audit(cursor=cursor, company_id=current["company_id"], actor_user_id=None,
-                                   actor_user_name="system", target_type="department", target_id=department_id,
-                                   event="directory.department_deleted", status_before=current["status"],
-                                   status_after="deleted", reason="상태 삭제")
+                self._insert_audit(
+                    cursor=cursor,
+                    company_id=current["company_id"],
+                    actor_user_id=None,
+                    actor_user_name="system",
+                    target_type="department",
+                    target_id=department_id,
+                    event="directory.department_deleted",
+                    status_before=current["status"],
+                    status_after="deleted",
+                    reason="상태 삭제",
+                )
             connection.commit()
         return self._to_department_record(row)
 
@@ -536,25 +567,45 @@ class DirectoryStore:
                     raise ValueError("이미 삭제된 권한 역할입니다.")
                 if current["name"] in {"관리자", "일반사용자"}:
                     raise ValueError("기본 권한 역할은 삭제할 수 없습니다.")
-                cursor.execute("SELECT 1 FROM users WHERE role_id = %s AND status != 'deleted' LIMIT 1", (role_id,))
+                cursor.execute(
+                    "SELECT 1 FROM users WHERE role_id = %s AND status != 'deleted' LIMIT 1",
+                    (role_id,),
+                )
                 if cursor.fetchone() is not None:
                     raise ValueError("사용자가 연결된 권한 역할은 삭제할 수 없습니다.")
                 cursor.execute(
-                    "UPDATE roles SET status = 'deleted' WHERE id = %s RETURNING id, company_id, name, permissions, status, created_at",
+                    """
+                    UPDATE roles
+                    SET status = 'deleted'
+                    WHERE id = %s
+                    RETURNING id, company_id, name, permissions, status, created_at
+                    """,
                     (role_id,),
                 )
                 row = cursor.fetchone()
-                self._insert_audit(cursor=cursor, company_id=current["company_id"], actor_user_id=None,
-                                   actor_user_name="system", target_type="role", target_id=role_id,
-                                   event="directory.role_deleted", status_before=current["status"],
-                                   status_after="deleted", reason="상태 삭제")
+                self._insert_audit(
+                    cursor=cursor,
+                    company_id=current["company_id"],
+                    actor_user_id=None,
+                    actor_user_name="system",
+                    target_type="role",
+                    target_id=role_id,
+                    event="directory.role_deleted",
+                    status_before=current["status"],
+                    status_after="deleted",
+                    reason="상태 삭제",
+                )
             connection.commit()
         return self._to_role_record(row)
 
     def create_user(self, payload: UserCreateRequest) -> UserView:
         self.db.ensure_migrations_applied()
         company = self._require_company()
-        normalized_email = (payload.email or f"{payload.loginId}@{company.domain}").lower()
+        login_id = self._derive_login_id(payload.loginId, payload.email)
+        normalized_email = self._build_user_email(login_id, company.domain)
+        initial_password = (payload.password or login_id).strip()
+        normalized_user_type = payload.userType.strip().lower() if payload.userType.strip() else "user"
+        must_change_password = normalized_user_type == "user"
         now = self._now()
         user_id = self._new_id("user")
         mail_account_id = self._new_id("mail")
@@ -569,28 +620,33 @@ class DirectoryStore:
                 if cursor.fetchone() is not None:
                     raise ValueError("이미 존재하는 이메일입니다.")
 
+                if payload.isDepartmentHead:
+                    cursor.execute("UPDATE users SET is_department_head = FALSE, updated_at = %s WHERE department_id = %s", (now, department["id"]))
+
                 cursor.execute(
                     """
                     INSERT INTO users (
                         id, company_id, email, name, password_hash, department_id, role_id,
-                        status, user_type, created_at, updated_at
+                        status, user_type, must_change_password, created_at, updated_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         user_id,
                         company.id,
                         normalized_email,
                         payload.name.strip(),
-                        self.security.hash_password(payload.password),
+                        self.security.hash_password(initial_password),
                         department["id"],
                         role["id"],
                         payload.status,
-                        payload.userType,
+                        normalized_user_type,
+                        must_change_password,
                         now,
                         now,
                     ),
                 )
+                cursor.execute("UPDATE users SET is_department_head = %s WHERE id = %s", (payload.isDepartmentHead, user_id))
                 cursor.execute(
                     """
                     INSERT INTO user_calendars (
@@ -629,7 +685,7 @@ class DirectoryStore:
                     event="directory.user_created",
                     status_before=None,
                     status_after=payload.status,
-                    reason=None,
+                    reason="아이디 기반 자동 생성 / 최초 로그인 후 비밀번호 변경 필요" if must_change_password else None,
                 )
                 row = self._fetch_user_view_row(cursor, user_id)
             connection.commit()
@@ -647,14 +703,23 @@ class DirectoryStore:
                 next_department_id = payload.departmentId or current["department_id"]
                 next_role_id = payload.roleId or current["role_id"]
                 next_status = payload.status or current["user_status"]
+                next_is_department_head = current["is_department_head"] if payload.isDepartmentHead is None else payload.isDepartmentHead
                 next_password_hash = (
                     self.security.hash_password(payload.password)
                     if payload.password is not None
                     else current["password_hash"]
                 )
+                next_must_change_password = False if payload.password is not None else current["must_change_password"]
 
-                self._fetch_required_department(cursor, next_department_id)
-                self._fetch_required_role(cursor, next_role_id)
+                department = self._fetch_required_department(cursor, next_department_id)
+                role = self._fetch_required_role(cursor, next_role_id)
+                if department["status"] == "deleted":
+                    raise ValueError("삭제된 부서는 선택할 수 없습니다.")
+                if role["status"] == "deleted":
+                    raise ValueError("삭제된 권한 역할은 선택할 수 없습니다.")
+
+                if next_is_department_head:
+                    cursor.execute("UPDATE users SET is_department_head = FALSE, updated_at = %s WHERE department_id = %s AND id <> %s", (self._now(), next_department_id, user_id))
 
                 cursor.execute(
                     """
@@ -663,11 +728,13 @@ class DirectoryStore:
                         password_hash = %s,
                         department_id = %s,
                         role_id = %s,
+                        is_department_head = %s,
                         status = %s,
+                        must_change_password = %s,
                         updated_at = %s
                     WHERE id = %s
                     """,
-                    (next_name, next_password_hash, next_department_id, next_role_id, next_status, self._now(), user_id),
+                    (next_name, next_password_hash, next_department_id, next_role_id, next_is_department_head, next_status, next_must_change_password, self._now(), user_id),
                 )
                 cursor.execute(
                     """
@@ -676,7 +743,7 @@ class DirectoryStore:
                         updated_at = %s
                     WHERE user_id = %s
                     """,
-                    ("active" if next_status == "active" else "inactive", self._now(), user_id),
+                    ("active" if next_status == "active" else ("deleted" if next_status == "deleted" else "inactive"), self._now(), user_id),
                 )
                 self._insert_audit(
                     cursor=cursor,
@@ -706,15 +773,42 @@ class DirectoryStore:
                 if current["user_status"] == "deleted":
                     raise ValueError("이미 삭제된 사용자입니다.")
                 if current["user_type"] == "admin":
-                    cursor.execute("SELECT COUNT(*) AS count FROM users WHERE user_type = 'admin' AND status != 'deleted'")
-                    if int(cursor.fetchone()["count"]) <= 1:
+                    cursor.execute(
+                        "SELECT COUNT(*) AS count FROM users WHERE user_type = 'admin' AND status != 'deleted'"
+                    )
+                    admin_count = int(cursor.fetchone()["count"])
+                    if admin_count <= 1:
                         raise ValueError("마지막 관리자 계정은 삭제할 수 없습니다.")
-                cursor.execute("UPDATE users SET status = 'deleted', updated_at = %s WHERE id = %s", (self._now(), user_id))
-                cursor.execute("UPDATE mail_accounts SET status = 'deleted', updated_at = %s WHERE user_id = %s", (self._now(), user_id))
-                self._insert_audit(cursor=cursor, company_id=current["company_id"], actor_user_id=actor_user_id,
-                                   actor_user_name="system", target_type="user", target_id=user_id,
-                                   event="directory.user_deleted", status_before=current["user_status"],
-                                   status_after="deleted", reason="상태 삭제")
+                cursor.execute(
+                    """
+                    UPDATE users
+                    SET status = 'deleted',
+                        updated_at = %s
+                    WHERE id = %s
+                    """,
+                    (self._now(), user_id),
+                )
+                cursor.execute(
+                    """
+                    UPDATE mail_accounts
+                    SET status = 'deleted',
+                        updated_at = %s
+                    WHERE user_id = %s
+                    """,
+                    (self._now(), user_id),
+                )
+                self._insert_audit(
+                    cursor=cursor,
+                    company_id=current["company_id"],
+                    actor_user_id=actor_user_id,
+                    actor_user_name="system",
+                    target_type="user",
+                    target_id=user_id,
+                    event="directory.user_deleted",
+                    status_before=current["user_status"],
+                    status_after="deleted",
+                    reason="상태 삭제",
+                )
                 row = self._fetch_user_view_row(cursor, user_id)
             connection.commit()
         return self._row_to_user_view(row)
@@ -1520,6 +1614,33 @@ class DirectoryStore:
                 (row["id"],),
             )
 
+    def list_active_approval_approvers(self, actor_id: str) -> ApprovalApproverListResponse:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                actor = self._fetch_actor_summary(cursor, actor_id)
+                cursor.execute(
+                    """
+                    SELECT u.id, u.name, u.email, COALESCE(d.name, '미지정') AS department_name
+                    FROM users u
+                    JOIN roles r ON r.id = u.role_id
+                    LEFT JOIN departments d ON d.id = u.department_id
+                    WHERE u.company_id = %s
+                      AND u.status = 'active'
+                      AND r.status = 'active'
+                      AND (d.id IS NULL OR d.status = 'active')
+                    ORDER BY department_name ASC, u.name ASC, u.email ASC
+                    """,
+                    (actor.companyId,),
+                )
+                users = cursor.fetchall()
+        return ApprovalApproverListResponse(
+            users=[
+                ApprovalApproverView(userId=row["id"], userName=row["name"], userEmail=row["email"], departmentName=row["department_name"])
+                for row in users
+            ]
+        )
+
     def create_approval_document(self, actor_id: str, payload: ApprovalDocumentCreateRequest) -> ApprovalCreateResponse:
         self.db.ensure_migrations_applied()
         now = self._now()
@@ -1594,114 +1715,27 @@ class DirectoryStore:
             connection.commit()
         return ApprovalCreateResponse(documentId=document_id)
 
-    def update_approval_document(
-        self,
-        actor_id: str,
-        document_id: str,
-        payload: ApprovalDocumentUpdateRequest,
-    ) -> ApprovalDocumentDetailResponse:
+    def update_approval_document(self, actor_id: str, document_id: str, payload: ApprovalDocumentUpdateRequest) -> ApprovalDocumentResponse:
         self.db.ensure_migrations_applied()
         now = self._now()
-        removed_storage_keys: list[str] = []
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
                 actor = self._fetch_actor_summary(cursor, actor_id)
                 document = self._fetch_required_approval_document(cursor, document_id, for_update=True)
                 self._assert_creator(actor, document)
                 self._assert_document_status(document, allowed={"draft"}, action_label="수정")
-                approvers = self._validate_approval_approvers(cursor, actor, payload.approverUserIds)
-                cursor.execute(
-                    """
-                    SELECT id, size_bytes, storage_key
-                    FROM approval_attachments
-                    WHERE document_id = %s
-                    FOR UPDATE
-                    """,
-                    (document_id,),
-                )
-                existing = cursor.fetchall()
-                existing_by_id = {row["id"]: row for row in existing}
-                if any(attachment_id not in existing_by_id for attachment_id in payload.retainedAttachmentIds):
-                    raise ValueError("유지할 결재 첨부를 찾을 수 없습니다.")
-                retained = [existing_by_id[attachment_id] for attachment_id in payload.retainedAttachmentIds]
-                if len(retained) + len(payload.attachments) > APPROVAL_ATTACHMENT_MAX_COUNT:
-                    raise ValueError("결재 첨부는 최대 10개까지 등록할 수 있습니다.")
-                retained_size = sum(int(row["size_bytes"]) for row in retained)
-
-                cursor.execute(
-                    """
-                    UPDATE approval_documents
-                    SET title = %s, content = %s, updated_at = %s
-                    WHERE id = %s
-                    """,
-                    (payload.title.strip(), payload.content.strip(), now, document_id),
-                )
+                approvers = [self._fetch_actor_summary(cursor, approver_id) for approver_id in payload.approverUserIds]
+                cursor.execute("UPDATE approval_documents SET title = %s, content = %s, updated_at = %s WHERE id = %s", (payload.title.strip(), payload.content.strip(), now, document_id))
                 cursor.execute("DELETE FROM approval_lines WHERE document_id = %s", (document_id,))
                 for sequence, approver in enumerate(approvers, start=1):
                     cursor.execute(
-                        """
-                        INSERT INTO approval_lines (
-                            id, document_id, approver_user_id, approver_user_name,
-                            sequence, status, comment, decided_by_user_id, decided_at
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (
-                            self._new_id("aline"),
-                            document_id,
-                            approver["user_id"],
-                            approver["user_name"],
-                            sequence,
-                            "pending",
-                            None,
-                            None,
-                            None,
-                        ),
+                        """INSERT INTO approval_lines (id, document_id, approver_user_id, approver_user_name, sequence, status, comment, decided_by_user_id, decided_at)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                        (self._new_id("aline"), document_id, approver.userId, approver.userName, sequence, "pending", None, None, None),
                     )
-                removed_ids = [row["id"] for row in existing if row["id"] not in set(payload.retainedAttachmentIds)]
-                if removed_ids:
-                    cursor.execute(
-                        """
-                        DELETE FROM approval_attachments
-                        WHERE document_id = %s AND id = ANY(%s)
-                        RETURNING storage_key
-                        """,
-                        (document_id, removed_ids),
-                    )
-                    removed_storage_keys = [row["storage_key"] for row in cursor.fetchall()]
-                self._consume_approval_uploads(
-                    cursor,
-                    actor,
-                    payload.attachments,
-                    document_id=document_id,
-                    now=now,
-                    retained_count=len(retained),
-                    retained_size=retained_size,
-                )
-                self._insert_audit(
-                    cursor=cursor,
-                    company_id=actor.companyId,
-                    actor_user_id=actor.userId,
-                    actor_user_name=actor.userName,
-                    target_type="approval_document",
-                    target_id=document_id,
-                    event="approval.updated",
-                    status_before="draft",
-                    status_after="draft",
-                    reason=None,
-                )
-                response = self._to_approval_document_detail_response(
-                    cursor,
-                    self._fetch_required_approval_document(cursor, document_id),
-                    actor,
-                )
+                self._insert_audit(cursor=cursor, company_id=actor.companyId, actor_user_id=actor.userId, actor_user_name=actor.userName, target_type="approval_document", target_id=document_id, event="approval.updated", status_before="draft", status_after="draft", reason="문서 또는 결재선 수정")
+                response = self._to_approval_document_response(cursor, self._fetch_required_approval_document(cursor, document_id))
             connection.commit()
-        storage = ApprovalAttachmentStorage()
-        for storage_key in removed_storage_keys:
-            try:
-                storage.delete(storage_key)
-            except (OSError, ValueError):
-                pass
         return response
 
     def submit_approval_document(self, actor_id: str, document_id: str) -> ApprovalDocumentResponse:
@@ -1904,7 +1938,7 @@ class DirectoryStore:
 
     def _fetch_required_department(self, cursor, department_id: str) -> dict:
         cursor.execute(
-            "SELECT id, company_id, name, parent_id, status, sort_order, created_at FROM departments WHERE id = %s",
+            "SELECT id, company_id, system_department_code, department_code, name, parent_id, status, sort_order, created_at FROM departments WHERE id = %s",
             (department_id,),
         )
         row = cursor.fetchone()
@@ -1935,6 +1969,8 @@ class DirectoryStore:
                 u.role_id,
                 u.status AS user_status,
                 u.user_type,
+                u.is_department_head,
+                u.must_change_password,
                 d.name AS department_name,
                 r.name AS role_name,
                 r.permissions,
@@ -2458,6 +2494,45 @@ class DirectoryStore:
         )
         return response
 
+    def change_own_password(self, user_id: str, current_password: str, new_password: str) -> AuthUserSummary:
+        self.db.ensure_migrations_applied()
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                row = self._fetch_user_access_row(cursor, "u.id = %s", (user_id,))
+                if row is None:
+                    raise ValueError("대상 사용자를 찾을 수 없습니다.")
+                self._assert_user_accessible(row)
+                if not self.security.verify_password(current_password, row["password_hash"]):
+                    raise ValueError("현재 비밀번호가 올바르지 않습니다.")
+
+                cursor.execute(
+                    """
+                    UPDATE users
+                    SET password_hash = %s,
+                        must_change_password = FALSE,
+                        updated_at = %s
+                    WHERE id = %s
+                    """,
+                    (self.security.hash_password(new_password), self._now(), user_id),
+                )
+                self._insert_audit(
+                    cursor=cursor,
+                    company_id=row["company_id"],
+                    actor_user_id=user_id,
+                    actor_user_name=row["user_name"],
+                    target_type="user",
+                    target_id=user_id,
+                    event="auth.password_changed",
+                    status_before="password_change_required" if row["must_change_password"] else "active",
+                    status_after="active",
+                    reason="최초 로그인 후 비밀번호 변경 완료" if row["must_change_password"] else "사용자 본인 비밀번호 변경",
+                )
+                updated = self._fetch_user_access_row(cursor, "u.id = %s", (user_id,))
+            connection.commit()
+        if updated is None:
+            raise ValueError("비밀번호 변경 후 사용자 정보를 찾을 수 없습니다.")
+        return self._row_to_auth_summary(updated)
+
     def _fetch_user_view_row(self, cursor, user_id: str) -> dict:
         row = self._fetch_user_access_row(cursor, "u.id = %s", (user_id,))
         if row is None:
@@ -2469,13 +2544,27 @@ class DirectoryStore:
             with connection.cursor() as cursor:
                 return self._to_company_record(self._fetch_company_row(cursor))
 
+    def get_login_domain(self) -> str | None:
+        if not self.is_initialized():
+            return None
+        company = self._require_company()
+        return company.domain.strip().lower()
+
     def _assert_user_accessible(self, row: dict) -> None:
-        if row["user_status"] != "active":
+        user_status = row["user_status"]
+        role_status = row["role_status"]
+        mail_status = row["mail_account_status"]
+
+        if user_status == "inactive":
             raise PermissionError("비활성화된 사용자 계정입니다.")
-        if row["role_status"] != "active":
-            raise PermissionError("사용자 권한이 비활성화된 상태입니다.")
-        if row["mail_account_status"] != "active":
-            raise PermissionError("사용자 계정 상태와 메일/권한 상태가 일치하지 않습니다.")
+        if user_status == "deleted":
+            raise PermissionError("삭제된 사용자 계정입니다. 관리자에게 문의하세요.")
+        if role_status == "inactive":
+            raise PermissionError("사용자의 권한 역할이 비활성화되어 로그인할 수 없습니다.")
+        if role_status == "deleted":
+            raise PermissionError("사용자의 권한 역할이 삭제되어 로그인할 수 없습니다.")
+        if mail_status != "active":
+            raise PermissionError("메일 계정이 비활성화되어 로그인할 수 없습니다.")
 
     def _permissions(self, raw: object) -> list[str]:
         if isinstance(raw, list):
@@ -2498,19 +2587,29 @@ class DirectoryStore:
             roleId=row["role_id"],
             roleName=row["role_name"],
             userType=row["user_type"],
+            isDepartmentHead=bool(row.get("is_department_head", False)),
             status=row["user_status"],
             permissions=self._permissions(row["permissions"]),
+            mustChangePassword=bool(row["must_change_password"]),
         )
 
     def _row_to_user_view(self, row: dict) -> UserView:
         permissions = self._permissions(row["permissions"])
         consistency_issues: list[UserStatusIssue] = []
-        if row["role_status"] != "active":
-            consistency_issues.append(UserStatusIssue(code="ROLE_INACTIVE", message="연결된 권한 역할이 비활성화 상태입니다."))
+        if row["user_status"] == "inactive":
+            consistency_issues.append(UserStatusIssue(code="USER_INACTIVE", message="비활성 사용자로 로그인할 수 없습니다."))
+        if row["user_status"] == "deleted":
+            consistency_issues.append(UserStatusIssue(code="USER_DELETED", message="삭제된 사용자 계정입니다."))
+        if row["role_status"] == "inactive":
+            consistency_issues.append(UserStatusIssue(code="ROLE_INACTIVE", message="연결된 권한 역할이 비활성화되어 로그인할 수 없습니다."))
+        if row["role_status"] == "deleted":
+            consistency_issues.append(UserStatusIssue(code="ROLE_DELETED", message="연결된 권한 역할이 삭제되어 로그인할 수 없습니다."))
         if row["user_status"] == "active" and row["mail_account_status"] != "active":
-            consistency_issues.append(UserStatusIssue(code="MAIL_ACCOUNT_MISMATCH", message="활성 사용자이지만 메일 계정이 활성 상태가 아닙니다."))
+            consistency_issues.append(UserStatusIssue(code="MAIL_INACTIVE", message="메일 계정이 비활성화되어 로그인할 수 없습니다."))
         if row["user_status"] != "active" and row["mail_account_status"] == "active":
             consistency_issues.append(UserStatusIssue(code="USER_INACTIVE_MAIL_ACTIVE", message="비활성 사용자이지만 메일 계정이 활성 상태입니다."))
+        if row["user_status"] == "active" and row["role_status"] == "active" and row["mail_account_status"] != "active":
+            consistency_issues.append(UserStatusIssue(code="LOGIN_BLOCKED", message="메일 계정 비활성화로 로그인할 수 없습니다."))
 
         return UserView(
             userId=row["user_id"],
@@ -2527,6 +2626,7 @@ class DirectoryStore:
             mailAccountStatus=row["mail_account_status"],
             permissions=permissions,
             consistencyIssues=consistency_issues,
+            mustChangePassword=bool(row["must_change_password"]),
         )
 
     def _to_company_record(self, row: dict) -> CompanyRecord:
@@ -2542,6 +2642,8 @@ class DirectoryStore:
         return DepartmentRecord(
             id=row["id"],
             companyId=row["company_id"],
+            systemDepartmentCode=row.get("system_department_code"),
+            departmentCode=row.get("department_code"),
             name=row["name"],
             parentId=row["parent_id"],
             status=row["status"],
@@ -2553,6 +2655,8 @@ class DirectoryStore:
         return RoleRecord(
             id=row["id"],
             companyId=row["company_id"],
+            systemDepartmentCode=row.get("system_department_code"),
+            departmentCode=row.get("department_code"),
             name=row["name"],
             permissions=self._permissions(row["permissions"]),
             status=row["status"],
@@ -2650,6 +2754,20 @@ class DirectoryStore:
                 record.createdAt,
             ),
         )
+
+    def _derive_login_id(self, login_id: str | None, email: str | None) -> str:
+        if login_id is not None and login_id.strip():
+            return login_id.strip().lower()
+        if email is not None and email.strip():
+            return email.strip().lower().split("@", 1)[0]
+        raise ValueError("아이디를 입력해야 합니다.")
+
+    def _build_user_email(self, login_id: str, company_domain: str) -> str:
+        normalized_domain = company_domain.strip().lower()
+        return f"{login_id}@{normalized_domain}"
+
+    def _new_system_department_code(self) -> str:
+        return f"DPT-{uuid4().hex[:10].upper()}"
 
     def _new_id(self, prefix: str) -> str:
         return f"{prefix}_{uuid4().hex[:12]}"

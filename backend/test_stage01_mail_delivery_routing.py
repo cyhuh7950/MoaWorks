@@ -41,6 +41,8 @@ def queue_row(provider_key: str) -> dict:
         "subject": "제목",
         "body_text": "본문",
         "body_html": None,
+        "sender_domain": "moaworks.sinsan.kr",
+        "sender_address": "no-reply@moaworks.sinsan.kr",
         "helo_name": "mail.moaworks.sinsan.kr",
         "timeout_sec": 20,
         "smtp_host": "smtp.email.ap-seoul-1.oci.oraclecloud.com",

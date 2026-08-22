@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/api.ts","./src/i18n.ts","./src/main.tsx","./src/vite-env.d.ts"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/messengerpanel.tsx","./src/notificationcenter.tsx","./src/splitview.tsx","./src/userhome.tsx","./src/workspacepanels.tsx","./src/api.ts","./src/i18n.ts","./src/main.tsx","./src/vite-env.d.ts","./src/components/commonpopup.tsx","./src/components/feedbacksystem.tsx"],"version":"5.9.3"}
