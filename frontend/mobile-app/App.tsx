@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AppState, Button, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { isSessionInvalidatedError, normalizeLoginIdentifier, requestJson } from "./auth-session";
+import { createAuthSessionController, isSessionInvalidatedError, requestJson } from "./auth-session";
 
 type AuthUser = {
   userId: string;
@@ -196,7 +196,7 @@ function formatStamp(value: string | null | undefined): string {
 
 export default function App() {
   const passwordInputRef = useRef<TextInput | null>(null);
-  const activeSessionTokenRef = useRef("");
+  const sessionControllerRef = useRef(createAuthSessionController());
   const [apiBase, setApiBase] = useState(fallbackApiBase);
   const [locale, setLocale] = useState<AppLocale>(resolveLocale("ko-KR"));
   const [timezone, setTimezone] = useState("Asia/Seoul");
@@ -254,8 +254,10 @@ export default function App() {
     setMessage("서버·화면 설정이 현재 앱 세션에 적용되었습니다.");
   }
 
-  function clearSession(nextMessage = "") {
-    activeSessionTokenRef.current = "";
+  function clearSession(nextMessage = "", advanceGeneration = true) {
+    if (advanceGeneration) {
+      sessionControllerRef.current.logout();
+    }
     setToken("");
     setMe(null);
     setPassword("");
@@ -282,12 +284,12 @@ export default function App() {
     setMessage(nextMessage);
   }
 
-  async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  async function request<T>(path: string, init: RequestInit | undefined, context: { generation: number; token: string }): Promise<T> {
     try {
-      return await requestJson({ apiBase, path, init }) as T;
+      return await sessionControllerRef.current.requestForSession({ apiBase, path, init, context }) as T;
     } catch (error) {
-      if (isSessionInvalidatedError(error)) {
-        clearSession(error instanceof Error ? error.message : "세션이 만료되었습니다. 다시 로그인 후 업무를 계속하세요.");
+      if (isSessionInvalidatedError(error) && (error as { sessionCleared?: boolean }).sessionCleared) {
+        clearSession(error instanceof Error ? error.message : "세션이 만료되었습니다. 다시 로그인 후 업무를 계속하세요.", false);
       }
       throw error;
     }
@@ -312,97 +314,104 @@ export default function App() {
     }
   }
 
-  async function loadNotifications(activeToken: string = token) {
+  async function loadNotifications(activeToken: string = token, context = sessionControllerRef.current.capture(activeToken)) {
     if (!activeToken) return;
     const [summary, body] = await Promise.all([
       request<NotificationSummary>("/notifications/summary", {
         headers: { Authorization: `Bearer ${activeToken}` },
-      }),
+      }, context),
       request<{ notifications: NotificationRecord[] }>("/notifications?limit=20", {
         headers: { Authorization: `Bearer ${activeToken}` },
-      }),
+      }, context),
     ]);
-    if (activeSessionTokenRef.current !== activeToken) return;
+    if (!sessionControllerRef.current.isCurrent(context)) return;
     setNotificationSummary(summary);
     setNotifications(body.notifications ?? []);
     setNotificationError("");
   }
 
-  async function refreshNotifications() {
+  async function refreshNotifications(context = sessionControllerRef.current.capture(token)) {
     try {
-      await withRetry(() => loadNotifications());
+      await withRetry(() => loadNotifications(token, context));
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       setNotificationError(error instanceof Error ? error.message : "알림 조회 실패");
     }
   }
 
   async function executeAckNotification(notificationId: string) {
+    const context = sessionControllerRef.current.capture(token);
     try {
       await request(`/notifications/${notificationId}/ack`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
-      });
-      await refreshNotifications();
+      }, context);
+      if (!sessionControllerRef.current.isCurrent(context)) return;
+      await refreshNotifications(context);
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       setNotificationError(error instanceof Error ? error.message : "읽음 처리 실패");
     }
   }
 
   async function doLogin() {
     try {
-      const loginEmail = normalizeLoginIdentifier(email);
-      const login = await request<{ accessToken: string; user: AuthUser }>("/auth/login", {
-        method: "POST",
-        body: JSON.stringify({ email: loginEmail, password }),
+      const loginResult = await sessionControllerRef.current.login({
+        apiBase,
+        identifier: email,
+        password,
       });
-      const meBody = await request<{ user: AuthUser }>("/auth/me", {
-        headers: { Authorization: `Bearer ${login.accessToken}` },
-      });
-      activeSessionTokenRef.current = login.accessToken;
-      setToken(login.accessToken);
-      setMe(meBody.user);
+      if (!loginResult.committed) return;
+      const context = loginResult.context;
+      setToken(loginResult.login.accessToken);
+      setMe(loginResult.me.user);
       setMessage("로그인 성공");
-      await loadApprovals(login.accessToken);
-      await loadNotifications(login.accessToken);
-      await loadMail(login.accessToken);
-      await loadRooms(login.accessToken);
-      await loadFiles(login.accessToken);
+      await loadApprovals(loginResult.login.accessToken, context);
+      await loadNotifications(loginResult.login.accessToken, context);
+      await loadMail(loginResult.login.accessToken, undefined, context);
+      await loadRooms(loginResult.login.accessToken, undefined, context);
+      await loadFiles(loginResult.login.accessToken, context);
     } catch (error) {
+      if (isSessionInvalidatedError(error) && (error as { sessionCleared?: boolean }).sessionCleared) {
+        clearSession(error instanceof Error ? error.message : "세션이 만료되었습니다. 다시 로그인 후 업무를 계속하세요.", false);
+      }
       if (isSessionInvalidatedError(error)) return;
       setMessage(error instanceof Error ? error.message : "로그인 실패");
     }
   }
 
-  async function loadApprovals(activeToken: string = token) {
+  async function loadApprovals(activeToken: string = token, context = sessionControllerRef.current.capture(activeToken)) {
     try {
       const body = await request<{ documents: Approval[] }>("/approvals", {
         headers: { Authorization: `Bearer ${activeToken}` },
-      });
-      if (activeSessionTokenRef.current !== activeToken) return;
+      }, context);
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       setDocuments(body.documents);
       setMessage("");
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       setMessage(error instanceof Error ? error.message : "조회 실패");
     }
   }
 
-  async function loadMail(activeToken: string = token, preferredMailId?: string) {
+  async function loadMail(activeToken: string = token, preferredMailId?: string, context = sessionControllerRef.current.capture(activeToken)) {
     if (!activeToken) return;
     try {
       const inbox = await request<{ mails: MailSummary[] }>("/mail/inbox", {
         headers: { Authorization: `Bearer ${activeToken}` },
-      });
-      if (activeSessionTokenRef.current !== activeToken) return;
+      }, context);
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       const mails = inbox.mails ?? [];
       setMailItems(mails);
       const targetMailId = preferredMailId || selectedMailId || mails[0]?.mailId || "";
       if (targetMailId) {
         const detail = await request<MailDetail>(`/mail/${targetMailId}`, {
           headers: { Authorization: `Bearer ${activeToken}` },
-        });
+        }, context);
+        if (!sessionControllerRef.current.isCurrent(context)) return;
         setSelectedMailId(targetMailId);
         setSelectedMailDetail(detail);
       } else {
@@ -412,6 +421,7 @@ export default function App() {
       setMailError("");
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       const nextError = error instanceof Error ? error.message : "메일 조회 실패";
       setMailError(nextError);
       setMessage(nextError);
@@ -420,20 +430,24 @@ export default function App() {
 
   async function openMail(mailId: string, activeToken: string = token) {
     if (!activeToken) return;
+    const context = sessionControllerRef.current.capture(activeToken);
     try {
       await request(`/mail/${mailId}/read`, {
         method: "POST",
         headers: { Authorization: `Bearer ${activeToken}` },
-      });
+      }, context);
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       const detail = await request<MailDetail>(`/mail/${mailId}`, {
         headers: { Authorization: `Bearer ${activeToken}` },
-      });
+      }, context);
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       setSelectedMailId(mailId);
       setSelectedMailDetail(detail);
       setMailItems((current) => current.map((item) => (item.mailId === mailId ? { ...item, isRead: true } : item)));
       setMailError("");
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       const nextError = error instanceof Error ? error.message : "메일 상세 조회 실패";
       setMailError(nextError);
       setMessage(nextError);
@@ -442,34 +456,38 @@ export default function App() {
 
   async function toggleMailStarState(mailId: string, activeToken: string = token) {
     if (!activeToken) return;
+    const context = sessionControllerRef.current.capture(activeToken);
     try {
       await request(`/mail/${mailId}/star`, {
         method: "POST",
         headers: { Authorization: `Bearer ${activeToken}` },
-      });
-      await loadMail(activeToken, mailId);
+      }, context);
+      if (!sessionControllerRef.current.isCurrent(context)) return;
+      await loadMail(activeToken, mailId, context);
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       const nextError = error instanceof Error ? error.message : "중요 표시 실패";
       setMailError(nextError);
       setMessage(nextError);
     }
   }
 
-  async function loadRooms(activeToken: string = token, preferredRoomId?: string) {
+  async function loadRooms(activeToken: string = token, preferredRoomId?: string, context = sessionControllerRef.current.capture(activeToken)) {
     if (!activeToken) return;
     try {
       const body = await request<{ rooms: MessengerRoom[] }>("/messenger/rooms", {
         headers: { Authorization: `Bearer ${activeToken}` },
-      });
-      if (activeSessionTokenRef.current !== activeToken) return;
+      }, context);
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       const nextRooms = body.rooms ?? [];
       setRooms(nextRooms);
       const roomId = preferredRoomId || selectedRoomId || nextRooms[0]?.roomId || "";
       if (roomId) {
         const messages = await request<{ messages: MessengerMessage[] }>(`/messenger/rooms/${roomId}/messages`, {
           headers: { Authorization: `Bearer ${activeToken}` },
-        });
+        }, context);
+        if (!sessionControllerRef.current.isCurrent(context)) return;
         setSelectedRoomId(roomId);
         setRoomMessages(messages.messages ?? []);
       } else {
@@ -479,56 +497,63 @@ export default function App() {
       setChatError("");
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       const nextError = error instanceof Error ? error.message : "메신저 조회 실패";
       setChatError(nextError);
       setMessage(nextError);
     }
   }
 
-  async function loadFiles(activeToken: string = token) {
+  async function loadFiles(activeToken: string = token, context = sessionControllerRef.current.capture(activeToken)) {
     if (!activeToken) return;
     try {
       const body = await request<{ items: WorkspaceFile[] }>("/workspace/files?scope=mine", {
         headers: { Authorization: `Bearer ${activeToken}` },
-      });
-      if (activeSessionTokenRef.current !== activeToken) return;
+      }, context);
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       setFiles(body.items ?? []);
       setFileError("");
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       setFileError(error instanceof Error ? error.message : "파일 조회 실패");
     }
   }
 
-  async function refreshAuthenticatedData(activeToken: string) {
+  async function refreshAuthenticatedData(activeToken: string, context = sessionControllerRef.current.capture(activeToken)) {
+    if (!sessionControllerRef.current.isCurrent(context)) return;
     await Promise.all([
-      loadApprovals(activeToken),
-      withRetry(() => loadNotifications(activeToken)).catch((error) => {
+      loadApprovals(activeToken, context),
+      withRetry(() => loadNotifications(activeToken, context)).catch((error) => {
         if (isSessionInvalidatedError(error)) return;
+        if (!sessionControllerRef.current.isCurrent(context)) return;
         setNotificationError(error instanceof Error ? error.message : "알림 조회 실패");
       }),
-      loadMail(activeToken),
-      loadRooms(activeToken),
-      loadFiles(activeToken),
+      loadMail(activeToken, undefined, context),
+      loadRooms(activeToken, undefined, context),
+      loadFiles(activeToken, context),
     ]);
   }
 
-  async function openRoom(roomId: string, activeToken: string = token) {
+  async function openRoom(roomId: string, activeToken: string = token, context = sessionControllerRef.current.capture(activeToken)) {
     if (!activeToken) return;
     try {
       await request(`/messenger/rooms/${roomId}/read`, {
         method: "POST",
         headers: { Authorization: `Bearer ${activeToken}` },
-      });
+      }, context);
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       const messages = await request<{ messages: MessengerMessage[] }>(`/messenger/rooms/${roomId}/messages`, {
         headers: { Authorization: `Bearer ${activeToken}` },
-      });
+      }, context);
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       setSelectedRoomId(roomId);
       setRoomMessages(messages.messages ?? []);
       setRooms((current) => current.map((item) => (item.roomId === roomId ? { ...item, unreadCount: 0 } : item)));
       setChatError("");
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       const nextError = error instanceof Error ? error.message : "대화방 조회 실패";
       setChatError(nextError);
       setMessage(nextError);
@@ -537,16 +562,19 @@ export default function App() {
 
   async function sendChatMessage() {
     if (!token || !selectedRoomId || !chatDraft.trim()) return;
+    const context = sessionControllerRef.current.capture(token);
     try {
       await request(`/messenger/rooms/${selectedRoomId}/messages`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: JSON.stringify({ body: chatDraft.trim(), messageType: "text", attachmentMeta: [] }),
-      });
+      }, context);
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       setChatDraft("");
-      await openRoom(selectedRoomId);
+      await openRoom(selectedRoomId, token, context);
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       const nextError = error instanceof Error ? error.message : "메시지 전송 실패";
       setChatError(nextError);
       setMessage(nextError);
@@ -570,28 +598,34 @@ export default function App() {
   }
 
   async function action(documentId: string, type: "submit" | "withdraw" | "redraft") {
+    const context = sessionControllerRef.current.capture(token);
     try {
       await request(`/approvals/${documentId}/${type}`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
-      });
-      await loadApprovals();
+      }, context);
+      if (!sessionControllerRef.current.isCurrent(context)) return;
+      await loadApprovals(token, context);
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       Alert.alert("작업 실패", error instanceof Error ? error.message : "요청 실패");
     }
   }
 
   async function actionWithReason(documentId: string, type: "approve" | "reject") {
+    const context = sessionControllerRef.current.capture(token);
     try {
       await request(`/approvals/${documentId}/${type}`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: JSON.stringify({ reason: actionReason || "확인" }),
-      });
-      await loadApprovals();
+      }, context);
+      if (!sessionControllerRef.current.isCurrent(context)) return;
+      await loadApprovals(token, context);
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       Alert.alert("작업 실패", error instanceof Error ? error.message : "요청 실패");
     }
   }
@@ -601,6 +635,7 @@ export default function App() {
   }
 
   async function createApprovalDocument() {
+    const context = sessionControllerRef.current.capture(token);
     try {
       await request("/approvals", {
         method: "POST",
@@ -610,11 +645,13 @@ export default function App() {
           content: createForm.content,
           approverUserIds: createForm.approverUserIds.split(",").map((item) => item.trim()).filter(Boolean),
         }),
-      });
+      }, context);
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       setCreateForm({ title: "", content: "", approverUserIds: "" });
-      await loadApprovals();
+      await loadApprovals(token, context);
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
+      if (!sessionControllerRef.current.isCurrent(context)) return;
       Alert.alert("작성 실패", error instanceof Error ? error.message : "요청 실패");
     }
   }
@@ -656,23 +693,25 @@ export default function App() {
 
   useEffect(() => {
     if (token) {
-      void refreshAuthenticatedData(token);
+      const context = sessionControllerRef.current.capture(token);
+      void refreshAuthenticatedData(token, context);
     }
   }, [token]);
 
   useEffect(() => {
     if (!token) return;
+    const context = sessionControllerRef.current.capture(token);
     const subscription = AppState.addEventListener("change", (nextState) => {
       if (nextState === "active") {
-        void refreshAuthenticatedData(token);
+        void refreshAuthenticatedData(token, context);
       }
     });
     return () => subscription.remove();
   }, [token]);
 
   useEffect(() => {
-    void request<UiContract>("/ui-contract")
-      .then((contract) => setUiContract({ ...defaultUiContract, ...contract }))
+    void requestJson({ apiBase, path: "/ui-contract" })
+      .then((contract: UiContract) => setUiContract({ ...defaultUiContract, ...contract }))
       .catch(() => setUiContract(defaultUiContract));
   }, [apiBase]);
 

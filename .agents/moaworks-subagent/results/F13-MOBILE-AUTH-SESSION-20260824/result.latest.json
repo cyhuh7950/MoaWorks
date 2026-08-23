@@ -2,18 +2,19 @@
   "taskId": "F13-MOBILE-AUTH-SESSION-20260824",
   "issueId": "F13-MOBILE-AUTH-SESSION",
   "outcome": "SUCCESS",
-  "summary": "승인된 F13 인증·세션 코드와 Node 계약 테스트 범위를 구현했다. 개발 인증 우회를 제거하고 auth/login 뒤 auth/me 성공 후에만 업무 화면을 열며, 401/403과 로그아웃은 중앙 상태 정리를 사용한다.",
+  "summary": "F13 재작업 1에서 인증·세션 요청을 generation/token context에 귀속했다. auth/login 뒤 auth/me 성공 시에만 업무 상태를 반영하고, 현재 세션의 401/403과 로그아웃은 중앙 정리를 실행하며 늦은 이전 요청은 상태를 재오염하지 못한다.",
   "reportPath": ".agents/moaworks-subagent/reports/F13-MOBILE-AUTH-SESSION-20260824.md",
   "modifiedFiles": [
     "frontend/mobile-app/App.tsx",
     "frontend/mobile-app/auth-session.js",
-    "frontend/mobile-app/test/mobile-f13-auth-session-contract.test.js"
+    "frontend/mobile-app/test/mobile-f13-auth-session-contract.test.js",
+    "frontend/mobile-app/test/mobile-f13-files-reconnect-contract.test.js"
   ],
   "verification": [
     {
       "command": "node --test test\\mobile-f13-auth-session-contract.test.js test\\mobile-f13-files-reconnect-contract.test.js",
       "status": "PASS",
-      "result": "7/7 passed"
+      "result": "9/9 passed; executable controller tests cover auth/me failure, central 401/403 clearing, late success after logout, stale-session 401, and reversed duplicate login responses"
     },
     {
       "command": "node --check auth-session.js",
@@ -23,7 +24,7 @@
     {
       "command": "npm test",
       "status": "BASELINE_FAILURE",
-      "result": "51/52 passed; existing Android wrapper hardcoded user path contract failure remains"
+      "result": "53/54 passed; existing Android wrapper hardcoded user path contract failure remains"
     },
     {
       "command": "npm run bundle",
@@ -43,14 +44,14 @@
   ],
   "directCause": null,
   "evidence": [
-    "F13 auth contract 4/4 passed",
+    "F13 executable auth controller contract 6/6 passed",
     "F13 files reconnect contract 3/3 passed",
-    "full mobile contracts 51/52 with the documented Android wrapper baseline failure"
+    "full mobile contracts 53/54 with the documented Android wrapper baseline failure"
   ],
   "attemptedAlternatives": [
     "bundle was retried with workspace write access; it remained blocked because node_modules is absent"
   ],
-  "currentState": "Local code and focused contracts pass; bundle and device/operational verification remain unverified.",
+  "currentState": "Local generation-bound auth/session code and executable focused contracts pass; bundle and device/operational verification remain unverified.",
   "remediationProposal": "Restore dependencies, then run bundle and Android device checks for operational authentication and session-expiry behavior.",
   "resumePoint": "Start with dependency restoration and Metro bundle verification.",
   "scopeChange": false,

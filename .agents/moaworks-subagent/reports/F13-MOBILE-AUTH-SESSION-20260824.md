@@ -29,3 +29,26 @@
 
 - F13 구현 동일 근본 원인 재시도 오류: 0회. 기준선 Android wrapper 실패와 bundle 의존성 부재는 별도 상태다.
 - 다음 조치: 의존성 준비 후 bundle/Android 실기기에서 실제 운영 계정 로그인, `/auth/me` 거부, 401/403, 로그아웃·재시작을 검증한다. Android wrapper 결함은 별도 브랜치에서 처리한다.
+
+## 재작업 1 — 세션 generation 귀속 및 실행형 계약
+
+### 조치
+
+- `auth-session.js`에 generation/token 기반 `createAuthSessionController`를 추가했다. 로그인 시도, 보호 요청, 로그아웃이 같은 generation을 공유하며, 현재 generation/token에 일치하는 401/403만 중앙 정리를 실행한다.
+- `App.tsx`의 모든 보호 요청과 후속 `await` 뒤 상태 반영을 해당 context로 제한했다. `loadMail`·`loadRooms`의 두 번째 await, `openMail`·`openRoom`, 연속 로그인 응답, 로그아웃 뒤 늦은 성공 응답은 현재 context가 아니면 업무 상태를 갱신하지 않는다.
+- 핵심 인증 계약을 `App.tsx` 정규식 검사가 아닌 controller 실행 테스트로 교체했다. `/auth/me` 실패 차단, 401/403 전체 정리, 로그아웃 뒤 늦은 성공 무시, 이전 세션 401 무시, 중복 로그인 응답 역전 방지를 실행한다.
+- Android command wrapper는 변경하지 않았다.
+
+### TDD 및 검증 증적
+
+- RED: `node --test test\mobile-f13-auth-session-contract.test.js` — 식별자 정규화 1건 통과, controller 동작 5건은 `TypeError: createAuthSessionController is not a function`으로 실패했다. helper가 아직 없어서 발생한 기대한 실패다.
+- GREEN: `node --test test\mobile-f13-auth-session-contract.test.js test\mobile-f13-files-reconnect-contract.test.js` — 9/9 통과.
+- PASS: `node --check auth-session.js`; 개발 우회·내부 주소·영속 세션 저장소 정적 검색 무결과; `git diff --check`.
+- 기준선: `npm test` — 54개 중 53개 통과, `test/mobile-build-contract.test.js`의 기존 Android wrapper `Users/cyhuh` 사용자 경로 검사 1건 실패. 이번 범위에서 수정하지 않았다.
+- BLOCKED: `npm run bundle` — `MOBILE_BUILD_PREREQUISITE_MISSING`, `node_modules is missing`.
+- 미검증: Android 실기기 및 실제 운영 HTTP 로그인·`/auth/me` 거부·401/403·로그아웃·재시작 흐름은 실행하지 않았다.
+
+### 재작업 상태
+
+- F13 구현 동일 근본 원인 재시도 오류: 0회. 이 RED는 TDD 기대 실패이며, Android wrapper 기준선 실패와 bundle 의존성 부재는 별도 상태다.
+- 다음 조치: 의존성을 복구한 뒤 bundle과 Android 실기기에서 운영 인증·세션 만료·로그아웃·재시작을 검증한다.

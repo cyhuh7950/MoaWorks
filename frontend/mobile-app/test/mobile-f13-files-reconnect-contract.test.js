@@ -17,10 +17,10 @@ test("F13 mobile navigation exposes a files tab backed by the workspace files AP
 });
 
 test("login, file tab entry and foreground reconnect refresh the file list", () => {
-  assert.match(appSource, /await loadFiles\(login\.accessToken\)/);
+  assert.match(appSource, /await loadFiles\(loginResult\.login\.accessToken, context\)/);
   assert.match(appSource, /nextTab === "files"[\s\S]*void loadFiles\(token\)/);
   assert.match(appSource, /AppState\.addEventListener\("change"/);
-  assert.match(appSource, /nextState === "active"[\s\S]*void refreshAuthenticatedData\(token\)/);
+  assert.match(appSource, /nextState === "active"[\s\S]*void refreshAuthenticatedData\(token, context\)/);
   assert.match(appSource, /function refreshAuthenticatedData\(/);
 });
 
