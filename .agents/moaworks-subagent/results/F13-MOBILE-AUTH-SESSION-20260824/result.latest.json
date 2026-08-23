@@ -1,27 +1,59 @@
 {
   "taskId": "F13-MOBILE-AUTH-SESSION-20260824",
-  "status": "PASS",
-  "decision": "승인된 인증·세션 코드와 Node 계약 테스트 범위 구현 완료",
-  "changedFiles": [
+  "issueId": "F13-MOBILE-AUTH-SESSION",
+  "outcome": "SUCCESS",
+  "summary": "승인된 F13 인증·세션 코드와 Node 계약 테스트 범위를 구현했다. 개발 인증 우회를 제거하고 auth/login 뒤 auth/me 성공 후에만 업무 화면을 열며, 401/403과 로그아웃은 중앙 상태 정리를 사용한다.",
+  "reportPath": ".agents/moaworks-subagent/reports/F13-MOBILE-AUTH-SESSION-20260824.md",
+  "modifiedFiles": [
     "frontend/mobile-app/App.tsx",
     "frontend/mobile-app/auth-session.js",
     "frontend/mobile-app/test/mobile-f13-auth-session-contract.test.js"
   ],
-  "tests": {
-    "authAndFilesContracts": "PASS 7/7",
-    "authHelperSyntax": "PASS",
-    "fullMobileContracts": "BASELINE_FAILURE 51/52; Android wrapper hardcoded user path",
-    "bundle": "BLOCKED; node_modules missing"
-  },
-  "errorCount": {
-    "f13ImplementationRepeatedRootCause": 0,
-    "baselineAndroidWrapper": 1
-  },
-  "unverified": [
-    "Metro bundle",
-    "Android device",
-    "real operational login and HTTP session-expiry flow"
+  "verification": [
+    {
+      "command": "node --test test\\mobile-f13-auth-session-contract.test.js test\\mobile-f13-files-reconnect-contract.test.js",
+      "status": "PASS",
+      "result": "7/7 passed"
+    },
+    {
+      "command": "node --check auth-session.js",
+      "status": "PASS",
+      "result": "syntax check passed"
+    },
+    {
+      "command": "npm test",
+      "status": "BASELINE_FAILURE",
+      "result": "51/52 passed; existing Android wrapper hardcoded user path contract failure remains"
+    },
+    {
+      "command": "npm run bundle",
+      "status": "BLOCKED",
+      "result": "MOBILE_BUILD_PREREQUISITE_MISSING: node_modules is missing"
+    },
+    {
+      "command": "forbidden bypass/internal-address/persistent-session static scan and git diff --check",
+      "status": "PASS",
+      "result": "no forbidden matches; diff check passed"
+    }
   ],
-  "nextStep": "Dependencies restored 후 Android에서 운영 로그인, auth/me 거부, 401/403, 로그아웃·재시작을 검증",
-  "formalFailure": false
+  "remaining": [
+    "Metro bundle verification is blocked until node_modules is restored",
+    "Android device verification was not run",
+    "Real operational login, auth/me rejection, 401/403, logout, and restart flows were not run"
+  ],
+  "directCause": null,
+  "evidence": [
+    "F13 auth contract 4/4 passed",
+    "F13 files reconnect contract 3/3 passed",
+    "full mobile contracts 51/52 with the documented Android wrapper baseline failure"
+  ],
+  "attemptedAlternatives": [
+    "bundle was retried with workspace write access; it remained blocked because node_modules is absent"
+  ],
+  "currentState": "Local code and focused contracts pass; bundle and device/operational verification remain unverified.",
+  "remediationProposal": "Restore dependencies, then run bundle and Android device checks for operational authentication and session-expiry behavior.",
+  "resumePoint": "Start with dependency restoration and Metro bundle verification.",
+  "scopeChange": false,
+  "requirementChange": false,
+  "majorRiskChange": false
 }
