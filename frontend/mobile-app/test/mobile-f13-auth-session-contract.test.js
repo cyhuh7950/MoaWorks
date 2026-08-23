@@ -1,10 +1,14 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const {
-  createAuthSessionController,
+  createMobileSessionAdapter,
   normalizeLoginIdentifier,
   isSessionInvalidatedError,
 } = require("../auth-session.js");
+
+const appSource = fs.readFileSync(path.resolve(__dirname, "..", "App.tsx"), "utf8");
 
 function response(status, body) {
   return {
@@ -26,40 +30,92 @@ function deferred() {
 
 function createState() {
   return {
+    email: "remembered@moaworks.sinsan.kr",
     token: "stale-token",
     user: { userId: "stale-user" },
+    password: "not-recorded",
     documents: [{ id: "stale-document" }],
-    mails: [{ mailId: "stale-mail" }],
+    createForm: { title: "stale title", content: "stale body", approverUserIds: "stale-user" },
+    notifications: [{ notificationId: "stale-notification" }],
+    notificationSummary: { unreadCount: 1 },
+    notificationError: "stale-notification-error",
+    activeTab: "files",
+    mailItems: [{ mailId: "stale-mail" }],
+    selectedMailId: "stale-mail",
+    selectedMailDetail: { mailId: "stale-mail", body: "stale" },
+    mailError: "stale-mail-error",
+    mailQuery: "stale-query",
+    mailFilter: "starred",
     rooms: [{ roomId: "stale-room" }],
-    errors: { mail: "stale-error" },
+    selectedRoomId: "stale-room",
+    roomMessages: [{ messageId: "stale-message" }],
+    chatDraft: "stale-draft",
+    chatError: "stale-chat-error",
+    files: [{ fileId: "stale-file" }],
+    fileError: "stale-file-error",
+    actionReason: "stale-reason",
+    llmProvider: "personal-provider",
+    llmApiKey: "not-recorded",
+    llmConnected: true,
+    aiDraft: "stale-ai-draft",
+    aiMessages: [{ role: "user", body: "stale-ai-message" }],
     message: "",
   };
 }
 
-function createController(state) {
-  return createAuthSessionController({
+function createAdapter(state) {
+  return createMobileSessionAdapter({
     onLoginCommitted({ token, user }) {
       state.token = token;
       state.user = user;
     },
-    onSessionCleared(message) {
-      state.token = "";
-      state.user = null;
-      state.documents = [];
-      state.mails = [];
-      state.rooms = [];
-      state.errors = {};
-      state.message = message;
+    onSessionReset(nextState) {
+      Object.assign(state, nextState);
     },
   });
 }
 
-function activate(controller, state, token, userId) {
-  const attempt = controller.beginLogin();
-  const context = controller.commitLogin(attempt, token, { userId });
+function activate(adapter, state, token, userId) {
+  const attempt = adapter.beginLogin();
+  const context = adapter.commitLogin(attempt, token, { userId });
   assert.ok(context);
   assert.equal(state.token, token);
   return context;
+}
+
+function clearedState(message) {
+  return {
+    email: "remembered@moaworks.sinsan.kr",
+    token: "",
+    user: null,
+    password: "",
+    documents: [],
+    createForm: { title: "", content: "", approverUserIds: "" },
+    notifications: [],
+    notificationSummary: null,
+    notificationError: "",
+    activeTab: "home",
+    mailItems: [],
+    selectedMailId: "",
+    selectedMailDetail: null,
+    mailError: "",
+    mailQuery: "",
+    mailFilter: "all",
+    rooms: [],
+    selectedRoomId: "",
+    roomMessages: [],
+    chatDraft: "",
+    chatError: "",
+    files: [],
+    fileError: "",
+    actionReason: "확인",
+    llmProvider: "OpenAI",
+    llmApiKey: "",
+    llmConnected: false,
+    aiDraft: "",
+    aiMessages: [],
+    message,
+  };
 }
 
 test("사내 아이디와 이메일 로그인 식별자를 운영 이메일 주소로 정규화한다", () => {
@@ -68,13 +124,13 @@ test("사내 아이디와 이메일 로그인 식별자를 운영 이메일 주�
   assert.equal(normalizeLoginIdentifier("   "), "");
 });
 
-test("보호 요청의 401과 403 응답은 중앙 업무 상태를 정리한다", async () => {
+test("보호 요청의 401과 403 응답은 App과 같은 전체 세션 상태를 중앙 정리한다", async () => {
   for (const status of [401, 403]) {
     const state = createState();
-    const controller = createController(state);
-    const context = activate(controller, state, "active-token", "active-user");
+    const adapter = createAdapter(state);
+    const context = activate(adapter, state, "active-token", "active-user");
     await assert.rejects(
-      controller.requestForSession({
+      adapter.requestForSession({
         apiBase: "https://api.moaworks.sinsan.kr/api/v1",
         path: "/approvals",
         context,
@@ -82,27 +138,19 @@ test("보호 요청의 401과 403 응답은 중앙 업무 상태를 정리한다
       }),
       (error) => error.status === status && isSessionInvalidatedError(error),
     );
-    assert.deepEqual(state, {
-      token: "",
-      user: null,
-      documents: [],
-      mails: [],
-      rooms: [],
-      errors: {},
-      message: status === 403
-        ? "권한이 없거나 세션이 만료되었습니다. 다시 로그인 후 업무를 계속하세요."
-        : "세션이 만료되었습니다. 다시 로그인 후 업무를 계속하세요.",
-    });
+    assert.deepEqual(state, clearedState(status === 403
+      ? "권한이 없거나 세션이 만료되었습니다. 다시 로그인 후 업무를 계속하세요."
+      : "세션이 만료되었습니다. 다시 로그인 후 업무를 계속하세요."));
   }
 });
 
 test("auth me 실패 시 로그인 결과를 반영하지 않고 업무 상태를 정리한다", async () => {
   const state = createState();
-  const controller = createController(state);
+  const adapter = createAdapter(state);
   const requests = [];
 
   await assert.rejects(
-    controller.login({
+    adapter.login({
       apiBase: "https://api.moaworks.sinsan.kr/api/v1",
       identifier: "sinsan",
       password: "not-recorded",
@@ -120,36 +168,52 @@ test("auth me 실패 시 로그인 결과를 반영하지 않고 업무 상태�
     "https://api.moaworks.sinsan.kr/api/v1/auth/login",
     "https://api.moaworks.sinsan.kr/api/v1/auth/me",
   ]);
-  assert.equal(state.token, "");
-  assert.equal(state.user, null);
-  assert.deepEqual(state.documents, []);
+  assert.deepEqual(state, clearedState("세션이 만료되었습니다. 다시 로그인 후 업무를 계속하세요."));
 });
 
-test("로그아웃 후 지연된 성공 응답은 업무 상태를 다시 채우지 못한다", async () => {
-  const state = createState();
-  const controller = createController(state);
-  const context = activate(controller, state, "active-token", "active-user");
-  const lateResponse = deferred();
+test("로그아웃 뒤 지연된 mail/room 두 번째 조회와 열기 응답은 동일 adapter로 차단한다", async () => {
+  const lateCases = [
+    ["loadMail detail", { mailId: "late-mail", body: "late" }, (state, value) => {
+      state.selectedMailId = value.mailId;
+      state.selectedMailDetail = value;
+    }],
+    ["loadRooms messages", { messages: [{ messageId: "late-room-message" }] }, (state, value) => {
+      state.selectedRoomId = "late-room";
+      state.roomMessages = value.messages;
+    }],
+    ["openMail detail", { mailId: "opened-late-mail", body: "late" }, (state, value) => {
+      state.selectedMailId = value.mailId;
+      state.selectedMailDetail = value;
+    }],
+    ["openRoom messages", { messages: [{ messageId: "opened-late-message" }] }, (state, value) => {
+      state.selectedRoomId = "opened-late-room";
+      state.roomMessages = value.messages;
+    }],
+  ];
 
-  const pending = controller.applyWhenCurrent(context, lateResponse.promise, (value) => {
-    state.documents = [value];
-  });
-  controller.logout("로그아웃되었습니다.");
-  lateResponse.resolve({ id: "late-document" });
+  for (const [label, value, apply] of lateCases) {
+    const state = createState();
+    const adapter = createAdapter(state);
+    const context = activate(adapter, state, "active-token", "active-user");
+    const lateResponse = deferred();
+    const pending = adapter.applyProtectedResponse(context, () => lateResponse.promise, (responseBody) => apply(state, responseBody));
 
-  assert.deepEqual(await pending, { applied: false, value: { id: "late-document" } });
-  assert.deepEqual(state.documents, []);
-  assert.equal(state.token, "");
+    adapter.clearSession("로그아웃되었습니다.");
+    lateResponse.resolve(value);
+
+    assert.deepEqual(await pending, { applied: false, value }, label);
+    assert.deepEqual(state, clearedState("로그아웃되었습니다."), label);
+  }
 });
 
 test("이전 세션의 늦은 401은 새 세션을 정리하지 않는다", async () => {
   const state = createState();
-  const controller = createController(state);
-  const oldContext = activate(controller, state, "old-token", "old-user");
-  const newContext = activate(controller, state, "new-token", "new-user");
+  const adapter = createAdapter(state);
+  const oldContext = activate(adapter, state, "old-token", "old-user");
+  const newContext = activate(adapter, state, "new-token", "new-user");
 
   await assert.rejects(
-    controller.requestForSession({
+    adapter.requestForSession({
       apiBase: "https://api.moaworks.sinsan.kr/api/v1",
       path: "/mail/inbox",
       context: oldContext,
@@ -158,23 +222,23 @@ test("이전 세션의 늦은 401은 새 세션을 정리하지 않는다", asyn
     (error) => isSessionInvalidatedError(error),
   );
 
-  assert.equal(controller.isCurrent(newContext), true);
+  assert.equal(adapter.isCurrent(newContext), true);
   assert.equal(state.token, "new-token");
   assert.deepEqual(state.user, { userId: "new-user" });
 });
 
 test("연속 로그인 응답이 역전되어도 최신 로그인만 인증 상태를 반영한다", async () => {
   const state = createState();
-  const controller = createController(state);
+  const adapter = createAdapter(state);
   const firstLoginResponse = deferred();
 
-  const first = controller.login({
+  const first = adapter.login({
     apiBase: "https://api.moaworks.sinsan.kr/api/v1",
     identifier: "first",
     password: "not-recorded",
     fetchImpl: async () => firstLoginResponse.promise,
   });
-  const second = controller.login({
+  const second = adapter.login({
     apiBase: "https://api.moaworks.sinsan.kr/api/v1",
     identifier: "second",
     password: "not-recorded",
@@ -188,4 +252,16 @@ test("연속 로그인 응답이 역전되어도 최신 로그인만 인증 상�
   assert.deepEqual(await first, { committed: false });
   assert.equal(state.token, "second-token");
   assert.deepEqual(state.user, { userId: "second" });
+});
+
+test("App은 중앙 reset과 mail/room 보호 응답에 production adapter를 연결한다", () => {
+  assert.match(appSource, /createMobileSessionAdapter\(/);
+  assert.match(appSource, /function clearSession[\s\S]*?\.clearSession\(nextMessage\)/);
+  for (const name of ["loadMail", "loadRooms", "openMail", "openRoom"]) {
+    const start = appSource.indexOf(`async function ${name}`);
+    assert.notEqual(start, -1, `${name} exists`);
+    const next = appSource.indexOf("\n  async function ", start + 1);
+    const body = appSource.slice(start, next === -1 ? appSource.length : next);
+    assert.match(body, /applyProtectedResponse\(/, `${name} uses adapter`);
+  }
 });

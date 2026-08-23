@@ -41,3 +41,22 @@
 ### 잔여 위험
 
 - Android 실기기와 실제 운영 HTTP 흐름은 미실행이다. 의존성 복구 후 bundle과 운영 로그인·`/auth/me` 거부·401/403·로그아웃·재시작을 확인해야 한다.
+
+## 재작업 2 — 실제 App session adapter 실행 계약
+
+### 구현
+
+- generation/token controller를 감싼 production `createMobileSessionAdapter`를 도입했다. 중앙 reset과 protected response application은 이 adapter가 담당한다.
+- App 중앙 로그아웃·401/403 reset은 adapter의 full-session reset callback을 사용한다. reset 범위에는 인증, 업무/선택/오류/form 상태와 개인 LLM provider/key/connection 및 AI draft/messages가 포함된다.
+- `loadMail`·`loadRooms`의 두 번째 await와 `openMail`·`openRoom`의 지연 응답은 App이 실제 사용하는 `applyProtectedResponse`를 거쳐 현재 generation/token일 때만 반영한다.
+
+### TDD 및 검증
+
+- RED: `node --test test\mobile-f13-auth-session-contract.test.js` — 1/7, `createMobileSessionAdapter is not a function` 및 App wiring 누락으로 실패.
+- GREEN: 같은 명령 7/7. `/auth/me` 실패, 401/403 전체 reset, 로그아웃 뒤 mail/room 지연 응답, 이전 세션 401, 중복 로그인 역전을 production adapter 조합으로 실행했다.
+- PASS: auth+files 계약 10/10, `node --check auth-session.js`, 금지 경로 검색, `git diff --check`.
+- 기준선: `npm test` 54/55이며 실패 1건은 변경 금지 Android wrapper의 기존 `Users/cyhuh` 경로 검사다.
+
+### 잔여 위험
+
+- `npm run bundle` 재실행도 `MOBILE_BUILD_PREREQUISITE_MISSING: node_modules is missing`으로 차단됐고 Android 실기기·실운영 HTTP는 미실행이다.

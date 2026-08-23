@@ -52,3 +52,24 @@
 
 - F13 구현 동일 근본 원인 재시도 오류: 0회. 이 RED는 TDD 기대 실패이며, Android wrapper 기준선 실패와 bundle 의존성 부재는 별도 상태다.
 - 다음 조치: 의존성을 복구한 뒤 bundle과 Android 실기기에서 운영 인증·세션 만료·로그아웃·재시작을 검증한다.
+
+## 재작업 2 — 실제 App session adapter 실행 계약
+
+### 조치
+
+- `auth-session.js`에 production `createMobileSessionAdapter`를 추가했다. 기존 generation/token controller를 감싸 로그인 commit, 현재 세션 401/403 reset, 명시 로그아웃, 지연 응답 반영을 한 경로로 조정한다.
+- adapter의 순수 reset 상태는 토큰·사용자·비밀번호, 결재·알림, 메일/선택/검색, 대화방/메시지/선택, 파일, 오류·form, 개인 LLM provider/key/connection 및 AI draft/messages를 초기화한다. 이메일·서버 설정처럼 비밀이 아닌 로그인 재입력 보조 설정은 유지한다.
+- `App.tsx`는 adapter의 reset callback을 중앙 `clearSession`에 사용하며, `loadMail`·`loadRooms`의 두 번째 await와 `openMail`·`openRoom`의 지연 응답 반영도 같은 `applyProtectedResponse`로 수행한다. Android wrapper와 업무 API는 변경하지 않았다.
+
+### TDD 및 검증 증적
+
+- RED: `node --test test\mobile-f13-auth-session-contract.test.js` — 1/7 통과, adapter 동작 5개는 `TypeError: createMobileSessionAdapter is not a function`, App wiring 보조 검사는 `createMobileSessionAdapter` 부재로 실패했다. 새 production adapter가 없어서 발생한 기대한 실패다.
+- GREEN: 같은 명령 — 7/7 통과. 실제 adapter 조합으로 `/auth/me` 실패, 401/403 전체 reset, 로그아웃 뒤 mail/room 두 번째 조회·열기 응답 무시, 이전 세션 401, 중복 로그인 역전을 검증했다.
+- PASS: `node --test test\mobile-f13-auth-session-contract.test.js test\mobile-f13-files-reconnect-contract.test.js` — 10/10; `node --check auth-session.js`; 금지 개발 우회·내부 주소·영속 저장소 검색 무결과; `git diff --check`.
+- 기준선: `npm test` — 54/55. 실패 1건은 변경 금지 Android wrapper의 기존 `Users/cyhuh` 사용자 경로 검사다.
+- BLOCKED: `npm run bundle` 재실행 — `MOBILE_BUILD_PREREQUISITE_MISSING`, `node_modules is missing`. Android 실기기·실운영 HTTP 인증 흐름은 실행하지 않았다.
+
+### 재작업 상태
+
+- F13 구현 동일 근본 원인 재시도 오류: 0회. 이 RED는 TDD 기대 실패이며, Android wrapper 기준선 실패와 bundle 의존성 부재는 별도 상태다.
+- 다음 조치: 의존성을 복구한 뒤 bundle과 Android 실기기에서 운영 로그인·`/auth/me` 거부·401/403·로그아웃·재시작을 검증한다.

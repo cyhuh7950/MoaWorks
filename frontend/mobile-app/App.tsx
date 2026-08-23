@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AppState, Button, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { createAuthSessionController, isSessionInvalidatedError, requestJson } from "./auth-session";
+import { createMobileSessionAdapter, isSessionInvalidatedError, requestJson } from "./auth-session";
 
 type AuthUser = {
   userId: string;
@@ -196,7 +196,6 @@ function formatStamp(value: string | null | undefined): string {
 
 export default function App() {
   const passwordInputRef = useRef<TextInput | null>(null);
-  const sessionControllerRef = useRef(createAuthSessionController());
   const [apiBase, setApiBase] = useState(fallbackApiBase);
   const [locale, setLocale] = useState<AppLocale>(resolveLocale("ko-KR"));
   const [timezone, setTimezone] = useState("Asia/Seoul");
@@ -231,6 +230,48 @@ export default function App() {
   const [chatError, setChatError] = useState("");
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
   const [fileError, setFileError] = useState("");
+  const [llmProvider, setLlmProvider] = useState("OpenAI");
+  const [llmApiKey, setLlmApiKey] = useState("");
+  const [llmConnected, setLlmConnected] = useState(false);
+  const [aiDraft, setAiDraft] = useState("");
+  const [aiMessages, setAiMessages] = useState<Array<{ role: "user" | "assistant"; body: string }>>([]);
+  const sessionControllerRef = useRef(createMobileSessionAdapter({
+    onLoginCommitted({ token: nextToken, user: nextUser }) {
+      setToken(nextToken);
+      setMe(nextUser);
+    },
+    onSessionReset(nextState) {
+      setToken(nextState.token);
+      setMe(nextState.user);
+      setPassword(nextState.password);
+      setDocuments(nextState.documents);
+      setCreateForm(nextState.createForm);
+      setNotifications(nextState.notifications);
+      setNotificationSummary(nextState.notificationSummary);
+      setNotificationError(nextState.notificationError);
+      setActiveTab(nextState.activeTab);
+      setMailItems(nextState.mailItems);
+      setSelectedMailId(nextState.selectedMailId);
+      setSelectedMailDetail(nextState.selectedMailDetail);
+      setMailError(nextState.mailError);
+      setMailQuery(nextState.mailQuery);
+      setMailFilter(nextState.mailFilter);
+      setRooms(nextState.rooms);
+      setSelectedRoomId(nextState.selectedRoomId);
+      setRoomMessages(nextState.roomMessages);
+      setChatDraft(nextState.chatDraft);
+      setChatError(nextState.chatError);
+      setFiles(nextState.files);
+      setFileError(nextState.fileError);
+      setActionReason(nextState.actionReason);
+      setLlmProvider(nextState.llmProvider);
+      setLlmApiKey(nextState.llmApiKey);
+      setLlmConnected(nextState.llmConnected);
+      setAiDraft(nextState.aiDraft);
+      setAiMessages(nextState.aiMessages);
+      setMessage(nextState.message);
+    },
+  }));
   const activeTabError = activeTab === "files" ? fileError : activeTab === "mail" ? mailError : activeTab === "chat" ? chatError : "";
 
   function connectLlm() {
@@ -254,45 +295,16 @@ export default function App() {
     setMessage("서버·화면 설정이 현재 앱 세션에 적용되었습니다.");
   }
 
-  function clearSession(nextMessage = "", advanceGeneration = true) {
-    if (advanceGeneration) {
-      sessionControllerRef.current.logout();
-    }
-    setToken("");
-    setMe(null);
-    setPassword("");
-    setDocuments([]);
-    setCreateForm({ title: "", content: "", approverUserIds: "" });
-    setNotifications([]);
-    setNotificationSummary(null);
-    setNotificationError("");
-    setActiveTab("home");
-    setMailItems([]);
-    setSelectedMailId("");
-    setSelectedMailDetail(null);
-    setMailError("");
-    setMailQuery("");
-    setMailFilter("all");
-    setRooms([]);
-    setSelectedRoomId("");
-    setRoomMessages([]);
-    setChatDraft("");
-    setChatError("");
-    setFiles([]);
-    setFileError("");
-    setActionReason("확인");
-    setMessage(nextMessage);
+  function clearSession(nextMessage = "") {
+    sessionControllerRef.current.clearSession(nextMessage);
   }
 
   async function request<T>(path: string, init: RequestInit | undefined, context: { generation: number; token: string }): Promise<T> {
-    try {
-      return await sessionControllerRef.current.requestForSession({ apiBase, path, init, context }) as T;
-    } catch (error) {
-      if (isSessionInvalidatedError(error) && (error as { sessionCleared?: boolean }).sessionCleared) {
-        clearSession(error instanceof Error ? error.message : "세션이 만료되었습니다. 다시 로그인 후 업무를 계속하세요.", false);
-      }
-      throw error;
-    }
+    return await sessionControllerRef.current.requestForSession({ apiBase, path, init, context }) as T;
+  }
+
+  async function applyProtectedResponse<T>(context: { generation: number; token: string }, operation: () => Promise<T>, apply: (value: T) => void) {
+    return await sessionControllerRef.current.applyProtectedResponse(context, operation, apply);
   }
 
   async function sleep(ms: number) {
@@ -374,9 +386,6 @@ export default function App() {
       await loadRooms(loginResult.login.accessToken, undefined, context);
       await loadFiles(loginResult.login.accessToken, context);
     } catch (error) {
-      if (isSessionInvalidatedError(error) && (error as { sessionCleared?: boolean }).sessionCleared) {
-        clearSession(error instanceof Error ? error.message : "세션이 만료되었습니다. 다시 로그인 후 업무를 계속하세요.", false);
-      }
       if (isSessionInvalidatedError(error)) return;
       setMessage(error instanceof Error ? error.message : "로그인 실패");
     }
@@ -400,25 +409,29 @@ export default function App() {
   async function loadMail(activeToken: string = token, preferredMailId?: string, context = sessionControllerRef.current.capture(activeToken)) {
     if (!activeToken) return;
     try {
-      const inbox = await request<{ mails: MailSummary[] }>("/mail/inbox", {
+      const inboxResponse = await applyProtectedResponse(context, () => request<{ mails: MailSummary[] }>("/mail/inbox", {
         headers: { Authorization: `Bearer ${activeToken}` },
-      }, context);
-      if (!sessionControllerRef.current.isCurrent(context)) return;
+      }, context), (body) => {
+        setMailItems(body.mails ?? []);
+      });
+      if (!inboxResponse.applied) return;
+      const inbox = inboxResponse.value;
       const mails = inbox.mails ?? [];
-      setMailItems(mails);
       const targetMailId = preferredMailId || selectedMailId || mails[0]?.mailId || "";
       if (targetMailId) {
-        const detail = await request<MailDetail>(`/mail/${targetMailId}`, {
+        const detailResponse = await applyProtectedResponse(context, () => request<MailDetail>(`/mail/${targetMailId}`, {
           headers: { Authorization: `Bearer ${activeToken}` },
-        }, context);
-        if (!sessionControllerRef.current.isCurrent(context)) return;
-        setSelectedMailId(targetMailId);
-        setSelectedMailDetail(detail);
+        }, context), (detail) => {
+          setSelectedMailId(targetMailId);
+          setSelectedMailDetail(detail);
+          setMailError("");
+        });
+        if (!detailResponse.applied) return;
       } else {
         setSelectedMailId("");
         setSelectedMailDetail(null);
+        setMailError("");
       }
-      setMailError("");
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
       if (!sessionControllerRef.current.isCurrent(context)) return;
@@ -432,19 +445,20 @@ export default function App() {
     if (!activeToken) return;
     const context = sessionControllerRef.current.capture(activeToken);
     try {
-      await request(`/mail/${mailId}/read`, {
+      const readResponse = await applyProtectedResponse(context, () => request(`/mail/${mailId}/read`, {
         method: "POST",
         headers: { Authorization: `Bearer ${activeToken}` },
-      }, context);
-      if (!sessionControllerRef.current.isCurrent(context)) return;
-      const detail = await request<MailDetail>(`/mail/${mailId}`, {
+      }, context), () => {});
+      if (!readResponse.applied) return;
+      const detailResponse = await applyProtectedResponse(context, () => request<MailDetail>(`/mail/${mailId}`, {
         headers: { Authorization: `Bearer ${activeToken}` },
-      }, context);
-      if (!sessionControllerRef.current.isCurrent(context)) return;
-      setSelectedMailId(mailId);
-      setSelectedMailDetail(detail);
-      setMailItems((current) => current.map((item) => (item.mailId === mailId ? { ...item, isRead: true } : item)));
-      setMailError("");
+      }, context), (detail) => {
+        setSelectedMailId(mailId);
+        setSelectedMailDetail(detail);
+        setMailItems((current) => current.map((item) => (item.mailId === mailId ? { ...item, isRead: true } : item)));
+        setMailError("");
+      });
+      if (!detailResponse.applied) return;
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
       if (!sessionControllerRef.current.isCurrent(context)) return;
@@ -476,25 +490,29 @@ export default function App() {
   async function loadRooms(activeToken: string = token, preferredRoomId?: string, context = sessionControllerRef.current.capture(activeToken)) {
     if (!activeToken) return;
     try {
-      const body = await request<{ rooms: MessengerRoom[] }>("/messenger/rooms", {
+      const roomsResponse = await applyProtectedResponse(context, () => request<{ rooms: MessengerRoom[] }>("/messenger/rooms", {
         headers: { Authorization: `Bearer ${activeToken}` },
-      }, context);
-      if (!sessionControllerRef.current.isCurrent(context)) return;
+      }, context), (body) => {
+        setRooms(body.rooms ?? []);
+      });
+      if (!roomsResponse.applied) return;
+      const body = roomsResponse.value;
       const nextRooms = body.rooms ?? [];
-      setRooms(nextRooms);
       const roomId = preferredRoomId || selectedRoomId || nextRooms[0]?.roomId || "";
       if (roomId) {
-        const messages = await request<{ messages: MessengerMessage[] }>(`/messenger/rooms/${roomId}/messages`, {
+        const messagesResponse = await applyProtectedResponse(context, () => request<{ messages: MessengerMessage[] }>(`/messenger/rooms/${roomId}/messages`, {
           headers: { Authorization: `Bearer ${activeToken}` },
-        }, context);
-        if (!sessionControllerRef.current.isCurrent(context)) return;
-        setSelectedRoomId(roomId);
-        setRoomMessages(messages.messages ?? []);
+        }, context), (messages) => {
+          setSelectedRoomId(roomId);
+          setRoomMessages(messages.messages ?? []);
+          setChatError("");
+        });
+        if (!messagesResponse.applied) return;
       } else {
         setSelectedRoomId("");
         setRoomMessages([]);
+        setChatError("");
       }
-      setChatError("");
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
       if (!sessionControllerRef.current.isCurrent(context)) return;
@@ -538,19 +556,20 @@ export default function App() {
   async function openRoom(roomId: string, activeToken: string = token, context = sessionControllerRef.current.capture(activeToken)) {
     if (!activeToken) return;
     try {
-      await request(`/messenger/rooms/${roomId}/read`, {
+      const readResponse = await applyProtectedResponse(context, () => request(`/messenger/rooms/${roomId}/read`, {
         method: "POST",
         headers: { Authorization: `Bearer ${activeToken}` },
-      }, context);
-      if (!sessionControllerRef.current.isCurrent(context)) return;
-      const messages = await request<{ messages: MessengerMessage[] }>(`/messenger/rooms/${roomId}/messages`, {
+      }, context), () => {});
+      if (!readResponse.applied) return;
+      const messagesResponse = await applyProtectedResponse(context, () => request<{ messages: MessengerMessage[] }>(`/messenger/rooms/${roomId}/messages`, {
         headers: { Authorization: `Bearer ${activeToken}` },
-      }, context);
-      if (!sessionControllerRef.current.isCurrent(context)) return;
-      setSelectedRoomId(roomId);
-      setRoomMessages(messages.messages ?? []);
-      setRooms((current) => current.map((item) => (item.roomId === roomId ? { ...item, unreadCount: 0 } : item)));
-      setChatError("");
+      }, context), (messages) => {
+        setSelectedRoomId(roomId);
+        setRoomMessages(messages.messages ?? []);
+        setRooms((current) => current.map((item) => (item.roomId === roomId ? { ...item, unreadCount: 0 } : item)));
+        setChatError("");
+      });
+      if (!messagesResponse.applied) return;
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
       if (!sessionControllerRef.current.isCurrent(context)) return;

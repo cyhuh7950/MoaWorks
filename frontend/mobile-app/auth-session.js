@@ -120,13 +120,6 @@ function createAuthSessionController({ onLoginCommitted = () => {}, onSessionCle
     }
   }
 
-  async function applyWhenCurrent(context, operation, apply) {
-    const value = await operation;
-    if (!isCurrent(context)) return { applied: false, value };
-    apply(value);
-    return { applied: true, value };
-  }
-
   async function login({ apiBase, identifier, password, fetchImpl }) {
     const attempt = beginLogin();
     const loginBody = await requestJson({
@@ -161,8 +154,68 @@ function createAuthSessionController({ onLoginCommitted = () => {}, onSessionCle
     clearAttemptIfCurrent,
     clearSessionIfCurrent,
     requestForSession,
-    applyWhenCurrent,
     login,
+  };
+}
+
+function createClearedMobileSessionState(message = "") {
+  return {
+    token: "",
+    user: null,
+    password: "",
+    documents: [],
+    createForm: { title: "", content: "", approverUserIds: "" },
+    notifications: [],
+    notificationSummary: null,
+    notificationError: "",
+    activeTab: "home",
+    mailItems: [],
+    selectedMailId: "",
+    selectedMailDetail: null,
+    mailError: "",
+    mailQuery: "",
+    mailFilter: "all",
+    rooms: [],
+    selectedRoomId: "",
+    roomMessages: [],
+    chatDraft: "",
+    chatError: "",
+    files: [],
+    fileError: "",
+    actionReason: "확인",
+    llmProvider: "OpenAI",
+    llmApiKey: "",
+    llmConnected: false,
+    aiDraft: "",
+    aiMessages: [],
+    message,
+  };
+}
+
+function createMobileSessionAdapter({ onLoginCommitted = () => {}, onSessionReset = () => {} } = {}) {
+  const controller = createAuthSessionController({
+    onLoginCommitted,
+    onSessionCleared(message) {
+      onSessionReset(createClearedMobileSessionState(message));
+    },
+  });
+
+  async function applyProtectedResponse(context, operation, apply) {
+    const value = await operation();
+    if (!controller.isCurrent(context)) return { applied: false, value };
+    apply(value);
+    return { applied: true, value };
+  }
+
+  return {
+    beginLogin: controller.beginLogin,
+    capture: controller.capture,
+    commitLogin: controller.commitLogin,
+    isCurrent: controller.isCurrent,
+    requestForSession: controller.requestForSession,
+    login: controller.login,
+    clearSession: controller.logout,
+    applyProtectedResponse,
   };
 }
 
@@ -171,4 +224,6 @@ module.exports = {
   requestJson,
   isSessionInvalidatedError,
   createAuthSessionController,
+  createClearedMobileSessionState,
+  createMobileSessionAdapter,
 };
