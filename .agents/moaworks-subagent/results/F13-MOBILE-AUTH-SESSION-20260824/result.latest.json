@@ -1,0 +1,27 @@
+{
+  "taskId": "F13-MOBILE-AUTH-SESSION-20260824",
+  "status": "PASS",
+  "decision": "승인된 인증·세션 코드와 Node 계약 테스트 범위 구현 완료",
+  "changedFiles": [
+    "frontend/mobile-app/App.tsx",
+    "frontend/mobile-app/auth-session.js",
+    "frontend/mobile-app/test/mobile-f13-auth-session-contract.test.js"
+  ],
+  "tests": {
+    "authAndFilesContracts": "PASS 7/7",
+    "authHelperSyntax": "PASS",
+    "fullMobileContracts": "BASELINE_FAILURE 51/52; Android wrapper hardcoded user path",
+    "bundle": "BLOCKED; node_modules missing"
+  },
+  "errorCount": {
+    "f13ImplementationRepeatedRootCause": 0,
+    "baselineAndroidWrapper": 1
+  },
+  "unverified": [
+    "Metro bundle",
+    "Android device",
+    "real operational login and HTTP session-expiry flow"
+  ],
+  "nextStep": "Dependencies restored 후 Android에서 운영 로그인, auth/me 거부, 401/403, 로그아웃·재시작을 검증",
+  "formalFailure": false
+}

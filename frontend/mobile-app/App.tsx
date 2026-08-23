@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, AppState, Button, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, AppState, Button, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { isSessionInvalidatedError, normalizeLoginIdentifier, requestJson } from "./auth-session";
 
 type AuthUser = {
   userId: string;
@@ -130,7 +131,6 @@ type MobileTab = "home" | "mail" | "approval" | "chat" | "files";
 const supportedLocales: AppLocale[] = ["ko-KR", "en-US", "ja-JP", "zh-CN", "es-ES", "fr-FR", "de-DE"];
 const supportedTimezones = ["Asia/Seoul", "Asia/Tokyo", "America/New_York", "America/Chicago", "Europe/Paris", "Europe/Berlin"];
 const fallbackApiBase = "https://api.moaworks.sinsan.kr/api/v1";
-const developmentAuthBypassEnabled = __DEV__;
 const notificationPolicy = {
   retryMax: 3,
   retryDelayMs: 400,
@@ -196,6 +196,7 @@ function formatStamp(value: string | null | undefined): string {
 
 export default function App() {
   const passwordInputRef = useRef<TextInput | null>(null);
+  const activeSessionTokenRef = useRef("");
   const [apiBase, setApiBase] = useState(fallbackApiBase);
   const [locale, setLocale] = useState<AppLocale>(resolveLocale("ko-KR"));
   const [timezone, setTimezone] = useState("Asia/Seoul");
@@ -253,22 +254,43 @@ export default function App() {
     setMessage("서버·화면 설정이 현재 앱 세션에 적용되었습니다.");
   }
 
+  function clearSession(nextMessage = "") {
+    activeSessionTokenRef.current = "";
+    setToken("");
+    setMe(null);
+    setPassword("");
+    setDocuments([]);
+    setCreateForm({ title: "", content: "", approverUserIds: "" });
+    setNotifications([]);
+    setNotificationSummary(null);
+    setNotificationError("");
+    setActiveTab("home");
+    setMailItems([]);
+    setSelectedMailId("");
+    setSelectedMailDetail(null);
+    setMailError("");
+    setMailQuery("");
+    setMailFilter("all");
+    setRooms([]);
+    setSelectedRoomId("");
+    setRoomMessages([]);
+    setChatDraft("");
+    setChatError("");
+    setFiles([]);
+    setFileError("");
+    setActionReason("확인");
+    setMessage(nextMessage);
+  }
+
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await fetch(`${apiBase}${path}`, {
-      ...init,
-      headers: {
-        "Content-Type": "application/json",
-        ...(init?.headers ?? {}),
-      },
-    });
-    const raw = await response.text();
-    const data = raw ? (JSON.parse(raw) as T) : ({} as T);
-    if (!response.ok) {
-      const detail = (data as { detail?: { userMessage?: string } }).detail;
-      const errorMessage = detail?.userMessage || (data as { userMessage?: string }).userMessage || "요청 처리 실패";
-      throw new Error(errorMessage);
+    try {
+      return await requestJson({ apiBase, path, init }) as T;
+    } catch (error) {
+      if (isSessionInvalidatedError(error)) {
+        clearSession(error instanceof Error ? error.message : "세션이 만료되었습니다. 다시 로그인 후 업무를 계속하세요.");
+      }
+      throw error;
     }
-    return data;
   }
 
   async function sleep(ms: number) {
@@ -279,6 +301,9 @@ export default function App() {
     try {
       return await task();
     } catch (error) {
+      if (isSessionInvalidatedError(error)) {
+        throw error;
+      }
       if (attempt >= notificationPolicy.retryMax) {
         throw error;
       }
@@ -297,6 +322,7 @@ export default function App() {
         headers: { Authorization: `Bearer ${activeToken}` },
       }),
     ]);
+    if (activeSessionTokenRef.current !== activeToken) return;
     setNotificationSummary(summary);
     setNotifications(body.notifications ?? []);
     setNotificationError("");
@@ -306,6 +332,7 @@ export default function App() {
     try {
       await withRetry(() => loadNotifications());
     } catch (error) {
+      if (isSessionInvalidatedError(error)) return;
       setNotificationError(error instanceof Error ? error.message : "알림 조회 실패");
     }
   }
@@ -318,84 +345,57 @@ export default function App() {
       });
       await refreshNotifications();
     } catch (error) {
+      if (isSessionInvalidatedError(error)) return;
       setNotificationError(error instanceof Error ? error.message : "읽음 처리 실패");
     }
   }
 
   async function doLogin() {
-    if (developmentAuthBypassEnabled) {
-      const developmentUser: AuthUser = {
-        userId: "development-user",
-        userName: "개발 테스트 사용자",
-        roleName: "개발자",
-        userEmail: "development@moaworks.local",
-        permissions: ["mobile:read", "mobile:write"],
-      };
-      setToken("development-only-session");
-      setMe(developmentUser);
-      setDocuments(developmentApprovalSamples);
-      setNotifications([]);
-      setNotificationSummary({ unreadCount: 0, severityCount: { INFO: 0, WARN: 0, ERROR: 0, CRITICAL: 0 } });
-      setMailItems(developmentMailSamples);
-      setRooms(developmentRoomSamples);
-      setSelectedRoomId("dev-room-001");
-      setRoomMessages(developmentMessageSamples);
-      setMessage("개발 빌드 인증 우회가 활성화되었습니다.");
-      return;
-    }
     try {
-      const loginEmail = email.includes("@") ? email.trim() : `${email.trim()}@moaworks.sinsan.kr`;
+      const loginEmail = normalizeLoginIdentifier(email);
       const login = await request<{ accessToken: string; user: AuthUser }>("/auth/login", {
         method: "POST",
         body: JSON.stringify({ email: loginEmail, password }),
       });
-      setToken(login.accessToken);
-      setMessage("로그인 성공");
       const meBody = await request<{ user: AuthUser }>("/auth/me", {
         headers: { Authorization: `Bearer ${login.accessToken}` },
       });
+      activeSessionTokenRef.current = login.accessToken;
+      setToken(login.accessToken);
       setMe(meBody.user);
+      setMessage("로그인 성공");
       await loadApprovals(login.accessToken);
       await loadNotifications(login.accessToken);
       await loadMail(login.accessToken);
       await loadRooms(login.accessToken);
       await loadFiles(login.accessToken);
     } catch (error) {
+      if (isSessionInvalidatedError(error)) return;
       setMessage(error instanceof Error ? error.message : "로그인 실패");
     }
   }
 
   async function loadApprovals(activeToken: string = token) {
-    if (developmentAuthBypassEnabled) {
-      setDocuments(developmentApprovalSamples);
-      setMessage("");
-      return;
-    }
     try {
       const body = await request<{ documents: Approval[] }>("/approvals", {
         headers: { Authorization: `Bearer ${activeToken}` },
       });
+      if (activeSessionTokenRef.current !== activeToken) return;
       setDocuments(body.documents);
       setMessage("");
     } catch (error) {
+      if (isSessionInvalidatedError(error)) return;
       setMessage(error instanceof Error ? error.message : "조회 실패");
     }
   }
 
   async function loadMail(activeToken: string = token, preferredMailId?: string) {
     if (!activeToken) return;
-    if (developmentAuthBypassEnabled) {
-      const targetMailId = preferredMailId || selectedMailId || developmentMailSamples[0]?.mailId || "";
-      setMailItems(developmentMailSamples);
-      setSelectedMailId(targetMailId);
-      setSelectedMailDetail(targetMailId ? developmentMailDetails[targetMailId] ?? null : null);
-      setMailError("");
-      return;
-    }
     try {
       const inbox = await request<{ mails: MailSummary[] }>("/mail/inbox", {
         headers: { Authorization: `Bearer ${activeToken}` },
       });
+      if (activeSessionTokenRef.current !== activeToken) return;
       const mails = inbox.mails ?? [];
       setMailItems(mails);
       const targetMailId = preferredMailId || selectedMailId || mails[0]?.mailId || "";
@@ -411,6 +411,7 @@ export default function App() {
       }
       setMailError("");
     } catch (error) {
+      if (isSessionInvalidatedError(error)) return;
       const nextError = error instanceof Error ? error.message : "메일 조회 실패";
       setMailError(nextError);
       setMessage(nextError);
@@ -419,13 +420,6 @@ export default function App() {
 
   async function openMail(mailId: string, activeToken: string = token) {
     if (!activeToken) return;
-    if (developmentAuthBypassEnabled) {
-      setSelectedMailId(mailId);
-      setSelectedMailDetail(developmentMailDetails[mailId] ?? null);
-      setMailItems((current) => current.map((item) => (item.mailId === mailId ? { ...item, isRead: true } : item)));
-      setMailError("");
-      return;
-    }
     try {
       await request(`/mail/${mailId}/read`, {
         method: "POST",
@@ -439,6 +433,7 @@ export default function App() {
       setMailItems((current) => current.map((item) => (item.mailId === mailId ? { ...item, isRead: true } : item)));
       setMailError("");
     } catch (error) {
+      if (isSessionInvalidatedError(error)) return;
       const nextError = error instanceof Error ? error.message : "메일 상세 조회 실패";
       setMailError(nextError);
       setMessage(nextError);
@@ -447,10 +442,6 @@ export default function App() {
 
   async function toggleMailStarState(mailId: string, activeToken: string = token) {
     if (!activeToken) return;
-    if (developmentAuthBypassEnabled) {
-      setMailItems((current) => current.map((item) => (item.mailId === mailId ? { ...item, isStarred: !item.isStarred } : item)));
-      return;
-    }
     try {
       await request(`/mail/${mailId}/star`, {
         method: "POST",
@@ -458,6 +449,7 @@ export default function App() {
       });
       await loadMail(activeToken, mailId);
     } catch (error) {
+      if (isSessionInvalidatedError(error)) return;
       const nextError = error instanceof Error ? error.message : "중요 표시 실패";
       setMailError(nextError);
       setMessage(nextError);
@@ -466,18 +458,11 @@ export default function App() {
 
   async function loadRooms(activeToken: string = token, preferredRoomId?: string) {
     if (!activeToken) return;
-    if (developmentAuthBypassEnabled) {
-      const roomId = preferredRoomId || selectedRoomId || developmentRoomSamples[0]?.roomId || "";
-      setRooms(developmentRoomSamples);
-      setSelectedRoomId(roomId);
-      setRoomMessages(roomId ? developmentMessageSamples.filter((item) => item.roomId === roomId) : []);
-      setChatError("");
-      return;
-    }
     try {
       const body = await request<{ rooms: MessengerRoom[] }>("/messenger/rooms", {
         headers: { Authorization: `Bearer ${activeToken}` },
       });
+      if (activeSessionTokenRef.current !== activeToken) return;
       const nextRooms = body.rooms ?? [];
       setRooms(nextRooms);
       const roomId = preferredRoomId || selectedRoomId || nextRooms[0]?.roomId || "";
@@ -493,6 +478,7 @@ export default function App() {
       }
       setChatError("");
     } catch (error) {
+      if (isSessionInvalidatedError(error)) return;
       const nextError = error instanceof Error ? error.message : "메신저 조회 실패";
       setChatError(nextError);
       setMessage(nextError);
@@ -505,9 +491,11 @@ export default function App() {
       const body = await request<{ items: WorkspaceFile[] }>("/workspace/files?scope=mine", {
         headers: { Authorization: `Bearer ${activeToken}` },
       });
+      if (activeSessionTokenRef.current !== activeToken) return;
       setFiles(body.items ?? []);
       setFileError("");
     } catch (error) {
+      if (isSessionInvalidatedError(error)) return;
       setFileError(error instanceof Error ? error.message : "파일 조회 실패");
     }
   }
@@ -516,6 +504,7 @@ export default function App() {
     await Promise.all([
       loadApprovals(activeToken),
       withRetry(() => loadNotifications(activeToken)).catch((error) => {
+        if (isSessionInvalidatedError(error)) return;
         setNotificationError(error instanceof Error ? error.message : "알림 조회 실패");
       }),
       loadMail(activeToken),
@@ -526,13 +515,6 @@ export default function App() {
 
   async function openRoom(roomId: string, activeToken: string = token) {
     if (!activeToken) return;
-    if (developmentAuthBypassEnabled) {
-      setSelectedRoomId(roomId);
-      setRoomMessages(developmentMessageSamples.filter((item) => item.roomId === roomId));
-      setRooms((current) => current.map((item) => (item.roomId === roomId ? { ...item, unreadCount: 0 } : item)));
-      setChatError("");
-      return;
-    }
     try {
       await request(`/messenger/rooms/${roomId}/read`, {
         method: "POST",
@@ -546,6 +528,7 @@ export default function App() {
       setRooms((current) => current.map((item) => (item.roomId === roomId ? { ...item, unreadCount: 0 } : item)));
       setChatError("");
     } catch (error) {
+      if (isSessionInvalidatedError(error)) return;
       const nextError = error instanceof Error ? error.message : "대화방 조회 실패";
       setChatError(nextError);
       setMessage(nextError);
@@ -554,24 +537,6 @@ export default function App() {
 
   async function sendChatMessage() {
     if (!token || !selectedRoomId || !chatDraft.trim()) return;
-    if (developmentAuthBypassEnabled) {
-      const body = chatDraft.trim();
-      setRoomMessages((current) => [...current, {
-        messageId: `dev-message-${Date.now()}`,
-        roomId: selectedRoomId,
-        senderUserId: "development-user",
-        senderUserName: "개발 테스트 사용자",
-        messageType: "text",
-        body,
-        attachmentMeta: [],
-        createdAt: new Date().toISOString(),
-        retentionExpiresAt: null,
-        readBy: [],
-        readState: "read",
-      }]);
-      setChatDraft("");
-      return;
-    }
     try {
       await request(`/messenger/rooms/${selectedRoomId}/messages`, {
         method: "POST",
@@ -581,6 +546,7 @@ export default function App() {
       setChatDraft("");
       await openRoom(selectedRoomId);
     } catch (error) {
+      if (isSessionInvalidatedError(error)) return;
       const nextError = error instanceof Error ? error.message : "메시지 전송 실패";
       setChatError(nextError);
       setMessage(nextError);
@@ -611,6 +577,7 @@ export default function App() {
       });
       await loadApprovals();
     } catch (error) {
+      if (isSessionInvalidatedError(error)) return;
       Alert.alert("작업 실패", error instanceof Error ? error.message : "요청 실패");
     }
   }
@@ -624,6 +591,7 @@ export default function App() {
       });
       await loadApprovals();
     } catch (error) {
+      if (isSessionInvalidatedError(error)) return;
       Alert.alert("작업 실패", error instanceof Error ? error.message : "요청 실패");
     }
   }
@@ -646,6 +614,7 @@ export default function App() {
       setCreateForm({ title: "", content: "", approverUserIds: "" });
       await loadApprovals();
     } catch (error) {
+      if (isSessionInvalidatedError(error)) return;
       Alert.alert("작성 실패", error instanceof Error ? error.message : "요청 실패");
     }
   }
@@ -832,9 +801,7 @@ export default function App() {
                 accessibilityRole="button"
                 accessibilityLabel="로그아웃"
                 onPress={() => {
-                  setToken("");
-                  setMe(null);
-                  setMessage("로그아웃되었습니다.");
+                  clearSession("로그아웃되었습니다.");
                 }}
                 style={styles.heroLogoutButton}
               >
@@ -1152,14 +1119,7 @@ export default function App() {
                 <Button
                   title="로그아웃"
                   onPress={() => {
-                    setToken("");
-                    setMe(null);
-                    setMessage("로그아웃되었습니다.");
-                    setSelectedMailDetail(null);
-                    setSelectedRoom(null);
-                    setSelectedRoomMessages([]);
-                    setFiles([]);
-                    setFileError("");
+                    clearSession("로그아웃되었습니다.");
                   }}
                 />
               </View>
