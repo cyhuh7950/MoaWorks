@@ -15,3 +15,8 @@
 
 - 전체 `npm test`는 로컬 `@babel/core`, `@babel/parser` 부재의 기존 환경 의존성으로 59/64였으며, 새 일정 계약은 통과했다.
 - bundle은 build-evidence 로그 파일 EPERM으로 중단됐고, Android release는 `ANDROID_SDK_MISSING`으로 BLOCKED다. Android/운영 API/생성/실기기 검증은 실행하지 않았다.
+
+## 재작업 3
+
+- schedules 응답은 `items`만 읽고, alertMinutes 기본값은 `[10]`으로 수정했다.
+- timezone `dateKey` 월 경계와 POST mutex를 보완했고 `npm test`는 64/64 PASS다.
