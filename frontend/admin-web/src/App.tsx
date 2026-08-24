@@ -1825,7 +1825,6 @@ export default function App() {
       if (userForm.userId) {
         await updateUser(token, userForm.userId, {
           name: userForm.name,
-          ...(userForm.password ? { password: userForm.password } : {}),
           departmentId: userForm.departmentId,
           roleId: userForm.roleId,
           status: userForm.status,
@@ -2683,10 +2682,12 @@ export default function App() {
                     <span>아이디 <InlineHint label="회사 도메인과 결합해 이메일 주소를 자동 구성합니다." /></span>
                     <input value={userForm.loginId} disabled={Boolean(userForm.userId)} onChange={(e) => setUserForm({ ...userForm, loginId: e.target.value.toLowerCase() })} placeholder="hong.gildong" />
                   </label>
-                  <label className="compact-field">
-                    <span>{userForm.userId ? "새 비밀번호(선택)" : "초기 비밀번호"} <InlineHint label="8자 이상으로 설정하고 사용자에게 별도 보안 채널로 전달하세요." /></span>
-                    <input type="password" minLength={8} required={!userForm.userId} value={userForm.password} onChange={(e) => setUserForm({ ...userForm, password: e.target.value })} autoComplete="new-password" />
-                  </label>
+                  {!userForm.userId && (
+                    <label className="compact-field">
+                      <span>초기 비밀번호 <InlineHint label="8자 이상으로 설정하고 사용자에게 별도 보안 채널로 전달하세요." /></span>
+                      <input type="password" minLength={8} required value={userForm.password} onChange={(e) => setUserForm({ ...userForm, password: e.target.value })} autoComplete="new-password" />
+                    </label>
+                  )}
                   <label className="compact-field">
                     <span>자동 생성 이메일</span>
                     <input value={userEmailPreview} readOnly />
