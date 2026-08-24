@@ -8,7 +8,7 @@
 
 - 작업지시서: `docs/workorders/f13-mobile-personal-ai-2026-08-24.md`
 - 작업 목적: 모바일 placeholder 개인 AI를 승인된 서버 proxy 계약의 Provider catalog/config/test/chat 흐름으로 교체한다.
-- 수정 파일: `frontend/mobile-app/App.tsx`, `auth-session.js`, `personal-ai-api.js`, `metro.config.js`, `test/mobile-f13-auth-session-contract.test.js`, `test/mobile-f13-personal-ai-contract.test.js`, `test/mobile-build-contract.test.js` 및 이 보고서·result·두 progress JSONL.
+- 수정 파일: 승인된 계획 `docs/superpowers/plans/2026-08-24-mobile-personal-ai-implementation-plan.md`, 작업지시 `docs/workorders/f13-mobile-personal-ai-2026-08-24.md`, worker prompt `docs/workorders/f13-mobile-personal-ai-worker-prompt-2026-08-24.md`, `frontend/mobile-app/App.tsx`, `auth-session.js`, `personal-ai-api.js`, `metro.config.js`, `test/mobile-f13-auth-session-contract.test.js`, `test/mobile-f13-personal-ai-contract.test.js`, `test/mobile-build-contract.test.js` 및 이 보고서·result·두 progress JSONL.
 - 변경 결과: server lowercase catalog만 사용하며 client endpoint 입력을 제거했다. config/test/chat 응답과 오류는 capture한 current session에서만 반영한다. `/test`의 `success=true`와 `connectionStatus=ready`가 동시에 확인된 현재 세션에서만 chat을 허용한다.
 - 키 안전: API key draft는 저장 시도 직전에 성공·실패와 무관하게 폐기하며, Provider 변경·logout/session invalidation에서도 즉시 폐기한다. 키는 저장·로그·응답 상태로 복원하지 않는다.
 - 상태 안전: 개인 AI action gate는 중복 동작을 막고 reset 이후 늦은 release가 새 작업을 해제하지 못한다. logout/session invalidation은 config/chat/error/pending/dirty/readiness 상태를 모두 초기화한다. local 설정 편집 중 `/test`와 server reload를 차단하고 save 성공 후에만 dirty를 해제한다.
