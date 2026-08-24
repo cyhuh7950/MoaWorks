@@ -645,7 +645,7 @@ export default function App() {
     }
   }
 
-  function openDirectoryMail(email: string) { const url = mailtoUrl(email); if (url) void Linking.openURL(url).catch(() => setDirectoryError("메일 앱을 열 수 없습니다.")); }
+  function openDirectoryMail(email: string) { const url = mailtoUrl(email); const context = sessionControllerRef.current.capture(token); if (url) void Linking.openURL(url).catch(() => { if (sessionControllerRef.current.isCurrent(context)) setDirectoryError("메일 앱을 열 수 없습니다."); }); }
 
   async function createSchedule() {
     if (!scheduleSubmissionGateRef.current.tryEnter()) return;

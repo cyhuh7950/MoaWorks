@@ -14,3 +14,7 @@
 ## Android 증적
 - release APK 59,176,318 bytes, `emulator-5554` streamed install `Success`, `com.moaworks.mobile/.MainActivity` cold launch 확인.
 - XML: `frontend/mobile-app/artifacts/android-mobile-directory-cold.xml`.
+
+## Final correction
+- stale mailto rejection은 capture session이 current일 때만 오류 반영; focused 6/6, full 75/75, bundle `ec368ac145a71ba2f0f571915d966cccb06b12e7b62221a1f402463fea0a4eda`.
+- Android `BUILD SUCCESSFUL in 19s` (64 tasks), emulator install Success/cold launch. 오류 횟수 1(기존 regex 기대 불일치), 다음 조치는 운영 로그인 후 GET/direct room/mail/deploy 별도 검증.

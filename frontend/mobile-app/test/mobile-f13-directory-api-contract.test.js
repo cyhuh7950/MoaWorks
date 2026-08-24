@@ -53,8 +53,13 @@ test("App은 더보기 기본 주소록 진입에서 재조회하고 본인 dire
   assert.match(appSource, /if \(nextTab === "more" && moreScreen === "directory"\) \{\s*void loadDirectory\(token\);/);
   assert.match(appSource, /const isSelf = member\.id === me\?\.userId;/);
   assert.match(appSource, /disabled=\{isSelf \|\| directoryBusyUserId === member\.id\}/);
-  assert.match(appSource, /Linking\.openURL\(url\)\.catch\(\(\) => setDirectoryError\(/);
+  assert.match(appSource, /const context = sessionControllerRef\.current\.capture\(token\);[\s\S]*?Linking\.openURL\(url\)\.catch\(\(\) => \{ if \(sessionControllerRef\.current\.isCurrent\(context\)\) setDirectoryError\(/);
   assert.doesNotMatch(appSource, /styles\.errorText/);
   assert.match(appSource, /style=\{styles\.directoryActions\}/);
   assert.match(appSource, /directoryActions:\s*\{[\s\S]*?flexWrap: "wrap"/);
+});
+
+test("늦은 mailto rejection은 capture한 세션이 current일 때만 오류를 반영한다", () => {
+  assert.match(appSource, /const context = sessionControllerRef\.current\.capture\(token\);/);
+  assert.match(appSource, /Linking\.openURL\(url\)\.catch\(\(\) => \{ if \(sessionControllerRef\.current\.isCurrent\(context\)\) setDirectoryError\(/);
 });
