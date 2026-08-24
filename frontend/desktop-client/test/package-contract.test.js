@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -28,6 +29,15 @@ test("portable packaging contract includes versioned directory, EXE, ZIP and SHA
   assert.match(packageScript, /\.zip/);
   assert.match(packageScript, /sha256/i);
   assert.match(packageScript, /manifest/i);
+});
+
+test("portable packaging script is valid JavaScript", () => {
+  const scriptPath = path.join(root, "scripts", "package-desktop-client.js");
+  const result = spawnSync(process.execPath, ["--check", scriptPath], {
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
 test("portable packaging includes the Squirrel startup runtime required by main process", () => {
