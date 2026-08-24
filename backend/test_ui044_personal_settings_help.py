@@ -252,6 +252,7 @@ class FakeSecurity:
 class FakeStore:
     def __init__(self, cursor, valid): self.db = FakeDb(cursor); self.security = FakeSecurity(valid); self.audits = []
     def _insert_audit(self, **kwargs): self.audits.append(kwargs); kwargs["cursor"].execute("INSERT INTO audit_logs(event) VALUES(%s)", (kwargs["event"],))
+    def get_user_summary(self, _user_id): return actor()
 
 
 def test_password_failure_is_audited_without_secret_and_rate_limit_is_shared_db():
@@ -279,7 +280,8 @@ def test_password_success_hashes_before_update_and_returns_no_secret_fields():
     update = next(params for sql, params in cursor.executed if sql.startswith("UPDATE users SET password_hash"))
     assert update[0] == "safe-hash"
     serialized = response.model_dump()
-    assert "password" not in str(serialized).lower()
+    assert "passwordhash" not in str(serialized).lower()
+    assert "temporarypassword" not in str(serialized).lower()
     assert store.audits[0]["event"] == "auth.password.changed"
 
 

@@ -113,6 +113,7 @@ class AuthUserSummary(BaseModel):
     permissions: list[str]
     departmentId: str | None = None
     departmentName: str | None = None
+    mustChangePassword: bool = False
     authSessionVersion: int = 0
 
 
