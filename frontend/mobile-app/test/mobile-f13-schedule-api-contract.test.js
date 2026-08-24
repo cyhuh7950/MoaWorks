@@ -21,11 +21,12 @@ test("서버 일정은 현재 월에만 배치하고 잘못된 날짜는 제외�
     { id: "bad", starts_at: "not-a-date" },
   ], "2026-08", "Asia/Seoul");
   assert.deepEqual(items.map((item) => item.id), ["in"]);
+  assert.equal(filterSchedulesForMonth([{ id: "boundary", starts_at: "2026-08-31T15:30:00Z" }], "2026-09", "Asia/Seoul")[0].id, "boundary");
 });
 
 test("기본 owned 달력과 서버 생성 payload를 검증한다", () => {
   assert.equal(selectDefaultCalendar({ owned: [{ id: "a" }, { id: "b", isDefault: true }] }).id, "b");
   const payload = buildSchedulePayload({ title: "회의", startsAt: "2026-08-03T09:00:00+09:00", endsAt: "2026-08-03T10:00:00+09:00", calendarId: "b", timezone: "Asia/Seoul" });
-  assert.deepEqual(payload, { title: "회의", startsAt: "2026-08-03T09:00:00+09:00", endsAt: "2026-08-03T10:00:00+09:00", description: "", location: "", attendeeUserIds: [], repeatType: "none", repeatUntil: null, alertMinutes: 10, timezone: "Asia/Seoul", calendarId: "b" });
+  assert.deepEqual(payload, { title: "회의", startsAt: "2026-08-03T09:00:00+09:00", endsAt: "2026-08-03T10:00:00+09:00", description: "", location: "", attendeeUserIds: [], repeatType: "none", repeatUntil: null, alertMinutes: [10], timezone: "Asia/Seoul", calendarId: "b" });
   assert.throws(() => buildSchedulePayload({ title: "", startsAt: "x", endsAt: "x", calendarId: "", timezone: "Asia/Seoul" }));
 });

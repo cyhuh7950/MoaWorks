@@ -33,7 +33,11 @@ function buildSchedulePayload(input) {
   const start = new Date(input.startsAt);
   const end = new Date(input.endsAt);
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) throw new Error("종료 시간은 시작 시간보다 늦어야 합니다.");
-  return { title, startsAt: input.startsAt, endsAt: input.endsAt, description: String(input.description || ""), location: String(input.location || ""), attendeeUserIds: Array.isArray(input.attendeeUserIds) ? input.attendeeUserIds.filter(Boolean) : [], repeatType: input.repeatType || "none", repeatUntil: input.repeatUntil || null, alertMinutes: Number.isInteger(input.alertMinutes) ? input.alertMinutes : 10, timezone: input.timezone, calendarId: input.calendarId };
+  const alertMinutes = Array.isArray(input.alertMinutes) ? input.alertMinutes.filter(Number.isInteger) : [Number.isInteger(input.alertMinutes) ? input.alertMinutes : 10];
+  return { title, startsAt: input.startsAt, endsAt: input.endsAt, description: String(input.description || ""), location: String(input.location || ""), attendeeUserIds: Array.isArray(input.attendeeUserIds) ? input.attendeeUserIds.filter(Boolean) : [], repeatType: input.repeatType || "none", repeatUntil: input.repeatUntil || null, alertMinutes, timezone: input.timezone, calendarId: input.calendarId };
 }
 
-module.exports = { buildMonthGrid, filterSchedulesForMonth, selectDefaultCalendar, buildSchedulePayload, dateKey };
+function scheduleItems(body) { return Array.isArray(body?.items) ? body.items : []; }
+function scheduleErrorMessage(error) { const detail = error?.detail; return Array.isArray(detail) ? detail.map((item) => item?.msg).filter(Boolean).join(" ") || "일정 입력값을 확인하세요." : error?.message || "일정 요청 실패"; }
+
+module.exports = { buildMonthGrid, filterSchedulesForMonth, selectDefaultCalendar, buildSchedulePayload, dateKey, scheduleItems, scheduleErrorMessage };

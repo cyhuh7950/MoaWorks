@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AppState, Button, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { createMobileSessionAdapter, isSessionInvalidatedError, requestJson } from "./auth-session";
-import { buildMonthGrid, buildSchedulePayload, filterSchedulesForMonth, selectDefaultCalendar } from "./schedule-api";
+import { buildMonthGrid, buildSchedulePayload, filterSchedulesForMonth, selectDefaultCalendar, scheduleErrorMessage, scheduleItems, dateKey } from "./schedule-api";
 
 type AuthUser = {
   userId: string;
@@ -254,6 +254,7 @@ export default function App() {
   const [scheduleForm, setScheduleForm] = useState<ScheduleForm>({ title: "", startsAt: "", endsAt: "", description: "", location: "" });
   const [scheduleMonth, setScheduleMonth] = useState(() => new Date());
   const [scheduleSaving, setScheduleSaving] = useState(false);
+  const scheduleSavingRef = useRef(false);
   const [moreScreen, setMoreScreen] = useState<Exclude<ScreenKey, MobileTab>>("directory");
   const [directoryQuery, setDirectoryQuery] = useState("");
   const [screenDensity, setScreenDensity] = useState<"standard" | "compact">("standard");
@@ -294,6 +295,8 @@ export default function App() {
       setSchedules(nextState.schedules);
       setScheduleError(nextState.scheduleError);
       setScheduleForm(nextState.scheduleForm);
+      scheduleSavingRef.current = false;
+      setScheduleSaving(false);
       setActionReason(nextState.actionReason);
       setLlmProvider(nextState.llmProvider);
       setLlmApiKey(nextState.llmApiKey);
@@ -584,33 +587,34 @@ export default function App() {
     try {
       const [calendarBody, scheduleBody] = await Promise.all([
         request<{ owned: WorkspaceCalendar[] }>("/workspace/calendars", { headers: { Authorization: `Bearer ${activeToken}` } }, context),
-        request<{ schedules: WorkspaceSchedule[] }>("/workspace/schedules", { headers: { Authorization: `Bearer ${activeToken}` } }, context),
+        request<{ items: WorkspaceSchedule[] }>("/workspace/schedules", { headers: { Authorization: `Bearer ${activeToken}` } }, context),
       ]);
       if (!sessionControllerRef.current.isCurrent(context)) return;
       setCalendars(calendarBody.owned ?? []);
-      setSchedules(scheduleBody.schedules ?? []);
+      setSchedules(scheduleItems(scheduleBody));
       setScheduleError("");
     } catch (error) {
       if (isSessionInvalidatedError(error) || !sessionControllerRef.current.isCurrent(context)) return;
-      setScheduleError(error instanceof Error ? error.message : "일정 조회 실패");
+      setScheduleError(scheduleErrorMessage(error));
     }
   }
 
   async function createSchedule() {
-    if (scheduleSaving) return;
+    if (scheduleSavingRef.current) return;
     const context = sessionControllerRef.current.capture(token);
     try {
       const calendar = selectDefaultCalendar({ owned: calendars });
       const payload = buildSchedulePayload({ ...scheduleForm, calendarId: calendar?.id || "", timezone });
+      scheduleSavingRef.current = true;
       setScheduleSaving(true);
       await request("/workspace/schedules", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(payload) }, context);
       if (!sessionControllerRef.current.isCurrent(context)) return;
       setScheduleForm({ title: "", startsAt: "", endsAt: "", description: "", location: "" });
       await loadSchedules(token, context);
     } catch (error) {
-      if (!isSessionInvalidatedError(error) && sessionControllerRef.current.isCurrent(context)) setScheduleError(error instanceof Error ? error.message : "일정 생성 실패");
+      if (!isSessionInvalidatedError(error) && sessionControllerRef.current.isCurrent(context)) setScheduleError(scheduleErrorMessage(error));
     } finally {
-      if (sessionControllerRef.current.isCurrent(context)) setScheduleSaving(false);
+      if (sessionControllerRef.current.isCurrent(context)) { scheduleSavingRef.current = false; setScheduleSaving(false); }
     }
   }
 
@@ -983,7 +987,7 @@ export default function App() {
                 <Text style={styles.surfaceTitle}>오늘의 일정</Text>
                 <View style={styles.buttonPair}><Button title="이전 달" onPress={() => setScheduleMonth((value) => new Date(value.getFullYear(), value.getMonth() - 1, 1))} /><Button title="다음 달" onPress={() => setScheduleMonth((value) => new Date(value.getFullYear(), value.getMonth() + 1, 1))} /></View>
                 <Text style={styles.surfaceHint}>{`${scheduleMonth.getFullYear()}년 ${scheduleMonth.getMonth() + 1}월 · ${timezone}`}</Text>
-                <View style={styles.calendarGrid}>{buildMonthGrid(new Date(Date.UTC(scheduleMonth.getFullYear(), scheduleMonth.getMonth(), 1))).map((cell, index) => <View key={`${cell.dateKey}-${index}`} style={styles.calendarCell}><Text style={styles.calendarDate}>{cell.day || ""}</Text>{filterSchedulesForMonth(schedules, `${scheduleMonth.getFullYear()}-${String(scheduleMonth.getMonth() + 1).padStart(2, "0")}`, timezone).filter((item) => item.starts_at && item.starts_at.includes(cell.dateKey)).slice(0, 2).map((item) => <Text key={item.id} style={styles.calendarEvent}>{item.title}</Text>)}</View>)}</View>
+                <View style={styles.calendarGrid}>{buildMonthGrid(new Date(Date.UTC(scheduleMonth.getFullYear(), scheduleMonth.getMonth(), 1))).map((cell, index) => <View key={`${cell.dateKey}-${index}`} style={styles.calendarCell}><Text style={styles.calendarDate}>{cell.day || ""}</Text>{filterSchedulesForMonth(schedules, `${scheduleMonth.getFullYear()}-${String(scheduleMonth.getMonth() + 1).padStart(2, "0")}`, timezone).filter((item) => dateKey(item.starts_at, timezone) === cell.dateKey).slice(0, 2).map((item) => <Text key={item.id} style={styles.calendarEvent}>{item.title}</Text>)}</View>)}</View>
                 {schedules.length === 0 ? <Text style={styles.emptyState}>표시할 일정이 없습니다.</Text> : null}
                 <TextInput accessibilityLabel="일정 제목" style={styles.input} value={scheduleForm.title} onChangeText={(title) => setScheduleForm((current) => ({ ...current, title }))} placeholder="일정 제목" />
                 <TextInput accessibilityLabel="일정 시작 시간" style={styles.input} value={scheduleForm.startsAt} onChangeText={(startsAt) => setScheduleForm((current) => ({ ...current, startsAt }))} placeholder="2026-08-24T09:00:00+09:00" />
