@@ -47,124 +47,51 @@ fs.rmSync(zipPath, { force: true });
 copyDirectory(electronDist, bundleDir);
 fs.renameSync(path.join(bundleDir, "electron.exe"), path.join(bundleDir, executableName));
 
-const runId = isoNow().replace(/[:.]/g, "-");
-const bundleDirName = `desktop-client-package-${runId}`;
-const bundleDir = path.join(evidenceRoot, bundleDirName);
-const portableDirName = `${bundleDirName}-portable`;
-const portableDir = path.join(evidenceRoot, portableDirName);
-const portableAppDir = path.join(portableDir, "resources", "app");
-const logPath = path.join(evidenceRoot, `${bundleDirName}.log`);
-const manifestPath = path.join(evidenceRoot, `${bundleDirName}.json`);
-const archivePath = path.join(evidenceRoot, `${bundleDirName}.tar.gz`);
-const electronDistDir = path.join(projectRoot, "node_modules", "electron", "dist");
-const portableExeName = "MoaWorks Desktop Client.exe";
-const portableExePath = path.join(portableDir, portableExeName);
-
-const filesToCopy = [
-  "index.html",
-  "package.json",
-  "README.md",
-];
-
-const directoriesToCopy = [
-  "electron",
-];
-
-writeLogLine(logPath, `desktop packaging start projectRoot=${projectRoot}`);
-
-if (!fs.existsSync(electronDistDir)) {
-  writeLogLine(logPath, `missing electron dist=${electronDistDir}`);
-  console.error(`STATUS=blocked`);
-  console.error(`BLOCKER=DESKTOP_ELECTRON_RUNTIME_MISSING`);
-  console.error(`DETAIL=missing node_modules/electron/dist`);
-  process.exit(2);
-}
-
-for (const file of filesToCopy) {
-  const source = path.join(projectRoot, file);
-  if (!fs.existsSync(source)) {
-    writeLogLine(logPath, `missing required file=${file}`);
-    console.error(`STATUS=blocked`);
-    console.error(`BLOCKER=DESKTOP_PACKAGE_INPUT_MISSING`);
-    console.error(`DETAIL=missing ${file}`);
-    process.exit(2);
-  }
-  copyFile(source, path.join(bundleDir, file));
-  copyFile(source, path.join(portableAppDir, file));
-  writeLogLine(logPath, `copied file=${file}`);
+const appDir = path.join(bundleDir, "resources", "app");
+fs.mkdirSync(appDir, { recursive: true });
+for (const name of ["index.html", "package.json", "README.md"]) {
+  fs.copyFileSync(path.join(projectRoot, name), path.join(appDir, name));
 }
 copyDirectory(path.join(projectRoot, "electron"), path.join(appDir, "electron"));
 copyDirectory(runtimePackageDir, path.join(appDir, "node_modules", runtimePackage));
 fs.rmSync(path.join(bundleDir, "resources", "default_app.asar"), { force: true });
 
-for (const dir of directoriesToCopy) {
-  const source = path.join(projectRoot, dir);
-  if (!fs.existsSync(source)) {
-    writeLogLine(logPath, `missing required directory=${dir}`);
-    console.error(`STATUS=blocked`);
-    console.error(`BLOCKER=DESKTOP_PACKAGE_INPUT_MISSING`);
-    console.error(`DETAIL=missing ${dir}`);
-    process.exit(2);
-  }
-  copyDirectory(source, path.join(bundleDir, dir));
-  copyDirectory(source, path.join(portableAppDir, dir));
-  writeLogLine(logPath, `copied directory=${dir}`);
-}
+const executablePath = path.join(bundleDir, executableName);
+const appCodePath = path.join(appDir, "electron", "main.js");
+const portableInfo = {
+  product: "MoaWorks Desktop Client",
+  version,
+  platform: "win32",
+  arch: "x64",
+  executable: { name: executableName, sha256: sha256(executablePath) },
+  appCode: { path: "resources/app/electron/main.js", sha256: sha256(appCodePath) },
+};
+fs.writeFileSync(path.join(bundleDir, "portable-info.json"), JSON.stringify(portableInfo, null, 2), "utf8");
 
-copyDirectory(electronDistDir, portableDir);
-writeLogLine(logPath, `copied electron dist=${electronDistDir}`);
-
-const copiedElectronExePath = path.join(portableDir, "electron.exe");
-if (!fs.existsSync(copiedElectronExePath)) {
-  writeLogLine(logPath, `missing copied electron exe=${copiedElectronExePath}`);
-  console.error(`STATUS=blocked`);
-  console.error(`BLOCKER=DESKTOP_ELECTRON_EXE_MISSING`);
-  console.error(`DETAIL=missing electron.exe in copied runtime`);
-  process.exit(2);
-}
-
-if (fs.existsSync(portableExePath)) {
-  fs.unlinkSync(portableExePath);
-}
-fs.renameSync(copiedElectronExePath, portableExePath);
-writeLogLine(logPath, `renamed portable exe=${path.relative(projectRoot, portableExePath)}`);
-
-const archiveResult = spawnSync("tar", ["-czf", archivePath, "-C", evidenceRoot, bundleDirName], {
+const archive = spawnSync("tar.exe", ["-a", "-c", "-f", zipPath, "-C", evidenceRoot, bundleName], {
   encoding: "utf8",
 });
 if (archive.status !== 0 || !fs.existsSync(zipPath)) fail(`Portable ZIP creation failed: ${archive.stderr || "unknown error"}`);
 
 const manifest = {
-  executedAt: isoNow(),
-  projectRoot,
-  bundleDir: path.relative(projectRoot, bundleDir),
-  portableDir: path.relative(projectRoot, portableDir),
-  portableExePath: fs.existsSync(portableExePath) ? path.relative(projectRoot, portableExePath) : null,
-  portableExeSha256: fs.existsSync(portableExePath) ? sha256(portableExePath) : null,
-  archivePath: fs.existsSync(archivePath) ? path.relative(projectRoot, archivePath) : null,
-  archiveSha256: fs.existsSync(archivePath) ? sha256(archivePath) : null,
-  artifacts: artifactFiles,
-  nodeModulesPresent: fs.existsSync(path.join(projectRoot, "node_modules")),
-  electronBinaryPresent: fs.existsSync(path.join(projectRoot, "node_modules", ".bin", process.platform === "win32" ? "electron.cmd" : "electron")),
-  status: fs.existsSync(archivePath) && fs.existsSync(portableExePath) ? "success" : "partial",
+  product: "MoaWorks Desktop Client",
+  version,
+  platform: "win32",
+  arch: "x64",
+  packageType: "portable-zip",
+  portableDirectory: bundleName,
+  zip: { fileName: path.basename(zipPath), size: fs.statSync(zipPath).size, sha256: sha256(zipPath) },
+  executable: { fileName: executableName, size: fs.statSync(executablePath).size, sha256: sha256(executablePath) },
+  appCode: { path: "resources/app/electron/main.js", size: fs.statSync(appCodePath).size, sha256: sha256(appCodePath) },
+  status: "success",
+  generatedAt: new Date().toISOString(),
 };
 fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
 fs.writeFileSync(logPath, `STATUS=success\nPACKAGE=${manifest.zip.fileName}\nZIP_SHA256=${manifest.zip.sha256}\n`, "utf8");
 fs.rmSync(bundleDir, { recursive: true, force: true });
 
-console.log(`STATUS=${manifest.status}`);
-console.log(`BUNDLE_DIR=${path.relative(projectRoot, bundleDir)}`);
-if (manifest.archivePath) {
-  console.log(`ARCHIVE=${manifest.archivePath}`);
-  console.log(`ARCHIVE_SHA256=${manifest.archiveSha256}`);
-} else {
-  console.log(`ARCHIVE=none`);
-}
-if (manifest.portableExePath) {
-  console.log(`PORTABLE_EXE=${manifest.portableExePath}`);
-  console.log(`PORTABLE_EXE_SHA256=${manifest.portableExeSha256}`);
-} else {
-  console.log(`PORTABLE_EXE=none`);
-}
+console.log("STATUS=success");
+console.log(`PACKAGE=${path.relative(projectRoot, zipPath)}`);
+console.log(`ZIP_SHA256=${manifest.zip.sha256}`);
 console.log(`MANIFEST=${path.relative(projectRoot, manifestPath)}`);
 console.log(`LOG=${path.relative(projectRoot, logPath)}`);
