@@ -1,0 +1,64 @@
+{
+  "taskId": "F13-MOBILE-TASK7-FINAL-VALIDATION-20260824",
+  "issueId": "F13-MOBILE-TASK7-FINAL-VALIDATION",
+  "outcome": "SUCCESS",
+  "summary": "제품 코드 변경 없이 fresh full 100/100, production/Android release 빌드, emulator 설치와 두 차례 cold launch, 비인증 로그인 screenshot/XML을 확인했고 인증 후 검증은 UNVERIFIED_EXTERNAL_CREDENTIAL로 분리했다.",
+  "reportPath": ".agents/moaworks-subagent/reports/F13-MOBILE-TASK7-FINAL-VALIDATION-20260824.md",
+  "modifiedFiles": [
+    "docs/superpowers/plans/2026-08-24-mobile-task7-final-validation-plan.md",
+    "docs/workorders/f13-mobile-task7-final-validation-2026-08-24.md",
+    "docs/workorders/f13-mobile-task7-final-validation-worker-prompt-2026-08-24.md",
+    "frontend/mobile-app/build-evidence/MoaWorks-Mobile-0.1.0-android-internal-release.apk.manifest.json",
+    "frontend/mobile-app/build-evidence/MoaWorks-Mobile-0.1.0-android-internal-release.audit-reachability.json",
+    "frontend/mobile-app/artifacts/android-mobile-task7-final-20260824.png",
+    "frontend/mobile-app/artifacts/android-mobile-task7-final-20260824.xml",
+    "frontend/mobile-app/artifacts/android-mobile-task7-relaunch-20260824.png",
+    "frontend/mobile-app/artifacts/android-mobile-task7-relaunch-20260824.xml",
+    ".agents/moaworks-subagent/reports/F13-MOBILE-TASK7-FINAL-VALIDATION-20260824.md",
+    ".agents/moaworks-subagent/results/F13-MOBILE-TASK7-FINAL-VALIDATION-20260824/result.latest.json",
+    "docs/work-progress/moaworks-completion-v2.1/stage-04-f12-f14/progress.jsonl",
+    "docs/work-progress/mobile-android-2026-08-21-update.jsonl"
+  ],
+  "verification": [
+    { "name": "full", "command": "npm test", "result": "PASS 100/100 after lockfile dependency restore" },
+    { "name": "production and package", "command": "npm run build", "result": "PASS; bundle SHA256 7AC6D4E25CDD3219788E6FE40C1FF7B0AA664AFE680814B29CD88A0F41D8BEA1; APK SHA256 B1201D8F18B15739EEC31248817FB31FE09843CF555AB47845A1709A12FCE730" },
+    { "name": "Android release", "command": "npm run build:android", "result": "BUILD SUCCESSFUL in 6s; 64 tasks" },
+    { "name": "emulator install", "command": "adb -s emulator-5554 install -r", "result": "Success" },
+    { "name": "first cold launch", "command": "am start -W -S", "result": "Status ok; LaunchState COLD; TotalTime 2481ms" },
+    { "name": "cold relaunch", "command": "am force-stop; am start -W -S", "result": "Status ok; LaunchState COLD; TotalTime 817ms" },
+    { "name": "unauthenticated evidence", "command": "uiautomator dump; screencap", "result": "PASS two current login screenshot/XML pairs; package/password/login nodes confirmed" },
+    { "name": "authenticated seven-screen/logout", "result": "UNVERIFIED_EXTERNAL_CREDENTIAL" },
+    { "name": "independent review", "result": "Critical 0 Important 0 Minor 0 after one progress parity re-review" }
+  ],
+  "remaining": [
+    "approved test credential login and authenticated seven-screen transition/logout UNVERIFIED_EXTERNAL_CREDENTIAL",
+    "physical Android and TalkBack UNVERIFIED_PHYSICAL_DEVICE",
+    "iOS/macOS/Xcode/VoiceOver DEFERRED",
+    "live API/DB/Provider and deploy UNVERIFIED_OPERATIONAL"
+  ],
+  "directCause": null,
+  "evidence": [
+    "full 100/100",
+    "bundle SHA256 7AC6D4E25CDD3219788E6FE40C1FF7B0AA664AFE680814B29CD88A0F41D8BEA1",
+    "APK SHA256 B1201D8F18B15739EEC31248817FB31FE09843CF555AB47845A1709A12FCE730",
+    "emulator install Success and COLD 2481ms/817ms",
+    "fresh login screenshot/XML artifacts",
+    "authenticated scope explicitly unverified",
+    "independent review Critical 0 Important 0 Minor 0",
+    "actual/result/stage/mobile 13/13 parity"
+  ],
+  "attemptedAlternatives": [
+    "empty shared dependency target was restored with npm ci from package-lock",
+    "sandbox EPERM commands were rerun once with approved permission",
+    "adb PATH resolution failure was recovered with the discovered Android SDK absolute path",
+    "result directory was created at the exact worktree path after parent-directory and sandbox diagnostics"
+  ],
+  "currentState": "agent-owned Task 7 validation and independent review complete; main acceptance required; external credential validation remains separate",
+  "remediationProposal": null,
+  "resumePoint": "approved dedicated test account validation: install the recorded APK SHA, login, traverse seven screens, capture evidence, logout and relaunch",
+  "errorCount": 6,
+  "repeatedRootCauseCount": 2,
+  "scopeChange": false,
+  "requirementChange": false,
+  "majorRiskChange": false
+}

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-11T06:11:31.724Z",
+  "generatedAt": "2026-08-24T09:25:03.808Z",
   "source": "npm-audit-omit-dev",
   "policy": {
     "approach": "conservative-explicit-allowlist",
@@ -42,9 +42,9 @@
       "info": 0,
       "low": 0,
       "moderate": 6,
-      "high": 7,
+      "high": 8,
       "critical": 0,
-      "total": 13
+      "total": 14
     },
     "dependencies": {
       "prod": 554,
@@ -57,9 +57,9 @@
   },
   "summary": {
     "runtime": 0,
-    "buildOnly": 13,
+    "buildOnly": 14,
     "unclassified": 0,
-    "total": 13
+    "total": 14
   },
   "packages": [
     {
@@ -119,7 +119,7 @@
       ],
       "fixAvailable": {
         "name": "react-native",
-        "version": "0.86.2",
+        "version": "0.87.0",
         "isSemVerMajor": true
       },
       "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
@@ -143,7 +143,7 @@
       ],
       "fixAvailable": {
         "name": "react-native",
-        "version": "0.86.2",
+        "version": "0.87.0",
         "isSemVerMajor": true
       },
       "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
@@ -166,7 +166,7 @@
       ],
       "fixAvailable": {
         "name": "react-native",
-        "version": "0.86.2",
+        "version": "0.87.0",
         "isSemVerMajor": true
       },
       "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
@@ -184,15 +184,52 @@
       "effects": [
         "react-native"
       ],
-      "range": "*",
+      "range": "<=0.81.0-rc.5 || 0.82.0-nightly-20250710-586f5ba89 - 0.82.0-rc.5 || >=0.87.0-nightly-20260507-ba204faa7",
       "nodes": [
         "node_modules/@react-native/community-cli-plugin"
       ],
       "fixAvailable": {
         "name": "react-native",
-        "version": "0.86.2",
+        "version": "0.87.0",
         "isSemVerMajor": true
       },
+      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
+    },
+    {
+      "package": "brace-expansion",
+      "severity": "high",
+      "isDirect": false,
+      "reachability": "build-only",
+      "viaPackages": [],
+      "directAdvisories": [
+        {
+          "source": 1123897,
+          "name": "brace-expansion",
+          "title": "brace-expansion: DoS via exponential-time expansion of consecutive non-expanding {} groups",
+          "url": "https://github.com/advisories/GHSA-3jxr-9vmj-r5cp",
+          "severity": "high"
+        },
+        {
+          "source": 1130588,
+          "name": "brace-expansion",
+          "title": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash",
+          "url": "https://github.com/advisories/GHSA-mh99-v99m-4gvg",
+          "severity": "high"
+        },
+        {
+          "source": 1130737,
+          "name": "brace-expansion",
+          "title": "brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation",
+          "url": "https://github.com/advisories/GHSA-rgw5-rvv9-x895",
+          "severity": "high"
+        }
+      ],
+      "effects": [],
+      "range": "<=1.1.17",
+      "nodes": [
+        "node_modules/brace-expansion"
+      ],
+      "fixAvailable": true,
       "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
     },
     {
@@ -220,7 +257,7 @@
       ],
       "fixAvailable": {
         "name": "react-native",
-        "version": "0.86.2",
+        "version": "0.87.0",
         "isSemVerMajor": true
       },
       "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
@@ -256,7 +293,7 @@
       ],
       "fixAvailable": {
         "name": "react-native",
-        "version": "0.86.2",
+        "version": "0.87.0",
         "isSemVerMajor": true
       },
       "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
@@ -308,13 +345,13 @@
         "metro-config",
         "metro-transform-worker"
       ],
-      "range": ">=0.22.1",
+      "range": "0.22.1 - 0.83.7 || 0.84.0 - 0.84.4 || >=0.85.0",
       "nodes": [
         "node_modules/metro"
       ],
       "fixAvailable": {
         "name": "react-native",
-        "version": "0.86.2",
+        "version": "0.87.0",
         "isSemVerMajor": true
       },
       "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
@@ -332,13 +369,13 @@
         "@react-native/community-cli-plugin",
         "metro"
       ],
-      "range": "*",
+      "range": "<=0.83.7 || 0.84.0 - 0.84.4 || >=0.85.0",
       "nodes": [
         "node_modules/metro-config"
       ],
       "fixAvailable": {
         "name": "react-native",
-        "version": "0.86.2",
+        "version": "0.87.0",
         "isSemVerMajor": true
       },
       "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
@@ -355,13 +392,13 @@
       "effects": [
         "metro"
       ],
-      "range": ">=0.60.0",
+      "range": "0.60.0 - 0.83.7 || 0.84.0 - 0.84.4 || >=0.85.0",
       "nodes": [
         "node_modules/metro-transform-worker"
       ],
       "fixAvailable": {
         "name": "react-native",
-        "version": "0.86.2",
+        "version": "0.87.0",
         "isSemVerMajor": true
       },
       "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
@@ -379,13 +416,13 @@
       ],
       "directAdvisories": [],
       "effects": [],
-      "range": ">=0.73.0-nightly-20230506-1af868c52",
+      "range": "0.73.0-nightly-20230506-1af868c52 - 0.81.0-rc.5 || 0.82.0-nightly-20250710-586f5ba89 - 0.82.0-rc.5 || >=0.87.0-nightly-20260507-ba204faa7",
       "nodes": [
         "node_modules/react-native"
       ],
       "fixAvailable": {
         "name": "react-native",
-        "version": "0.86.2",
+        "version": "0.87.0",
         "isSemVerMajor": true
       },
       "rationale": "Runtime package is listed only as a carrier for explicitly classified build-only packages"
