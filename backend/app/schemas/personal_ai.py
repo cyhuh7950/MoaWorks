@@ -55,6 +55,16 @@ class PersonalAiConfigView(BaseModel):
     lastTestedAt: datetime | None = None
 
 
+class PersonalAiProviderOption(BaseModel):
+    provider: str
+    label: str
+    apiKeyRequired: bool
+
+
+class PersonalAiProviderListView(BaseModel):
+    providers: list[PersonalAiProviderOption]
+
+
 class PersonalAiConnectionTestView(BaseModel):
     success: bool
     provider: str

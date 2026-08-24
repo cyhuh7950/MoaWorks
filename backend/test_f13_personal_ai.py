@@ -123,6 +123,113 @@ class FixtureJsonTransport:
         return self.responses.pop(0) if self.responses else {}
 
 
+class InMemoryPersonalAiStore:
+    def __init__(self, configs: dict[tuple[str, str], dict[str, object]]) -> None:
+        self.configs = {key: dict(value) for key, value in configs.items()}
+        self.rate_counts: dict[tuple[str, str, str], int] = {}
+
+    @staticmethod
+    def _key(actor: AuthUserSummary) -> tuple[str, str]:
+        return actor.companyId, actor.userId
+
+    def get_config(
+        self, actor: AuthUserSummary, *, include_secret: bool = False
+    ) -> dict[str, object]:
+        config = dict(
+            self.configs.get(
+                self._key(actor),
+                {
+                    "provider": "",
+                    "model": "",
+                    "apiKeyConfigured": False,
+                    "connectionStatus": "unconfigured",
+                    "lastTestCode": None,
+                    "lastTestedAt": None,
+                    "apiKey": "",
+                },
+            )
+        )
+        if not include_secret:
+            config.pop("apiKey", None)
+        return config
+
+    def save_config(self, actor: AuthUserSummary, payload: object) -> dict[str, object]:
+        current = self.configs.get(self._key(actor), {})
+        raw_key = payload.apiKey.get_secret_value() if payload.apiKey is not None else None
+        configured = bool(raw_key) or (
+            payload.provider == current.get("provider")
+            and bool(current.get("apiKey"))
+            and not payload.clearApiKey
+        )
+        config = {
+            "provider": payload.provider,
+            "model": payload.model,
+            "apiKeyConfigured": configured,
+            "connectionStatus": "untested",
+            "lastTestCode": None,
+            "lastTestedAt": None,
+            "apiKey": raw_key or (current.get("apiKey") if configured else ""),
+        }
+        self.configs[self._key(actor)] = config
+        return {key: value for key, value in config.items() if key != "apiKey"}
+
+    def record_test(
+        self, actor: AuthUserSummary, success: bool, code: str
+    ) -> None:
+        config = self.configs[self._key(actor)]
+        config["connectionStatus"] = "ready" if success else "error"
+        config["lastTestCode"] = code
+        config["lastTestedAt"] = datetime(2026, 8, 24, 4, 0, tzinfo=UTC)
+
+    def acquire_rate_limit(
+        self,
+        actor: AuthUserSummary,
+        action: str,
+        limit: int,
+        now: datetime | None = None,
+    ) -> int:
+        key = (actor.companyId, actor.userId, action)
+        count = self.rate_counts.get(key, 0) + 1
+        self.rate_counts[key] = count
+        if count > limit:
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "PERSONAL_AI_RATE_LIMITED",
+                    "userMessage": "요청이 너무 많습니다.",
+                    "adminMessage": "rate limited",
+                },
+            )
+        return count
+
+
+class FixturePersonalAiProviderClient:
+    def __init__(
+        self,
+        *,
+        output: str = "업무 답변",
+        connection_error: Exception | None = None,
+        chat_error: Exception | None = None,
+    ) -> None:
+        self.output = output
+        self.connection_error = connection_error
+        self.chat_error = chat_error
+        self.connection_configs: list[dict[str, object]] = []
+        self.chat_configs: list[dict[str, object]] = []
+
+    def test_connection(self, config: dict[str, object]) -> bool:
+        self.connection_configs.append(dict(config))
+        if self.connection_error is not None:
+            raise self.connection_error
+        return True
+
+    def chat(self, config: dict[str, object], messages: list[object]) -> str:
+        self.chat_configs.append(dict(config))
+        if self.chat_error is not None:
+            raise self.chat_error
+        return self.output
+
+
 class PersonalAiSchemaContractTest(unittest.TestCase):
     def test_config_update_normalizes_provider_and_model_without_serializing_secret(self) -> None:
         from app.schemas.personal_ai import PersonalAiConfigUpdate
@@ -622,6 +729,209 @@ class PersonalAiProviderTest(unittest.TestCase):
         self.assertEqual(success, True)
         self.assertEqual(len(transport.requests), 1)
         self.assertEqual(transport.requests[0]["payload"]["stream"], False)
+
+
+class PersonalAiServiceTest(unittest.TestCase):
+    def _configured_store(
+        self, *, status_value: str = "ready", api_key: str = "fixture-personal-credential"
+    ) -> InMemoryPersonalAiStore:
+        return InMemoryPersonalAiStore(
+            {
+                ("company-f13", "user-f13"): {
+                    "provider": "groq",
+                    "model": "model-a",
+                    "apiKeyConfigured": bool(api_key),
+                    "connectionStatus": status_value,
+                    "lastTestCode": None,
+                    "lastTestedAt": None,
+                    "apiKey": api_key,
+                },
+                ("company-f13", "other-user"): {
+                    "provider": "anthropic",
+                    "model": "other-model",
+                    "apiKeyConfigured": True,
+                    "connectionStatus": "ready",
+                    "lastTestCode": None,
+                    "lastTestedAt": None,
+                    "apiKey": "other-user-credential",
+                },
+            }
+        )
+
+    def test_catalog_and_config_hide_endpoint_and_secret_for_actor_scope(self) -> None:
+        from app.services.personal_ai_service import PersonalAiService
+
+        service = PersonalAiService(
+            store=self._configured_store(),
+            provider_client=FixturePersonalAiProviderClient(),
+        )
+
+        catalog = service.list_providers().model_dump(mode="json")
+        config = service.get_config(personal_ai_actor()).model_dump(mode="json")
+
+        self.assertEqual(len(catalog["providers"]), 9)
+        self.assertEqual(
+            set(catalog["providers"][0]), {"provider", "label", "apiKeyRequired"}
+        )
+        self.assertEqual(config["provider"], "groq")
+        self.assertEqual(config["model"], "model-a")
+        rendered = json.dumps({"catalog": catalog, "config": config})
+        self.assertNotIn("fixture-personal-credential", rendered)
+        self.assertNotIn("other-user-credential", rendered)
+        self.assertNotIn("apiBaseUrl", rendered)
+
+    def test_connection_transitions_to_ready_and_enforces_five_per_minute(self) -> None:
+        from app.services.personal_ai_service import PersonalAiService
+
+        store = self._configured_store(status_value="untested")
+        service = PersonalAiService(
+            store=store, provider_client=FixturePersonalAiProviderClient()
+        )
+
+        results = [service.test_connection(personal_ai_actor()) for _ in range(5)]
+
+        self.assertTrue(all(result.success for result in results))
+        self.assertEqual(results[-1].connectionStatus, "ready")
+        self.assertEqual(
+            store.get_config(personal_ai_actor())["connectionStatus"], "ready"
+        )
+        with self.assertRaises(HTTPException) as captured:
+            service.test_connection(personal_ai_actor())
+        self.assertEqual(captured.exception.status_code, 429)
+
+    def test_connection_failure_is_generalized_and_transitions_to_error(self) -> None:
+        from app.services.personal_ai_service import PersonalAiService
+
+        store = self._configured_store(status_value="untested")
+        service = PersonalAiService(
+            store=store,
+            provider_client=FixturePersonalAiProviderClient(
+                connection_error=RuntimeError(
+                    "external-body fixture-personal-credential internal-host"
+                )
+            ),
+        )
+
+        result = service.test_connection(personal_ai_actor())
+
+        self.assertEqual(result.success, False)
+        self.assertEqual(result.code, "PERSONAL_AI_CONNECTION_FAILED")
+        self.assertEqual(result.connectionStatus, "error")
+        rendered = result.model_dump_json()
+        self.assertNotIn("external-body", rendered)
+        self.assertNotIn("fixture-personal-credential", rendered)
+        self.assertNotIn("internal-host", rendered)
+
+    def test_connection_rejects_missing_required_key(self) -> None:
+        from app.services.personal_ai_service import PersonalAiService
+
+        service = PersonalAiService(
+            store=self._configured_store(status_value="untested", api_key=""),
+            provider_client=FixturePersonalAiProviderClient(),
+        )
+
+        with self.assertRaises(HTTPException) as captured:
+            service.test_connection(personal_ai_actor())
+
+        self.assertEqual(captured.exception.status_code, 400)
+        self.assertEqual(
+            captured.exception.detail["code"], "PERSONAL_AI_NOT_CONFIGURED"
+        )
+
+    def test_chat_requires_ready_config_and_maps_external_failure_safely(self) -> None:
+        from app.schemas.personal_ai import PersonalAiChatRequest
+        from app.services.personal_ai_service import PersonalAiService
+
+        request = PersonalAiChatRequest(
+            messages=[{"role": "user", "content": "업무를 정리해 줘"}]
+        )
+        not_ready = PersonalAiService(
+            store=self._configured_store(status_value="untested"),
+            provider_client=FixturePersonalAiProviderClient(),
+        )
+        with self.assertRaises(HTTPException) as captured:
+            not_ready.chat(personal_ai_actor(), request)
+        self.assertEqual(captured.exception.detail["code"], "PERSONAL_AI_NOT_READY")
+
+        failed = PersonalAiService(
+            store=self._configured_store(),
+            provider_client=FixturePersonalAiProviderClient(
+                chat_error=RuntimeError(
+                    "external-body fixture-personal-credential internal-host"
+                )
+            ),
+        )
+        with self.assertRaises(HTTPException) as captured:
+            failed.chat(personal_ai_actor(), request)
+        self.assertEqual(captured.exception.status_code, 502)
+        self.assertEqual(captured.exception.detail["code"], "PERSONAL_AI_CHAT_FAILED")
+        rendered = json.dumps(captured.exception.detail)
+        self.assertNotIn("external-body", rendered)
+        self.assertNotIn("fixture-personal-credential", rendered)
+        self.assertNotIn("internal-host", rendered)
+
+    def test_chat_returns_safe_contract_and_enforces_twenty_per_minute(self) -> None:
+        from app.schemas.personal_ai import PersonalAiChatRequest
+        from app.services.personal_ai_service import PersonalAiService
+
+        store = self._configured_store()
+        service = PersonalAiService(
+            store=store,
+            provider_client=FixturePersonalAiProviderClient(output="안전한 업무 답변"),
+        )
+        request = PersonalAiChatRequest(
+            messages=[{"role": "user", "content": "업무를 정리해 줘"}]
+        )
+
+        responses = [service.chat(personal_ai_actor(), request) for _ in range(20)]
+
+        latest = responses[-1].model_dump(mode="json")
+        self.assertEqual(
+            set(latest), {"provider", "model", "message", "generatedAt"}
+        )
+        self.assertEqual(latest["message"], {"role": "assistant", "content": "안전한 업무 답변"})
+        rendered = json.dumps(latest)
+        self.assertNotIn("fixture-personal-credential", rendered)
+        self.assertNotIn("apiBaseUrl", rendered)
+        with self.assertRaises(HTTPException) as captured:
+            service.chat(personal_ai_actor(), request)
+        self.assertEqual(captured.exception.status_code, 429)
+
+
+class PersonalAiRouteContractTest(unittest.TestCase):
+    def test_routes_expose_exact_contract_with_profile_read_dependency(self) -> None:
+        from fastapi import FastAPI
+        from fastapi.routing import APIRoute
+
+        from app.api.routes.personal_ai import router
+
+        app = FastAPI()
+        app.include_router(router, prefix="/workspace/personal-ai")
+        routes = {
+            (route.path, next(iter(route.methods))): route
+            for route in app.routes
+            if isinstance(route, APIRoute)
+        }
+        expected = {
+            ("/workspace/personal-ai/providers", "GET"): "PersonalAiProviderListView",
+            ("/workspace/personal-ai/config", "GET"): "PersonalAiConfigView",
+            ("/workspace/personal-ai/config", "PUT"): "PersonalAiConfigView",
+            ("/workspace/personal-ai/test", "POST"): "PersonalAiConnectionTestView",
+            ("/workspace/personal-ai/chat", "POST"): "PersonalAiChatResponse",
+        }
+
+        self.assertEqual(set(routes), set(expected))
+        for route_key, response_model_name in expected.items():
+            with self.subTest(route=route_key):
+                route = routes[route_key]
+                self.assertEqual(route.response_model.__name__, response_model_name)
+                dependency_values = {
+                    cell.cell_contents
+                    for dependency in route.dependant.dependencies
+                    for cell in (getattr(dependency.call, "__closure__", None) or ())
+                    if isinstance(cell.cell_contents, str)
+                }
+                self.assertIn("profile:read", dependency_values)
 
 
 if __name__ == "__main__":
