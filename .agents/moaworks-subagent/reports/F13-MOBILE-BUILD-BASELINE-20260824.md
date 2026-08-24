@@ -30,6 +30,14 @@ The smoke-script `nowIso` failure prevents the wrapper's successful production-b
 - Regression: complete `npm test` passed 60/60; smoke, Android wrapper, and auth-session syntax checks passed; `git diff --check` passed.
 - Android release: `npm run build:android` reached Gradle `:app:createBundleReleaseJsAndAssets`; a release APK exists at `android/app/build/outputs/apk/release/app-release.apk` (59,169,514 bytes, timestamp 2026-08-24 02:20:35 UTC). The command executor did not return a final exit line, so the release build is recorded as APK-observed rather than a verified successful exit. Device launch was not run.
 
+## Main agent independent verification
+
+- Focused build contracts: 13/13 PASS; full mobile contracts: 61/61 PASS.
+- Production bundle: exit 0, SHA-256 `4d11d585b029d0336f6791f077b2cdb3869e5da2f7ee3644728bec8c17ecc972`.
+- Android release: `BUILD SUCCESSFUL in 14s`, 64 actionable tasks; APK 59,169,576 bytes, SHA-256 `442952F5ADBDE963D0264768C7DC82945E99AD18AE4287F9F84C5629852D751F`.
+- Emulator: `emulator-5554` streamed install `Success`, cold launch `Status: ok`; release 로그인 화면 UI dump와 screenshot을 확보했다.
+- 미검증: 물리 Android 기기, 실제 운영 계정 로그인 및 보호 API 흐름.
+
 ## Rework 2 — stray JSX text
 
 - RED: changed the test to parse the original TSX with `@babel/parser` and traverse the AST. It correctly failed with the exact external `JSXText` value `) : null}`; the earlier Babel-transform AST would have hidden JSX nodes and was not used as proof.
