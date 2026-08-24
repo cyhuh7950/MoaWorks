@@ -7148,7 +7148,7 @@ export default function App() {
                       <div style={{ fontSize: 12, color: "#0f766e", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>메일 상세 읽기 영역</div>
                       <h3 style={{ margin: "10px 0 0", fontSize: 24 }}>3분기 계약 검토 요청</h3>
                       <div style={{ marginTop: 14, display: "grid", gap: 10, color: "#475569" }}>
-                        <div><strong style={{ color: "#0f172a" }}>발신자</strong> 대표이사 &lt;ceo@moaworks.local&gt;</div>
+                        <div><strong style={{ color: "#0f172a" }}>발신자</strong> 대표이사 &lt;{`ceo@${uiContract.company.domain}`}&gt;</div>
                         <div><strong style={{ color: "#0f172a" }}>수신자</strong> 신산님, 경영지원팀</div>
                         <div><strong style={{ color: "#0f172a" }}>참조</strong> 법무협업, 제품전략</div>
                         <div><strong style={{ color: "#0f172a" }}>첨부</strong> 계약서_v3.pdf, 검토포인트.xlsx</div>
