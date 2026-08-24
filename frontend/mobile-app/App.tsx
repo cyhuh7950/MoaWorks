@@ -6,6 +6,9 @@ import { createDirectoryActionGate, directoryUsers as readDirectoryUsers, direct
 import { buildPersonalAiChatPayload, buildPersonalAiConfigPayload, createPersonalAiActionGate, personalAiErrorMessage, readPersonalAiChatResponse, readPersonalAiConfig, readPersonalAiConnectionTest, readPersonalAiProviders } from "./personal-ai-api";
 import { normalizeBusinessSearchText, searchLoadedBusinessSummaries, updateBusinessSearchWarnings } from "./business-search";
 
+const { navigationModel } = require("./mobile-ui-design.js");
+const mobileNavigation = navigationModel();
+
 type AuthUser = {
   userId: string;
   userName: string;
@@ -1152,15 +1155,11 @@ export default function App() {
         </View>
       ) : null}
       <ScrollView contentContainerStyle={[styles.container, screenDensity === "compact" ? styles.containerCompact : null]}>
-        <View style={styles.hero}>
+        {!me ? (
+          <View style={styles.hero}>
           <Text style={styles.heroKicker}>MoaWorks Mobile</Text>
-          <Text style={styles.heroTitle}>{me ? "오늘의 업무" : "사용자 업무 포털"}</Text>
-          <Text style={styles.heroDesc}>
-            {me ? "필요한 업무를 한 화면에서 빠르게 확인하세요." : "메일, 결재, 메신저를 한 곳에서 이어가는 업무 포털입니다."}
-          </Text>
-
-          {!me ? (
-            <>
+          <Text style={styles.heroTitle}>사용자 업무 포털</Text>
+          <Text style={styles.heroDesc}>메일, 결재, 메신저를 한 곳에서 이어가는 업무 포털입니다.</Text>
               <Text style={styles.sectionLabel}>아이디</Text>
               <View style={styles.loginField}>
                 <MoaIcon name="directory" color="#99f6e4" size={20} />
@@ -1206,49 +1205,17 @@ export default function App() {
                   <Text style={styles.loginButtonText}>업무 포털 로그인</Text>
                 </Pressable>
               </View>
-            </>
-          ) : (
-            <View style={styles.loggedInHeroCard}>
-              <Text style={styles.loggedInHeroTitle}>업무 포털 접속 완료</Text>
-              <Text style={styles.userName}>{`${me.userName} (${me.roleName})`}</Text>
-              <Text style={styles.loggedInHeroText}>{me.userEmail}</Text>
-              <Text style={styles.loggedInHeroText}>
-                알림 {notificationSummary?.unreadCount ?? 0}건 / 대기 결재 {documents.filter((item) => item.status === "submitted").length}건
-              </Text>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="로그아웃"
-                onPress={() => {
-                  clearSession("로그아웃되었습니다.");
-                }}
-                style={styles.heroLogoutButton}
-              >
-                <Text style={styles.heroLogoutText}>로그아웃</Text>
-              </Pressable>
-            </View>
-          )}
           {message ? <Text style={styles.message}>{message}</Text> : null}
-        </View>
+          </View>
+        ) : null}
 
         {me ? (
           <>
-            {activeTab !== "home" ? (
-              <View style={styles.homeSummaryGrid}>
-                {summaryCards.map((item) => (
-                  <View key={item.title} style={[styles.homeSummaryCard, item.tone]}>
-                    <Text style={styles.homeSummaryLabel}>{item.title}</Text>
-                    <Text style={styles.homeSummaryValue}>{item.value}</Text>
-                    <Text style={styles.homeSummaryDesc}>{item.desc}</Text>
-                  </View>
-                ))}
-              </View>
-            ) : null}
-
             {activeTab === "more" || activeTabError ? (
               <View style={styles.surfaceCard}>
               {activeTab === "more" ? (
                 <View style={styles.mobileSubNav}>
-                  {[{ id: "directory", label: "주소록", icon: "directory" }, { id: "ai", label: "AI 채팅", icon: "ai" }, { id: "search", label: "업무 검색", icon: "search" }, { id: "settings", label: "설정", icon: "settings" }].map((item) => (
+                  {mobileNavigation.more.map((item: { id: string; label: string; icon: IconName }) => (
                     <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} accessibilityHint="선택한 더보기 화면으로 이동합니다." onPress={() => { setMoreScreen(item.id as Exclude<ScreenKey, MobileTab>); if (item.id === "directory" && token) void loadDirectory(token); if ((item.id === "settings" || (item.id === "ai" && !personalAiTestReady)) && token) void loadPersonalAi(token); }} style={[styles.mobileSubTab, moreScreen === item.id ? styles.mobileSubTabActive : styles.mobileSubTabIdle]}><MoaIcon name={item.icon as IconName} color={moreScreen === item.id ? "#ffffff" : "#0f766e"} /><Text style={[styles.mobileTabLabel, moreScreen === item.id ? styles.mobileTabLabelActive : null]}>{item.label}</Text></Pressable>
                   ))}
                 </View>
@@ -1356,37 +1323,9 @@ export default function App() {
                 <Button accessibilityLabel="개인 AI 연결 시험" title={personalAiPendingAction === "test" ? "연결 시험 중" : llmConnectionStatus === "ready" ? "연결됨 · 다시 시험" : "LLM 연결 시험"} disabled={Boolean(personalAiPendingAction) || personalAiConfigDirty || !llmProvider || !llmModel.trim()} onPress={() => { void testPersonalAiConnection(); }} />
                 <Button accessibilityLabel="개인 AI 설정 저장" title={personalAiPendingAction === "save" ? "설정 저장 중" : "개인 AI 설정 저장"} disabled={Boolean(personalAiPendingAction) || !llmProvider || !llmModel.trim()} onPress={() => { void savePersonalAiConfig(); }} />
                 {personalAiError ? <Text accessibilityRole="alert" accessibilityLabel="개인 AI 요청을 처리하지 못했습니다." style={styles.error}>{personalAiError}</Text> : null}
+                <Button accessibilityLabel="로그아웃" title="로그아웃" onPress={() => clearSession("로그아웃되었습니다.")} />
               </View>
             ) : null}
-
-            <View style={styles.surfaceCard}>
-              <Text style={styles.surfaceKicker}>빠른 이동</Text>
-              <Text style={styles.surfaceTitle}>모바일 주요 업무 탭</Text>
-              <View style={styles.mobileTabRow}>
-                {[
-                  { id: "home", label: "홈" },
-                  { id: "mail", label: "메일" },
-                  { id: "approval", label: "결재" },
-                  { id: "chat", label: "메신저" },
-                  { id: "calendar", label: "일정" },
-                  { id: "files", label: "파일" },
-                  { id: "more", label: "더보기" },
-                ].map((item) => (
-                  <Text
-                    key={item.id}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${item.label} 빠른 이동`}
-                    accessibilityHint="선택한 업무 탭으로 이동합니다."
-                    onPress={() => handleTabPress(item.id as MobileTab)}
-                    style={[styles.mobileTab, activeTab === item.id ? styles.mobileTabActive : styles.mobileTabIdle]}
-                  >
-                    {item.label}
-                  </Text>
-                ))}
-              </View>
-              <Text style={styles.surfaceHint}>정책 본문은 메인에 두지 않고 {uiContract.helpText} 경로만 제공합니다.</Text>
-              {activeTabError ? <Text style={styles.error}>{activeTabError}</Text> : null}
-            </View>
 
             {activeTab === "home" ? (
               <View style={styles.surfaceCard}>
@@ -1734,7 +1673,7 @@ export default function App() {
       </ScrollView>
       {me ? (
         <View style={styles.mobileBottomNav}>
-          {[{ id: "home", label: "홈", icon: "home" }, { id: "mail", label: "메일", icon: "mail" }, { id: "approval", label: "결재", icon: "approval" }, { id: "chat", label: "메신저", icon: "chat" }, { id: "calendar", label: "일정", icon: "calendar" }, { id: "files", label: "파일", icon: "files" }, { id: "more", label: "더보기", icon: "more" }].map((item) => (
+          {mobileNavigation.bottom.map((item: { id: string; label: string; icon: IconName }) => (
             <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} accessibilityHint="선택한 업무 탭으로 이동합니다." onPress={() => handleTabPress(item.id as MobileTab)} style={[styles.mobileBottomNavItem, activeTab === item.id ? styles.mobileBottomNavItemActive : null]}>
               <MoaIcon name={item.icon as IconName} color={activeTab === item.id ? "#ffffff" : "#475569"} size={18} />
               <Text style={[styles.mobileBottomNavLabel, activeTab === item.id ? styles.mobileBottomNavLabelActive : null]}>{item.label}</Text>

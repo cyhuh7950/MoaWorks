@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { parse } = require("@babel/parser");
+const { navigationModel } = require("../mobile-ui-design.js");
 
 const appSource = fs.readFileSync(path.resolve(__dirname, "..", "App.tsx"), "utf8");
 const ast = parse(appSource, { sourceType: "module", plugins: ["typescript", "jsx"] });
@@ -230,27 +231,12 @@ test("개인 AI API 키 입력은 값과 분리된 고정 이름·hint·secure �
   assert.ok(attribute(apiKeyInput, "secureTextEntry"), "API-key input remains secure");
 });
 
-test("기존 탭과 더보기 navigation은 네 화면 진입점을 유지한다", () => {
-  const pairs = new Set();
-  walk(ast, (node) => {
-    if (node.type !== "ObjectExpression") return;
-    const values = {};
-    for (const property of node.properties) {
-      if (property.type === "ObjectProperty" && property.key.type === "Identifier" && property.value.type === "StringLiteral") {
-        values[property.key.name] = property.value.value;
-      }
-    }
-    if (values.id && values.label) pairs.add(`${values.id}:${values.label}`);
-  });
+test("정본 하단 탭과 더보기 navigation은 접근 가능한 진입점을 유지한다", () => {
+  const navigation = navigationModel();
+  const pairs = new Set([...navigation.bottom, ...navigation.more].map(({ id, label }) => `${id}:${label}`));
   for (const pair of ["calendar:일정", "directory:주소록", "ai:AI 채팅", "search:업무 검색", "more:더보기"]) {
     assert.ok(pairs.has(pair), `${pair} navigation remains reachable`);
   }
-
-  const mainTab = elements(ast, "Text").find((element) => source(attribute(element, "onPress")).includes("handleTabPress(item.id"));
-  assert.ok(mainTab, "quick tab control calls handleTabPress");
-  assert.equal(attributeValue(mainTab, "accessibilityRole"), "button");
-  assert.match(source(attribute(mainTab, "accessibilityLabel")), /item\.label/);
-  assert.ok(attributeValue(mainTab, "accessibilityHint"));
 
   const bottomTab = elements(ast, "Pressable").find((element) => source(attribute(element, "onPress")).includes("handleTabPress(item.id"));
   assert.ok(bottomTab, "bottom tab control calls handleTabPress");
