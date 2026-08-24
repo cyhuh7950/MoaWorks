@@ -29,3 +29,10 @@ The smoke-script `nowIso` failure prevents the wrapper's successful production-b
 - GREEN: `npm run bundle` exited 0 and produced `STATUS=success`, `BUNDLE=MoaWorks-Mobile-0.1.0-android-production.bundle`, and SHA-256 `a24d6fe1dff3919148a6d3856f3270ab771121ac4a2e1470a363ca23441cc39d` in its evidence log.
 - Regression: complete `npm test` passed 60/60; smoke, Android wrapper, and auth-session syntax checks passed; `git diff --check` passed.
 - Android release: `npm run build:android` reached Gradle `:app:createBundleReleaseJsAndAssets`; a release APK exists at `android/app/build/outputs/apk/release/app-release.apk` (59,169,514 bytes, timestamp 2026-08-24 02:20:35 UTC). The command executor did not return a final exit line, so the release build is recorded as APK-observed rather than a verified successful exit. Device launch was not run.
+
+## Rework 2 — stray JSX text
+
+- RED: changed the test to parse the original TSX with `@babel/parser` and traverse the AST. It correctly failed with the exact external `JSXText` value `) : null}`; the earlier Babel-transform AST would have hidden JSX nodes and was not used as proof.
+- GREEN: removed the stray quick-navigation conditional fragment. The AST traversal now finds no non-whitespace `JSXText` outside React Native `<Text>` components.
+- Calendar: removed the `주간회의` placeholder. The calendar tab and home shell retain explicit empty states; no calendar fixture or API was added.
+- Regression: `npm test` passed 61/61, `APP_BABEL_AST_PARSE=success`, smoke/wrapper/auth JS checks passed, and `npm run bundle` produced SHA-256 `4d11d585b029d0336f6791f077b2cdb3869e5da2f7ee3644728bec8c17ecc972`.

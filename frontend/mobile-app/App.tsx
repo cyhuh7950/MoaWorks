@@ -990,8 +990,7 @@ export default function App() {
               </View>
               <Text style={styles.surfaceHint}>정책 본문은 메인에 두지 않고 {uiContract.helpText} 경로만 제공합니다.</Text>
               {activeTabError ? <Text style={styles.error}>{activeTabError}</Text> : null}
-              </View>
-            ) : null}
+            </View>
 
             {activeTab === "home" ? (
               <View style={styles.surfaceCard}>
@@ -1017,9 +1016,8 @@ export default function App() {
                 <View style={styles.homeDetailGrid}>
                   <View style={styles.homeDetailCard}>
                     <Text style={styles.listKicker}>오늘 일정</Text>
-                    <Text style={styles.listTitle}>주간회의</Text>
-                    <Text style={styles.listBody}>오늘 · 10:00 · 회의실 A</Text>
-                    <Text style={styles.listBody}>일정 메뉴에서 월간 달력과 상세 내용을 확인하세요.</Text>
+                    <Text style={styles.emptyState}>표시할 일정이 없습니다.</Text>
+                    <Text style={styles.listBody}>일정 메뉴에서 연결 상태와 상세 내용을 확인하세요.</Text>
                   </View>
                   <View style={styles.homeDetailCard}>
                     <Text style={styles.listKicker}>최근 대화</Text>

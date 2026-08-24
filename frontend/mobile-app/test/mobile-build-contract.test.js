@@ -56,6 +56,23 @@ test("App TSX parses with the production React Native Babel preset", () => {
   assert.equal(parse.status, 0, parse.stderr);
 });
 
+test("App JSX has no non-whitespace raw text outside React Native Text", () => {
+  const { parse } = require("@babel/parser");
+  const ast = parse(appSource, { sourceType: "module", plugins: ["typescript", "jsx"] });
+  const violations = [];
+  const walk = (node, insideText = false) => {
+    if (!node || typeof node !== "object") return;
+    if (node.type === "JSXText" && node.value.trim() && !insideText) violations.push(node.value.trim());
+    const isText = node.type === "JSXElement" && node.openingElement?.name?.name === "Text";
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) value.forEach((child) => walk(child, insideText || isText));
+      else if (value && typeof value === "object") walk(value, insideText || isText);
+    }
+  };
+  walk(ast);
+  assert.deepEqual(violations, []);
+});
+
 test("packager contract names an internal release APK and writes a SHA-256 manifest", () => {
   const packagePath = path.join(root, "scripts", "mobile-package-android.js");
   assert.equal(fs.existsSync(packagePath), true);
