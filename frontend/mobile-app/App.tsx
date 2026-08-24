@@ -8,6 +8,7 @@ import { normalizeBusinessSearchText, searchLoadedBusinessSummaries, updateBusin
 
 const { approvalViewModel, buildHomeViewModel, navigationModel } = require("./mobile-ui-design.js");
 const { buildMailSendPayload, mailboxRequestPath, mailboxViewModel } = require("./mail-compose.js");
+const { buildTranslationPayload, messengerViewModel } = require("./messenger-translation.js");
 const mobileNavigation = navigationModel();
 
 type AuthUser = {
@@ -107,6 +108,7 @@ type MessengerRoom = {
   createdAt: string;
   updatedAt: string;
   retentionExpiresAt: string | null;
+  translationLocale: string;
 };
 
 type MessengerMessage = {
@@ -279,6 +281,8 @@ export default function App() {
   const [roomMessages, setRoomMessages] = useState<MessengerMessage[]>([]);
   const [chatDraft, setChatDraft] = useState("");
   const [chatError, setChatError] = useState("");
+  const [chatTranslationPending, setChatTranslationPending] = useState(false);
+  const chatTranslationGateRef = useRef(false);
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
   const [fileError, setFileError] = useState("");
   const [calendars, setCalendars] = useState<WorkspaceCalendar[]>([]);
@@ -344,6 +348,8 @@ export default function App() {
       setApprovalView("progress");
       setSelectedApprovalId("");
       setApprovalComposeOpen(false);
+      setChatTranslationPending(false);
+      chatTranslationGateRef.current = false;
       setMailboxTab("inbox");
       setMailComposeOpen(false);
       setMailComposeForm({ to: "", subject: "", bodyText: "" });
@@ -379,6 +385,8 @@ export default function App() {
       setRoomMessages(nextState.roomMessages);
       setChatDraft(nextState.chatDraft);
       setChatError(nextState.chatError);
+      setChatTranslationPending(nextState.chatTranslationPending);
+      chatTranslationGateRef.current = false;
       setFiles(nextState.files);
       setFileError(nextState.fileError);
       setCalendars(nextState.calendars);
@@ -1042,6 +1050,39 @@ export default function App() {
     }
   }
 
+  async function updateRoomTranslation(localeValue: string) {
+    if (!token || !selectedRoomId || chatTranslationPending || chatTranslationGateRef.current) return;
+    let payload: { translationLocale: string };
+    try {
+      payload = buildTranslationPayload(localeValue);
+    } catch (error) {
+      setChatError(error instanceof Error ? error.message : "번역 언어를 확인해 주세요.");
+      return;
+    }
+    const context = sessionControllerRef.current.capture(token);
+    chatTranslationGateRef.current = true;
+    setChatTranslationPending(true);
+    setChatError("");
+    try {
+      await request(`/messenger/rooms/${selectedRoomId}/translation`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }, context);
+      if (!sessionControllerRef.current.isCurrent(context)) return;
+      setRooms((current) => current.map((room) => room.roomId === selectedRoomId ? { ...room, translationLocale: payload.translationLocale } : room));
+    } catch (error) {
+      if (isSessionInvalidatedError(error)) return;
+      if (!sessionControllerRef.current.isCurrent(context)) return;
+      const nextError = error instanceof Error ? error.message : "번역 언어 변경 실패";
+      setChatError(nextError);
+      setMessage(nextError);
+    } finally {
+      if (sessionControllerRef.current.isCurrent(context)) setChatTranslationPending(false);
+      chatTranslationGateRef.current = false;
+    }
+  }
+
   function handleTabPress(nextTab: MobileTab) {
     setActiveTab(nextTab);
     if (!token) return;
@@ -1231,6 +1272,7 @@ export default function App() {
   });
   const approvalScreen = approvalViewModel({ documents, view: approvalView, selectedId: selectedApprovalId }) as { tabs: string[]; rows: Approval[]; selected: Approval | null };
   const selectedApproval = approvalScreen.selected;
+  const messengerScreen = messengerViewModel({ rooms, selectedRoomId, messages: roomMessages }) as { selectedRoom: MessengerRoom | null; messages: MessengerMessage[]; languageOptions: Array<{ value: string; label: string }> };
   const [approvalView, setApprovalView] = useState<ApprovalView>("progress");
   const [selectedApprovalId, setSelectedApprovalId] = useState("");
   const [approvalComposeOpen, setApprovalComposeOpen] = useState(false);
@@ -1609,48 +1651,31 @@ export default function App() {
             ) : null}
 
             {activeTab === "chat" ? (
-              <View style={styles.surfaceCard}>
-                <Text style={styles.surfaceKicker}>메신저</Text>
-                <Text style={styles.surfaceTitle}>최근 대화 / 고정 채널 / 미확인 메시지</Text>
-                <View style={styles.quickGrid}>
-                  {[
-                    { title: "최근 대화", note: `${rooms.length}개`, tone: styles.quickInk },
-                    { title: "고정 채널", note: rooms[0]?.roomName || "대화방 없음", tone: styles.quickSand },
-                    { title: "미확인 메시지", note: `${rooms.reduce((sum, item) => sum + item.unreadCount, 0)}건`, tone: styles.quickDanger },
-                  ].map((item) => (
-                    <View key={item.title} style={[styles.quickCard, item.tone]}>
-                      <Text style={styles.quickCardTitle}>{item.title}</Text>
-                      <Text style={styles.quickCardNote}>{item.note}</Text>
-                    </View>
-                  ))}
+              <View style={styles.messengerScreen}>
+                <View style={styles.messengerHeader}>
+                  <View style={styles.messengerAvatar}><Text style={styles.messengerAvatarText}>{messengerScreen.selectedRoom?.roomName?.slice(0, 1) || "M"}</Text></View>
+                  <View style={styles.messengerHeaderText}><Text accessibilityRole="header" style={styles.messengerRoomTitle}>{messengerScreen.selectedRoom?.roomName || "메신저"}</Text><Text style={styles.messengerRoomMeta}>{messengerScreen.selectedRoom ? `참여자 ${messengerScreen.selectedRoom.participantIds.length}명` : "대화방을 선택해 주세요"}</Text></View>
+                  <Text style={styles.messengerHeaderIcon}>⌕</Text><Text style={styles.messengerHeaderIcon}>⌕</Text>
                 </View>
-                {rooms.map((item) => (
-                  <View key={item.roomId} style={styles.listCard}>
-                    <Text style={styles.listKicker}>최근 대화</Text>
-                    <Text style={styles.listTitle}>{item.roomName}</Text>
-                    <Text style={styles.listBody}>{item.lastMessage || "최근 메시지 없음"} / 미읽음 {item.unreadCount}</Text>
-                    <View style={styles.mobileTabRow}>
-                      <Text onPress={() => { void openRoom(item.roomId); }} style={[styles.mobileTab, styles.mobileTabIdle]}>열기</Text>
-                    </View>
+                {rooms.length > 1 ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.messengerRoomStrip}>{rooms.map((room) => <Pressable key={room.roomId} accessibilityRole="button" accessibilityLabel={`${room.roomName} 대화방 열기`} onPress={() => { void openRoom(room.roomId); }} style={[styles.messengerRoomChip, messengerScreen.selectedRoom?.roomId === room.roomId ? styles.messengerRoomChipActive : null]}><Text style={styles.messengerRoomChipText}>{room.roomName}</Text>{room.unreadCount > 0 ? <Text style={styles.messengerUnreadBadge}>{room.unreadCount}</Text> : null}</Pressable>)}</ScrollView> : null}
+                {!messengerScreen.selectedRoom ? <View style={styles.messengerEmpty}><Text style={styles.messengerEmptyTitle}>참여 중인 대화방이 없습니다.</Text><Pressable accessibilityRole="button" accessibilityLabel="주소록에서 대화 시작" onPress={() => { setActiveTab("more"); setMoreScreen("directory"); if (token) void loadDirectory(token); }} style={styles.primaryCompactButton}><Text style={styles.primaryCompactButtonText}>주소록에서 대화 시작</Text></Pressable></View> : <>
+                  <View accessibilityLabel="메시지 목록" style={styles.messageCanvas}>
+                    {messengerScreen.messages.map((item) => {
+                      const mine = item.senderUserId === me?.userId;
+                      return <View key={item.messageId} style={[styles.messageGroup, mine ? styles.messageGroupMine : null]}>{!mine ? <Text style={styles.messageSender}>{item.senderUserName}</Text> : null}<View style={[styles.messageBubble, mine ? styles.messageBubbleMine : styles.messageBubbleOther]}><Text style={mine ? styles.messageTextMine : styles.messageTextOther}>{item.body}</Text></View><Text style={styles.messageTime}>{formatStamp(item.createdAt).slice(-5)}</Text></View>;
+                    })}
+                    {messengerScreen.messages.length === 0 ? <Text style={styles.messengerEmptyMessages}>아직 메시지가 없습니다.</Text> : null}
                   </View>
-                ))}
-                {roomMessages.map((item) => (
-                  <View key={item.messageId} style={styles.listCard}>
-                    <Text style={styles.listKicker}>{item.senderUserName}</Text>
-                    <Text style={styles.listTitle}>{formatStamp(item.createdAt)}</Text>
-                    <Text style={styles.listBody}>{item.body}</Text>
+                  <View accessibilityLabel="대화 번역 언어" style={styles.translationControl}>
+                    <Pressable accessibilityRole="button" accessibilityLabel="한국어 번역 선택" disabled={chatTranslationPending} onPress={() => { void updateRoomTranslation("ko"); }} style={styles.translationOption}><Text style={[styles.translationOptionText, messengerScreen.selectedRoom?.translationLocale === "ko" ? styles.translationOptionTextActive : null]}>한국어</Text></Pressable>
+                    <Text style={styles.translationSwap}>↔</Text>
+                    <Pressable accessibilityRole="button" accessibilityLabel="English 번역 선택" disabled={chatTranslationPending} onPress={() => { void updateRoomTranslation("en"); }} style={styles.translationOption}><Text style={[styles.translationOptionText, messengerScreen.selectedRoom?.translationLocale === "en" ? styles.translationOptionTextActive : null]}>English</Text></Pressable>
                   </View>
-                ))}
-                <TextInput
-                  style={[styles.input, styles.textarea]}
-                  value={chatDraft}
-                  onChangeText={setChatDraft}
-                  placeholder="메시지를 입력하세요."
-                  multiline
-                />
-                <View style={styles.buttonBlock}>
-                  <Button title="메시지 전송" onPress={() => { void sendChatMessage(); }} />
-                </View>
+                  <View style={styles.messengerInputBar}>
+                    <TextInput accessibilityLabel="메신저 메시지" style={styles.messengerInput} value={chatDraft} onChangeText={setChatDraft} placeholder="메시지를 입력하세요." returnKeyType="send" onSubmitEditing={() => { void sendChatMessage(); }} />
+                    <Pressable accessibilityRole="button" accessibilityLabel="메시지 전송" onPress={() => { void sendChatMessage(); }} style={styles.messengerSendButton}><Text style={styles.messengerSendText}>➤</Text></Pressable>
+                  </View>
+                </>}
                 {chatError ? <Text style={styles.error}>{chatError}</Text> : null}
               </View>
             ) : null}
@@ -2746,6 +2771,205 @@ const styles = StyleSheet.create({
   approvalPrimaryActionText: {
     color: "#ffffff",
     fontSize: 11,
+    fontWeight: "800",
+  },
+  messengerScreen: {
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#dce5ec",
+    overflow: "hidden",
+  },
+  messengerHeader: {
+    minHeight: 58,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#e2e8f0",
+  },
+  messengerAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#0f766e",
+  },
+  messengerAvatarText: {
+    color: "#ffffff",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  messengerHeaderText: {
+    flex: 1,
+  },
+  messengerRoomTitle: {
+    color: "#0f172a",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  messengerRoomMeta: {
+    marginTop: 2,
+    color: "#64748b",
+    fontSize: 9,
+  },
+  messengerHeaderIcon: {
+    color: "#0f172a",
+    fontSize: 17,
+    fontWeight: "700",
+  },
+  messengerRoomStrip: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    gap: 6,
+  },
+  messengerRoomChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    backgroundColor: "#f1f5f9",
+  },
+  messengerRoomChipActive: {
+    backgroundColor: "#ccfbf1",
+  },
+  messengerRoomChipText: {
+    color: "#334155",
+    fontSize: 9,
+    fontWeight: "700",
+  },
+  messengerUnreadBadge: {
+    minWidth: 16,
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    backgroundColor: "#ef4444",
+    color: "#ffffff",
+    fontSize: 8,
+    textAlign: "center",
+  },
+  messengerEmpty: {
+    minHeight: 220,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    padding: 20,
+  },
+  messengerEmptyTitle: {
+    color: "#475569",
+    fontSize: 11,
+  },
+  messageCanvas: {
+    minHeight: 260,
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+    backgroundColor: "#fbfdff",
+    gap: 10,
+  },
+  messageGroup: {
+    alignItems: "flex-start",
+  },
+  messageGroupMine: {
+    alignItems: "flex-end",
+  },
+  messageSender: {
+    marginBottom: 4,
+    color: "#475569",
+    fontSize: 9,
+    fontWeight: "700",
+  },
+  messageBubble: {
+    maxWidth: "78%",
+    borderRadius: 12,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+  },
+  messageBubbleMine: {
+    borderBottomRightRadius: 3,
+    backgroundColor: "#0f9f9a",
+  },
+  messageBubbleOther: {
+    borderBottomLeftRadius: 3,
+    backgroundColor: "#eef2f7",
+  },
+  messageTextMine: {
+    color: "#ffffff",
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  messageTextOther: {
+    color: "#334155",
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  messageTime: {
+    marginTop: 3,
+    color: "#94a3b8",
+    fontSize: 8,
+  },
+  messengerEmptyMessages: {
+    color: "#94a3b8",
+    fontSize: 10,
+    textAlign: "center",
+    paddingVertical: 60,
+  },
+  translationControl: {
+    marginHorizontal: 12,
+    marginVertical: 9,
+    minHeight: 34,
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#0f9f9a",
+  },
+  translationOption: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: 7,
+  },
+  translationOptionText: {
+    color: "#475569",
+    fontSize: 10,
+  },
+  translationOptionTextActive: {
+    color: "#0f766e",
+    fontWeight: "800",
+  },
+  translationSwap: {
+    color: "#0f766e",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  messengerInputBar: {
+    marginHorizontal: 12,
+    marginBottom: 12,
+    minHeight: 42,
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+    backgroundColor: "#ffffff",
+  },
+  messengerInput: {
+    flex: 1,
+    paddingHorizontal: 11,
+    color: "#0f172a",
+    fontSize: 11,
+  },
+  messengerSendButton: {
+    width: 40,
+    height: 40,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  messengerSendText: {
+    color: "#0f766e",
+    fontSize: 16,
     fontWeight: "800",
   },
   statusPill: {
