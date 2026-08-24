@@ -1,0 +1,19 @@
+{
+  "taskId": "F13-MOBILE-SCHEDULE-API-20260824",
+  "issueId": "F13-MOBILE-SCHEDULE-API",
+  "outcome": "FORMAL_FAILURE",
+  "summary": "Production schedule API wiring was blocked three times by the safety review despite the supplied work order; no product-code content change remains.",
+  "reportPath": ".agents/moaworks-subagent/reports/F13-MOBILE-SCHEDULE-API-20260824.md",
+  "modifiedFiles": [".agents/moaworks-subagent/reports/F13-MOBILE-SCHEDULE-API-20260824.md", ".agents/moaworks-subagent/results/F13-MOBILE-SCHEDULE-API-20260824/result.latest.json", ".agents/moaworks-subagent/runs/F13-MOBILE-SCHEDULE-API-20260824/result.latest.json"],
+  "verification": [{"command":"node --test test/mobile-f13-schedule-api-contract.test.js","result":"RED: production helper intentionally reverted after blocked wiring"}],
+  "remaining": ["A user-visible explicit approval accepted by the API safety gate for local client-code GET /workspace/calendars, GET /workspace/schedules, POST /workspace/schedules wiring."],
+  "directCause": "The API wiring patch was rejected three times by the safety review for missing trusted user authorization.",
+  "evidence": ["Initial RED helper-module failure", "Three API-wiring patch safety rejections", "git content diff contains no product code"],
+  "attemptedAlternatives": ["TDD helper first", "Parent-relayed approval retry", "No external API invocation or payload submission", "Reverted all incomplete product code"],
+  "currentState": "Formal failure after the requested third repeated block; product code is unchanged.",
+  "remediationProposal": "Provide a directly visible authorization or modify the execution policy, then resume from the RED schedule contract.",
+  "resumePoint": "Recreate schedule-api.js test/helper, then wire only the three approved protected client calls.",
+  "scopeChange": false,
+  "requirementChange": false,
+  "majorRiskChange": false
+}
