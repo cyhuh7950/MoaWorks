@@ -9,7 +9,7 @@ const assertions = [
   ["mail detail sample does not hard-code the legacy local domain", !appSource.includes("ceo@moaworks.local")],
   ["mail detail sample derives its sender domain from the UI contract", /ceo@\$\{uiContract\.company\.domain\}/.test(appSource)],
   ["production fallback derives the domain from the current host", /function resolveDefaultCompanyDomain\(\)/.test(appSource) && /domain: resolveDefaultCompanyDomain\(\)/.test(appSource)],
-  ["production host fallback selects the sinsan domain", /endsWith\("\.moaworks\.sinsan\.kr"\)/.test(appSource) && /return "moaworks\.sinsan\.kr"/.test(appSource)],
+  ["production host fallback selects the sinsan domain", /endsWith\("\.moaworks\.sinsan\.kr"\)/.test(appSource) && /\? "moaworks\.sinsan\.kr" :/.test(appSource)],
 ];
 
 const failures = assertions.filter(([, passed]) => !passed).map(([name]) => name);
