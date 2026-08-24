@@ -6,9 +6,27 @@ function dateKey(value, timezone) {
   return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
+function monthKeyForDate(value, timezone) {
+  return dateKey(value, timezone).slice(0, 7);
+}
+
+function monthParts(month) {
+  if (typeof month === "string") {
+    const matched = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(month);
+    if (!matched) throw new Error("유효한 YYYY-MM 월 key가 필요합니다.");
+    return { year: Number(matched[1]), monthIndex: Number(matched[2]) - 1 };
+  }
+  return { year: month.getUTCFullYear(), monthIndex: month.getUTCMonth() };
+}
+
+function shiftMonthKey(monthKey, amount) {
+  const { year, monthIndex } = monthParts(monthKey);
+  const anchor = new Date(Date.UTC(year, monthIndex + amount, 1));
+  return `${anchor.getUTCFullYear()}-${String(anchor.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
 function buildMonthGrid(month) {
-  const year = month.getUTCFullYear();
-  const monthIndex = month.getUTCMonth();
+  const { year, monthIndex } = monthParts(month);
   const firstDay = new Date(Date.UTC(year, monthIndex, 1)).getUTCDay();
   const days = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
   return Array.from({ length: firstDay + days }, (_, index) => {
@@ -39,5 +57,14 @@ function buildSchedulePayload(input) {
 
 function scheduleItems(body) { return Array.isArray(body?.items) ? body.items : []; }
 function scheduleErrorMessage(error) { const detail = error?.detail; return Array.isArray(detail) ? detail.map((item) => item?.msg).filter(Boolean).join(" ") || "일정 입력값을 확인하세요." : error?.message || "일정 요청 실패"; }
+function createSubmissionGate() {
+  let locked = false;
+  return {
+    tryEnter() { if (locked) return false; locked = true; return true; },
+    release() { locked = false; },
+    reset() { locked = false; },
+    isLocked() { return locked; },
+  };
+}
 
-module.exports = { buildMonthGrid, filterSchedulesForMonth, selectDefaultCalendar, buildSchedulePayload, dateKey, scheduleItems, scheduleErrorMessage };
+module.exports = { buildMonthGrid, filterSchedulesForMonth, selectDefaultCalendar, buildSchedulePayload, dateKey, monthKeyForDate, shiftMonthKey, scheduleItems, scheduleErrorMessage, createSubmissionGate };

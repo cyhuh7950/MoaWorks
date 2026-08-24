@@ -53,6 +53,10 @@ function createState() {
     chatError: "stale-chat-error",
     files: [{ fileId: "stale-file" }],
     fileError: "stale-file-error",
+    calendars: [{ id: "stale-calendar", isDefault: true }],
+    schedules: [{ id: "stale-schedule", title: "stale" }],
+    scheduleError: "stale-schedule-error",
+    scheduleForm: { title: "stale", startsAt: "2026-08-01T09:00:00+09:00", endsAt: "2026-08-01T10:00:00+09:00", description: "stale", location: "stale" },
     actionReason: "stale-reason",
     llmProvider: "personal-provider",
     llmApiKey: "not-recorded",
@@ -332,7 +336,7 @@ test("새 세션이 시작되면 이전 로그인 초기 요청의 성공과 실
   }
 });
 
-test("App은 중앙 reset과 mail/room 보호 응답에 production adapter를 연결한다", () => {
+test("App은 중앙 reset과 mail/room/schedule 보호 응답에 production adapter를 연결한다", () => {
   assert.match(appSource, /createMobileSessionAdapter\(/);
   assert.match(appSource, /function clearSession[\s\S]*?\.clearSession\(nextMessage\)/);
   for (const name of ["loadMail", "loadRooms", "openMail", "openRoom"]) {
@@ -342,4 +346,12 @@ test("App은 중앙 reset과 mail/room 보호 응답에 production adapter를 �
     const body = appSource.slice(start, next === -1 ? appSource.length : next);
     assert.match(body, /applyProtectedResponse\(/, `${name} uses adapter`);
   }
+  assert.match(appSource, /request<\{ owned: WorkspaceCalendar\[\] \}>\("\/workspace\/calendars"/);
+  assert.match(appSource, /request<\{ items: WorkspaceSchedule\[\] \}>\("\/workspace\/schedules"/);
+  assert.match(appSource, /setSchedules\(scheduleItems\(scheduleBody\)\)/);
+  assert.match(appSource, /createSubmissionGate\(\)/);
+  assert.match(appSource, /scheduleSubmissionGateRef\.current\.reset\(\)/);
+  assert.match(appSource, /onLoginCommitted\([\s\S]*?scheduleSubmissionGateRef\.current\.reset\(\)/);
+  assert.match(appSource, /if \(!scheduleSubmissionGateRef\.current\.tryEnter\(\)\) return;/);
+  assert.match(appSource, /sessionControllerRef\.current\.isCurrent\(context\).*scheduleSubmissionGateRef\.current\.release\(\)/s);
 });

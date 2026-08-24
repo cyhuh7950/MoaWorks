@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AppState, Button, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { createMobileSessionAdapter, isSessionInvalidatedError, requestJson } from "./auth-session";
-import { buildMonthGrid, buildSchedulePayload, filterSchedulesForMonth, selectDefaultCalendar, scheduleErrorMessage, scheduleItems, dateKey } from "./schedule-api";
+import { buildMonthGrid, buildSchedulePayload, createSubmissionGate, filterSchedulesForMonth, monthKeyForDate, selectDefaultCalendar, scheduleErrorMessage, scheduleItems, shiftMonthKey, dateKey } from "./schedule-api";
 
 type AuthUser = {
   userId: string;
@@ -252,9 +252,9 @@ export default function App() {
   const [schedules, setSchedules] = useState<WorkspaceSchedule[]>([]);
   const [scheduleError, setScheduleError] = useState("");
   const [scheduleForm, setScheduleForm] = useState<ScheduleForm>({ title: "", startsAt: "", endsAt: "", description: "", location: "" });
-  const [scheduleMonth, setScheduleMonth] = useState(() => new Date());
+  const [scheduleMonthKey, setScheduleMonthKey] = useState(() => monthKeyForDate(new Date(), timezone));
   const [scheduleSaving, setScheduleSaving] = useState(false);
-  const scheduleSavingRef = useRef(false);
+  const scheduleSubmissionGateRef = useRef(createSubmissionGate());
   const [moreScreen, setMoreScreen] = useState<Exclude<ScreenKey, MobileTab>>("directory");
   const [directoryQuery, setDirectoryQuery] = useState("");
   const [screenDensity, setScreenDensity] = useState<"standard" | "compact">("standard");
@@ -267,6 +267,8 @@ export default function App() {
     onLoginCommitted({ token: nextToken, user: nextUser }) {
       setToken(nextToken);
       setMe(nextUser);
+      scheduleSubmissionGateRef.current.reset();
+      setScheduleSaving(false);
     },
     onSessionReset(nextState) {
       setToken(nextState.token);
@@ -295,7 +297,7 @@ export default function App() {
       setSchedules(nextState.schedules);
       setScheduleError(nextState.scheduleError);
       setScheduleForm(nextState.scheduleForm);
-      scheduleSavingRef.current = false;
+      scheduleSubmissionGateRef.current.reset();
       setScheduleSaving(false);
       setActionReason(nextState.actionReason);
       setLlmProvider(nextState.llmProvider);
@@ -600,12 +602,11 @@ export default function App() {
   }
 
   async function createSchedule() {
-    if (scheduleSavingRef.current) return;
+    if (!scheduleSubmissionGateRef.current.tryEnter()) return;
     const context = sessionControllerRef.current.capture(token);
     try {
       const calendar = selectDefaultCalendar({ owned: calendars });
       const payload = buildSchedulePayload({ ...scheduleForm, calendarId: calendar?.id || "", timezone });
-      scheduleSavingRef.current = true;
       setScheduleSaving(true);
       await request("/workspace/schedules", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(payload) }, context);
       if (!sessionControllerRef.current.isCurrent(context)) return;
@@ -614,7 +615,7 @@ export default function App() {
     } catch (error) {
       if (!isSessionInvalidatedError(error) && sessionControllerRef.current.isCurrent(context)) setScheduleError(scheduleErrorMessage(error));
     } finally {
-      if (sessionControllerRef.current.isCurrent(context)) { scheduleSavingRef.current = false; setScheduleSaving(false); }
+      if (sessionControllerRef.current.isCurrent(context)) { scheduleSubmissionGateRef.current.release(); setScheduleSaving(false); }
     }
   }
 
@@ -985,9 +986,9 @@ export default function App() {
               <View style={styles.surfaceCard}>
                 <Text style={styles.surfaceKicker}>일정</Text>
                 <Text style={styles.surfaceTitle}>오늘의 일정</Text>
-                <View style={styles.buttonPair}><Button title="이전 달" onPress={() => setScheduleMonth((value) => new Date(value.getFullYear(), value.getMonth() - 1, 1))} /><Button title="다음 달" onPress={() => setScheduleMonth((value) => new Date(value.getFullYear(), value.getMonth() + 1, 1))} /></View>
-                <Text style={styles.surfaceHint}>{`${scheduleMonth.getFullYear()}년 ${scheduleMonth.getMonth() + 1}월 · ${timezone}`}</Text>
-                <View style={styles.calendarGrid}>{buildMonthGrid(new Date(Date.UTC(scheduleMonth.getFullYear(), scheduleMonth.getMonth(), 1))).map((cell, index) => <View key={`${cell.dateKey}-${index}`} style={styles.calendarCell}><Text style={styles.calendarDate}>{cell.day || ""}</Text>{filterSchedulesForMonth(schedules, `${scheduleMonth.getFullYear()}-${String(scheduleMonth.getMonth() + 1).padStart(2, "0")}`, timezone).filter((item) => dateKey(item.starts_at, timezone) === cell.dateKey).slice(0, 2).map((item) => <Text key={item.id} style={styles.calendarEvent}>{item.title}</Text>)}</View>)}</View>
+                <View style={styles.buttonPair}><Button title="이전 달" onPress={() => setScheduleMonthKey((value) => shiftMonthKey(value, -1))} /><Button title="다음 달" onPress={() => setScheduleMonthKey((value) => shiftMonthKey(value, 1))} /></View>
+                <Text style={styles.surfaceHint}>{`${Number(scheduleMonthKey.slice(0, 4))}년 ${Number(scheduleMonthKey.slice(5, 7))}월 · ${timezone}`}</Text>
+                <View style={styles.calendarGrid}>{buildMonthGrid(scheduleMonthKey).map((cell, index) => <View key={`${cell.dateKey}-${index}`} style={styles.calendarCell}><Text style={styles.calendarDate}>{cell.day || ""}</Text>{filterSchedulesForMonth(schedules, scheduleMonthKey, timezone).filter((item) => dateKey(item.starts_at, timezone) === cell.dateKey).slice(0, 2).map((item) => <Text key={item.id} style={styles.calendarEvent}>{item.title}</Text>)}</View>)}</View>
                 {schedules.length === 0 ? <Text style={styles.emptyState}>표시할 일정이 없습니다.</Text> : null}
                 <TextInput accessibilityLabel="일정 제목" style={styles.input} value={scheduleForm.title} onChangeText={(title) => setScheduleForm((current) => ({ ...current, title }))} placeholder="일정 제목" />
                 <TextInput accessibilityLabel="일정 시작 시간" style={styles.input} value={scheduleForm.startsAt} onChangeText={(startsAt) => setScheduleForm((current) => ({ ...current, startsAt }))} placeholder="2026-08-24T09:00:00+09:00" />
