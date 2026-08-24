@@ -31,6 +31,16 @@ test("Android wrapper has no fixed Windows username and supports conventional JD
   assert.match(supportSource, /LOCALAPPDATA|Program Files/);
 });
 
+test("bundle smoke remains a single hash-and-log flow without stale phase helpers", () => {
+  const check = spawnSync(process.execPath, ["--check", path.join(root, "scripts", "mobile-app-build-smoke.js")], {
+    encoding: "utf8",
+  });
+  assert.equal(check.status, 0, check.stderr);
+  assert.match(smokeSource, /sha256File\(bundlePath\)/);
+  assert.match(smokeSource, /STATUS=success/);
+  assert.doesNotMatch(smokeSource, /\b(?:nowIso|logLines|runId|safeSha256|findExecutable|runCommand|reportPath)\b/);
+});
+
 test("Android wrapper is executable JavaScript before any Android environment is required", () => {
   const check = spawnSync(process.execPath, ["--check", path.join(root, "scripts", "mobile-android-command.js")], {
     encoding: "utf8",
