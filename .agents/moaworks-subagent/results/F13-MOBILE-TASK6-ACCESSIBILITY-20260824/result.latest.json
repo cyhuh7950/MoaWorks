@@ -1,0 +1,60 @@
+{
+  "taskId": "F13-MOBILE-TASK6-ACCESSIBILITY-20260824",
+  "issueId": "F13-MOBILE-TASK6-ACCESSIBILITY",
+  "outcome": "SUCCESS",
+  "summary": "일정·주소록·개인 AI·업무 검색의 접근성 AST 계약과 최소 App 속성 보완을 완료했고 focused 38/38, full 100/100, bundle, Android release/install/cold launch, 비인증 accessibility tree 및 독립 review 0/0/0을 확인했다.",
+  "reportPath": ".agents/moaworks-subagent/reports/F13-MOBILE-TASK6-ACCESSIBILITY-20260824.md",
+  "modifiedFiles": [
+    "docs/superpowers/plans/2026-08-24-mobile-task6-accessibility-plan.md",
+    "docs/workorders/f13-mobile-task6-accessibility-2026-08-24.md",
+    "docs/workorders/f13-mobile-task6-accessibility-worker-prompt-2026-08-24.md",
+    "frontend/mobile-app/App.tsx",
+    "frontend/mobile-app/test/mobile-f13-accessibility-contract.test.js",
+    "frontend/mobile-app/test/mobile-f13-directory-api-contract.test.js",
+    ".agents/moaworks-subagent/reports/F13-MOBILE-TASK6-ACCESSIBILITY-20260824.md",
+    ".agents/moaworks-subagent/results/F13-MOBILE-TASK6-ACCESSIBILITY-20260824/result.latest.json",
+    "docs/work-progress/moaworks-completion-v2.1/stage-04-f12-f14/progress.jsonl",
+    "docs/work-progress/mobile-android-2026-08-21-update.jsonl"
+  ],
+  "verification": [
+    { "name": "baseline", "command": "npm test", "result": "PASS 93/93" },
+    { "name": "accessibility RED", "command": "node --test test\\mobile-f13-accessibility-contract.test.js", "result": "expected FAIL 1/5 pass, 4/5 fail; header/name/live/alert missing" },
+    { "name": "focused", "command": "node --test accessibility/schedule/directory/personal-ai/business-search contracts", "result": "PASS 38/38" },
+    { "name": "full", "command": "npm test", "result": "PASS 100/100" },
+    { "name": "bundle", "command": "npm run bundle", "result": "PASS SHA256 7ac6d4e25cdd3219788e6fe40c1ff7b0aa664afe680814b29cd88a0f41d8bea1" },
+    { "name": "Android release", "command": "npm run build:android", "result": "BUILD SUCCESSFUL in 17s; 64 tasks" },
+    { "name": "APK", "command": "Get-FileHash app-release.apk", "result": "59185994 bytes; SHA256 B1A9C68738959DD57E6440FB4625680365E06055A6513F678C39488D4FAD7802" },
+    { "name": "emulator", "command": "adb install -r; am start -W -S", "result": "Success; Status ok; LaunchState COLD; TotalTime 1817ms" },
+    { "name": "accessibility tree", "command": "adb shell uiautomator dump", "result": "PASS unauthenticated login tree only" },
+    { "name": "independent review", "result": "Critical 0 Important 0 Minor 0 after one rework round" }
+  ],
+  "remaining": [
+    "TalkBack 미실행",
+    "VoiceOver 미실행",
+    "authenticated calendar/directory/personal-AI/business-search device interaction 미실행",
+    "physical Android device 및 iOS 미실행",
+    "live account/API/DB/Provider 및 deploy 미실행"
+  ],
+  "directCause": null,
+  "evidence": [
+    "focused 38/38",
+    "full 100/100",
+    "bundle SHA256 7ac6d4e25cdd3219788e6fe40c1ff7b0aa664afe680814b29cd88a0f41d8bea1",
+    "APK SHA256 B1A9C68738959DD57E6440FB4625680365E06055A6513F678C39488D4FAD7802",
+    "emulator install Success and COLD launch",
+    "independent review 0/0/0",
+    "actual cumulative diff/result/stage/mobile 10/10 parity"
+  ],
+  "attemptedAlternatives": [
+    "rg.exe ACL 거부 후 PowerShell read-only 조회 사용",
+    "bundle sandbox EPERM 후 승인된 동일 command 재실행"
+  ],
+  "currentState": "implementation and developer verification complete; main independent acceptance required",
+  "remediationProposal": null,
+  "resumePoint": null,
+  "errorCount": 6,
+  "repeatedRootCauseCount": 2,
+  "scopeChange": false,
+  "requirementChange": false,
+  "majorRiskChange": false
+}

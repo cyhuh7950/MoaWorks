@@ -42,7 +42,7 @@ test("App은 directory API/reset/메일/비활성 전화/direct room production 
   assert.match(appSource, /setDirectoryUsers\(readDirectoryUsers\(body\)\)/);
   assert.match(appSource, /directoryActionGateRef\.current\.reset\(\)/);
   assert.match(appSource, /Linking\.openURL\(url\)/);
-  assert.match(appSource, /accessibilityLabel="전화번호 미제공"/);
+  assert.match(appSource, /accessibilityLabel=\{`\$\{member\.name\} 전화번호 미제공`\}/);
   assert.match(appSource, /disabled=\{true\}/);
   assert.match(appSource, /request<\{ roomId: string \}>\("\/messenger\/rooms", \{ method: "POST"/);
   assert.match(appSource, /directRoomPayload\(member\)/);
