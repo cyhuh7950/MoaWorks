@@ -7,6 +7,7 @@ import { buildPersonalAiChatPayload, buildPersonalAiConfigPayload, createPersona
 import { normalizeBusinessSearchText, searchLoadedBusinessSummaries, updateBusinessSearchWarnings } from "./business-search";
 
 const { buildHomeViewModel, navigationModel } = require("./mobile-ui-design.js");
+const { buildMailSendPayload, mailboxRequestPath, mailboxViewModel } = require("./mail-compose.js");
 const mobileNavigation = navigationModel();
 
 type AuthUser = {
@@ -148,6 +149,7 @@ type BusinessSearchResult = {
 type AppLocale = "ko-KR" | "en-US" | "ja-JP" | "zh-CN" | "es-ES" | "fr-FR" | "de-DE";
 type MobileTab = "home" | "mail" | "approval" | "chat" | "calendar" | "more" | "files";
 type ScreenKey = MobileTab | "directory" | "ai" | "search" | "settings";
+type MailboxTab = "inbox" | "starred" | "sent" | "drafts";
 type PersonalAiProviderOption = { provider: string; label: string; apiKeyRequired: boolean };
 type PersonalAiConnectionStatus = "unconfigured" | "untested" | "ready" | "error";
 type PersonalAiConfig = { provider: string; model: string; apiKeyConfigured: boolean; connectionStatus: PersonalAiConnectionStatus; lastTestCode: string | null; lastTestedAt: string | null };
@@ -266,6 +268,11 @@ export default function App() {
   const [mailError, setMailError] = useState("");
   const [mailQuery, setMailQuery] = useState("");
   const [mailFilter, setMailFilter] = useState<"all" | "unread" | "starred">("all");
+  const [mailboxTab, setMailboxTab] = useState<MailboxTab>("inbox");
+  const [mailComposeOpen, setMailComposeOpen] = useState(false);
+  const [mailComposeForm, setMailComposeForm] = useState({ to: "", subject: "", bodyText: "" });
+  const [mailSendPending, setMailSendPending] = useState(false);
+  const mailSendGateRef = useRef(false);
   const [rooms, setRooms] = useState<MessengerRoom[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState("");
   const [roomMessages, setRoomMessages] = useState<MessengerMessage[]>([]);
@@ -333,6 +340,11 @@ export default function App() {
       setBusinessSearchQuery("");
       setBusinessSearchSelectedResultId("");
       setBusinessSearchWarnings([]);
+      setMailboxTab("inbox");
+      setMailComposeOpen(false);
+      setMailComposeForm({ to: "", subject: "", bodyText: "" });
+      setMailSendPending(false);
+      mailSendGateRef.current = false;
     },
     onSessionReset(nextState) {
       setToken(nextState.token);
@@ -350,6 +362,11 @@ export default function App() {
       setMailError(nextState.mailError);
       setMailQuery(nextState.mailQuery);
       setMailFilter(nextState.mailFilter);
+      setMailboxTab("inbox");
+      setMailComposeOpen(false);
+      setMailComposeForm({ to: "", subject: "", bodyText: "" });
+      setMailSendPending(false);
+      mailSendGateRef.current = false;
       setRooms(nextState.rooms);
       setSelectedRoomId(nextState.selectedRoomId);
       setRoomMessages(nextState.roomMessages);
@@ -652,10 +669,10 @@ export default function App() {
     }
   }
 
-  async function loadMail(activeToken: string = token, preferredMailId?: string, context = sessionControllerRef.current.capture(activeToken)) {
+  async function loadMail(activeToken: string = token, preferredMailId?: string, context = sessionControllerRef.current.capture(activeToken), mailbox: MailboxTab = mailboxTab) {
     if (!activeToken) return;
     try {
-      const inboxResponse = await applyProtectedResponse(context, () => request<{ mails: MailSummary[] }>("/mail/inbox", {
+      const inboxResponse = await applyProtectedResponse(context, () => request<{ mails: MailSummary[] }>(mailboxRequestPath(mailbox), {
         headers: { Authorization: `Bearer ${activeToken}` },
       }, context), (body) => {
         setMailItems(body.mails ?? []);
@@ -665,7 +682,8 @@ export default function App() {
       const mails = inbox.mails ?? [];
       const targetMailId = preferredMailId || selectedMailId || mails[0]?.mailId || "";
       if (targetMailId) {
-        const detailResponse = await applyProtectedResponse(context, () => request<MailDetail>(`/mail/${targetMailId}`, {
+        const detailView = mailbox === "sent" ? "sent" : mailbox === "drafts" ? "draft" : "inbox";
+        const detailResponse = await applyProtectedResponse(context, () => request<MailDetail>(`/mail/${targetMailId}?view=${detailView}`, {
           headers: { Authorization: `Bearer ${activeToken}` },
         }, context), (detail) => {
           setSelectedMailId(targetMailId);
@@ -693,17 +711,22 @@ export default function App() {
     if (!activeToken) return;
     const context = sessionControllerRef.current.capture(activeToken);
     try {
-      const readResponse = await applyProtectedResponse(context, () => request(`/mail/${mailId}/read`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${activeToken}` },
-      }, context), () => {});
-      if (!readResponse.applied) return;
-      const detailResponse = await applyProtectedResponse(context, () => request<MailDetail>(`/mail/${mailId}`, {
+      if (mailboxTab === "inbox" || mailboxTab === "starred") {
+        const readResponse = await applyProtectedResponse(context, () => request(`/mail/${mailId}/read`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${activeToken}` },
+        }, context), () => {});
+        if (!readResponse.applied) return;
+      }
+      const detailView = mailboxTab === "sent" ? "sent" : mailboxTab === "drafts" ? "draft" : "inbox";
+      const detailResponse = await applyProtectedResponse(context, () => request<MailDetail>(`/mail/${mailId}?view=${detailView}`, {
         headers: { Authorization: `Bearer ${activeToken}` },
       }, context), (detail) => {
         setSelectedMailId(mailId);
         setSelectedMailDetail(detail);
-        setMailItems((current) => current.map((item) => (item.mailId === mailId ? { ...item, isRead: true } : item)));
+        if (mailboxTab === "inbox" || mailboxTab === "starred") {
+          setMailItems((current) => current.map((item) => (item.mailId === mailId ? { ...item, isRead: true } : item)));
+        }
         setMailError("");
       });
       if (!detailResponse.applied) return;
@@ -725,13 +748,70 @@ export default function App() {
         headers: { Authorization: `Bearer ${activeToken}` },
       }, context);
       if (!sessionControllerRef.current.isCurrent(context)) return;
-      await loadMail(activeToken, mailId, context);
+      await loadMail(activeToken, mailId, context, mailboxTab);
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
       if (!sessionControllerRef.current.isCurrent(context)) return;
       const nextError = error instanceof Error ? error.message : "중요 표시 실패";
       setMailError(nextError);
       setMessage(nextError);
+    }
+  }
+
+  function selectMailbox(nextMailbox: MailboxTab) {
+    setMailboxTab(nextMailbox);
+    setMailFilter(nextMailbox === "starred" ? "starred" : "all");
+    setSelectedMailId("");
+    setSelectedMailDetail(null);
+    if (token) void loadMail(token, undefined, sessionControllerRef.current.capture(token), nextMailbox);
+  }
+
+  async function performSendMail(payload: ReturnType<typeof buildMailSendPayload>, activeToken: string, context: { generation: number; token: string }) {
+    if (mailSendGateRef.current || !sessionControllerRef.current.isCurrent(context)) return;
+    mailSendGateRef.current = true;
+    setMailSendPending(true);
+    try {
+      await request("/mail/send", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${activeToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }, context);
+      if (!sessionControllerRef.current.isCurrent(context)) return;
+      setMailComposeForm({ to: "", subject: "", bodyText: "" });
+      setMailComposeOpen(false);
+      setMailboxTab("sent");
+      setMailFilter("all");
+      setMailError("");
+      setMessage("메일을 발송했습니다.");
+      await loadMail(activeToken, undefined, context, "sent");
+    } catch (error) {
+      if (isSessionInvalidatedError(error)) return;
+      if (!sessionControllerRef.current.isCurrent(context)) return;
+      const nextError = error instanceof Error ? error.message : "메일 발송 실패";
+      setMailError(nextError);
+      setMessage(nextError);
+    } finally {
+      if (sessionControllerRef.current.isCurrent(context)) setMailSendPending(false);
+      mailSendGateRef.current = false;
+    }
+  }
+
+  function confirmSendMail() {
+    if (!token || mailSendPending || mailSendGateRef.current) return;
+    try {
+      const payload = buildMailSendPayload(mailComposeForm);
+      const context = sessionControllerRef.current.capture(token);
+      setMailError("");
+      Alert.alert(
+        "메일 발송",
+        `${payload.to[0]}에게 메일을 발송하시겠습니까?`,
+        [
+          { text: "취소", style: "cancel" },
+          { text: "발송", onPress: () => { void performSendMail(payload, token, context); } },
+        ],
+      );
+    } catch (error) {
+      setMailError(error instanceof Error ? error.message : "메일 내용을 확인해 주세요.");
     }
   }
 
@@ -1132,12 +1212,8 @@ export default function App() {
     const rightIndex = uiContract.homeCardOrder.indexOf(right.id);
     return (leftIndex === -1 ? 999 : leftIndex) - (rightIndex === -1 ? 999 : rightIndex);
   });
-  const visibleMailItems = mailItems.filter((item) => {
-    const normalizedQuery = mailQuery.trim().toLowerCase();
-    const matchesQuery = !normalizedQuery || `${item.senderEmail} ${item.subject}`.toLowerCase().includes(normalizedQuery);
-    const matchesFilter = mailFilter === "all" || (mailFilter === "unread" ? !item.isRead : item.isStarred);
-    return matchesQuery && matchesFilter;
-  });
+  const mailView = mailboxViewModel({ items: mailItems, filter: mailboxTab === "starred" ? "starred" : mailFilter, query: mailQuery });
+  const visibleMailItems = mailView.rows as MailSummary[];
   const todayKey = dateKey(new Date().toISOString(), timezone);
   const homeView = buildHomeViewModel({
     userName: me?.userName || "",
@@ -1381,30 +1457,56 @@ export default function App() {
             ) : null}
 
             {activeTab === "mail" ? (
-              <View style={styles.surfaceCard}>
-                <Text style={styles.surfaceKicker}>메일</Text>
-                <Text style={styles.surfaceTitle}>받은편지함</Text>
+              <View style={styles.mailScreen}>
+                <View style={styles.moduleToolbar}>
+                  <View><Text style={styles.moduleKicker}>MAIL</Text><Text accessibilityRole="header" style={styles.moduleTitle}>메일</Text></View>
+                  <Pressable accessibilityRole="button" accessibilityLabel="새 메일 작성" onPress={() => { setMailComposeOpen(true); setMailError(""); }} style={styles.primaryCompactButton}>
+                    <Text style={styles.primaryCompactButtonText}>＋ 새 메일</Text>
+                  </Pressable>
+                </View>
+                <View accessibilityLabel="메일함" style={styles.mailboxTabs}>
+                  {([
+                    { id: "inbox", label: "받은메일함" },
+                    { id: "starred", label: "중요" },
+                    { id: "sent", label: "보낸메일함" },
+                    { id: "drafts", label: "임시보관함" },
+                  ] as Array<{ id: MailboxTab; label: string }>).map((item) => (
+                    <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 열기`} onPress={() => selectMailbox(item.id)} style={[styles.mailboxTab, mailboxTab === item.id ? styles.mailboxTabActive : null]}>
+                      <Text style={[styles.mailboxTabText, mailboxTab === item.id ? styles.mailboxTabTextActive : null]}>{item.label}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+                {mailComposeOpen ? (
+                  <View accessibilityLabel="새 메일 작성 양식" style={styles.composeCard}>
+                    <View style={styles.composeHeader}><Text style={styles.composeTitle}>새 메일</Text><Text onPress={() => { if (!mailSendPending) setMailComposeOpen(false); }} style={styles.composeClose}>닫기</Text></View>
+                    <TextInput accessibilityLabel="메일 수신자" style={styles.compactInput} value={mailComposeForm.to} onChangeText={(to) => setMailComposeForm((current) => ({ ...current, to }))} placeholder="받는 사람 이메일" autoCapitalize="none" keyboardType="email-address" editable={!mailSendPending} />
+                    <TextInput accessibilityLabel="메일 제목" style={styles.compactInput} value={mailComposeForm.subject} onChangeText={(subject) => setMailComposeForm((current) => ({ ...current, subject }))} placeholder="제목" editable={!mailSendPending} />
+                    <TextInput accessibilityLabel="메일 본문" style={[styles.compactInput, styles.composeBody]} value={mailComposeForm.bodyText} onChangeText={(bodyText) => setMailComposeForm((current) => ({ ...current, bodyText }))} placeholder="내용을 입력하세요" multiline textAlignVertical="top" editable={!mailSendPending} />
+                    <Pressable accessibilityRole="button" accessibilityLabel="메일 발송 확인" disabled={mailSendPending} onPress={confirmSendMail} style={[styles.composeSendButton, mailSendPending ? styles.buttonDisabled : null]}>
+                      <Text style={styles.composeSendButtonText}>{mailSendPending ? "발송 중" : "발송"}</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
                 <TextInput
                   accessibilityLabel="메일 검색"
-                  style={styles.input}
+                  style={styles.mailSearchInput}
                   value={mailQuery}
                   onChangeText={setMailQuery}
                   placeholder="보낸 사람 또는 제목 검색"
                   autoCapitalize="none"
                 />
-                <View style={styles.mobileSubNav}>
-                  {(["all", "unread", "starred"] as const).map((filter) => (
+                {(mailboxTab === "inbox" || mailboxTab === "starred") ? <View style={styles.mailFilterRow}>
+                  {(["all", "unread"] as const).map((filter) => (
                     <Pressable
                       key={filter}
-                      accessibilityRole="button"
-                      accessibilityLabel={filter === "all" ? "전체 메일" : filter === "unread" ? "읽지 않은 메일" : "중요 메일"}
+                      accessibilityRole="button" accessibilityLabel={filter === "all" ? "전체 메일" : "읽지 않은 메일"}
                       onPress={() => setMailFilter(filter)}
-                      style={[styles.mobileSubTab, mailFilter === filter ? styles.mobileSubTabActive : styles.mobileSubTabIdle]}
+                      style={[styles.mailFilterChip, mailFilter === filter ? styles.mailFilterChipActive : null]}
                     >
-                      <Text style={mailFilter === filter ? styles.mobileTabLabelActive : styles.mobileTabLabel}>{filter === "all" ? "전체" : filter === "unread" ? "안 읽음" : "중요"}</Text>
+                      <Text style={mailFilter === filter ? styles.mailFilterTextActive : styles.mailFilterText}>{filter === "all" ? "전체" : "안 읽음"}</Text>
                     </Pressable>
                   ))}
-                </View>
+                </View> : null}
                 <View accessibilityLabel="메일 목록" style={styles.mailList}>
                   {visibleMailItems.map((item) => (
                     <Pressable
@@ -1430,15 +1532,16 @@ export default function App() {
                 </View>
                 {visibleMailItems.length === 0 ? <Text style={styles.emptyState}>조건에 맞는 메일이 없습니다.</Text> : null}
                 {selectedMailDetail ? (
-                  <View style={styles.listCard}>
-                    <Text style={styles.listKicker}>메일 상세</Text>
-                    <Text style={styles.listTitle}>{selectedMailDetail.subject}</Text>
-                    <Text style={styles.listBody}>{selectedMailDetail.bodyText}</Text>
-                    <Text style={styles.listBody}>수신: {selectedMailDetail.recipients.map((item) => item.recipientEmail).join(", ") || "-"}</Text>
+                  <View style={styles.mailDetailCard}>
+                    <View style={styles.mailDetailHeader}><Text style={styles.mailDetailKicker}>메일 상세</Text>{mailboxTab === "inbox" || mailboxTab === "starred" ? <Text accessibilityRole="button" accessibilityLabel="중요 표시 전환" onPress={() => { void toggleMailStarState(selectedMailDetail.mailId); }} style={styles.mailDetailAction}>★ 중요</Text> : null}</View>
+                    <Text style={styles.mailDetailTitle}>{selectedMailDetail.subject}</Text>
+                    <Text style={styles.mailDetailMeta}>{selectedMailDetail.senderEmail} · {formatStamp(selectedMailDetail.sentAt || selectedMailDetail.createdAt)}</Text>
+                    <Text style={styles.mailDetailBody}>{selectedMailDetail.bodyText}</Text>
+                    <Text style={styles.mailDetailMeta}>수신: {selectedMailDetail.recipients.map((item) => item.recipientEmail).join(", ") || "-"}</Text>
                   </View>
                 ) : null}
                 {mailError ? <Text style={styles.error}>{mailError}</Text> : null}
-                <Text style={styles.emptyState}>장기 보관 메일은 설치형 로컬 아카이브 흐름으로 연결됩니다.</Text>
+                <Text style={styles.mailPolicyNote}>장기 보관 메일은 설치형 로컬 아카이브에서 관리됩니다.</Text>
               </View>
             ) : null}
 
@@ -2252,15 +2355,167 @@ const styles = StyleSheet.create({
     color: "#475569",
     lineHeight: 21,
   },
+  mailScreen: {
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#dce5ec",
+    padding: 14,
+  },
+  moduleToolbar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  moduleKicker: {
+    color: "#0f766e",
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 1,
+  },
+  moduleTitle: {
+    marginTop: 2,
+    color: "#0f172a",
+    fontSize: 18,
+    fontWeight: "800",
+  },
+  primaryCompactButton: {
+    borderRadius: 10,
+    backgroundColor: "#0f766e",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  primaryCompactButtonText: {
+    color: "#ffffff",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  mailboxTabs: {
+    marginTop: 12,
+    flexDirection: "row",
+    borderBottomWidth: 1,
+    borderBottomColor: "#dbe4ec",
+  },
+  mailboxTab: {
+    flex: 1,
+    minHeight: 34,
+    alignItems: "center",
+    justifyContent: "center",
+    borderBottomWidth: 2,
+    borderBottomColor: "transparent",
+    paddingHorizontal: 2,
+  },
+  mailboxTabActive: {
+    borderBottomColor: "#0f766e",
+  },
+  mailboxTabText: {
+    color: "#64748b",
+    fontSize: 9,
+    fontWeight: "700",
+  },
+  mailboxTabTextActive: {
+    color: "#0f766e",
+    fontWeight: "800",
+  },
+  composeCard: {
+    marginTop: 12,
+    borderRadius: 12,
+    padding: 12,
+    backgroundColor: "#f8fafc",
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+  },
+  composeHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  composeTitle: {
+    color: "#0f172a",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  composeClose: {
+    color: "#64748b",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  compactInput: {
+    marginTop: 8,
+    minHeight: 38,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    backgroundColor: "#ffffff",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    color: "#0f172a",
+    fontSize: 12,
+  },
+  composeBody: {
+    minHeight: 92,
+  },
+  composeSendButton: {
+    marginTop: 10,
+    alignSelf: "flex-end",
+    borderRadius: 9,
+    backgroundColor: "#0f766e",
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+  },
+  composeSendButtonText: {
+    color: "#ffffff",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  buttonDisabled: {
+    opacity: 0.5,
+  },
+  mailSearchInput: {
+    marginTop: 12,
+    minHeight: 38,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    backgroundColor: "#ffffff",
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    color: "#0f172a",
+    fontSize: 11,
+  },
+  mailFilterRow: {
+    marginTop: 8,
+    flexDirection: "row",
+    gap: 6,
+  },
+  mailFilterChip: {
+    borderRadius: 999,
+    backgroundColor: "#f1f5f9",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  mailFilterChipActive: {
+    backgroundColor: "#ccfbf1",
+  },
+  mailFilterText: {
+    color: "#64748b",
+    fontSize: 9,
+    fontWeight: "700",
+  },
+  mailFilterTextActive: {
+    color: "#0f766e",
+    fontSize: 9,
+    fontWeight: "800",
+  },
   mailList: {
-    marginTop: 14,
+    marginTop: 8,
     borderTopWidth: 1,
     borderTopColor: "#dbe4ec",
   },
   mailRow: {
-    minHeight: 68,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
+    minHeight: 58,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
     borderBottomWidth: 1,
     borderBottomColor: "#e2e8f0",
     backgroundColor: "#ffffff",
@@ -2313,6 +2568,49 @@ const styles = StyleSheet.create({
     flex: 1,
     color: "#64748b",
     fontSize: 11,
+  },
+  mailDetailCard: {
+    marginTop: 10,
+    borderRadius: 12,
+    padding: 12,
+    backgroundColor: "#f8fafc",
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+    gap: 7,
+  },
+  mailDetailHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  mailDetailKicker: {
+    color: "#0f766e",
+    fontSize: 9,
+    fontWeight: "800",
+  },
+  mailDetailAction: {
+    color: "#b45309",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  mailDetailTitle: {
+    color: "#0f172a",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  mailDetailMeta: {
+    color: "#64748b",
+    fontSize: 9,
+  },
+  mailDetailBody: {
+    color: "#334155",
+    fontSize: 11,
+    lineHeight: 17,
+  },
+  mailPolicyNote: {
+    marginTop: 10,
+    color: "#94a3b8",
+    fontSize: 9,
   },
   statusPill: {
     paddingHorizontal: 12,
