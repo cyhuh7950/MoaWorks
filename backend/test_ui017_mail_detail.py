@@ -121,9 +121,17 @@ class MailDetailTest(unittest.TestCase):
 
     def test_attachment_response_view_never_serializes_storage_key(self):
         self.assertTrue(hasattr(mail_schemas, "MailAttachmentView"), "상세 응답 전용 첨부 view가 필요합니다.")
-        view = mail_schemas.MailAttachmentView(fileName="report.pdf", contentType="application/pdf", sizeBytes=1234)
+        view = mail_schemas.MailAttachmentView(
+            attachmentId="attachment-1",
+            fileName="report.pdf",
+            contentType="application/pdf",
+            sizeBytes=1234,
+        )
         self.assertEqual(view.model_dump(mode="json"), {
-            "fileName": "report.pdf", "contentType": "application/pdf", "sizeBytes": 1234,
+            "attachmentId": "attachment-1",
+            "fileName": "report.pdf",
+            "contentType": "application/pdf",
+            "sizeBytes": 1234,
         })
 
     def test_attachment_query_does_not_select_or_return_storage_key(self):

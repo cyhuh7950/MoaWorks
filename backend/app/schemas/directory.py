@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -233,23 +233,6 @@ class ApprovalDocumentUpdateRequest(ApprovalDocumentCreateRequest):
         return values
 
 
-class ApprovalDocumentUpdateRequest(BaseModel):
-    title: str = Field(min_length=1)
-    content: str = Field(min_length=1)
-    approverUserIds: list[str] = Field(default_factory=list)
-
-
-class ApprovalApproverView(BaseModel):
-    userId: str
-    userName: str
-    userEmail: str
-    departmentName: str
-
-
-class ApprovalApproverListResponse(BaseModel):
-    users: list[ApprovalApproverView]
-
-
 class ApprovalSubmitResponse(BaseModel):
     documentId: str
 
@@ -420,7 +403,7 @@ class DepartmentUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1)
     parentId: str | None = None
     sortOrder: int | None = None
-    status: str | None = None
+    status: Literal["active", "inactive"] | None = None
 
 
 class RoleCreateRequest(BaseModel):
@@ -438,7 +421,7 @@ class UserCreateRequest(BaseModel):
     name: str = Field(min_length=1)
     loginId: str | None = None
     email: str | None = None
-    password: str | None = Field(default=None, min_length=1)
+    password: str = Field(min_length=8)
     departmentId: str = Field(min_length=1)
     roleId: str = Field(min_length=1)
     status: str = Field(default="active")

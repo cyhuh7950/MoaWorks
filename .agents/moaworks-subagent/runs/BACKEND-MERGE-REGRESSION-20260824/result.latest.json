@@ -1,0 +1,60 @@
+{
+  "taskId": "BACKEND-MERGE-REGRESSION-20260824",
+  "issueId": "BACKEND-MERGE-REGRESSION",
+  "agentId": "/root/backend_merge_regression_writer",
+  "outcome": "SUCCESS",
+  "summary": "승인된 11개 파일에서 64df3e2 병합 손상을 최소 복구했다. backend 582/582, F13 28/28, Stage03 30/30, compileall과 diff-check가 통과했다.",
+  "branch": "fix/backend-merge-regression",
+  "baseCommit": "50c61b613e57f17d0d97ff6ea5a7ad242658c45e",
+  "reportPath": ".agents/moaworks-subagent/reports/BACKEND-MERGE-REGRESSION-20260824.md",
+  "modifiedFiles": [
+    ".agents/moaworks-subagent/reports/BACKEND-MERGE-REGRESSION-20260824.md",
+    ".agents/moaworks-subagent/runs/BACKEND-MERGE-REGRESSION-20260824/result.latest.json",
+    "backend/app/schemas/content_operations.py",
+    "backend/app/schemas/directory.py",
+    "backend/app/schemas/mail_messenger.py",
+    "backend/app/services/content_operations_service.py",
+    "backend/app/services/directory_store.py",
+    "backend/app/services/mail_delivery_service.py",
+    "backend/app/services/mail_messenger_service.py",
+    "backend/app/services/org_import_service.py",
+    "backend/test_ui017_mail_detail.py",
+    "deploy/docker-compose.oracle.yml",
+    "deploy/docker-compose.yml",
+    "docs/superpowers/plans/2026-08-24-backend-merge-regression-remediation-plan.md",
+    "docs/work-progress/moaworks-completion-v2.1/progress.jsonl",
+    "docs/work-progress/moaworks-completion-v2.1/stage-04-f12-f14/progress.jsonl",
+    "docs/workorders/backend-merge-regression-remediation-2026-08-24.md",
+    "docs/workorders/backend-merge-regression-remediation-worker-prompt-2026-08-24.md"
+  ],
+  "verification": [
+    {"name": "compileall", "result": "PASS"},
+    {"name": "current queue schema contract", "result": "PASS"},
+    {"name": "focused root-cause and review regression", "result": "PASS 36/36"},
+    {"name": "UI017 mail detail", "result": "PASS 9/9"},
+    {"name": "backend full discovery", "result": "PASS 582/582; skipped 2; failures 0; errors 0"},
+    {"name": "F13 personal AI", "result": "PASS 28/28"},
+    {"name": "Stage03 translation operations", "result": "PASS 30/30"},
+    {"name": "git diff --check", "result": "PASS"}
+  ],
+  "remaining": [
+    "운영 API/DB/Provider, 실제 인증 세션, 배포는 실행하지 않았다.",
+    "iOS와 실제 기기 검증은 별도 외부 환경 검증으로 남는다.",
+    "main agent가 수용 후 병합, push, 브랜치 정리를 수행한다."
+  ],
+  "review": {
+    "initial": {"critical": 1, "important": 3, "minor": 0},
+    "intermediate": {"critical": 1, "important": 0, "minor": 0},
+    "final": {"critical": 0, "important": 0, "minor": 0, "ready": true},
+    "reworkRounds": 2
+  },
+  "errorCount": 6,
+  "maxConsecutiveSameRootCause": 3,
+  "formalFailure": false,
+  "scopeChange": true,
+  "requirementChange": false,
+  "majorRiskChange": false,
+  "pushPerformed": false,
+  "deploymentPerformed": false,
+  "resumePoint": "main agent가 branch diff와 증적을 수용한 뒤 승인된 순서로 merge, push, branch cleanup을 수행한다."
+}
