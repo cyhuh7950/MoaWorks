@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { parse } = require("@babel/parser");
+const { navigationModel } = require("../mobile-ui-design.js");
 
 const appSource = fs.readFileSync(path.resolve(__dirname, "..", "App.tsx"), "utf8");
 const ast = parse(appSource, { sourceType: "module", plugins: ["typescript", "jsx"] });
@@ -114,24 +115,23 @@ function referencedIdentifiers(node) {
 
 test("일정·주소록·개인 AI·업무 검색 화면 제목은 programmatic heading이다", () => {
   const cases = [
-    [screenRegion("calendar"), "오늘의 일정"],
-    [screenRegion("more", "directory"), "사원 정보 검색"],
-    [screenRegion("more", "ai"), "연결된 LLM에게 질문하고 검색"],
-    [screenRegion("more", "search"), "현재 불러온 업무 통합 검색"],
+    [screenRegion("calendar"), "scheduleMonthKey", "월간 일정"],
+    [screenRegion("more", "directory"), ">주소록<", "주소록"],
+    [screenRegion("more", "ai"), ">AI 채팅<", "AI 채팅"],
+    [screenRegion("more", "search"), ">현재 불러온 업무 통합 검색<", "현재 불러온 업무 통합 검색"],
   ];
 
-  for (const [region, title] of cases) {
-    const heading = elements(region, "Text").find((element) => textContent(element) === title);
-    assert.ok(heading, `${title} heading exists`);
-    assert.equal(attributeValue(heading, "accessibilityRole"), "header", `${title} exposes the header role`);
+  for (const [region, fragment, label] of cases) {
+    const heading = elements(region, "Text").find((element) => source(element).includes(fragment));
+    assert.ok(heading, `${label} heading exists`);
+    assert.equal(attributeValue(heading, "accessibilityRole"), "header", `${label} exposes the header role`);
   }
 });
 
 test("네 화면의 입력·버튼·결과 행은 동작과 대상을 설명하는 이름과 hint를 유지한다", () => {
   const calendar = screenRegion("calendar");
-  for (const label of ["이전 달 일정 보기", "다음 달 일정 보기", "일정 생성"]) {
-    assertNamedAndHinted(calendar, "Button", label);
-  }
+  for (const label of ["이전 달 일정 보기", "다음 달 일정 보기"]) assertNamedAndHinted(calendar, "Text", label);
+  assertNamedAndHinted(calendar, "Pressable", "일정 만들기");
   for (const label of ["일정 제목", "일정 시작 시간", "일정 종료 시간"]) {
     assertNamedAndHinted(calendar, "TextInput", label);
   }
@@ -139,32 +139,31 @@ test("네 화면의 입력·버튼·결과 행은 동작과 대상을 설명하�
   const directory = screenRegion("more", "directory");
   assertNamedAndHinted(directory, "TextInput", "주소록 검색");
   for (const action of ["메일 보내기", "전화번호 미제공", "대화 시작"]) {
-    const control = assertNamedAndHinted(directory, "Button", action);
+    const control = assertNamedAndHinted(directory, "Pressable", action);
     assert.match(source(attribute(control, "accessibilityLabel")), /member\.name/, `${action} names the member target`);
   }
 
   const personalAi = screenRegion("more", "ai");
   assertNamedAndHinted(personalAi, "TextInput", "개인 AI 질문");
-  assertNamedAndHinted(personalAi, "Button", "개인 AI 질문 보내기");
+  assertNamedAndHinted(personalAi, "Pressable", "개인 AI 질문 보내기");
 
   const search = screenRegion("more", "search");
   assertNamedAndHinted(search, "TextInput", "업무 검색어");
   const result = assertNamedAndHinted(search, "Pressable", "열기");
   assert.match(source(attribute(result, "accessibilityLabel")), /result\.title/, "검색 결과 이름은 target title을 포함한다");
 
-  const scheduleSubmit = elementWithLabel(calendar, "Button", "일정 생성");
+  const scheduleSubmit = elementWithLabel(calendar, "Pressable", "일정 생성");
   assert.equal(attributeValue(scheduleSubmit, "accessibilityLabel"), "일정 생성", "pending 중에도 일정 생성 이름은 고정된다");
-  assert.match(source(attribute(scheduleSubmit, "title")), /scheduleSaving/);
+  assert.match(source(scheduleSubmit), /scheduleSaving/);
   assert.match(source(attribute(scheduleSubmit, "disabled")), /scheduleSaving/);
 
-  const directRoom = elementWithLabel(directory, "Button", "대화 시작");
+  const directRoom = elementWithLabel(directory, "Pressable", "대화 시작");
   assert.doesNotMatch(source(attribute(directRoom, "accessibilityLabel")), /directoryBusyUserId|isSelf/, "disabled/pending 상태가 대화 동작 이름을 바꾸지 않는다");
-  assert.match(source(attribute(directRoom, "title")), /directoryBusyUserId/);
   assert.match(source(attribute(directRoom, "disabled")), /directoryBusyUserId/);
 
-  const aiSubmit = elementWithLabel(personalAi, "Button", "개인 AI 질문 보내기");
+  const aiSubmit = elementWithLabel(personalAi, "Pressable", "개인 AI 질문 보내기");
   assert.equal(attributeValue(aiSubmit, "accessibilityLabel"), "개인 AI 질문 보내기", "pending 중에도 질문 보내기 이름은 고정된다");
-  assert.match(source(attribute(aiSubmit, "title")), /personalAiPendingAction/);
+  assert.match(source(aiSubmit), /personalAiPendingAction/);
   assert.match(source(attribute(aiSubmit, "disabled")), /personalAiPendingAction/);
 });
 
@@ -201,8 +200,22 @@ test("요청·부분 로드 오류는 안전한 고정 이름의 alert role이�
   }
 });
 
+test("AI 오류 alert는 카드 안에서 잘리지 않는 compact 전용 스타일을 사용한다", () => {
+  const personalAi = screenRegion("more", "ai");
+  const alert = elements(personalAi, "Text").find((element) => source(element).includes("personalAiError"));
+  assert.ok(alert, "AI error alert exists");
+  assert.match(source(attribute(alert, "style")), /styles\.aiInlineError/, "AI alert does not reuse the unbounded shared error style");
+
+  const style = appSource.match(/aiInlineError:\s*\{([\s\S]*?)\n\s*\},/);
+  assert.ok(style, "AI compact error style exists");
+  assert.match(style[1], /marginHorizontal:\s*12/);
+  assert.match(style[1], /marginBottom:\s*12/);
+  assert.match(style[1], /fontSize:\s*10/);
+  assert.match(style[1], /lineHeight:\s*15/);
+});
+
 test("접근성 속성은 secret binding이나 승인되지 않은 동적 이름을 참조하지 않는다", () => {
-  const allowedDynamicNameRoots = new Set(["BUSINESS_SEARCH_CATEGORY_LABELS", "filter", "item", "member", "name", "option", "result", "room"]);
+  const allowedDynamicNameRoots = new Set(["BUSINESS_SEARCH_CATEGORY_LABELS", "approvalScreen", "calendarScreen", "cell", "daySchedules", "directoryScreen", "doc", "filter", "index", "item", "member", "name", "option", "result", "room", "section", "undefined", "view"]);
   const forbiddenSecretBindings = new Set(["apiKeyDraft", "llmApiKey", "password", "token"]);
   walk(ast, (node) => {
     if (node.type !== "JSXElement") return;
@@ -230,35 +243,20 @@ test("개인 AI API 키 입력은 값과 분리된 고정 이름·hint·secure �
   assert.ok(attribute(apiKeyInput, "secureTextEntry"), "API-key input remains secure");
 });
 
-test("기존 탭과 더보기 navigation은 네 화면 진입점을 유지한다", () => {
-  const pairs = new Set();
-  walk(ast, (node) => {
-    if (node.type !== "ObjectExpression") return;
-    const values = {};
-    for (const property of node.properties) {
-      if (property.type === "ObjectProperty" && property.key.type === "Identifier" && property.value.type === "StringLiteral") {
-        values[property.key.name] = property.value.value;
-      }
-    }
-    if (values.id && values.label) pairs.add(`${values.id}:${values.label}`);
-  });
+test("정본 하단 탭과 더보기 navigation은 접근 가능한 진입점을 유지한다", () => {
+  const navigation = navigationModel();
+  const pairs = new Set([...navigation.bottom, ...navigation.more].map(({ id, label }) => `${id}:${label}`));
   for (const pair of ["calendar:일정", "directory:주소록", "ai:AI 채팅", "search:업무 검색", "more:더보기"]) {
     assert.ok(pairs.has(pair), `${pair} navigation remains reachable`);
   }
 
-  const mainTab = elements(ast, "Text").find((element) => source(attribute(element, "onPress")).includes("handleTabPress(item.id"));
-  assert.ok(mainTab, "quick tab control calls handleTabPress");
-  assert.equal(attributeValue(mainTab, "accessibilityRole"), "button");
-  assert.match(source(attribute(mainTab, "accessibilityLabel")), /item\.label/);
-  assert.ok(attributeValue(mainTab, "accessibilityHint"));
-
-  const bottomTab = elements(ast, "Pressable").find((element) => source(attribute(element, "onPress")).includes("handleTabPress(item.id"));
+  const bottomTab = elements(ast, "Pressable").find((element) => source(attribute(element, "onPress")).includes("handleTabPress(item.id") && source(attribute(element, "accessibilityLabel")).includes("메뉴"));
   assert.ok(bottomTab, "bottom tab control calls handleTabPress");
   assert.equal(attributeValue(bottomTab, "accessibilityRole"), "button");
   assert.match(source(attribute(bottomTab, "accessibilityLabel")), /item\.label/);
   assert.ok(attributeValue(bottomTab, "accessibilityHint"));
 
-  const moreTab = elements(screenRegion("more"), "Pressable").find((element) => source(attribute(element, "onPress")).includes("setMoreScreen(item.id"));
+  const moreTab = elements(ast, "Pressable").find((element) => source(attribute(element, "onPress")).includes("setMoreScreen(item.id") && source(attribute(element, "accessibilityLabel")).includes("메뉴"));
   assert.ok(moreTab, "more menu control calls setMoreScreen");
   assert.equal(attributeValue(moreTab, "accessibilityRole"), "button");
   assert.match(source(attribute(moreTab, "accessibilityLabel")), /item\.label/);

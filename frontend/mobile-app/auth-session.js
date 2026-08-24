@@ -195,6 +195,7 @@ function createClearedMobileSessionState(message = "") {
     roomMessages: [],
     chatDraft: "",
     chatError: "",
+    chatTranslationPending: false,
     files: [],
     fileError: "",
     calendars: [],

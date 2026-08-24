@@ -47,7 +47,8 @@ test("현재 표시 월에 일정이 없으면 다른 월 일정이 있어도 �
   assert.equal(schedules.length, 1);
   assert.equal(visibleSchedules.length, 0);
   assert.match(appSource, /const visibleSchedules = useMemo\(\(\) => filterSchedulesForMonth\(schedules, scheduleMonthKey, timezone\), \[schedules, scheduleMonthKey, timezone\]\);/);
-  assert.match(appSource, /\{visibleSchedules\.length === 0 \? <Text style=\{styles\.emptyState\}>표시할 일정이 없습니다\.<\/Text> : null\}/);
+  assert.match(appSource, /calendarViewModel\(\{ cells: buildMonthGrid\(scheduleMonthKey\), schedules: visibleSchedules, selectedDateKey: selectedScheduleDateKey, timezone \}\)/);
+  assert.match(appSource, /calendarScreen\.selectedSchedules\.length === 0 \? <Text style=\{styles\.calendarEmpty\}>선택한 날짜에 일정이 없습니다\.<\/Text> : null/);
 });
 
 test("기본 owned 달력과 서버 생성 payload를 검증한다", () => {

@@ -6,6 +6,11 @@ import { createDirectoryActionGate, directoryUsers as readDirectoryUsers, direct
 import { buildPersonalAiChatPayload, buildPersonalAiConfigPayload, createPersonalAiActionGate, personalAiErrorMessage, readPersonalAiChatResponse, readPersonalAiConfig, readPersonalAiConnectionTest, readPersonalAiProviders } from "./personal-ai-api";
 import { normalizeBusinessSearchText, searchLoadedBusinessSummaries, updateBusinessSearchWarnings } from "./business-search";
 
+const { aiViewModel, approvalViewModel, buildHomeViewModel, calendarViewModel, directoryViewModel, navigationModel } = require("./mobile-ui-design.js");
+const { buildMailSendPayload, mailboxRequestPath, mailboxViewModel } = require("./mail-compose.js");
+const { buildTranslationPayload, messengerViewModel } = require("./messenger-translation.js");
+const mobileNavigation = navigationModel();
+
 type AuthUser = {
   userId: string;
   userName: string;
@@ -103,6 +108,7 @@ type MessengerRoom = {
   createdAt: string;
   updatedAt: string;
   retentionExpiresAt: string | null;
+  translationLocale: string;
 };
 
 type MessengerMessage = {
@@ -145,6 +151,8 @@ type BusinessSearchResult = {
 type AppLocale = "ko-KR" | "en-US" | "ja-JP" | "zh-CN" | "es-ES" | "fr-FR" | "de-DE";
 type MobileTab = "home" | "mail" | "approval" | "chat" | "calendar" | "more" | "files";
 type ScreenKey = MobileTab | "directory" | "ai" | "search" | "settings";
+type MailboxTab = "inbox" | "starred" | "sent" | "drafts";
+type ApprovalView = "draft" | "progress" | "complete";
 type PersonalAiProviderOption = { provider: string; label: string; apiKeyRequired: boolean };
 type PersonalAiConnectionStatus = "unconfigured" | "untested" | "ready" | "error";
 type PersonalAiConfig = { provider: string; model: string; apiKeyConfigured: boolean; connectionStatus: PersonalAiConnectionStatus; lastTestCode: string | null; lastTestedAt: string | null };
@@ -263,11 +271,18 @@ export default function App() {
   const [mailError, setMailError] = useState("");
   const [mailQuery, setMailQuery] = useState("");
   const [mailFilter, setMailFilter] = useState<"all" | "unread" | "starred">("all");
+  const [mailboxTab, setMailboxTab] = useState<MailboxTab>("inbox");
+  const [mailComposeOpen, setMailComposeOpen] = useState(false);
+  const [mailComposeForm, setMailComposeForm] = useState({ to: "", subject: "", bodyText: "" });
+  const [mailSendPending, setMailSendPending] = useState(false);
+  const mailSendGateRef = useRef(false);
   const [rooms, setRooms] = useState<MessengerRoom[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState("");
   const [roomMessages, setRoomMessages] = useState<MessengerMessage[]>([]);
   const [chatDraft, setChatDraft] = useState("");
   const [chatError, setChatError] = useState("");
+  const [chatTranslationPending, setChatTranslationPending] = useState(false);
+  const chatTranslationGateRef = useRef(false);
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
   const [fileError, setFileError] = useState("");
   const [calendars, setCalendars] = useState<WorkspaceCalendar[]>([]);
@@ -275,12 +290,16 @@ export default function App() {
   const [scheduleError, setScheduleError] = useState("");
   const [scheduleForm, setScheduleForm] = useState<ScheduleForm>({ title: "", startsAt: "", endsAt: "", description: "", location: "" });
   const [scheduleMonthKey, setScheduleMonthKey] = useState(() => monthKeyForDate(new Date(), timezone));
+  const [selectedScheduleDateKey, setSelectedScheduleDateKey] = useState(() => dateKey(new Date().toISOString(), timezone));
+  const [scheduleFormOpen, setScheduleFormOpen] = useState(false);
   const [scheduleSaving, setScheduleSaving] = useState(false);
   const scheduleSubmissionGateRef = useRef(createSubmissionGate());
   const visibleSchedules = useMemo(() => filterSchedulesForMonth(schedules, scheduleMonthKey, timezone), [schedules, scheduleMonthKey, timezone]);
   const [moreScreen, setMoreScreen] = useState<Exclude<ScreenKey, MobileTab>>("directory");
+  const [moreMenuOpen, setMoreMenuOpen] = useState(true);
   const [directoryUsers, setDirectoryUsers] = useState<DirectoryUser[]>([]);
   const [directoryQuery, setDirectoryQuery] = useState("");
+  const [directorySection, setDirectorySection] = useState<"all" | "favorites" | "recent">("all");
   const [directoryError, setDirectoryError] = useState("");
   const [directoryBusyUserId, setDirectoryBusyUserId] = useState("");
   const directoryActionGateRef = useRef(createDirectoryActionGate());
@@ -321,6 +340,8 @@ export default function App() {
       setMe(nextUser);
       scheduleSubmissionGateRef.current.reset();
       setScheduleSaving(false);
+      setSelectedScheduleDateKey(dateKey(new Date().toISOString(), timezone));
+      setScheduleFormOpen(false);
       directoryActionGateRef.current.reset();
       setDirectoryBusyUserId("");
       personalAiActionGateRef.current.reset();
@@ -330,6 +351,18 @@ export default function App() {
       setBusinessSearchQuery("");
       setBusinessSearchSelectedResultId("");
       setBusinessSearchWarnings([]);
+      setApprovalView("progress");
+      setSelectedApprovalId("");
+      setApprovalComposeOpen(false);
+      setDirectorySection("all");
+      setMoreMenuOpen(true);
+      setChatTranslationPending(false);
+      chatTranslationGateRef.current = false;
+      setMailboxTab("inbox");
+      setMailComposeOpen(false);
+      setMailComposeForm({ to: "", subject: "", bodyText: "" });
+      setMailSendPending(false);
+      mailSendGateRef.current = false;
     },
     onSessionReset(nextState) {
       setToken(nextState.token);
@@ -337,6 +370,9 @@ export default function App() {
       setPassword(nextState.password);
       setDocuments(nextState.documents);
       setCreateForm(nextState.createForm);
+      setApprovalView("progress");
+      setSelectedApprovalId("");
+      setApprovalComposeOpen(false);
       setNotifications(nextState.notifications);
       setNotificationSummary(nextState.notificationSummary);
       setNotificationError(nextState.notificationError);
@@ -347,11 +383,18 @@ export default function App() {
       setMailError(nextState.mailError);
       setMailQuery(nextState.mailQuery);
       setMailFilter(nextState.mailFilter);
+      setMailboxTab("inbox");
+      setMailComposeOpen(false);
+      setMailComposeForm({ to: "", subject: "", bodyText: "" });
+      setMailSendPending(false);
+      mailSendGateRef.current = false;
       setRooms(nextState.rooms);
       setSelectedRoomId(nextState.selectedRoomId);
       setRoomMessages(nextState.roomMessages);
       setChatDraft(nextState.chatDraft);
       setChatError(nextState.chatError);
+      setChatTranslationPending(nextState.chatTranslationPending);
+      chatTranslationGateRef.current = false;
       setFiles(nextState.files);
       setFileError(nextState.fileError);
       setCalendars(nextState.calendars);
@@ -360,8 +403,12 @@ export default function App() {
       setScheduleForm(nextState.scheduleForm);
       scheduleSubmissionGateRef.current.reset();
       setScheduleSaving(false);
+      setSelectedScheduleDateKey(dateKey(new Date().toISOString(), timezone));
+      setScheduleFormOpen(false);
       setDirectoryUsers(nextState.directoryUsers);
       setDirectoryQuery(nextState.directoryQuery);
+      setDirectorySection("all");
+      setMoreMenuOpen(true);
       setDirectoryError(nextState.directoryError);
       directoryActionGateRef.current.reset();
       setDirectoryBusyUserId(nextState.directoryBusyUserId);
@@ -649,10 +696,10 @@ export default function App() {
     }
   }
 
-  async function loadMail(activeToken: string = token, preferredMailId?: string, context = sessionControllerRef.current.capture(activeToken)) {
+  async function loadMail(activeToken: string = token, preferredMailId?: string, context = sessionControllerRef.current.capture(activeToken), mailbox: MailboxTab = mailboxTab) {
     if (!activeToken) return;
     try {
-      const inboxResponse = await applyProtectedResponse(context, () => request<{ mails: MailSummary[] }>("/mail/inbox", {
+      const inboxResponse = await applyProtectedResponse(context, () => request<{ mails: MailSummary[] }>(mailboxRequestPath(mailbox), {
         headers: { Authorization: `Bearer ${activeToken}` },
       }, context), (body) => {
         setMailItems(body.mails ?? []);
@@ -662,7 +709,8 @@ export default function App() {
       const mails = inbox.mails ?? [];
       const targetMailId = preferredMailId || selectedMailId || mails[0]?.mailId || "";
       if (targetMailId) {
-        const detailResponse = await applyProtectedResponse(context, () => request<MailDetail>(`/mail/${targetMailId}`, {
+        const detailView = mailbox === "sent" ? "sent" : mailbox === "drafts" ? "draft" : "inbox";
+        const detailResponse = await applyProtectedResponse(context, () => request<MailDetail>(`/mail/${targetMailId}?view=${detailView}`, {
           headers: { Authorization: `Bearer ${activeToken}` },
         }, context), (detail) => {
           setSelectedMailId(targetMailId);
@@ -690,17 +738,22 @@ export default function App() {
     if (!activeToken) return;
     const context = sessionControllerRef.current.capture(activeToken);
     try {
-      const readResponse = await applyProtectedResponse(context, () => request(`/mail/${mailId}/read`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${activeToken}` },
-      }, context), () => {});
-      if (!readResponse.applied) return;
-      const detailResponse = await applyProtectedResponse(context, () => request<MailDetail>(`/mail/${mailId}`, {
+      if (mailboxTab === "inbox" || mailboxTab === "starred") {
+        const readResponse = await applyProtectedResponse(context, () => request(`/mail/${mailId}/read`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${activeToken}` },
+        }, context), () => {});
+        if (!readResponse.applied) return;
+      }
+      const detailView = mailboxTab === "sent" ? "sent" : mailboxTab === "drafts" ? "draft" : "inbox";
+      const detailResponse = await applyProtectedResponse(context, () => request<MailDetail>(`/mail/${mailId}?view=${detailView}`, {
         headers: { Authorization: `Bearer ${activeToken}` },
       }, context), (detail) => {
         setSelectedMailId(mailId);
         setSelectedMailDetail(detail);
-        setMailItems((current) => current.map((item) => (item.mailId === mailId ? { ...item, isRead: true } : item)));
+        if (mailboxTab === "inbox" || mailboxTab === "starred") {
+          setMailItems((current) => current.map((item) => (item.mailId === mailId ? { ...item, isRead: true } : item)));
+        }
         setMailError("");
       });
       if (!detailResponse.applied) return;
@@ -722,13 +775,70 @@ export default function App() {
         headers: { Authorization: `Bearer ${activeToken}` },
       }, context);
       if (!sessionControllerRef.current.isCurrent(context)) return;
-      await loadMail(activeToken, mailId, context);
+      await loadMail(activeToken, mailId, context, mailboxTab);
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
       if (!sessionControllerRef.current.isCurrent(context)) return;
       const nextError = error instanceof Error ? error.message : "중요 표시 실패";
       setMailError(nextError);
       setMessage(nextError);
+    }
+  }
+
+  function selectMailbox(nextMailbox: MailboxTab) {
+    setMailboxTab(nextMailbox);
+    setMailFilter(nextMailbox === "starred" ? "starred" : "all");
+    setSelectedMailId("");
+    setSelectedMailDetail(null);
+    if (token) void loadMail(token, undefined, sessionControllerRef.current.capture(token), nextMailbox);
+  }
+
+  async function performSendMail(payload: ReturnType<typeof buildMailSendPayload>, activeToken: string, context: { generation: number; token: string }) {
+    if (mailSendGateRef.current || !sessionControllerRef.current.isCurrent(context)) return;
+    mailSendGateRef.current = true;
+    setMailSendPending(true);
+    try {
+      await request("/mail/send", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${activeToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }, context);
+      if (!sessionControllerRef.current.isCurrent(context)) return;
+      setMailComposeForm({ to: "", subject: "", bodyText: "" });
+      setMailComposeOpen(false);
+      setMailboxTab("sent");
+      setMailFilter("all");
+      setMailError("");
+      setMessage("메일을 발송했습니다.");
+      await loadMail(activeToken, undefined, context, "sent");
+    } catch (error) {
+      if (isSessionInvalidatedError(error)) return;
+      if (!sessionControllerRef.current.isCurrent(context)) return;
+      const nextError = error instanceof Error ? error.message : "메일 발송 실패";
+      setMailError(nextError);
+      setMessage(nextError);
+    } finally {
+      if (sessionControllerRef.current.isCurrent(context)) setMailSendPending(false);
+      mailSendGateRef.current = false;
+    }
+  }
+
+  function confirmSendMail() {
+    if (!token || mailSendPending || mailSendGateRef.current) return;
+    try {
+      const payload = buildMailSendPayload(mailComposeForm);
+      const context = sessionControllerRef.current.capture(token);
+      setMailError("");
+      Alert.alert(
+        "메일 발송",
+        `${payload.to[0]}에게 메일을 발송하시겠습니까?`,
+        [
+          { text: "취소", style: "cancel" },
+          { text: "발송", onPress: () => { void performSendMail(payload, token, context); } },
+        ],
+      );
+    } catch (error) {
+      setMailError(error instanceof Error ? error.message : "메일 내용을 확인해 주세요.");
     }
   }
 
@@ -924,6 +1034,7 @@ export default function App() {
     if (result.target.screen === "directory") {
       setActiveTab("more");
       setMoreScreen("directory");
+      setMoreMenuOpen(false);
       return;
     }
     if (result.target.screen === "files") {
@@ -952,8 +1063,42 @@ export default function App() {
     }
   }
 
+  async function updateRoomTranslation(localeValue: string) {
+    if (!token || !selectedRoomId || chatTranslationPending || chatTranslationGateRef.current) return;
+    let payload: { translationLocale: string };
+    try {
+      payload = buildTranslationPayload(localeValue);
+    } catch (error) {
+      setChatError(error instanceof Error ? error.message : "번역 언어를 확인해 주세요.");
+      return;
+    }
+    const context = sessionControllerRef.current.capture(token);
+    chatTranslationGateRef.current = true;
+    setChatTranslationPending(true);
+    setChatError("");
+    try {
+      await request(`/messenger/rooms/${selectedRoomId}/translation`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }, context);
+      if (!sessionControllerRef.current.isCurrent(context)) return;
+      setRooms((current) => current.map((room) => room.roomId === selectedRoomId ? { ...room, translationLocale: payload.translationLocale } : room));
+    } catch (error) {
+      if (isSessionInvalidatedError(error)) return;
+      if (!sessionControllerRef.current.isCurrent(context)) return;
+      const nextError = error instanceof Error ? error.message : "번역 언어 변경 실패";
+      setChatError(nextError);
+      setMessage(nextError);
+    } finally {
+      if (sessionControllerRef.current.isCurrent(context)) setChatTranslationPending(false);
+      chatTranslationGateRef.current = false;
+    }
+  }
+
   function handleTabPress(nextTab: MobileTab) {
     setActiveTab(nextTab);
+    if (nextTab === "more") setMoreMenuOpen(true);
     if (!token) return;
     if (nextTab === "more" && moreScreen === "directory") {
       void loadDirectory(token);
@@ -974,6 +1119,18 @@ export default function App() {
     if (nextTab === "calendar") {
       void loadSchedules(token);
     }
+  }
+
+  function changeScheduleMonth(amount: number) {
+    const nextMonth = shiftMonthKey(scheduleMonthKey, amount);
+    setScheduleMonthKey(nextMonth);
+    setSelectedScheduleDateKey(`${nextMonth}-01`);
+  }
+
+  function selectTodaySchedule() {
+    const today = dateKey(new Date().toISOString(), timezone);
+    setScheduleMonthKey(today.slice(0, 7));
+    setSelectedScheduleDateKey(today);
   }
 
   async function action(documentId: string, type: "submit" | "withdraw" | "redraft") {
@@ -1129,13 +1286,26 @@ export default function App() {
     const rightIndex = uiContract.homeCardOrder.indexOf(right.id);
     return (leftIndex === -1 ? 999 : leftIndex) - (rightIndex === -1 ? 999 : rightIndex);
   });
-  const visibleMailItems = mailItems.filter((item) => {
-    const normalizedQuery = mailQuery.trim().toLowerCase();
-    const matchesQuery = !normalizedQuery || `${item.senderEmail} ${item.subject}`.toLowerCase().includes(normalizedQuery);
-    const matchesFilter = mailFilter === "all" || (mailFilter === "unread" ? !item.isRead : item.isStarred);
-    return matchesQuery && matchesFilter;
+  const mailView = mailboxViewModel({ items: mailItems, filter: mailboxTab === "starred" ? "starred" : mailFilter, query: mailQuery });
+  const visibleMailItems = mailView.rows as MailSummary[];
+  const todayKey = dateKey(new Date().toISOString(), timezone);
+  const homeView = buildHomeViewModel({
+    userName: me?.userName || "",
+    mailItems,
+    documents,
+    todaySchedules: schedules.filter((item) => dateKey(item.starts_at, timezone) === todayKey),
+    rooms,
   });
-  const activeTabLabel = activeTab === "home" ? "홈" : activeTab === "mail" ? "메일" : activeTab === "approval" ? "결재" : activeTab === "chat" ? "메신저" : activeTab === "calendar" ? "일정" : activeTab === "files" ? "파일" : "더보기";
+  const approvalScreen = approvalViewModel({ documents, view: approvalView, selectedId: selectedApprovalId }) as { tabs: string[]; rows: Approval[]; selected: Approval | null };
+  const selectedApproval = approvalScreen.selected;
+  const messengerScreen = messengerViewModel({ rooms, selectedRoomId, messages: roomMessages }) as { selectedRoom: MessengerRoom | null; messages: MessengerMessage[]; languageOptions: Array<{ value: string; label: string }> };
+  const calendarScreen = calendarViewModel({ cells: buildMonthGrid(scheduleMonthKey), schedules: visibleSchedules, selectedDateKey: selectedScheduleDateKey, timezone }) as { columns: number; weekdayLabels: string[]; cells: Array<{ dateKey: string; day: number | null }>; selectedDateKey: string; selectedSchedules: WorkspaceSchedule[] };
+  const directoryScreen = directoryViewModel({ users: visibleDirectoryUsers, query: "", section: directorySection }) as { sections: string[]; rows: DirectoryUser[] };
+  const aiScreen = aiViewModel({ messages: aiMessages, provider: llmProvider, connectionStatus: llmConnectionStatus }) as { providerLabel: string; ready: boolean; messages: Array<{ role: "user" | "assistant"; body: string }> };
+  const [approvalView, setApprovalView] = useState<ApprovalView>("progress");
+  const [selectedApprovalId, setSelectedApprovalId] = useState("");
+  const [approvalComposeOpen, setApprovalComposeOpen] = useState(false);
+  const activeTabLabel = activeTab === "home" ? "홈" : activeTab === "mail" ? "메일" : activeTab === "approval" ? "결재" : activeTab === "chat" ? "메신저" : activeTab === "calendar" ? "일정" : activeTab === "files" ? "파일" : mobileNavigation.more.find((item: { id: string }) => item.id === moreScreen)?.label || "더보기";
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -1152,15 +1322,11 @@ export default function App() {
         </View>
       ) : null}
       <ScrollView contentContainerStyle={[styles.container, screenDensity === "compact" ? styles.containerCompact : null]}>
-        <View style={styles.hero}>
+        {!me ? (
+          <View style={styles.hero}>
           <Text style={styles.heroKicker}>MoaWorks Mobile</Text>
-          <Text style={styles.heroTitle}>{me ? "오늘의 업무" : "사용자 업무 포털"}</Text>
-          <Text style={styles.heroDesc}>
-            {me ? "필요한 업무를 한 화면에서 빠르게 확인하세요." : "메일, 결재, 메신저를 한 곳에서 이어가는 업무 포털입니다."}
-          </Text>
-
-          {!me ? (
-            <>
+          <Text style={styles.heroTitle}>사용자 업무 포털</Text>
+          <Text style={styles.heroDesc}>메일, 결재, 메신저를 한 곳에서 이어가는 업무 포털입니다.</Text>
               <Text style={styles.sectionLabel}>아이디</Text>
               <View style={styles.loginField}>
                 <MoaIcon name="directory" color="#99f6e4" size={20} />
@@ -1206,50 +1372,18 @@ export default function App() {
                   <Text style={styles.loginButtonText}>업무 포털 로그인</Text>
                 </Pressable>
               </View>
-            </>
-          ) : (
-            <View style={styles.loggedInHeroCard}>
-              <Text style={styles.loggedInHeroTitle}>업무 포털 접속 완료</Text>
-              <Text style={styles.userName}>{`${me.userName} (${me.roleName})`}</Text>
-              <Text style={styles.loggedInHeroText}>{me.userEmail}</Text>
-              <Text style={styles.loggedInHeroText}>
-                알림 {notificationSummary?.unreadCount ?? 0}건 / 대기 결재 {documents.filter((item) => item.status === "submitted").length}건
-              </Text>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="로그아웃"
-                onPress={() => {
-                  clearSession("로그아웃되었습니다.");
-                }}
-                style={styles.heroLogoutButton}
-              >
-                <Text style={styles.heroLogoutText}>로그아웃</Text>
-              </Pressable>
-            </View>
-          )}
           {message ? <Text style={styles.message}>{message}</Text> : null}
-        </View>
+          </View>
+        ) : null}
 
         {me ? (
           <>
-            {activeTab !== "home" ? (
-              <View style={styles.homeSummaryGrid}>
-                {summaryCards.map((item) => (
-                  <View key={item.title} style={[styles.homeSummaryCard, item.tone]}>
-                    <Text style={styles.homeSummaryLabel}>{item.title}</Text>
-                    <Text style={styles.homeSummaryValue}>{item.value}</Text>
-                    <Text style={styles.homeSummaryDesc}>{item.desc}</Text>
-                  </View>
-                ))}
-              </View>
-            ) : null}
-
-            {activeTab === "more" || activeTabError ? (
+            {(activeTab === "more" && moreMenuOpen) || activeTabError ? (
               <View style={styles.surfaceCard}>
-              {activeTab === "more" ? (
+              {activeTab === "more" && moreMenuOpen ? (
                 <View style={styles.mobileSubNav}>
-                  {[{ id: "directory", label: "주소록", icon: "directory" }, { id: "ai", label: "AI 채팅", icon: "ai" }, { id: "search", label: "업무 검색", icon: "search" }, { id: "settings", label: "설정", icon: "settings" }].map((item) => (
-                    <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} accessibilityHint="선택한 더보기 화면으로 이동합니다." onPress={() => { setMoreScreen(item.id as Exclude<ScreenKey, MobileTab>); if (item.id === "directory" && token) void loadDirectory(token); if ((item.id === "settings" || (item.id === "ai" && !personalAiTestReady)) && token) void loadPersonalAi(token); }} style={[styles.mobileSubTab, moreScreen === item.id ? styles.mobileSubTabActive : styles.mobileSubTabIdle]}><MoaIcon name={item.icon as IconName} color={moreScreen === item.id ? "#ffffff" : "#0f766e"} /><Text style={[styles.mobileTabLabel, moreScreen === item.id ? styles.mobileTabLabelActive : null]}>{item.label}</Text></Pressable>
+                  {mobileNavigation.more.map((item: { id: string; label: string; icon: IconName }) => (
+                    <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} accessibilityHint="선택한 더보기 화면으로 이동합니다." onPress={() => { setMoreScreen(item.id as Exclude<ScreenKey, MobileTab>); setMoreMenuOpen(false); if (item.id === "directory" && token) void loadDirectory(token); if ((item.id === "settings" || (item.id === "ai" && !personalAiTestReady)) && token) void loadPersonalAi(token); }} style={[styles.mobileSubTab, moreScreen === item.id ? styles.mobileSubTabActive : styles.mobileSubTabIdle]}><MoaIcon name={item.icon as IconName} color={moreScreen === item.id ? "#ffffff" : "#0f766e"} /><Text style={[styles.mobileTabLabel, moreScreen === item.id ? styles.mobileTabLabelActive : null]}>{item.label}</Text></Pressable>
                   ))}
                 </View>
               ) : null}
@@ -1257,42 +1391,57 @@ export default function App() {
             ) : null}
 
             {activeTab === "calendar" ? (
-              <View style={styles.surfaceCard}>
-                <Text style={styles.surfaceKicker}>일정</Text>
-                <Text accessibilityRole="header" style={styles.surfaceTitle}>오늘의 일정</Text>
-                <View style={styles.buttonPair}><Button accessibilityLabel="이전 달 일정 보기" accessibilityHint="표시 중인 달을 한 달 전으로 이동합니다." title="이전 달" onPress={() => setScheduleMonthKey((value) => shiftMonthKey(value, -1))} /><Button accessibilityLabel="다음 달 일정 보기" accessibilityHint="표시 중인 달을 한 달 뒤로 이동합니다." title="다음 달" onPress={() => setScheduleMonthKey((value) => shiftMonthKey(value, 1))} /></View>
-                <Text accessibilityLiveRegion="polite" style={styles.surfaceHint}>{`${Number(scheduleMonthKey.slice(0, 4))}년 ${Number(scheduleMonthKey.slice(5, 7))}월 · ${timezone}`}</Text>
-                <View style={styles.calendarGrid}>{buildMonthGrid(scheduleMonthKey).map((cell, index) => <View key={`${cell.dateKey}-${index}`} style={styles.calendarCell}><Text style={styles.calendarDate}>{cell.day || ""}</Text>{visibleSchedules.filter((item) => dateKey(item.starts_at, timezone) === cell.dateKey).slice(0, 2).map((item) => <Text key={item.id} style={styles.calendarEvent}>{item.title}</Text>)}</View>)}</View>
-                {visibleSchedules.length === 0 ? <Text style={styles.emptyState}>표시할 일정이 없습니다.</Text> : null}
-                <TextInput accessibilityLabel="일정 제목" accessibilityHint="생성할 일정의 제목을 입력합니다." style={styles.input} value={scheduleForm.title} onChangeText={(title) => setScheduleForm((current) => ({ ...current, title }))} placeholder="일정 제목" />
-                <TextInput accessibilityLabel="일정 시작 시간" accessibilityHint="일정 시작 시각을 날짜와 시간 형식으로 입력합니다." style={styles.input} value={scheduleForm.startsAt} onChangeText={(startsAt) => setScheduleForm((current) => ({ ...current, startsAt }))} placeholder="2026-08-24T09:00:00+09:00" />
-                <TextInput accessibilityLabel="일정 종료 시간" accessibilityHint="일정 종료 시각을 날짜와 시간 형식으로 입력합니다." style={styles.input} value={scheduleForm.endsAt} onChangeText={(endsAt) => setScheduleForm((current) => ({ ...current, endsAt }))} placeholder="2026-08-24T10:00:00+09:00" />
-                <Button accessibilityLabel="일정 생성" accessibilityHint="입력한 제목과 시간으로 일정을 생성합니다." title={scheduleSaving ? "저장 중" : "일정 생성"} disabled={scheduleSaving} onPress={() => { void createSchedule(); }} />
+              <View style={styles.calendarScreen}>
+                <View style={styles.calendarToolbar}>
+                  <Text accessibilityRole="button" accessibilityLabel="이전 달 일정 보기" accessibilityHint="표시 중인 달을 한 달 전으로 이동합니다." onPress={() => changeScheduleMonth(-1)} style={styles.calendarArrow}>‹</Text>
+                  <Text accessibilityRole="header" accessibilityLiveRegion="polite" style={styles.calendarMonthTitle}>{`${Number(scheduleMonthKey.slice(0, 4))}년 ${Number(scheduleMonthKey.slice(5, 7))}월`}</Text>
+                  <Pressable accessibilityRole="button" accessibilityLabel="오늘 일정 보기" accessibilityHint="오늘 날짜와 일정으로 이동합니다." onPress={selectTodaySchedule} style={styles.calendarTodayButton}><Text style={styles.calendarTodayText}>오늘</Text></Pressable>
+                  <Text accessibilityRole="button" accessibilityLabel="다음 달 일정 보기" accessibilityHint="표시 중인 달을 한 달 뒤로 이동합니다." onPress={() => changeScheduleMonth(1)} style={styles.calendarArrow}>›</Text>
+                </View>
+                <View style={styles.calendarWeekdays}>{calendarScreen.weekdayLabels.map((label, index) => <Text key={label} style={[styles.calendarWeekday, index === 0 ? styles.calendarSunday : null]}>{label}</Text>)}</View>
+                <View style={styles.calendarGrid}>{calendarScreen.cells.map((cell, index) => {
+                  const daySchedules = visibleSchedules.filter((item) => dateKey(item.starts_at, timezone) === cell.dateKey);
+                  const selected = Boolean(cell.dateKey) && cell.dateKey === calendarScreen.selectedDateKey;
+                  return <Pressable key={`${cell.dateKey}-${index}`} accessibilityRole={cell.dateKey ? "button" : undefined} accessibilityLabel={cell.dateKey ? `${cell.day}일 일정 ${daySchedules.length}건` : undefined} accessibilityHint={cell.dateKey ? "선택한 날짜의 일정 목록을 표시합니다." : undefined} disabled={!cell.dateKey} onPress={() => setSelectedScheduleDateKey(cell.dateKey)} style={styles.calendarCompactCell}><Text style={[styles.calendarCompactDate, index % 7 === 0 ? styles.calendarSunday : null, selected ? styles.calendarSelectedDate : null]}>{cell.day || ""}</Text>{daySchedules.length > 0 ? <View style={styles.calendarEventDot} /> : null}</Pressable>;
+                })}</View>
+                <View style={styles.selectedDayHeader}><Text style={styles.selectedDayTitle}>{calendarScreen.selectedDateKey ? `${Number(calendarScreen.selectedDateKey.slice(5, 7))}월 ${Number(calendarScreen.selectedDateKey.slice(8, 10))}일` : "선택일"}</Text><Text style={styles.selectedDayCount}>전체 {calendarScreen.selectedSchedules.length}건</Text></View>
+                <View accessibilityLabel="선택일 일정 목록" style={styles.selectedScheduleList}>
+                  {calendarScreen.selectedSchedules.map((item, index) => <View key={item.id} style={[styles.selectedScheduleRow, index === calendarScreen.selectedSchedules.length - 1 ? styles.selectedScheduleAlert : null]}><Text style={styles.selectedScheduleTime}>{formatStamp(item.starts_at).slice(-5)}</Text><View style={styles.selectedScheduleBody}><Text style={styles.selectedScheduleTitle}>{item.title}</Text><Text style={styles.selectedScheduleMeta}>{item.ends_at ? `${formatStamp(item.starts_at).slice(-5)} - ${formatStamp(item.ends_at).slice(-5)}` : formatStamp(item.starts_at)}{item.location ? ` · ${item.location}` : ""}</Text></View></View>)}
+                  {calendarScreen.selectedSchedules.length === 0 ? <Text style={styles.calendarEmpty}>선택한 날짜에 일정이 없습니다.</Text> : null}
+                </View>
+                {scheduleFormOpen ? <View style={styles.scheduleComposeCard}>
+                  <TextInput accessibilityLabel="일정 제목" accessibilityHint="생성할 일정의 제목을 입력합니다." style={styles.compactInput} value={scheduleForm.title} onChangeText={(title) => setScheduleForm((current) => ({ ...current, title }))} placeholder="일정 제목" />
+                  <TextInput accessibilityLabel="일정 시작 시간" accessibilityHint="일정 시작 시각을 날짜와 시간 형식으로 입력합니다." style={styles.compactInput} value={scheduleForm.startsAt} onChangeText={(startsAt) => setScheduleForm((current) => ({ ...current, startsAt }))} placeholder="2026-08-24T09:00:00+09:00" />
+                  <TextInput accessibilityLabel="일정 종료 시간" accessibilityHint="일정 종료 시각을 날짜와 시간 형식으로 입력합니다." style={styles.compactInput} value={scheduleForm.endsAt} onChangeText={(endsAt) => setScheduleForm((current) => ({ ...current, endsAt }))} placeholder="2026-08-24T10:00:00+09:00" />
+                  <Pressable accessibilityRole="button" accessibilityLabel="일정 생성" disabled={scheduleSaving} onPress={() => { void createSchedule(); }} style={[styles.composeSendButton, scheduleSaving ? styles.buttonDisabled : null]}><Text style={styles.composeSendButtonText}>{scheduleSaving ? "저장 중" : "일정 저장"}</Text></Pressable>
+                </View> : null}
+                <Pressable accessibilityRole="button" accessibilityLabel="일정 만들기" accessibilityHint="새 일정 입력 양식을 열거나 닫습니다." onPress={() => setScheduleFormOpen((current) => !current)} style={styles.calendarCreateButton}><Text style={styles.calendarCreateText}>{scheduleFormOpen ? "닫기" : "＋ 일정 만들기"}</Text></Pressable>
                 {scheduleError ? <Text accessibilityRole="alert" accessibilityLabel="일정 요청을 처리하지 못했습니다." style={styles.error}>{scheduleError}</Text> : null}
               </View>
             ) : null}
 
             {activeTab === "more" && moreScreen === "directory" ? (
-              <View style={styles.surfaceCard}>
-                <Text style={styles.surfaceKicker}>주소록</Text>
-                <Text accessibilityRole="header" style={styles.surfaceTitle}>사원 정보 검색</Text>
-                <TextInput accessibilityLabel="주소록 검색" accessibilityHint="이름, 부서, 역할 또는 이메일로 사원을 검색합니다." style={styles.input} value={directoryQuery} onChangeText={setDirectoryQuery} placeholder="이름, 부서, 역할, 이메일 검색" />
-                {visibleDirectoryUsers.map((member) => { const isSelf = member.id === me?.userId; return <View key={member.id} style={styles.directoryCard}><View style={styles.avatar}><Text style={styles.avatarText}>{member.name.slice(0, 1)}</Text></View><View style={styles.directoryInfo}><Text style={styles.listTitle}>{member.name}</Text><Text style={styles.listBody}>{member.department_name} · {member.role_name}</Text><Text style={styles.listBody}>{member.email}</Text></View><View style={styles.directoryActions}><Button title="메일" accessibilityLabel={`${member.name}에게 메일 보내기`} accessibilityHint="기본 메일 앱을 엽니다." onPress={() => openDirectoryMail(member.email)} disabled={!mailtoUrl(member.email)} /><Button title="전화" accessibilityLabel={`${member.name} 전화번호 미제공`} accessibilityHint="전화번호가 없어 사용할 수 없습니다." onPress={() => {}} disabled={true} /><Button title={isSelf ? "나" : directoryBusyUserId === member.id ? "생성 중" : "대화"} accessibilityLabel={`${member.name}와 대화 시작`} accessibilityHint="선택한 사원과 일대일 대화방을 엽니다." onPress={() => void startDirectRoom(member)} disabled={isSelf || directoryBusyUserId === member.id} /></View></View>; })}
+              <View style={styles.directoryScreen}>
+                <Text accessibilityRole="header" style={styles.directoryScreenTitle}>주소록</Text>
+                <TextInput accessibilityLabel="주소록 검색" accessibilityHint="이름, 부서, 역할 또는 이메일로 사원을 검색합니다." style={styles.directorySearchInput} value={directoryQuery} onChangeText={setDirectoryQuery} placeholder="이름, 부서, 직책 검색" />
+                <View style={styles.directorySections}>{(["all", "favorites", "recent"] as const).map((section, index) => <Pressable key={section} accessibilityRole="button" accessibilityLabel={`${directoryScreen.sections[index]} 주소록 보기`} onPress={() => setDirectorySection(section)} style={[styles.directorySection, directorySection === section ? styles.directorySectionActive : null]}><Text style={[styles.directorySectionText, directorySection === section ? styles.directorySectionTextActive : null]}>{directoryScreen.sections[index]}</Text></Pressable>)}</View>
+                <View style={styles.directoryListHeader}><Text style={styles.directoryListTitle}>{directorySection === "all" ? `전체 직원 (${directoryScreen.rows.length})` : directoryScreen.sections[["all", "favorites", "recent"].indexOf(directorySection)]}</Text></View>
+                {directoryScreen.rows.map((member) => { const isSelf = member.id === me?.userId; return <View key={member.id} style={styles.directoryCompactRow}><View style={styles.directoryInitial}><Text style={styles.directoryInitialText}>{member.name.slice(0, 1)}</Text></View><View style={styles.directoryCompactInfo}><Text style={styles.directoryMemberName}>{member.name} <Text style={styles.directoryMemberRole}>{member.role_name}</Text></Text><Text style={styles.directoryDepartment}>{member.department_name}</Text></View><View style={styles.directoryActions}><Pressable accessibilityRole="button" accessibilityLabel={`${member.name} 전화번호 미제공`} accessibilityHint="전화번호가 없어 사용할 수 없습니다." onPress={() => {}} disabled={true} style={styles.directoryIconDisabled}><Text style={styles.directoryIcon}>⌕</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel={`${member.name}에게 메일 보내기`} accessibilityHint="기본 메일 앱을 엽니다." onPress={() => openDirectoryMail(member.email)} disabled={!mailtoUrl(member.email)} style={styles.directoryIconButton}><Text style={styles.directoryIcon}>✉</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel={`${member.name}와 대화 시작`} accessibilityHint="선택한 사원과 일대일 대화방을 엽니다." onPress={() => void startDirectRoom(member)} disabled={isSelf || directoryBusyUserId === member.id} style={[styles.directoryIconButton, isSelf || directoryBusyUserId === member.id ? styles.directoryIconDisabled : null]}><Text style={styles.directoryIcon}>◌</Text></Pressable></View></View>; })}
                 {directoryError ? <Text accessibilityRole="alert" accessibilityLabel="주소록 요청을 처리하지 못했습니다." style={styles.directoryError}>{directoryError}</Text> : null}
-                {visibleDirectoryUsers.length === 0 && !directoryError ? <Text accessibilityLiveRegion="polite" style={styles.emptyState}>표시할 주소록 정보가 없습니다.</Text> : null}
+                {directoryScreen.rows.length === 0 && !directoryError ? <Text accessibilityLiveRegion="polite" style={styles.emptyState}>표시할 주소록 정보가 없습니다.</Text> : null}
               </View>
             ) : null}
 
             {activeTab === "more" && moreScreen === "ai" ? (
-              <View style={styles.surfaceCard}>
-                <Text style={styles.surfaceKicker}>AI 채팅</Text>
-                <Text accessibilityRole="header" style={styles.surfaceTitle}>연결된 LLM에게 질문하고 검색</Text>
-                <Text style={styles.surfaceHint}>개인 API 키는 설정 화면의 현재 입력 중에만 유지되며, 답변 요청은 MoaWorks 서버를 통해 처리합니다.</Text>
-                {aiMessages.map((item, index) => <View key={`${item.role}-${index}`} style={[styles.aiBubble, item.role === "user" ? styles.aiUserBubble : styles.aiAssistantBubble]}><Text style={styles.aiRole}>{item.role === "user" ? "나" : llmProvider}</Text><Text style={styles.listBody}>{item.body}</Text></View>)}
-                <TextInput accessibilityLabel="개인 AI 질문" accessibilityHint="개인 AI에게 보낼 질문을 입력합니다." style={[styles.input, styles.textarea]} value={aiDraft} onChangeText={setAiDraft} placeholder="질문을 입력하세요." multiline maxLength={8000} editable={!personalAiPendingAction} />
-                <Button accessibilityLabel="개인 AI 질문 보내기" accessibilityHint="입력한 질문을 연결된 개인 AI에 보냅니다." title={personalAiPendingAction === "chat" ? "답변 대기 중" : "질문 보내기"} disabled={!personalAiTestReady || Boolean(personalAiPendingAction) || !aiDraft.trim()} onPress={() => { void askAi(); }} />
-                {!personalAiTestReady ? <Text accessibilityLiveRegion="polite" style={styles.surfaceHint}>현재 로그인 세션에서 연결 시험이 준비 상태가 되어야 질문을 보낼 수 있습니다.</Text> : null}
-                {personalAiError ? <Text accessibilityRole="alert" accessibilityLabel="개인 AI 요청을 처리하지 못했습니다." style={styles.error}>{personalAiError}</Text> : null}
+              <View style={styles.aiScreen}>
+                <View style={styles.aiHeader}><View><Text accessibilityRole="header" style={styles.aiTitle}>AI 채팅</Text><Text style={styles.aiProviderStatus}>{aiScreen.providerLabel || "PROVIDER"} · {aiScreen.ready ? "연결됨" : "연결 필요"}</Text></View><Text accessibilityRole="button" accessibilityLabel="개인 AI 설정 열기" onPress={() => { setMoreScreen("settings"); setMoreMenuOpen(false); }} style={styles.aiSettingsAction}>⚙ 설정</Text></View>
+                <View accessibilityLabel="AI 대화" style={styles.aiConversation}>
+                  {aiScreen.messages.map((item, index) => <View key={`${item.role}-${index}`} style={[styles.aiMessageGroup, item.role === "user" ? styles.aiMessageGroupUser : null]}>{item.role === "assistant" ? <View style={styles.aiAvatar}><Text style={styles.aiAvatarText}>M</Text></View> : null}<View style={[styles.aiMessageBubble, item.role === "user" ? styles.aiMessageUser : styles.aiMessageAssistant]}><Text style={item.role === "user" ? styles.aiMessageTextUser : styles.aiMessageTextAssistant}>{item.body}</Text></View></View>)}
+                  {aiScreen.messages.length === 0 ? <View style={styles.aiMessageGroup}><View style={styles.aiAvatar}><Text style={styles.aiAvatarText}>M</Text></View><View style={[styles.aiMessageBubble, styles.aiMessageAssistant]}><Text style={styles.aiMessageTextAssistant}>안녕하세요, MoaWorks AI입니다. 무엇을 도와드릴까요?</Text></View></View> : null}
+                </View>
+                <View style={styles.aiInputBar}><Text style={styles.aiAddButton}>＋</Text><TextInput accessibilityLabel="개인 AI 질문" accessibilityHint="개인 AI에게 보낼 질문을 입력합니다." style={styles.aiInput} value={aiDraft} onChangeText={setAiDraft} placeholder="무엇이든 물어보세요..." maxLength={8000} editable={!personalAiPendingAction} /><Pressable accessibilityRole="button" accessibilityLabel="개인 AI 질문 보내기" accessibilityHint="입력한 질문을 연결된 개인 AI에 보냅니다." disabled={!personalAiTestReady || Boolean(personalAiPendingAction) || !aiDraft.trim()} onPress={() => { void askAi(); }} style={[styles.aiSendButton, !personalAiTestReady || Boolean(personalAiPendingAction) || !aiDraft.trim() ? styles.buttonDisabled : null]}><Text style={styles.aiSendText}>{personalAiPendingAction === "chat" ? "…" : "➤"}</Text></Pressable></View>
+                {!personalAiTestReady ? <Text accessibilityLiveRegion="polite" style={styles.aiReadinessNote}>현재 로그인 세션에서 연결 시험이 준비 상태가 되어야 질문을 보낼 수 있습니다.</Text> : null}
+                {personalAiError ? <Text accessibilityRole="alert" accessibilityLabel="개인 AI 요청을 처리하지 못했습니다." style={styles.aiInlineError}>{personalAiError}</Text> : null}
               </View>
             ) : null}
 
@@ -1356,104 +1505,109 @@ export default function App() {
                 <Button accessibilityLabel="개인 AI 연결 시험" title={personalAiPendingAction === "test" ? "연결 시험 중" : llmConnectionStatus === "ready" ? "연결됨 · 다시 시험" : "LLM 연결 시험"} disabled={Boolean(personalAiPendingAction) || personalAiConfigDirty || !llmProvider || !llmModel.trim()} onPress={() => { void testPersonalAiConnection(); }} />
                 <Button accessibilityLabel="개인 AI 설정 저장" title={personalAiPendingAction === "save" ? "설정 저장 중" : "개인 AI 설정 저장"} disabled={Boolean(personalAiPendingAction) || !llmProvider || !llmModel.trim()} onPress={() => { void savePersonalAiConfig(); }} />
                 {personalAiError ? <Text accessibilityRole="alert" accessibilityLabel="개인 AI 요청을 처리하지 못했습니다." style={styles.error}>{personalAiError}</Text> : null}
+                <View style={styles.settingsCompactSection}><Text style={styles.sectionLabel}>현재 사용자</Text><Text style={styles.settingsValue}>{me.userName} · {me.roleName}</Text><Text style={styles.settingsValue}>{me.userEmail}</Text></View>
+                <View style={styles.settingsCompactSection}><View style={styles.moduleToolbar}><Text style={styles.sectionLabel}>알림 {notificationSummary?.unreadCount ?? 0}건</Text><Text accessibilityRole="button" accessibilityLabel="알림 새로고침" onPress={() => { void refreshNotifications(); }} style={styles.homeSectionLink}>새로고침</Text></View>{notifications.slice(0, 5).map((item) => <Pressable key={item.notificationId} accessibilityRole="button" accessibilityLabel={`${item.title} 알림 읽음 처리`} disabled={item.status !== "unread"} onPress={() => { void executeAckNotification(item.notificationId); }} style={styles.settingsNotificationRow}><Text style={styles.listTitle}>{item.title}</Text><Text style={styles.listBody}>{item.message}</Text></Pressable>)}{notificationError ? <Text accessibilityRole="alert" style={styles.error}>{notificationError}</Text> : null}</View>
+                <View style={styles.settingsCompactSection}><Text style={styles.sectionLabel}>도움말</Text><Text style={styles.settingsValue}>정책 확인 경로: {uiContract.helpText}</Text>{sessionMessages.map((item) => <Text key={item} style={styles.settingsValue}>{item}</Text>)}</View>
+                <Button accessibilityLabel="로그아웃" title="로그아웃" onPress={() => clearSession("로그아웃되었습니다.")} />
               </View>
             ) : null}
 
-            <View style={styles.surfaceCard}>
-              <Text style={styles.surfaceKicker}>빠른 이동</Text>
-              <Text style={styles.surfaceTitle}>모바일 주요 업무 탭</Text>
-              <View style={styles.mobileTabRow}>
-                {[
-                  { id: "home", label: "홈" },
-                  { id: "mail", label: "메일" },
-                  { id: "approval", label: "결재" },
-                  { id: "chat", label: "메신저" },
-                  { id: "calendar", label: "일정" },
-                  { id: "files", label: "파일" },
-                  { id: "more", label: "더보기" },
-                ].map((item) => (
-                  <Text
-                    key={item.id}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${item.label} 빠른 이동`}
-                    accessibilityHint="선택한 업무 탭으로 이동합니다."
-                    onPress={() => handleTabPress(item.id as MobileTab)}
-                    style={[styles.mobileTab, activeTab === item.id ? styles.mobileTabActive : styles.mobileTabIdle]}
-                  >
-                    {item.label}
-                  </Text>
-                ))}
-              </View>
-              <Text style={styles.surfaceHint}>정책 본문은 메인에 두지 않고 {uiContract.helpText} 경로만 제공합니다.</Text>
-              {activeTabError ? <Text style={styles.error}>{activeTabError}</Text> : null}
-            </View>
-
             {activeTab === "home" ? (
-              <View style={styles.surfaceCard}>
-                <Text style={styles.surfaceKicker}>홈</Text>
-                <Text style={styles.surfaceTitle}>오늘의 업무를 빠르게 확인하세요</Text>
-                <View style={styles.quickGrid}>
-                  {homeQuickCards.map((item) => (
+              <View style={styles.homeScreen}>
+                <View style={styles.homeWelcome}>
+                  <Text accessibilityRole="header" style={styles.homeGreeting}>{homeView.greeting}</Text>
+                  <Text style={styles.homeDate}>{new Date().toLocaleDateString(locale, { month: "long", day: "numeric", weekday: "short" })}</Text>
+                  <Text style={styles.homeStatus}>알림 {notificationSummary?.unreadCount ?? 0}건 · {me.roleName}</Text>
+                </View>
+                <View style={styles.homeStats}>
+                  {homeView.summary.map((item: { id: "mail" | "approval"; label: string; count: number }) => (
                     <Pressable
-                      key={item.title}
+                      key={item.id}
                       accessibilityRole="button"
-                      accessibilityLabel={`${item.title} 화면 열기`}
-                      onPress={() => {
-                        const nextTab: MobileTab = item.id === "mail" ? "mail" : item.id === "approval" ? "approval" : item.id === "chat" ? "chat" : "home";
-                        if (nextTab !== "home") setActiveTab(nextTab);
-                      }}
-                      style={[styles.quickCard, item.tone]}
+                      accessibilityLabel={`${item.label} ${item.count}건 화면 열기`}
+                      accessibilityHint={`하단 ${item.label === "안 읽은 메일" ? "메일" : "결재"} 화면으로 이동합니다.`}
+                      onPress={() => handleTabPress(item.id)}
+                      style={styles.homeStatCard}
                     >
-                      <Text style={styles.quickCardTitle}>{item.title}</Text>
-                      <Text style={styles.quickCardNote}>{item.note}</Text>
+                      <Text style={styles.homeStatLabel}>{item.label}</Text>
+                      <Text style={styles.homeStatValue}>{item.count}<Text style={styles.homeStatUnit}>건</Text></Text>
                     </Pressable>
                   ))}
                 </View>
-                <View style={styles.homeDetailGrid}>
-                  <View style={styles.homeDetailCard}>
-                    <Text style={styles.listKicker}>오늘 일정</Text>
-                    <Text style={styles.emptyState}>표시할 일정이 없습니다.</Text>
-                    <Text style={styles.listBody}>일정 메뉴에서 연결 상태와 상세 내용을 확인하세요.</Text>
-                  </View>
-                  <View style={styles.homeDetailCard}>
-                    <Text style={styles.listKicker}>최근 대화</Text>
-                    {rooms.slice(0, 2).map((room) => (
+                <View style={styles.homeSection}>
+                  <View style={styles.homeSectionHeader}><Text style={styles.homeSectionTitle}>오늘의 일정</Text><Text onPress={() => handleTabPress("calendar")} style={styles.homeSectionLink}>전체</Text></View>
+                  {homeView.todaySchedules.map((item: WorkspaceSchedule) => (
+                    <Pressable key={item.id} onPress={() => handleTabPress("calendar")} style={styles.homeCompactRow}>
+                      <Text style={styles.homeRowTime}>{formatStamp(item.starts_at).slice(-5)}</Text>
+                      <Text style={styles.homeRowTitle} numberOfLines={1}>{item.title}</Text>
+                    </Pressable>
+                  ))}
+                  {homeView.todaySchedules.length === 0 ? <Text style={styles.homeEmpty}>오늘 등록된 일정이 없습니다.</Text> : null}
+                </View>
+                <View style={styles.homeSection}>
+                    <View style={styles.homeSectionHeader}><Text style={styles.homeSectionTitle}>최근 메신저</Text><Text onPress={() => handleTabPress("chat")} style={styles.homeSectionLink}>더보기</Text></View>
+                    {homeView.recentRooms.map((room: MessengerRoom) => (
                       <Pressable key={room.roomId} accessibilityRole="button" accessibilityLabel={`${room.roomName} 대화 열기`} onPress={() => { setActiveTab("chat"); void openRoom(room.roomId); }} style={styles.homeRecentRow}>
                         <Text style={styles.listTitle}>{room.roomName}</Text>
                         <Text style={styles.listBody}>{room.lastMessage || "최근 메시지 없음"}</Text>
                       </Pressable>
                     ))}
-                    {rooms.length === 0 ? <Text style={styles.emptyState}>최근 대화가 없습니다.</Text> : null}
-                  </View>
+                    {homeView.recentRooms.length === 0 ? <Text style={styles.homeEmpty}>최근 대화가 없습니다.</Text> : null}
                 </View>
               </View>
             ) : null}
 
             {activeTab === "mail" ? (
-              <View style={styles.surfaceCard}>
-                <Text style={styles.surfaceKicker}>메일</Text>
-                <Text style={styles.surfaceTitle}>받은편지함</Text>
+              <View style={styles.mailScreen}>
+                <View style={styles.moduleToolbar}>
+                  <View><Text style={styles.moduleKicker}>MAIL</Text><Text accessibilityRole="header" style={styles.moduleTitle}>메일</Text></View>
+                  <Pressable accessibilityRole="button" accessibilityLabel="새 메일 작성" onPress={() => { setMailComposeOpen(true); setMailError(""); }} style={styles.primaryCompactButton}>
+                    <Text style={styles.primaryCompactButtonText}>＋ 새 메일</Text>
+                  </Pressable>
+                </View>
+                <View accessibilityLabel="메일함" style={styles.mailboxTabs}>
+                  {([
+                    { id: "inbox", label: "받은메일함" },
+                    { id: "starred", label: "중요" },
+                    { id: "sent", label: "보낸메일함" },
+                    { id: "drafts", label: "임시보관함" },
+                  ] as Array<{ id: MailboxTab; label: string }>).map((item) => (
+                    <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 열기`} onPress={() => selectMailbox(item.id)} style={[styles.mailboxTab, mailboxTab === item.id ? styles.mailboxTabActive : null]}>
+                      <Text style={[styles.mailboxTabText, mailboxTab === item.id ? styles.mailboxTabTextActive : null]}>{item.label}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+                {mailComposeOpen ? (
+                  <View accessibilityLabel="새 메일 작성 양식" style={styles.composeCard}>
+                    <View style={styles.composeHeader}><Text style={styles.composeTitle}>새 메일</Text><Text onPress={() => { if (!mailSendPending) setMailComposeOpen(false); }} style={styles.composeClose}>닫기</Text></View>
+                    <TextInput accessibilityLabel="메일 수신자" style={styles.compactInput} value={mailComposeForm.to} onChangeText={(to) => setMailComposeForm((current) => ({ ...current, to }))} placeholder="받는 사람 이메일" autoCapitalize="none" keyboardType="email-address" editable={!mailSendPending} />
+                    <TextInput accessibilityLabel="메일 제목" style={styles.compactInput} value={mailComposeForm.subject} onChangeText={(subject) => setMailComposeForm((current) => ({ ...current, subject }))} placeholder="제목" editable={!mailSendPending} />
+                    <TextInput accessibilityLabel="메일 본문" style={[styles.compactInput, styles.composeBody]} value={mailComposeForm.bodyText} onChangeText={(bodyText) => setMailComposeForm((current) => ({ ...current, bodyText }))} placeholder="내용을 입력하세요" multiline textAlignVertical="top" editable={!mailSendPending} />
+                    <Pressable accessibilityRole="button" accessibilityLabel="메일 발송 확인" disabled={mailSendPending} onPress={confirmSendMail} style={[styles.composeSendButton, mailSendPending ? styles.buttonDisabled : null]}>
+                      <Text style={styles.composeSendButtonText}>{mailSendPending ? "발송 중" : "발송"}</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
                 <TextInput
                   accessibilityLabel="메일 검색"
-                  style={styles.input}
+                  style={styles.mailSearchInput}
                   value={mailQuery}
                   onChangeText={setMailQuery}
                   placeholder="보낸 사람 또는 제목 검색"
                   autoCapitalize="none"
                 />
-                <View style={styles.mobileSubNav}>
-                  {(["all", "unread", "starred"] as const).map((filter) => (
+                {(mailboxTab === "inbox" || mailboxTab === "starred") ? <View style={styles.mailFilterRow}>
+                  {(["all", "unread"] as const).map((filter) => (
                     <Pressable
                       key={filter}
-                      accessibilityRole="button"
-                      accessibilityLabel={filter === "all" ? "전체 메일" : filter === "unread" ? "읽지 않은 메일" : "중요 메일"}
+                      accessibilityRole="button" accessibilityLabel={filter === "all" ? "전체 메일" : "읽지 않은 메일"}
                       onPress={() => setMailFilter(filter)}
-                      style={[styles.mobileSubTab, mailFilter === filter ? styles.mobileSubTabActive : styles.mobileSubTabIdle]}
+                      style={[styles.mailFilterChip, mailFilter === filter ? styles.mailFilterChipActive : null]}
                     >
-                      <Text style={mailFilter === filter ? styles.mobileTabLabelActive : styles.mobileTabLabel}>{filter === "all" ? "전체" : filter === "unread" ? "안 읽음" : "중요"}</Text>
+                      <Text style={mailFilter === filter ? styles.mailFilterTextActive : styles.mailFilterText}>{filter === "all" ? "전체" : "안 읽음"}</Text>
                     </Pressable>
                   ))}
-                </View>
+                </View> : null}
                 <View accessibilityLabel="메일 목록" style={styles.mailList}>
                   {visibleMailItems.map((item) => (
                     <Pressable
@@ -1479,84 +1633,96 @@ export default function App() {
                 </View>
                 {visibleMailItems.length === 0 ? <Text style={styles.emptyState}>조건에 맞는 메일이 없습니다.</Text> : null}
                 {selectedMailDetail ? (
-                  <View style={styles.listCard}>
-                    <Text style={styles.listKicker}>메일 상세</Text>
-                    <Text style={styles.listTitle}>{selectedMailDetail.subject}</Text>
-                    <Text style={styles.listBody}>{selectedMailDetail.bodyText}</Text>
-                    <Text style={styles.listBody}>수신: {selectedMailDetail.recipients.map((item) => item.recipientEmail).join(", ") || "-"}</Text>
+                  <View style={styles.mailDetailCard}>
+                    <View style={styles.mailDetailHeader}><Text style={styles.mailDetailKicker}>메일 상세</Text>{mailboxTab === "inbox" || mailboxTab === "starred" ? <Text accessibilityRole="button" accessibilityLabel="중요 표시 전환" onPress={() => { void toggleMailStarState(selectedMailDetail.mailId); }} style={styles.mailDetailAction}>★ 중요</Text> : null}</View>
+                    <Text style={styles.mailDetailTitle}>{selectedMailDetail.subject}</Text>
+                    <Text style={styles.mailDetailMeta}>{selectedMailDetail.senderEmail} · {formatStamp(selectedMailDetail.sentAt || selectedMailDetail.createdAt)}</Text>
+                    <Text style={styles.mailDetailBody}>{selectedMailDetail.bodyText}</Text>
+                    <Text style={styles.mailDetailMeta}>수신: {selectedMailDetail.recipients.map((item) => item.recipientEmail).join(", ") || "-"}</Text>
                   </View>
                 ) : null}
                 {mailError ? <Text style={styles.error}>{mailError}</Text> : null}
-                <Text style={styles.emptyState}>장기 보관 메일은 설치형 로컬 아카이브 흐름으로 연결됩니다.</Text>
+                <Text style={styles.mailPolicyNote}>장기 보관 메일은 설치형 로컬 아카이브에서 관리됩니다.</Text>
               </View>
             ) : null}
 
             {activeTab === "approval" ? (
-              <View style={styles.surfaceCard}>
-                <Text style={styles.surfaceKicker}>결재</Text>
-                <Text style={styles.surfaceTitle}>긴급 승인 / 대기 문서 / 최근 처리</Text>
-                <View style={styles.quickGrid}>
-                  {recentApprovalActions.map((item, index) => (
-                    <View key={item} style={[styles.quickCard, index === 0 ? styles.quickDanger : styles.quickInk]}>
-                      <Text style={styles.quickCardTitle}>{item}</Text>
-                      <Text style={styles.quickCardNote}>모바일에서 바로 실행할 수 있는 1차 처리 흐름</Text>
-                    </View>
+              <View style={styles.approvalScreen}>
+                <View style={styles.moduleToolbar}>
+                  <View><Text style={styles.moduleKicker}>APPROVAL</Text><Text accessibilityRole="header" style={styles.moduleTitle}>결재</Text></View>
+                  {can("approval:create") ? <Text accessibilityRole="button" accessibilityLabel="결재 초안 작성" onPress={() => setApprovalComposeOpen((current) => !current)} style={styles.approvalCreateAction}>{approvalComposeOpen ? "닫기" : "＋ 기안"}</Text> : null}
+                </View>
+                <View accessibilityLabel="결재 상태" style={styles.approvalTabs}>
+                  {(["draft", "progress", "complete"] as ApprovalView[]).map((view, index) => (
+                    <Pressable key={view} accessibilityRole="button" accessibilityLabel={`${approvalScreen.tabs[index]} 결재 보기`} onPress={() => { setApprovalView(view); setSelectedApprovalId(""); }} style={[styles.approvalTab, approvalView === view ? styles.approvalTabActive : null]}>
+                      <Text style={[styles.approvalTabText, approvalView === view ? styles.approvalTabTextActive : null]}>{approvalScreen.tabs[index]}{view === "progress" ? ` ${approvalScreen.rows.length}` : ""}</Text>
+                    </Pressable>
                   ))}
                 </View>
-                {urgentApprovals.length === 0 ? <Text style={styles.emptyState}>승인 대기 문서가 없습니다.</Text> : null}
-                {urgentApprovals.map((doc) => (
-                  <View key={doc.id} style={styles.listCard}>
-                    <Text style={styles.listKicker}>{doc.status}</Text>
-                    <Text style={styles.listTitle}>{doc.title}</Text>
-                    <Text style={styles.listBody}>긴급 문서는 모바일에서 즉시 승인/반려/회수 흐름으로 이동합니다.</Text>
+                {approvalComposeOpen ? (
+                  <View style={styles.approvalComposeCard}>
+                    <TextInput accessibilityLabel="결재 제목" style={styles.compactInput} value={createForm.title} onChangeText={(title) => setCreateForm((current) => ({ ...current, title }))} placeholder="제목" />
+                    <TextInput accessibilityLabel="결재 내용" style={[styles.compactInput, styles.composeBody]} value={createForm.content} onChangeText={(content) => setCreateForm((current) => ({ ...current, content }))} placeholder="내용" multiline textAlignVertical="top" />
+                    <TextInput accessibilityLabel="결재자 사용자 아이디" style={styles.compactInput} value={createForm.approverUserIds} onChangeText={(approverUserIds) => setCreateForm((current) => ({ ...current, approverUserIds }))} placeholder="결재자 사용자ID (콤마 구분)" autoCapitalize="none" />
+                    <Pressable accessibilityRole="button" accessibilityLabel="결재 초안 저장" onPress={() => { void createApprovalDocument(); }} style={styles.composeSendButton}><Text style={styles.composeSendButtonText}>초안 저장</Text></Pressable>
                   </View>
-                ))}
+                ) : null}
+                {approvalScreen.rows.length > 1 ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.approvalDocumentStrip}>
+                  {approvalScreen.rows.map((doc) => <Pressable key={doc.id} accessibilityRole="button" accessibilityLabel={`${doc.title} 결재 선택`} onPress={() => setSelectedApprovalId(doc.id)} style={[styles.approvalDocumentChip, selectedApproval?.id === doc.id ? styles.approvalDocumentChipActive : null]}><Text numberOfLines={1} style={styles.approvalDocumentChipText}>{doc.title}</Text></Pressable>)}
+                </ScrollView> : null}
+                {!selectedApproval ? <Text style={styles.emptyState}>해당 상태의 결재 문서가 없습니다.</Text> : (
+                  <View style={styles.approvalDetailCard}>
+                    <Text style={styles.approvalSectionLabel}>기안 문서</Text>
+                    <Text style={styles.approvalDetailTitle}>{selectedApproval.title}</Text>
+                    <View style={styles.approvalMetaGrid}>
+                      <Text style={styles.approvalMetaLabel}>기안자</Text><Text style={styles.approvalMetaValue}>{selectedApproval.creatorUserName}</Text>
+                      <Text style={styles.approvalMetaLabel}>상태</Text><Text style={styles.approvalMetaValue}>{selectedApproval.status}</Text>
+                    </View>
+                    <View style={styles.approvalDivider} />
+                    <Text style={styles.approvalSectionLabel}>상세 내용</Text>
+                    <Text style={styles.approvalDetailBody}>{selectedApproval.content || "내용이 없습니다."}</Text>
+                    <View style={styles.approvalDivider} />
+                    <Text style={styles.approvalSectionLabel}>결재선</Text>
+                    {(selectedApproval.lines ?? []).map((line, index) => <View key={`${line.sequence}-${line.approverUserId}`} style={styles.approvalLine}><Text style={styles.approvalLineStep}>{index + 1}</Text><Text style={styles.approvalLineName}>{line.approverUserName}</Text><Text style={styles.approvalLineStatus}>{line.status}</Text></View>)}
+                    {(selectedApproval.lines ?? []).length === 0 ? <Text style={styles.approvalDetailMeta}>등록된 결재선이 없습니다.</Text> : null}
+                    {selectedApproval.status === "submitted" && can("approval:act") && currentApprover(selectedApproval)?.approverUserId === me?.userId ? <TextInput accessibilityLabel="결재 처리 사유" style={styles.compactInput} value={actionReason} onChangeText={setActionReason} placeholder="처리 사유" /> : null}
+                    <View style={styles.approvalActions}>
+                      {selectedApproval.status === "draft" && selectedApproval.creatorUserId === me?.userId && can("approval:submit") ? <Pressable accessibilityRole="button" accessibilityLabel="결재 상신" onPress={() => { void action(selectedApproval.id, "submit"); }} style={styles.approvalPrimaryAction}><Text style={styles.approvalPrimaryActionText}>상신</Text></Pressable> : null}
+                      {selectedApproval.status === "submitted" && selectedApproval.creatorUserId === me?.userId && can("approval:withdraw") ? <Pressable accessibilityRole="button" accessibilityLabel="결재 회수" onPress={() => { void action(selectedApproval.id, "withdraw"); }} style={styles.approvalRejectAction}><Text style={styles.approvalRejectActionText}>회수</Text></Pressable> : null}
+                      {selectedApproval.status === "rejected" && selectedApproval.creatorUserId === me?.userId && can("approval:rework") ? <Pressable accessibilityRole="button" accessibilityLabel="결재 재기안" onPress={() => { void action(selectedApproval.id, "redraft"); }} style={styles.approvalPrimaryAction}><Text style={styles.approvalPrimaryActionText}>재기안</Text></Pressable> : null}
+                      {selectedApproval.status === "submitted" && can("approval:act") && currentApprover(selectedApproval)?.approverUserId === me?.userId ? <><Pressable accessibilityRole="button" accessibilityLabel="결재 반려" onPress={() => { void actionWithReason(selectedApproval.id, "reject"); }} style={styles.approvalRejectAction}><Text style={styles.approvalRejectActionText}>반려</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel="결재 승인" onPress={() => { void actionWithReason(selectedApproval.id, "approve"); }} style={styles.approvalPrimaryAction}><Text style={styles.approvalPrimaryActionText}>승인</Text></Pressable></> : null}
+                    </View>
+                  </View>
+                )}
               </View>
             ) : null}
 
             {activeTab === "chat" ? (
-              <View style={styles.surfaceCard}>
-                <Text style={styles.surfaceKicker}>메신저</Text>
-                <Text style={styles.surfaceTitle}>최근 대화 / 고정 채널 / 미확인 메시지</Text>
-                <View style={styles.quickGrid}>
-                  {[
-                    { title: "최근 대화", note: `${rooms.length}개`, tone: styles.quickInk },
-                    { title: "고정 채널", note: rooms[0]?.roomName || "대화방 없음", tone: styles.quickSand },
-                    { title: "미확인 메시지", note: `${rooms.reduce((sum, item) => sum + item.unreadCount, 0)}건`, tone: styles.quickDanger },
-                  ].map((item) => (
-                    <View key={item.title} style={[styles.quickCard, item.tone]}>
-                      <Text style={styles.quickCardTitle}>{item.title}</Text>
-                      <Text style={styles.quickCardNote}>{item.note}</Text>
-                    </View>
-                  ))}
+              <View style={styles.messengerScreen}>
+                <View style={styles.messengerHeader}>
+                  <View style={styles.messengerAvatar}><Text style={styles.messengerAvatarText}>{messengerScreen.selectedRoom?.roomName?.slice(0, 1) || "M"}</Text></View>
+                  <View style={styles.messengerHeaderText}><Text accessibilityRole="header" style={styles.messengerRoomTitle}>{messengerScreen.selectedRoom?.roomName || "메신저"}</Text><Text style={styles.messengerRoomMeta}>{messengerScreen.selectedRoom ? `참여자 ${messengerScreen.selectedRoom.participantIds.length}명` : "대화방을 선택해 주세요"}</Text></View>
+                  <Text style={styles.messengerHeaderIcon}>⌕</Text><Text style={styles.messengerHeaderIcon}>⌕</Text>
                 </View>
-                {rooms.map((item) => (
-                  <View key={item.roomId} style={styles.listCard}>
-                    <Text style={styles.listKicker}>최근 대화</Text>
-                    <Text style={styles.listTitle}>{item.roomName}</Text>
-                    <Text style={styles.listBody}>{item.lastMessage || "최근 메시지 없음"} / 미읽음 {item.unreadCount}</Text>
-                    <View style={styles.mobileTabRow}>
-                      <Text onPress={() => { void openRoom(item.roomId); }} style={[styles.mobileTab, styles.mobileTabIdle]}>열기</Text>
-                    </View>
+                {rooms.length > 1 ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.messengerRoomStrip}>{rooms.map((room) => <Pressable key={room.roomId} accessibilityRole="button" accessibilityLabel={`${room.roomName} 대화방 열기`} onPress={() => { void openRoom(room.roomId); }} style={[styles.messengerRoomChip, messengerScreen.selectedRoom?.roomId === room.roomId ? styles.messengerRoomChipActive : null]}><Text style={styles.messengerRoomChipText}>{room.roomName}</Text>{room.unreadCount > 0 ? <Text style={styles.messengerUnreadBadge}>{room.unreadCount}</Text> : null}</Pressable>)}</ScrollView> : null}
+                {!messengerScreen.selectedRoom ? <View style={styles.messengerEmpty}><Text style={styles.messengerEmptyTitle}>참여 중인 대화방이 없습니다.</Text><Pressable accessibilityRole="button" accessibilityLabel="주소록에서 대화 시작" onPress={() => { setActiveTab("more"); setMoreScreen("directory"); setMoreMenuOpen(false); if (token) void loadDirectory(token); }} style={styles.primaryCompactButton}><Text style={styles.primaryCompactButtonText}>주소록에서 대화 시작</Text></Pressable></View> : <>
+                  <View accessibilityLabel="메시지 목록" style={styles.messageCanvas}>
+                    {messengerScreen.messages.map((item) => {
+                      const mine = item.senderUserId === me?.userId;
+                      return <View key={item.messageId} style={[styles.messageGroup, mine ? styles.messageGroupMine : null]}>{!mine ? <Text style={styles.messageSender}>{item.senderUserName}</Text> : null}<View style={[styles.messageBubble, mine ? styles.messageBubbleMine : styles.messageBubbleOther]}><Text style={mine ? styles.messageTextMine : styles.messageTextOther}>{item.body}</Text></View><Text style={styles.messageTime}>{formatStamp(item.createdAt).slice(-5)}</Text></View>;
+                    })}
+                    {messengerScreen.messages.length === 0 ? <Text style={styles.messengerEmptyMessages}>아직 메시지가 없습니다.</Text> : null}
                   </View>
-                ))}
-                {roomMessages.map((item) => (
-                  <View key={item.messageId} style={styles.listCard}>
-                    <Text style={styles.listKicker}>{item.senderUserName}</Text>
-                    <Text style={styles.listTitle}>{formatStamp(item.createdAt)}</Text>
-                    <Text style={styles.listBody}>{item.body}</Text>
+                  <View accessibilityLabel="대화 번역 언어" style={styles.translationControl}>
+                    <Pressable accessibilityRole="button" accessibilityLabel="한국어 번역 선택" disabled={chatTranslationPending} onPress={() => { void updateRoomTranslation("ko"); }} style={styles.translationOption}><Text style={[styles.translationOptionText, messengerScreen.selectedRoom?.translationLocale === "ko" ? styles.translationOptionTextActive : null]}>한국어</Text></Pressable>
+                    <Text style={styles.translationSwap}>↔</Text>
+                    <Pressable accessibilityRole="button" accessibilityLabel="English 번역 선택" disabled={chatTranslationPending} onPress={() => { void updateRoomTranslation("en"); }} style={styles.translationOption}><Text style={[styles.translationOptionText, messengerScreen.selectedRoom?.translationLocale === "en" ? styles.translationOptionTextActive : null]}>English</Text></Pressable>
                   </View>
-                ))}
-                <TextInput
-                  style={[styles.input, styles.textarea]}
-                  value={chatDraft}
-                  onChangeText={setChatDraft}
-                  placeholder="메시지를 입력하세요."
-                  multiline
-                />
-                <View style={styles.buttonBlock}>
-                  <Button title="메시지 전송" onPress={() => { void sendChatMessage(); }} />
-                </View>
+                  <View style={styles.messengerInputBar}>
+                    <TextInput accessibilityLabel="메신저 메시지" style={styles.messengerInput} value={chatDraft} onChangeText={setChatDraft} placeholder="메시지를 입력하세요." returnKeyType="send" onSubmitEditing={() => { void sendChatMessage(); }} />
+                    <Pressable accessibilityRole="button" accessibilityLabel="메시지 전송" onPress={() => { void sendChatMessage(); }} style={styles.messengerSendButton}><Text style={styles.messengerSendText}>➤</Text></Pressable>
+                  </View>
+                </>}
                 {chatError ? <Text style={styles.error}>{chatError}</Text> : null}
               </View>
             ) : null}
@@ -1583,158 +1749,12 @@ export default function App() {
               </View>
             ) : null}
 
-            <View style={styles.surfaceCard}>
-              <Text style={styles.surfaceKicker}>알림</Text>
-              <Text style={styles.surfaceTitle}>빠른 확인과 폴백</Text>
-              <Text style={styles.surfaceHint}>
-                수신 모드: {notificationMode === "polling" ? "Polling" : "Fallback"} / 미읽음 {notificationSummary?.unreadCount ?? 0} / 긴급 {notificationSummary?.severityCount.CRITICAL ?? 0}
-              </Text>
-              <View style={styles.inlineButtons}>
-                <Button title="알림 새로고침" onPress={() => { void refreshNotifications(); }} />
-              </View>
-              {notificationError ? <Text style={styles.error}>{notificationError || uiContract.messages.error}</Text> : null}
-              {notifications.map((item) => (
-                <View key={item.notificationId} style={styles.listCard}>
-                  <View style={styles.listHeader}>
-                    <View>
-                      <Text style={styles.listKicker}>{item.category}</Text>
-                      <Text style={styles.listTitle}>{item.title}</Text>
-                    </View>
-                    <View style={[styles.statusPill, item.status === "unread" ? styles.statusUnread : styles.statusRead]}>
-                      <Text style={[styles.statusPillText, item.status === "unread" ? styles.statusUnreadText : styles.statusReadText]}>{item.status}</Text>
-                    </View>
-                  </View>
-                  <Text style={styles.listBody}>{item.message}</Text>
-                  <Button
-                    title="읽음 처리"
-                    disabled={item.status !== "unread"}
-                    onPress={() => {
-                      void executeAckNotification(item.notificationId);
-                    }}
-                  />
-                </View>
-              ))}
-              {notifications.length === 0 ? <Text style={styles.emptyState}>아직 표시할 알림이 없습니다.</Text> : null}
-            </View>
-
-            <View style={styles.surfaceCard}>
-              <Text style={styles.surfaceKicker}>현재 사용자</Text>
-              <Text style={styles.surfaceTitle}>프로필 / 역할 / 업무 권한</Text>
-              <View style={styles.profileCard}>
-                <Text style={styles.profileName}>{me?.userName || "로그인 후 표시"}</Text>
-                <Text style={styles.profileText}>{me?.roleName || "역할 미지정"}</Text>
-                <Text style={styles.profileText}>{me?.userEmail || "이메일 미확인"}</Text>
-                <Text style={styles.profileText}>결재 작성 권한: {can("approval:create") ? "있음" : "없음"}</Text>
-              </View>
-              <View style={styles.policyCard}>
-                {sessionMessages.map((item) => (
-                  <Text key={item} style={styles.policyText}>{item}</Text>
-                ))}
-              </View>
-            </View>
-
-            <View style={styles.surfaceCard}>
-              <Text style={styles.surfaceKicker}>설정 / Help</Text>
-              <Text style={styles.surfaceTitle}>정책 경로와 세션 정리</Text>
-              <View style={styles.policyCard}>
-                <Text style={styles.policyText}>정책 확인 경로: {uiContract.helpText}</Text>
-                <Text style={styles.policyText}>언어, 시간대, 알림 새로고침 기준은 공통 설정 계약을 따릅니다.</Text>
-              </View>
-              <View style={styles.buttonBlock}>
-                <Button
-                  title="로그아웃"
-                  onPress={() => {
-                    clearSession("로그아웃되었습니다.");
-                  }}
-                />
-              </View>
-            </View>
-
-            {can("approval:create") ? (
-              <View style={styles.surfaceCard}>
-                <Text style={styles.surfaceKicker}>결재 작성</Text>
-                <Text style={styles.surfaceTitle}>모바일 빠른 상신</Text>
-                <Text style={styles.sectionLabel}>제목</Text>
-                <TextInput
-                  style={styles.input}
-                  value={createForm.title}
-                  onChangeText={(value) => setCreateForm((current) => ({ ...current, title: value }))}
-                />
-                <Text style={styles.sectionLabel}>내용</Text>
-                <TextInput
-                  style={[styles.input, styles.textarea]}
-                  value={createForm.content}
-                  onChangeText={(value) => setCreateForm((current) => ({ ...current, content: value }))}
-                  multiline
-                />
-                <Text style={styles.sectionLabel}>결재자 사용자ID (콤마 구분)</Text>
-                <TextInput
-                  style={styles.input}
-                  value={createForm.approverUserIds}
-                  onChangeText={(value) => setCreateForm((current) => ({ ...current, approverUserIds: value }))}
-                  autoCapitalize="none"
-                />
-                <View style={styles.buttonBlock}>
-                  <Button title="결재 초안 저장" onPress={() => { void createApprovalDocument(); }} />
-                </View>
-              </View>
-            ) : null}
-
-            <View style={styles.surfaceCard}>
-              <Text style={styles.surfaceKicker}>결재 목록</Text>
-              <Text style={styles.surfaceTitle}>상태별 문서 보기</Text>
-              {documents.map((doc) => {
-                const currentLine = currentApprover(doc);
-                return (
-                  <View key={doc.id} style={styles.listCard}>
-                    <View style={styles.listHeader}>
-                      <View>
-                        <Text style={styles.listKicker}>{doc.status}</Text>
-                        <Text style={styles.listTitle}>{doc.title}</Text>
-                      </View>
-                      <View style={[styles.statusPill, styles.statusApproval]}>
-                        <Text style={[styles.statusPillText, styles.statusApprovalText]}>{doc.creatorUserName}</Text>
-                      </View>
-                    </View>
-                    <Text style={styles.listBody}>
-                      현재 결재선: {currentLine ? `${currentLine.approverUserName} / ${currentLine.status}` : "대기 없음"}
-                    </Text>
-                    {doc.status === "draft" && doc.creatorUserId === me?.userId && can("approval:submit") ? (
-                      <View style={styles.buttonBlock}>
-                        <Button title="상신" onPress={() => action(doc.id, "submit")} />
-                      </View>
-                    ) : null}
-                    {doc.status === "submitted" && doc.creatorUserId === me?.userId && can("approval:withdraw") ? (
-                      <View style={styles.buttonBlock}>
-                        <Button title="회수" onPress={() => action(doc.id, "withdraw")} />
-                      </View>
-                    ) : null}
-                    {doc.status === "rejected" && doc.creatorUserId === me?.userId && can("approval:rework") ? (
-                      <View style={styles.buttonBlock}>
-                        <Button title="재기안" onPress={() => action(doc.id, "redraft")} />
-                      </View>
-                    ) : null}
-                    {doc.status === "submitted" && can("approval:act") && currentApprover(doc)?.approverUserId === me?.userId ? (
-                      <>
-                        <Text style={styles.sectionLabel}>처리 사유</Text>
-                        <TextInput style={styles.input} value={actionReason} onChangeText={setActionReason} />
-                        <View style={styles.buttonPair}>
-                          <View style={styles.buttonHalf}><Button title="승인" onPress={() => actionWithReason(doc.id, "approve")} /></View>
-                          <View style={styles.buttonHalf}><Button title="반려" color="#9f1239" onPress={() => actionWithReason(doc.id, "reject")} /></View>
-                        </View>
-                      </>
-                    ) : null}
-                  </View>
-                );
-              })}
-              {documents.length === 0 ? <Text style={styles.emptyState}>아직 문서가 없습니다.</Text> : null}
-            </View>
           </>
         ) : null}
       </ScrollView>
       {me ? (
         <View style={styles.mobileBottomNav}>
-          {[{ id: "home", label: "홈", icon: "home" }, { id: "mail", label: "메일", icon: "mail" }, { id: "approval", label: "결재", icon: "approval" }, { id: "chat", label: "메신저", icon: "chat" }, { id: "calendar", label: "일정", icon: "calendar" }, { id: "files", label: "파일", icon: "files" }, { id: "more", label: "더보기", icon: "more" }].map((item) => (
+          {mobileNavigation.bottom.map((item: { id: string; label: string; icon: IconName }) => (
             <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} accessibilityHint="선택한 업무 탭으로 이동합니다." onPress={() => handleTabPress(item.id as MobileTab)} style={[styles.mobileBottomNavItem, activeTab === item.id ? styles.mobileBottomNavItemActive : null]}>
               <MoaIcon name={item.icon as IconName} color={activeTab === item.id ? "#ffffff" : "#475569"} size={18} />
               <Text style={[styles.mobileBottomNavLabel, activeTab === item.id ? styles.mobileBottomNavLabelActive : null]}>{item.label}</Text>
@@ -1828,6 +1848,105 @@ const styles = StyleSheet.create({
   containerCompact: {
     padding: 12,
     gap: 12,
+  },
+  homeScreen: {
+    gap: 10,
+  },
+  homeWelcome: {
+    backgroundColor: "#07305a",
+    borderRadius: 14,
+    padding: 16,
+  },
+  homeGreeting: {
+    color: "#ffffff",
+    fontSize: 18,
+    fontWeight: "800",
+  },
+  homeDate: {
+    marginTop: 4,
+    color: "#dbeafe",
+    fontSize: 11,
+  },
+  homeStatus: {
+    marginTop: 8,
+    color: "#bae6fd",
+    fontSize: 10,
+  },
+  homeStats: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  homeStatCard: {
+    flex: 1,
+    minHeight: 84,
+    borderRadius: 12,
+    padding: 12,
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+  },
+  homeStatLabel: {
+    color: "#334155",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  homeStatValue: {
+    marginTop: 8,
+    color: "#0f172a",
+    fontSize: 24,
+    fontWeight: "800",
+  },
+  homeStatUnit: {
+    color: "#64748b",
+    fontSize: 10,
+  },
+  homeSection: {
+    backgroundColor: "#ffffff",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+    padding: 12,
+  },
+  homeSectionHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  homeSectionTitle: {
+    color: "#0f172a",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  homeSectionLink: {
+    color: "#0f766e",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  homeCompactRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: "#eef2f7",
+  },
+  homeRowTime: {
+    width: 42,
+    color: "#0f766e",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  homeRowTitle: {
+    flex: 1,
+    color: "#0f172a",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  homeEmpty: {
+    color: "#64748b",
+    fontSize: 10,
+    paddingVertical: 10,
   },
   hero: {
     borderRadius: 30,
@@ -2202,15 +2321,167 @@ const styles = StyleSheet.create({
     color: "#475569",
     lineHeight: 21,
   },
+  mailScreen: {
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#dce5ec",
+    padding: 14,
+  },
+  moduleToolbar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  moduleKicker: {
+    color: "#0f766e",
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 1,
+  },
+  moduleTitle: {
+    marginTop: 2,
+    color: "#0f172a",
+    fontSize: 18,
+    fontWeight: "800",
+  },
+  primaryCompactButton: {
+    borderRadius: 10,
+    backgroundColor: "#0f766e",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  primaryCompactButtonText: {
+    color: "#ffffff",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  mailboxTabs: {
+    marginTop: 12,
+    flexDirection: "row",
+    borderBottomWidth: 1,
+    borderBottomColor: "#dbe4ec",
+  },
+  mailboxTab: {
+    flex: 1,
+    minHeight: 34,
+    alignItems: "center",
+    justifyContent: "center",
+    borderBottomWidth: 2,
+    borderBottomColor: "transparent",
+    paddingHorizontal: 2,
+  },
+  mailboxTabActive: {
+    borderBottomColor: "#0f766e",
+  },
+  mailboxTabText: {
+    color: "#64748b",
+    fontSize: 9,
+    fontWeight: "700",
+  },
+  mailboxTabTextActive: {
+    color: "#0f766e",
+    fontWeight: "800",
+  },
+  composeCard: {
+    marginTop: 12,
+    borderRadius: 12,
+    padding: 12,
+    backgroundColor: "#f8fafc",
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+  },
+  composeHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  composeTitle: {
+    color: "#0f172a",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  composeClose: {
+    color: "#64748b",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  compactInput: {
+    marginTop: 8,
+    minHeight: 38,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    backgroundColor: "#ffffff",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    color: "#0f172a",
+    fontSize: 12,
+  },
+  composeBody: {
+    minHeight: 92,
+  },
+  composeSendButton: {
+    marginTop: 10,
+    alignSelf: "flex-end",
+    borderRadius: 9,
+    backgroundColor: "#0f766e",
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+  },
+  composeSendButtonText: {
+    color: "#ffffff",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  buttonDisabled: {
+    opacity: 0.5,
+  },
+  mailSearchInput: {
+    marginTop: 12,
+    minHeight: 38,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    backgroundColor: "#ffffff",
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    color: "#0f172a",
+    fontSize: 11,
+  },
+  mailFilterRow: {
+    marginTop: 8,
+    flexDirection: "row",
+    gap: 6,
+  },
+  mailFilterChip: {
+    borderRadius: 999,
+    backgroundColor: "#f1f5f9",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  mailFilterChipActive: {
+    backgroundColor: "#ccfbf1",
+  },
+  mailFilterText: {
+    color: "#64748b",
+    fontSize: 9,
+    fontWeight: "700",
+  },
+  mailFilterTextActive: {
+    color: "#0f766e",
+    fontSize: 9,
+    fontWeight: "800",
+  },
   mailList: {
-    marginTop: 14,
+    marginTop: 8,
     borderTopWidth: 1,
     borderTopColor: "#dbe4ec",
   },
   mailRow: {
-    minHeight: 68,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
+    minHeight: 58,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
     borderBottomWidth: 1,
     borderBottomColor: "#e2e8f0",
     backgroundColor: "#ffffff",
@@ -2263,6 +2534,423 @@ const styles = StyleSheet.create({
     flex: 1,
     color: "#64748b",
     fontSize: 11,
+  },
+  mailDetailCard: {
+    marginTop: 10,
+    borderRadius: 12,
+    padding: 12,
+    backgroundColor: "#f8fafc",
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+    gap: 7,
+  },
+  mailDetailHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  mailDetailKicker: {
+    color: "#0f766e",
+    fontSize: 9,
+    fontWeight: "800",
+  },
+  mailDetailAction: {
+    color: "#b45309",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  mailDetailTitle: {
+    color: "#0f172a",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  mailDetailMeta: {
+    color: "#64748b",
+    fontSize: 9,
+  },
+  mailDetailBody: {
+    color: "#334155",
+    fontSize: 11,
+    lineHeight: 17,
+  },
+  mailPolicyNote: {
+    marginTop: 10,
+    color: "#94a3b8",
+    fontSize: 9,
+  },
+  approvalScreen: {
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#dce5ec",
+    padding: 14,
+  },
+  approvalCreateAction: {
+    color: "#0f766e",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  approvalTabs: {
+    marginTop: 12,
+    flexDirection: "row",
+    borderBottomWidth: 1,
+    borderBottomColor: "#dbe4ec",
+  },
+  approvalTab: {
+    flex: 1,
+    minHeight: 36,
+    alignItems: "center",
+    justifyContent: "center",
+    borderBottomWidth: 2,
+    borderBottomColor: "transparent",
+  },
+  approvalTabActive: {
+    borderBottomColor: "#0f766e",
+  },
+  approvalTabText: {
+    color: "#64748b",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  approvalTabTextActive: {
+    color: "#0f766e",
+    fontWeight: "800",
+  },
+  approvalComposeCard: {
+    marginTop: 10,
+    borderRadius: 12,
+    padding: 10,
+    backgroundColor: "#f8fafc",
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+  },
+  approvalDocumentStrip: {
+    gap: 6,
+    paddingTop: 10,
+  },
+  approvalDocumentChip: {
+    maxWidth: 150,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: "#f1f5f9",
+  },
+  approvalDocumentChipActive: {
+    backgroundColor: "#ccfbf1",
+  },
+  approvalDocumentChipText: {
+    color: "#334155",
+    fontSize: 9,
+    fontWeight: "700",
+  },
+  approvalDetailCard: {
+    marginTop: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+    backgroundColor: "#ffffff",
+    padding: 12,
+  },
+  approvalSectionLabel: {
+    color: "#475569",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  approvalDetailTitle: {
+    marginTop: 7,
+    color: "#0f172a",
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  approvalMetaGrid: {
+    marginTop: 8,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    rowGap: 5,
+  },
+  approvalMetaLabel: {
+    width: "22%",
+    color: "#64748b",
+    fontSize: 9,
+  },
+  approvalMetaValue: {
+    width: "78%",
+    color: "#334155",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  approvalDivider: {
+    marginVertical: 10,
+    height: 1,
+    backgroundColor: "#e2e8f0",
+  },
+  approvalDetailBody: {
+    marginTop: 7,
+    color: "#334155",
+    fontSize: 11,
+    lineHeight: 17,
+  },
+  approvalDetailMeta: {
+    marginTop: 7,
+    color: "#64748b",
+    fontSize: 9,
+  },
+  approvalLine: {
+    marginTop: 7,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  approvalLineStep: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "#ccfbf1",
+    color: "#0f766e",
+    fontSize: 9,
+    fontWeight: "800",
+    textAlign: "center",
+    lineHeight: 18,
+  },
+  approvalLineName: {
+    flex: 1,
+    color: "#334155",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  approvalLineStatus: {
+    color: "#64748b",
+    fontSize: 9,
+  },
+  approvalActions: {
+    marginTop: 12,
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 8,
+  },
+  approvalRejectAction: {
+    minWidth: 86,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: "#ef4444",
+    paddingVertical: 9,
+    alignItems: "center",
+  },
+  approvalRejectActionText: {
+    color: "#dc2626",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  approvalPrimaryAction: {
+    minWidth: 86,
+    borderRadius: 9,
+    backgroundColor: "#0f9f9a",
+    paddingVertical: 9,
+    alignItems: "center",
+  },
+  approvalPrimaryActionText: {
+    color: "#ffffff",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  messengerScreen: {
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#dce5ec",
+    overflow: "hidden",
+  },
+  messengerHeader: {
+    minHeight: 58,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#e2e8f0",
+  },
+  messengerAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#0f766e",
+  },
+  messengerAvatarText: {
+    color: "#ffffff",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  messengerHeaderText: {
+    flex: 1,
+  },
+  messengerRoomTitle: {
+    color: "#0f172a",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  messengerRoomMeta: {
+    marginTop: 2,
+    color: "#64748b",
+    fontSize: 9,
+  },
+  messengerHeaderIcon: {
+    color: "#0f172a",
+    fontSize: 17,
+    fontWeight: "700",
+  },
+  messengerRoomStrip: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    gap: 6,
+  },
+  messengerRoomChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    backgroundColor: "#f1f5f9",
+  },
+  messengerRoomChipActive: {
+    backgroundColor: "#ccfbf1",
+  },
+  messengerRoomChipText: {
+    color: "#334155",
+    fontSize: 9,
+    fontWeight: "700",
+  },
+  messengerUnreadBadge: {
+    minWidth: 16,
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    backgroundColor: "#ef4444",
+    color: "#ffffff",
+    fontSize: 8,
+    textAlign: "center",
+  },
+  messengerEmpty: {
+    minHeight: 220,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    padding: 20,
+  },
+  messengerEmptyTitle: {
+    color: "#475569",
+    fontSize: 11,
+  },
+  messageCanvas: {
+    minHeight: 260,
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+    backgroundColor: "#fbfdff",
+    gap: 10,
+  },
+  messageGroup: {
+    alignItems: "flex-start",
+  },
+  messageGroupMine: {
+    alignItems: "flex-end",
+  },
+  messageSender: {
+    marginBottom: 4,
+    color: "#475569",
+    fontSize: 9,
+    fontWeight: "700",
+  },
+  messageBubble: {
+    maxWidth: "78%",
+    borderRadius: 12,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+  },
+  messageBubbleMine: {
+    borderBottomRightRadius: 3,
+    backgroundColor: "#0f9f9a",
+  },
+  messageBubbleOther: {
+    borderBottomLeftRadius: 3,
+    backgroundColor: "#eef2f7",
+  },
+  messageTextMine: {
+    color: "#ffffff",
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  messageTextOther: {
+    color: "#334155",
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  messageTime: {
+    marginTop: 3,
+    color: "#94a3b8",
+    fontSize: 8,
+  },
+  messengerEmptyMessages: {
+    color: "#94a3b8",
+    fontSize: 10,
+    textAlign: "center",
+    paddingVertical: 60,
+  },
+  translationControl: {
+    marginHorizontal: 12,
+    marginVertical: 9,
+    minHeight: 34,
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#0f9f9a",
+  },
+  translationOption: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: 7,
+  },
+  translationOptionText: {
+    color: "#475569",
+    fontSize: 10,
+  },
+  translationOptionTextActive: {
+    color: "#0f766e",
+    fontWeight: "800",
+  },
+  translationSwap: {
+    color: "#0f766e",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  messengerInputBar: {
+    marginHorizontal: 12,
+    marginBottom: 12,
+    minHeight: 42,
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+    backgroundColor: "#ffffff",
+  },
+  messengerInput: {
+    flex: 1,
+    paddingHorizontal: 11,
+    color: "#0f172a",
+    fontSize: 11,
+  },
+  messengerSendButton: {
+    width: 40,
+    height: 40,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  messengerSendText: {
+    color: "#0f766e",
+    fontSize: 16,
+    fontWeight: "800",
   },
   statusPill: {
     paddingHorizontal: 12,
@@ -2346,6 +3034,117 @@ const styles = StyleSheet.create({
     backgroundColor: "#f1f5f9",
     color: "#334155",
   },
+  directoryScreen: {
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#dce5ec",
+    padding: 12,
+  },
+  directoryScreenTitle: {
+    color: "#0f172a",
+    fontSize: 18,
+    fontWeight: "800",
+  },
+  directorySearchInput: {
+    marginTop: 10,
+    minHeight: 38,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+    backgroundColor: "#f8fafc",
+    paddingHorizontal: 11,
+    color: "#0f172a",
+    fontSize: 10,
+  },
+  directorySections: {
+    marginTop: 8,
+    flexDirection: "row",
+    borderBottomWidth: 1,
+    borderBottomColor: "#e2e8f0",
+  },
+  directorySection: {
+    flex: 1,
+    minHeight: 34,
+    alignItems: "center",
+    justifyContent: "center",
+    borderBottomWidth: 2,
+    borderBottomColor: "transparent",
+  },
+  directorySectionActive: {
+    borderBottomColor: "#0f9f9a",
+  },
+  directorySectionText: {
+    color: "#64748b",
+    fontSize: 9,
+    fontWeight: "700",
+  },
+  directorySectionTextActive: {
+    color: "#0f766e",
+    fontWeight: "800",
+  },
+  directoryListHeader: {
+    paddingVertical: 11,
+  },
+  directoryListTitle: {
+    color: "#334155",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  directoryCompactRow: {
+    minHeight: 56,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eef2f7",
+    paddingVertical: 7,
+  },
+  directoryInitial: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#e2e8f0",
+  },
+  directoryInitialText: {
+    color: "#334155",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  directoryCompactInfo: {
+    flex: 1,
+  },
+  directoryMemberName: {
+    color: "#0f172a",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  directoryMemberRole: {
+    color: "#475569",
+    fontSize: 9,
+    fontWeight: "600",
+  },
+  directoryDepartment: {
+    marginTop: 3,
+    color: "#64748b",
+    fontSize: 9,
+  },
+  directoryIconButton: {
+    width: 28,
+    height: 28,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  directoryIconDisabled: {
+    opacity: 0.35,
+  },
+  directoryIcon: {
+    color: "#0f82a0",
+    fontSize: 14,
+    fontWeight: "800",
+  },
   directoryCard: {
     marginTop: 12,
     flexDirection: "row",
@@ -2381,6 +3180,58 @@ const styles = StyleSheet.create({
     maxWidth: "100%",
   },
   directoryError: { color: "#9f1239", marginTop: 8, fontSize: 12 },
+  calendarScreen: {
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#dce5ec",
+    padding: 14,
+  },
+  calendarToolbar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    minHeight: 38,
+  },
+  calendarArrow: {
+    width: 28,
+    color: "#334155",
+    fontSize: 22,
+    textAlign: "center",
+  },
+  calendarMonthTitle: {
+    flex: 1,
+    color: "#0f172a",
+    fontSize: 14,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  calendarTodayButton: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  calendarTodayText: {
+    color: "#475569",
+    fontSize: 9,
+    fontWeight: "700",
+  },
+  calendarWeekdays: {
+    marginTop: 8,
+    flexDirection: "row",
+  },
+  calendarWeekday: {
+    width: "14.285%",
+    color: "#475569",
+    fontSize: 9,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  calendarSunday: {
+    color: "#ef4444",
+  },
   calendarHeader: {
     marginTop: 14,
     flexDirection: "row",
@@ -2393,10 +3244,116 @@ const styles = StyleSheet.create({
     color: "#0f172a",
   },
   calendarGrid: {
-    marginTop: 14,
+    marginTop: 4,
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 6,
+  },
+  calendarCompactCell: {
+    width: "14.285%",
+    minHeight: 36,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  calendarCompactDate: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    color: "#334155",
+    fontSize: 10,
+    lineHeight: 24,
+    textAlign: "center",
+  },
+  calendarSelectedDate: {
+    backgroundColor: "#0f9f9a",
+    color: "#ffffff",
+    fontWeight: "800",
+  },
+  calendarEventDot: {
+    marginTop: 2,
+    width: 3,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: "#0f9f9a",
+  },
+  selectedDayHeader: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#e2e8f0",
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  selectedDayTitle: {
+    color: "#0f172a",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  selectedDayCount: {
+    color: "#64748b",
+    fontSize: 9,
+  },
+  selectedScheduleList: {
+    marginTop: 7,
+  },
+  selectedScheduleRow: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    borderLeftWidth: 2,
+    borderLeftColor: "#0f9f9a",
+    borderBottomWidth: 1,
+    borderBottomColor: "#eef2f7",
+    paddingVertical: 7,
+    paddingHorizontal: 9,
+  },
+  selectedScheduleAlert: {
+    borderLeftColor: "#ef4444",
+  },
+  selectedScheduleTime: {
+    width: 46,
+    color: "#0f172a",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  selectedScheduleBody: {
+    flex: 1,
+  },
+  selectedScheduleTitle: {
+    color: "#334155",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  selectedScheduleMeta: {
+    marginTop: 3,
+    color: "#64748b",
+    fontSize: 8,
+  },
+  calendarEmpty: {
+    color: "#94a3b8",
+    fontSize: 10,
+    paddingVertical: 16,
+    textAlign: "center",
+  },
+  scheduleComposeCard: {
+    marginTop: 10,
+    borderRadius: 12,
+    padding: 10,
+    backgroundColor: "#f8fafc",
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+  },
+  calendarCreateButton: {
+    marginTop: 12,
+    alignSelf: "flex-end",
+    borderRadius: 999,
+    backgroundColor: "#0f9f9a",
+    paddingHorizontal: 15,
+    paddingVertical: 9,
+  },
+  calendarCreateText: {
+    color: "#ffffff",
+    fontSize: 10,
+    fontWeight: "800",
   },
   calendarDay: {
     width: "13.5%",
@@ -2446,6 +3403,148 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     color: "#0f766e",
     fontWeight: "800",
+  },
+  aiScreen: {
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#dce5ec",
+    overflow: "hidden",
+  },
+  aiHeader: {
+    minHeight: 52,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 13,
+    borderBottomWidth: 1,
+    borderBottomColor: "#e2e8f0",
+  },
+  aiTitle: {
+    color: "#0f172a",
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  aiProviderStatus: {
+    marginTop: 2,
+    color: "#64748b",
+    fontSize: 8,
+  },
+  aiSettingsAction: {
+    color: "#0f766e",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  aiConversation: {
+    minHeight: 280,
+    gap: 10,
+    padding: 12,
+    backgroundColor: "#fbfdff",
+  },
+  aiMessageGroup: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+  },
+  aiMessageGroupUser: {
+    justifyContent: "flex-end",
+  },
+  aiAvatar: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#0f82c9",
+  },
+  aiAvatarText: {
+    color: "#ffffff",
+    fontSize: 9,
+    fontWeight: "800",
+  },
+  aiMessageBubble: {
+    maxWidth: "80%",
+    borderRadius: 11,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+  },
+  aiMessageAssistant: {
+    borderTopLeftRadius: 3,
+    backgroundColor: "#eef2f7",
+  },
+  aiMessageUser: {
+    borderTopRightRadius: 3,
+    backgroundColor: "#0f9f9a",
+  },
+  aiMessageTextAssistant: {
+    color: "#334155",
+    fontSize: 10,
+    lineHeight: 15,
+  },
+  aiMessageTextUser: {
+    color: "#ffffff",
+    fontSize: 10,
+    lineHeight: 15,
+  },
+  aiInputBar: {
+    margin: 10,
+    minHeight: 42,
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+  },
+  aiAddButton: {
+    width: 36,
+    color: "#475569",
+    fontSize: 18,
+    textAlign: "center",
+  },
+  aiInput: {
+    flex: 1,
+    color: "#0f172a",
+    fontSize: 10,
+    paddingVertical: 8,
+  },
+  aiSendButton: {
+    width: 34,
+    height: 34,
+    marginRight: 4,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#083b73",
+  },
+  aiSendText: {
+    color: "#ffffff",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  aiReadinessNote: {
+    marginHorizontal: 12,
+    marginBottom: 10,
+    color: "#64748b",
+    fontSize: 9,
+  },
+  aiInlineError: {
+    marginHorizontal: 12,
+    marginBottom: 12,
+    color: "#b91c1c",
+    fontSize: 10,
+    lineHeight: 15,
+  },
+  settingsCompactSection: {
+    marginVertical: 9,
+    borderTopWidth: 1,
+    borderTopColor: "#e2e8f0",
+    paddingTop: 9,
+  },
+  settingsNotificationRow: {
+    marginTop: 6,
+    borderRadius: 10,
+    backgroundColor: "#f8fafc",
+    padding: 9,
   },
   providerRow: {
     flexDirection: "row",
