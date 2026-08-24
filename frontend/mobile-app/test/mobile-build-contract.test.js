@@ -24,6 +24,12 @@ test("Windows bundle execution uses npx.cmd and validates prerequisites", () => 
   assert.match(smokeSource, /android/);
 });
 
+test("Metro watches the resolved node_modules target when the worktree uses a junction", () => {
+  const config = require(path.join(root, "metro.config.js"));
+  const resolvedModules = fs.realpathSync(path.join(root, "node_modules"));
+  assert.ok(config.watchFolders.includes(resolvedModules));
+});
+
 test("Android wrapper has no fixed Windows username and supports conventional JDK and SDK discovery", () => {
   assert.doesNotMatch(androidCommandSource, /Users[\\/]cyhuh/i);
   assert.match(androidCommandSource, /JAVA_HOME/);

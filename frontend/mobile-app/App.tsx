@@ -3,6 +3,7 @@ import { Alert, AppState, Button, Linking, Pressable, SafeAreaView, ScrollView, 
 import { createMobileSessionAdapter, isSessionInvalidatedError, requestJson } from "./auth-session";
 import { buildMonthGrid, buildSchedulePayload, createSubmissionGate, filterSchedulesForMonth, monthKeyForDate, selectDefaultCalendar, scheduleErrorMessage, scheduleItems, shiftMonthKey, dateKey } from "./schedule-api";
 import { createDirectoryActionGate, directoryUsers as readDirectoryUsers, directRoomPayload, filterDirectoryUsers, mailtoUrl } from "./directory-api";
+import { buildPersonalAiChatPayload, buildPersonalAiConfigPayload, createPersonalAiActionGate, personalAiErrorMessage, readPersonalAiChatResponse, readPersonalAiConfig, readPersonalAiConnectionTest, readPersonalAiProviders } from "./personal-ai-api";
 
 type AuthUser = {
   userId: string;
@@ -134,7 +135,11 @@ type ScheduleForm = { title: string; startsAt: string; endsAt: string; descripti
 type AppLocale = "ko-KR" | "en-US" | "ja-JP" | "zh-CN" | "es-ES" | "fr-FR" | "de-DE";
 type MobileTab = "home" | "mail" | "approval" | "chat" | "calendar" | "more" | "files";
 type ScreenKey = MobileTab | "directory" | "ai" | "search" | "settings";
-type LlmProvider = "CEREBRAS" | "GROQ" | "MISTRAL" | "OPENAI" | "UPSTAGE" | "GEMINI" | "OPENROUTER" | "ANTHROPIC" | "OLLAMA";
+type PersonalAiProviderOption = { provider: string; label: string; apiKeyRequired: boolean };
+type PersonalAiConnectionStatus = "unconfigured" | "untested" | "ready" | "error";
+type PersonalAiConfig = { provider: string; model: string; apiKeyConfigured: boolean; connectionStatus: PersonalAiConnectionStatus; lastTestCode: string | null; lastTestedAt: string | null };
+type PersonalAiConnectionTest = { success: boolean; provider: string; model: string; code: string; message: string; connectionStatus: PersonalAiConnectionStatus; testedAt: string };
+type PersonalAiChatResponse = { provider: string; model: string; message: { role: "assistant"; content: string }; generatedAt: string };
 type IconName = "home" | "mail" | "approval" | "chat" | "calendar" | "directory" | "ai" | "search" | "settings" | "more" | "files";
 
 const iconGlyphs: Record<IconName, string> = {
@@ -144,8 +149,6 @@ const iconGlyphs: Record<IconName, string> = {
 function MoaIcon({ name, color = "#0f766e", size = 18 }: { name: IconName; color?: string; size?: number }) {
   return <Text accessibilityLabel={`${name} 아이콘`} style={{ color, fontSize: size, lineHeight: size + 2, fontWeight: "800", textAlign: "center" }}>{iconGlyphs[name]}</Text>;
 }
-
-const llmProviders: LlmProvider[] = ["CEREBRAS", "GROQ", "MISTRAL", "OPENAI", "UPSTAGE", "GEMINI", "OPENROUTER", "ANTHROPIC", "OLLAMA"];
 
 const supportedLocales: AppLocale[] = ["ko-KR", "en-US", "ja-JP", "zh-CN", "es-ES", "fr-FR", "de-DE"];
 const supportedTimezones = ["Asia/Seoul", "Asia/Tokyo", "America/New_York", "America/Chicago", "Europe/Paris", "Europe/Berlin"];
@@ -265,9 +268,18 @@ export default function App() {
   const directoryActionGateRef = useRef(createDirectoryActionGate());
   const visibleDirectoryUsers = useMemo(() => filterDirectoryUsers(directoryUsers, directoryQuery), [directoryUsers, directoryQuery]);
   const [screenDensity, setScreenDensity] = useState<"standard" | "compact">("standard");
-  const [llmProvider, setLlmProvider] = useState<LlmProvider>("GROQ");
+  const [personalAiProviders, setPersonalAiProviders] = useState<PersonalAiProviderOption[]>([]);
+  const [llmProvider, setLlmProvider] = useState("openai");
+  const [llmModel, setLlmModel] = useState("");
   const [llmApiKey, setLlmApiKey] = useState("");
-  const [llmConnected, setLlmConnected] = useState(false);
+  const [llmApiKeyConfigured, setLlmApiKeyConfigured] = useState(false);
+  const [llmConnectionStatus, setLlmConnectionStatus] = useState<PersonalAiConnectionStatus>("unconfigured");
+  const [personalAiTestReady, setPersonalAiTestReady] = useState(false);
+  const [personalAiConfigDirty, setPersonalAiConfigDirty] = useState(false);
+  const [llmLastTestedAt, setLlmLastTestedAt] = useState<string | null>(null);
+  const [personalAiError, setPersonalAiError] = useState("");
+  const [personalAiPendingAction, setPersonalAiPendingAction] = useState("");
+  const personalAiActionGateRef = useRef(createPersonalAiActionGate());
   const [aiDraft, setAiDraft] = useState("");
   const [aiMessages, setAiMessages] = useState<Array<{ role: "user" | "assistant"; body: string }>>([]);
   const sessionControllerRef = useRef(createMobileSessionAdapter({
@@ -278,6 +290,10 @@ export default function App() {
       setScheduleSaving(false);
       directoryActionGateRef.current.reset();
       setDirectoryBusyUserId("");
+      personalAiActionGateRef.current.reset();
+      setPersonalAiPendingAction("");
+      setPersonalAiTestReady(false);
+      setPersonalAiConfigDirty(false);
     },
     onSessionReset(nextState) {
       setToken(nextState.token);
@@ -314,9 +330,18 @@ export default function App() {
       directoryActionGateRef.current.reset();
       setDirectoryBusyUserId(nextState.directoryBusyUserId);
       setActionReason(nextState.actionReason);
+      setPersonalAiProviders(nextState.personalAiProviders);
       setLlmProvider(nextState.llmProvider);
+      setLlmModel(nextState.llmModel);
       setLlmApiKey(nextState.llmApiKey);
-      setLlmConnected(nextState.llmConnected);
+      setLlmApiKeyConfigured(nextState.llmApiKeyConfigured);
+      setLlmConnectionStatus(nextState.llmConnectionStatus);
+      setPersonalAiTestReady(nextState.personalAiTestReady);
+      setPersonalAiConfigDirty(nextState.personalAiConfigDirty);
+      setLlmLastTestedAt(nextState.llmLastTestedAt);
+      setPersonalAiError(nextState.personalAiError);
+      personalAiActionGateRef.current.reset();
+      setPersonalAiPendingAction(nextState.personalAiPendingAction);
       setAiDraft(nextState.aiDraft);
       setAiMessages(nextState.aiMessages);
       setMessage(nextState.message);
@@ -324,25 +349,137 @@ export default function App() {
   }));
   const activeTabError = activeTab === "files" ? fileError : activeTab === "calendar" ? scheduleError : activeTab === "mail" ? mailError : activeTab === "chat" ? chatError : "";
 
-  function connectLlm() {
-    if (!llmApiKey.trim()) {
-      setMessage("LLM API 키를 입력한 뒤 연결 테스트를 실행하세요.");
-      setLlmConnected(false);
-      return;
+  async function loadPersonalAi(activeToken: string = token, context = sessionControllerRef.current.capture(activeToken)) {
+    if (!activeToken || personalAiConfigDirty || !sessionControllerRef.current.isCurrent(context)) return;
+    const ticket = personalAiActionGateRef.current.tryEnter("load");
+    if (!ticket) return;
+    setPersonalAiPendingAction("load");
+    setPersonalAiTestReady(false);
+    try {
+      await applyProtectedResponse(context, async () => {
+        const [providersBody, configBody] = await Promise.all([
+          request<{ providers: PersonalAiProviderOption[] }>("/workspace/personal-ai/providers", { headers: { Authorization: `Bearer ${activeToken}` } }, context),
+          request<PersonalAiConfig>("/workspace/personal-ai/config", { headers: { Authorization: `Bearer ${activeToken}` } }, context),
+        ]);
+        return { providers: readPersonalAiProviders(providersBody), config: readPersonalAiConfig(configBody) };
+      }, ({ providers, config }) => {
+        setPersonalAiProviders(providers);
+        setLlmProvider(config.provider || providers[0]?.provider || "openai");
+        setLlmModel(config.model);
+        setLlmApiKeyConfigured(config.apiKeyConfigured);
+        setLlmConnectionStatus(config.connectionStatus);
+        setLlmLastTestedAt(config.lastTestedAt);
+        setPersonalAiError("");
+      });
+    } catch (error) {
+      if (!isSessionInvalidatedError(error) && sessionControllerRef.current.isCurrent(context)) setPersonalAiError(personalAiErrorMessage(error));
+    } finally {
+      if (sessionControllerRef.current.isCurrent(context)) {
+        personalAiActionGateRef.current.release(ticket);
+        setPersonalAiPendingAction("");
+      }
     }
-    setLlmConnected(true);
-    setMessage(`${llmProvider} 연결 정보가 이 기기에서 준비되었습니다.`);
   }
 
-  function askAi() {
+  async function savePersonalAiConfig() {
+    const context = sessionControllerRef.current.capture(token);
+    if (!token || !sessionControllerRef.current.isCurrent(context)) return;
+    const ticket = personalAiActionGateRef.current.tryEnter("save");
+    if (!ticket) return;
+    const apiKeyDraft = llmApiKey;
+    setLlmApiKey("");
+    setPersonalAiPendingAction("save");
+    setPersonalAiError("");
+    setPersonalAiTestReady(false);
+    try {
+      const payload = buildPersonalAiConfigPayload({ provider: llmProvider, model: llmModel, apiKeyDraft });
+      await applyProtectedResponse(context, async () => readPersonalAiConfig(await request<PersonalAiConfig>("/workspace/personal-ai/config", {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify(payload),
+      }, context)), (config) => {
+        setLlmProvider(config.provider);
+        setLlmModel(config.model);
+        setLlmApiKeyConfigured(config.apiKeyConfigured);
+        setLlmConnectionStatus(config.connectionStatus);
+        setLlmLastTestedAt(config.lastTestedAt);
+        setPersonalAiConfigDirty(false);
+        setMessage("개인 AI 설정이 저장되었습니다. 연결 시험을 실행해 주세요.");
+      });
+    } catch (error) {
+      if (!isSessionInvalidatedError(error) && sessionControllerRef.current.isCurrent(context)) setPersonalAiError(personalAiErrorMessage(error));
+    } finally {
+      if (sessionControllerRef.current.isCurrent(context)) {
+        personalAiActionGateRef.current.release(ticket);
+        setPersonalAiPendingAction("");
+      }
+    }
+  }
+
+  async function testPersonalAiConnection() {
+    const context = sessionControllerRef.current.capture(token);
+    if (!token || personalAiConfigDirty || !sessionControllerRef.current.isCurrent(context)) return;
+    const ticket = personalAiActionGateRef.current.tryEnter("test");
+    if (!ticket) return;
+    setPersonalAiPendingAction("test");
+    setPersonalAiError("");
+    setPersonalAiTestReady(false);
+    try {
+      await applyProtectedResponse(context, async () => readPersonalAiConnectionTest(await request<PersonalAiConnectionTest>("/workspace/personal-ai/test", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      }, context)), (result) => {
+        setLlmProvider(result.provider);
+        setLlmModel(result.model);
+        setLlmConnectionStatus(result.connectionStatus);
+        setPersonalAiTestReady(result.success && result.connectionStatus === "ready");
+        setLlmLastTestedAt(result.testedAt);
+        setMessage(result.message);
+        setPersonalAiError(result.success && result.connectionStatus === "ready" ? "" : result.message);
+      });
+    } catch (error) {
+      if (!isSessionInvalidatedError(error) && sessionControllerRef.current.isCurrent(context)) {
+        setLlmConnectionStatus("error");
+        setPersonalAiTestReady(false);
+        setPersonalAiError(personalAiErrorMessage(error));
+      }
+    } finally {
+      if (sessionControllerRef.current.isCurrent(context)) {
+        personalAiActionGateRef.current.release(ticket);
+        setPersonalAiPendingAction("");
+      }
+    }
+  }
+
+  async function askAi() {
+    const context = sessionControllerRef.current.capture(token);
+    if (!token || !personalAiTestReady || !sessionControllerRef.current.isCurrent(context)) return;
+    const ticket = personalAiActionGateRef.current.tryEnter("chat");
+    if (!ticket) return;
     const prompt = aiDraft.trim();
-    if (!prompt) return;
-    setAiMessages((current) => [...current, { role: "user", body: prompt }, { role: "assistant", body: llmConnected ? `${llmProvider} 연결 후 답변이 표시됩니다.` : "먼저 개인 LLM API 키를 연결해 주세요." }]);
-    setAiDraft("");
-  }
-
-  function saveAppSettings() {
-    setMessage("서버·화면 설정이 현재 앱 세션에 적용되었습니다.");
+    try {
+      const payload = buildPersonalAiChatPayload(aiMessages, prompt);
+      setPersonalAiPendingAction("chat");
+      setPersonalAiError("");
+      setAiDraft("");
+      setAiMessages((current) => [...current, { role: "user", body: prompt }]);
+      await applyProtectedResponse(context, async () => readPersonalAiChatResponse(await request<PersonalAiChatResponse>("/workspace/personal-ai/chat", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify(payload),
+      }, context)), (result) => {
+        setLlmProvider(result.provider);
+        setLlmModel(result.model);
+        setAiMessages((current) => [...current, { role: "assistant", body: result.message.content }]);
+      });
+    } catch (error) {
+      if (!isSessionInvalidatedError(error) && sessionControllerRef.current.isCurrent(context)) setPersonalAiError(personalAiErrorMessage(error));
+    } finally {
+      if (sessionControllerRef.current.isCurrent(context)) {
+        personalAiActionGateRef.current.release(ticket);
+        setPersonalAiPendingAction("");
+      }
+    }
   }
 
   function clearSession(nextMessage = "") {
@@ -679,6 +816,7 @@ export default function App() {
       loadFiles(activeToken, context),
       loadSchedules(activeToken, context),
       loadDirectory(activeToken, context),
+      loadPersonalAi(activeToken, context),
     ]);
   }
 
@@ -1026,7 +1164,7 @@ export default function App() {
               {activeTab === "more" ? (
                 <View style={styles.mobileSubNav}>
                   {[{ id: "directory", label: "주소록", icon: "directory" }, { id: "ai", label: "AI 채팅", icon: "ai" }, { id: "search", label: "업무 검색", icon: "search" }, { id: "settings", label: "설정", icon: "settings" }].map((item) => (
-                    <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} onPress={() => { setMoreScreen(item.id as Exclude<ScreenKey, MobileTab>); if (item.id === "directory" && token) void loadDirectory(token); }} style={[styles.mobileSubTab, moreScreen === item.id ? styles.mobileSubTabActive : styles.mobileSubTabIdle]}><MoaIcon name={item.icon as IconName} color={moreScreen === item.id ? "#ffffff" : "#0f766e"} /><Text style={[styles.mobileTabLabel, moreScreen === item.id ? styles.mobileTabLabelActive : null]}>{item.label}</Text></Pressable>
+                    <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} onPress={() => { setMoreScreen(item.id as Exclude<ScreenKey, MobileTab>); if (item.id === "directory" && token) void loadDirectory(token); if ((item.id === "settings" || (item.id === "ai" && !personalAiTestReady)) && token) void loadPersonalAi(token); }} style={[styles.mobileSubTab, moreScreen === item.id ? styles.mobileSubTabActive : styles.mobileSubTabIdle]}><MoaIcon name={item.icon as IconName} color={moreScreen === item.id ? "#ffffff" : "#0f766e"} /><Text style={[styles.mobileTabLabel, moreScreen === item.id ? styles.mobileTabLabelActive : null]}>{item.label}</Text></Pressable>
                   ))}
                 </View>
               ) : null}
@@ -1064,10 +1202,12 @@ export default function App() {
               <View style={styles.surfaceCard}>
                 <Text style={styles.surfaceKicker}>AI 채팅</Text>
                 <Text style={styles.surfaceTitle}>연결된 LLM에게 질문하고 검색</Text>
-                <Text style={styles.surfaceHint}>개인 API 키는 이 화면에서만 입력하며, 실제 Provider 호출은 서버 보안 프록시로 연결합니다.</Text>
+                <Text style={styles.surfaceHint}>개인 API 키는 설정 화면의 현재 입력 중에만 유지되며, 답변 요청은 MoaWorks 서버를 통해 처리합니다.</Text>
                 {aiMessages.map((item, index) => <View key={`${item.role}-${index}`} style={[styles.aiBubble, item.role === "user" ? styles.aiUserBubble : styles.aiAssistantBubble]}><Text style={styles.aiRole}>{item.role === "user" ? "나" : llmProvider}</Text><Text style={styles.listBody}>{item.body}</Text></View>)}
-                <TextInput style={[styles.input, styles.textarea]} value={aiDraft} onChangeText={setAiDraft} placeholder="질문을 입력하세요." multiline />
-                <Button title="질문 보내기" onPress={askAi} />
+                <TextInput accessibilityLabel="개인 AI 질문" style={[styles.input, styles.textarea]} value={aiDraft} onChangeText={setAiDraft} placeholder="질문을 입력하세요." multiline maxLength={8000} editable={!personalAiPendingAction} />
+                <Button accessibilityLabel="개인 AI 질문 보내기" title={personalAiPendingAction === "chat" ? "답변 대기 중" : "질문 보내기"} disabled={!personalAiTestReady || Boolean(personalAiPendingAction) || !aiDraft.trim()} onPress={() => { void askAi(); }} />
+                {!personalAiTestReady ? <Text style={styles.surfaceHint}>현재 로그인 세션에서 연결 시험이 준비 상태가 되어야 질문을 보낼 수 있습니다.</Text> : null}
+                {personalAiError ? <Text style={styles.error}>{personalAiError}</Text> : null}
               </View>
             ) : null}
 
@@ -1081,8 +1221,15 @@ export default function App() {
                 <Text style={styles.sectionLabel}>연결 서버</Text><TextInput style={styles.input} value={apiBase} onChangeText={setApiBase} autoCapitalize="none" />
                 <Text style={styles.sectionLabel}>화면 언어</Text><Text style={styles.settingsValue}>{locale}</Text><Text style={styles.sectionLabel}>시간대</Text><Text style={styles.settingsValue}>{timezone}</Text>
                 <Text style={styles.sectionLabel}>화면 밀도</Text><View style={styles.providerRow}><Text onPress={() => setScreenDensity("standard")} style={[styles.providerChip, screenDensity === "standard" ? styles.providerChipActive : null]}>표준</Text><Text onPress={() => setScreenDensity("compact")} style={[styles.providerChip, screenDensity === "compact" ? styles.providerChipActive : null]}>간결</Text></View>
-                <Text style={styles.sectionLabel}>LLM Provider</Text><View style={styles.providerRow}>{llmProviders.map((provider) => <Text key={provider} onPress={() => setLlmProvider(provider)} style={[styles.providerChip, llmProvider === provider ? styles.providerChipActive : null]}>{provider}</Text>)}</View>
-                <TextInput style={styles.input} value={llmApiKey} onChangeText={setLlmApiKey} placeholder="개인 LLM API 키" secureTextEntry autoCapitalize="none" /><Button title={llmConnected ? "연결됨 · 다시 테스트" : "LLM 연결 테스트"} onPress={connectLlm} /><Button title="설정 저장" onPress={saveAppSettings} />
+                <Text style={styles.sectionLabel}>LLM Provider</Text>
+                <View style={styles.providerRow}>{personalAiProviders.map((option) => <Pressable key={option.provider} accessibilityRole="button" accessibilityLabel={`${option.label} Provider 선택`} disabled={Boolean(personalAiPendingAction)} onPress={() => { if (option.provider !== llmProvider) { setLlmProvider(option.provider); setLlmModel(""); setLlmApiKey(""); setLlmApiKeyConfigured(false); setLlmConnectionStatus("untested"); setPersonalAiTestReady(false); setPersonalAiConfigDirty(true); setLlmLastTestedAt(null); setPersonalAiError(""); } }} style={[styles.providerChip, llmProvider === option.provider ? styles.providerChipActive : null]}><Text>{option.label}</Text></Pressable>)}</View>
+                {personalAiProviders.length === 0 ? <Text style={styles.surfaceHint}>Provider 목록을 불러오지 못했습니다.</Text> : null}
+                <TextInput accessibilityLabel="개인 AI 모델" style={styles.input} value={llmModel} onChangeText={(value) => { setLlmModel(value); setLlmConnectionStatus("untested"); setPersonalAiTestReady(false); setPersonalAiConfigDirty(true); }} placeholder="모델 이름" autoCapitalize="none" maxLength={200} editable={!personalAiPendingAction} />
+                <TextInput accessibilityLabel="개인 AI API 키" style={styles.input} value={llmApiKey} onChangeText={(value) => { setLlmApiKey(value); setLlmConnectionStatus("untested"); setPersonalAiTestReady(false); setPersonalAiConfigDirty(true); }} placeholder={llmApiKeyConfigured ? "새 API 키를 입력할 때만 변경" : "개인 LLM API 키"} secureTextEntry autoCapitalize="none" maxLength={1000} editable={!personalAiPendingAction} />
+                <Text style={styles.surfaceHint}>{`설정 상태: ${llmApiKeyConfigured ? "API 키 설정됨" : "API 키 미설정"} · 연결 ${llmConnectionStatus} · 최근 시험 ${formatStamp(llmLastTestedAt)}`}</Text>
+                <Button accessibilityLabel="개인 AI 연결 시험" title={personalAiPendingAction === "test" ? "연결 시험 중" : llmConnectionStatus === "ready" ? "연결됨 · 다시 시험" : "LLM 연결 시험"} disabled={Boolean(personalAiPendingAction) || personalAiConfigDirty || !llmProvider || !llmModel.trim()} onPress={() => { void testPersonalAiConnection(); }} />
+                <Button accessibilityLabel="개인 AI 설정 저장" title={personalAiPendingAction === "save" ? "설정 저장 중" : "개인 AI 설정 저장"} disabled={Boolean(personalAiPendingAction) || !llmProvider || !llmModel.trim()} onPress={() => { void savePersonalAiConfig(); }} />
+                {personalAiError ? <Text style={styles.error}>{personalAiError}</Text> : null}
               </View>
             ) : null}
 

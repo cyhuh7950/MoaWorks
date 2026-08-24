@@ -62,9 +62,17 @@ function createState() {
     directoryError: "stale-directory-error",
     directoryBusyUserId: "stale-user",
     actionReason: "stale-reason",
-    llmProvider: "personal-provider",
+    personalAiProviders: [{ provider: "groq", label: "Groq", apiKeyRequired: true }],
+    llmProvider: "groq",
+    llmModel: "stale-model",
     llmApiKey: "not-recorded",
-    llmConnected: true,
+    llmApiKeyConfigured: true,
+    llmConnectionStatus: "ready",
+    personalAiTestReady: true,
+    personalAiConfigDirty: true,
+    llmLastTestedAt: "2026-08-24T04:00:00Z",
+    personalAiError: "stale-personal-ai-error",
+    personalAiPendingAction: "chat",
     aiDraft: "stale-ai-draft",
     aiMessages: [{ role: "user", body: "stale-ai-message" }],
     message: "",
@@ -125,9 +133,17 @@ function clearedState(message) {
     directoryError: "",
     directoryBusyUserId: "",
     actionReason: "확인",
-    llmProvider: "OpenAI",
+    personalAiProviders: [],
+    llmProvider: "openai",
+    llmModel: "",
     llmApiKey: "",
-    llmConnected: false,
+    llmApiKeyConfigured: false,
+    llmConnectionStatus: "unconfigured",
+    personalAiTestReady: false,
+    personalAiConfigDirty: false,
+    llmLastTestedAt: null,
+    personalAiError: "",
+    personalAiPendingAction: "",
     aiDraft: "",
     aiMessages: [],
     message,
@@ -187,7 +203,7 @@ test("auth me 실패 시 로그인 결과를 반영하지 않고 업무 상태�
   assert.deepEqual(state, clearedState("세션이 만료되었습니다. 다시 로그인 후 업무를 계속하세요."));
 });
 
-test("로그아웃 뒤 지연된 mail/room 두 번째 조회와 열기 응답은 동일 adapter로 차단한다", async () => {
+test("로그아웃 뒤 지연된 mail/room/개인 AI 보호 응답은 동일 adapter로 차단한다", async () => {
   const lateCases = [
     ["loadMail detail", { mailId: "late-mail", body: "late" }, (state, value) => {
       state.selectedMailId = value.mailId;
@@ -204,6 +220,18 @@ test("로그아웃 뒤 지연된 mail/room 두 번째 조회와 열기 응답은
     ["openRoom messages", { messages: [{ messageId: "opened-late-message" }] }, (state, value) => {
       state.selectedRoomId = "opened-late-room";
       state.roomMessages = value.messages;
+    }],
+    ["personal AI config", { provider: "groq", model: "late-model", connectionStatus: "ready" }, (state, value) => {
+      state.llmProvider = value.provider;
+      state.llmModel = value.model;
+      state.llmConnectionStatus = value.connectionStatus;
+    }],
+    ["personal AI connection test", { connectionStatus: "ready", testedAt: "late" }, (state, value) => {
+      state.llmConnectionStatus = value.connectionStatus;
+      state.llmLastTestedAt = value.testedAt;
+    }],
+    ["personal AI chat", { message: { role: "assistant", content: "late answer" } }, (state, value) => {
+      state.aiMessages = [...state.aiMessages, { role: value.message.role, body: value.message.content }];
     }],
   ];
 
