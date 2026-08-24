@@ -17,6 +17,7 @@ class TokenService:
     def issue_access_token(self, user: AuthUserSummary, expires_in: int = 3600) -> str:
         payload = {
             "subject": user.userId,
+            "sessionVersion": getattr(user, "authSessionVersion", 0),
             "exp": (datetime.now(UTC) + timedelta(seconds=expires_in)).isoformat(),
         }
         return self.security.encrypt_secret(json.dumps(payload, ensure_ascii=True))

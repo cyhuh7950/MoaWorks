@@ -83,6 +83,7 @@ class AuthService:
 
             password_hash = self.store.security.hash_password(payload.newPassword)
             cursor.execute("UPDATE users SET password_hash=%s,updated_at=NOW() WHERE id=%s AND company_id=%s", (password_hash, user.userId, user.companyId))
+            cursor.execute("UPDATE users SET must_change_password=FALSE WHERE id=%s AND company_id=%s", (user.userId, user.companyId))
             self.store._insert_audit(
                 cursor=cursor, company_id=user.companyId, actor_user_id=user.userId, actor_user_name=user.userName,
                 target_type="user", target_id=user.userId, event="auth.password.changed",

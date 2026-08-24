@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
 import json
+import secrets
+import string
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -2167,6 +2169,8 @@ class DirectoryStore:
                 u.status AS user_status,
                 u.user_type,
                 u.is_department_head,
+                u.must_change_password,
+                u.auth_session_version,
                 d.name AS department_name,
                 r.name AS role_name,
                 r.permissions,
@@ -2759,6 +2763,33 @@ class DirectoryStore:
             raise ValueError("비밀번호 변경 후 사용자 정보를 찾을 수 없습니다.")
         return self._row_to_auth_summary(updated)
 
+    def reset_user_password(self, actor: AuthUserSummary, user_id: str, revoke_sessions: bool = True) -> dict:
+        self.db.ensure_migrations_applied()
+        temporary_password = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT * FROM users WHERE id=%s AND company_id=%s FOR UPDATE", (user_id, actor.companyId))
+                target = cursor.fetchone()
+                if target is None:
+                    raise ValueError("대상 사용자를 찾을 수 없습니다.")
+                next_version = int(target.get("auth_session_version", 0)) + (1 if revoke_sessions else 0)
+                cursor.execute(
+                    """UPDATE users SET password_hash=%s, must_change_password=TRUE,
+                       auth_session_version=%s, updated_at=NOW()
+                       WHERE id=%s AND company_id=%s""",
+                    (self.security.hash_password(temporary_password), next_version, user_id, actor.companyId),
+                )
+                self._insert_audit(
+                    cursor=cursor, company_id=actor.companyId, actor_user_id=actor.userId,
+                    actor_user_name=actor.userName, target_type="user", target_id=user_id,
+                    event="admin.user.password_reset",
+                    status_before="password_reset_required" if target.get("must_change_password") else "active",
+                    status_after="password_reset_required",
+                    reason="관리자 비밀번호 재설정; 기존 세션 폐기" if revoke_sessions else "관리자 비밀번호 재설정",
+                )
+            connection.commit()
+        return {"userId": user_id, "temporaryPassword": temporary_password, "mustChangePassword": True, "sessionsRevoked": revoke_sessions}
+
     def _fetch_user_view_row(self, cursor, user_id: str) -> dict:
         row = self._fetch_user_access_row(cursor, "u.id = %s", (user_id,))
         if row is None:
@@ -2818,6 +2849,7 @@ class DirectoryStore:
             permissions=self._permissions(row["permissions"]),
             departmentId=row.get("department_id"),
             departmentName=row.get("department_name"),
+            authSessionVersion=int(row.get("auth_session_version", 0)),
         )
 
     def _row_to_user_view(self, row: dict) -> UserView:
