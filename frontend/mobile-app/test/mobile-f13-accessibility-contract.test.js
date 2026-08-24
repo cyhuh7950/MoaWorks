@@ -200,6 +200,20 @@ test("요청·부분 로드 오류는 안전한 고정 이름의 alert role이�
   }
 });
 
+test("AI 오류 alert는 카드 안에서 잘리지 않는 compact 전용 스타일을 사용한다", () => {
+  const personalAi = screenRegion("more", "ai");
+  const alert = elements(personalAi, "Text").find((element) => source(element).includes("personalAiError"));
+  assert.ok(alert, "AI error alert exists");
+  assert.match(source(attribute(alert, "style")), /styles\.aiInlineError/, "AI alert does not reuse the unbounded shared error style");
+
+  const style = appSource.match(/aiInlineError:\s*\{([\s\S]*?)\n\s*\},/);
+  assert.ok(style, "AI compact error style exists");
+  assert.match(style[1], /marginHorizontal:\s*12/);
+  assert.match(style[1], /marginBottom:\s*12/);
+  assert.match(style[1], /fontSize:\s*10/);
+  assert.match(style[1], /lineHeight:\s*15/);
+});
+
 test("접근성 속성은 secret binding이나 승인되지 않은 동적 이름을 참조하지 않는다", () => {
   const allowedDynamicNameRoots = new Set(["BUSINESS_SEARCH_CATEGORY_LABELS", "approvalScreen", "calendarScreen", "cell", "daySchedules", "directoryScreen", "doc", "filter", "index", "item", "member", "name", "option", "result", "room", "section", "undefined", "view"]);
   const forbiddenSecretBindings = new Set(["apiKeyDraft", "llmApiKey", "password", "token"]);
@@ -242,7 +256,7 @@ test("정본 하단 탭과 더보기 navigation은 접근 가능한 진입점을
   assert.match(source(attribute(bottomTab, "accessibilityLabel")), /item\.label/);
   assert.ok(attributeValue(bottomTab, "accessibilityHint"));
 
-  const moreTab = elements(screenRegion("more"), "Pressable").find((element) => source(attribute(element, "onPress")).includes("setMoreScreen(item.id") && source(attribute(element, "accessibilityLabel")).includes("메뉴"));
+  const moreTab = elements(ast, "Pressable").find((element) => source(attribute(element, "onPress")).includes("setMoreScreen(item.id") && source(attribute(element, "accessibilityLabel")).includes("메뉴"));
   assert.ok(moreTab, "more menu control calls setMoreScreen");
   assert.equal(attributeValue(moreTab, "accessibilityRole"), "button");
   assert.match(source(attribute(moreTab, "accessibilityLabel")), /item\.label/);

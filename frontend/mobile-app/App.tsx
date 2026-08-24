@@ -296,6 +296,7 @@ export default function App() {
   const scheduleSubmissionGateRef = useRef(createSubmissionGate());
   const visibleSchedules = useMemo(() => filterSchedulesForMonth(schedules, scheduleMonthKey, timezone), [schedules, scheduleMonthKey, timezone]);
   const [moreScreen, setMoreScreen] = useState<Exclude<ScreenKey, MobileTab>>("directory");
+  const [moreMenuOpen, setMoreMenuOpen] = useState(true);
   const [directoryUsers, setDirectoryUsers] = useState<DirectoryUser[]>([]);
   const [directoryQuery, setDirectoryQuery] = useState("");
   const [directorySection, setDirectorySection] = useState<"all" | "favorites" | "recent">("all");
@@ -354,6 +355,7 @@ export default function App() {
       setSelectedApprovalId("");
       setApprovalComposeOpen(false);
       setDirectorySection("all");
+      setMoreMenuOpen(true);
       setChatTranslationPending(false);
       chatTranslationGateRef.current = false;
       setMailboxTab("inbox");
@@ -406,6 +408,7 @@ export default function App() {
       setDirectoryUsers(nextState.directoryUsers);
       setDirectoryQuery(nextState.directoryQuery);
       setDirectorySection("all");
+      setMoreMenuOpen(true);
       setDirectoryError(nextState.directoryError);
       directoryActionGateRef.current.reset();
       setDirectoryBusyUserId(nextState.directoryBusyUserId);
@@ -1031,6 +1034,7 @@ export default function App() {
     if (result.target.screen === "directory") {
       setActiveTab("more");
       setMoreScreen("directory");
+      setMoreMenuOpen(false);
       return;
     }
     if (result.target.screen === "files") {
@@ -1094,6 +1098,7 @@ export default function App() {
 
   function handleTabPress(nextTab: MobileTab) {
     setActiveTab(nextTab);
+    if (nextTab === "more") setMoreMenuOpen(true);
     if (!token) return;
     if (nextTab === "more" && moreScreen === "directory") {
       void loadDirectory(token);
@@ -1300,7 +1305,7 @@ export default function App() {
   const [approvalView, setApprovalView] = useState<ApprovalView>("progress");
   const [selectedApprovalId, setSelectedApprovalId] = useState("");
   const [approvalComposeOpen, setApprovalComposeOpen] = useState(false);
-  const activeTabLabel = activeTab === "home" ? "홈" : activeTab === "mail" ? "메일" : activeTab === "approval" ? "결재" : activeTab === "chat" ? "메신저" : activeTab === "calendar" ? "일정" : activeTab === "files" ? "파일" : "더보기";
+  const activeTabLabel = activeTab === "home" ? "홈" : activeTab === "mail" ? "메일" : activeTab === "approval" ? "결재" : activeTab === "chat" ? "메신저" : activeTab === "calendar" ? "일정" : activeTab === "files" ? "파일" : mobileNavigation.more.find((item: { id: string }) => item.id === moreScreen)?.label || "더보기";
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -1373,12 +1378,12 @@ export default function App() {
 
         {me ? (
           <>
-            {activeTab === "more" || activeTabError ? (
+            {(activeTab === "more" && moreMenuOpen) || activeTabError ? (
               <View style={styles.surfaceCard}>
-              {activeTab === "more" ? (
+              {activeTab === "more" && moreMenuOpen ? (
                 <View style={styles.mobileSubNav}>
                   {mobileNavigation.more.map((item: { id: string; label: string; icon: IconName }) => (
-                    <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} accessibilityHint="선택한 더보기 화면으로 이동합니다." onPress={() => { setMoreScreen(item.id as Exclude<ScreenKey, MobileTab>); if (item.id === "directory" && token) void loadDirectory(token); if ((item.id === "settings" || (item.id === "ai" && !personalAiTestReady)) && token) void loadPersonalAi(token); }} style={[styles.mobileSubTab, moreScreen === item.id ? styles.mobileSubTabActive : styles.mobileSubTabIdle]}><MoaIcon name={item.icon as IconName} color={moreScreen === item.id ? "#ffffff" : "#0f766e"} /><Text style={[styles.mobileTabLabel, moreScreen === item.id ? styles.mobileTabLabelActive : null]}>{item.label}</Text></Pressable>
+                    <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} accessibilityHint="선택한 더보기 화면으로 이동합니다." onPress={() => { setMoreScreen(item.id as Exclude<ScreenKey, MobileTab>); setMoreMenuOpen(false); if (item.id === "directory" && token) void loadDirectory(token); if ((item.id === "settings" || (item.id === "ai" && !personalAiTestReady)) && token) void loadPersonalAi(token); }} style={[styles.mobileSubTab, moreScreen === item.id ? styles.mobileSubTabActive : styles.mobileSubTabIdle]}><MoaIcon name={item.icon as IconName} color={moreScreen === item.id ? "#ffffff" : "#0f766e"} /><Text style={[styles.mobileTabLabel, moreScreen === item.id ? styles.mobileTabLabelActive : null]}>{item.label}</Text></Pressable>
                   ))}
                 </View>
               ) : null}
@@ -1429,14 +1434,14 @@ export default function App() {
 
             {activeTab === "more" && moreScreen === "ai" ? (
               <View style={styles.aiScreen}>
-                <View style={styles.aiHeader}><View><Text accessibilityRole="header" style={styles.aiTitle}>AI 채팅</Text><Text style={styles.aiProviderStatus}>{aiScreen.providerLabel || "PROVIDER"} · {aiScreen.ready ? "연결됨" : "연결 필요"}</Text></View><Text accessibilityRole="button" accessibilityLabel="개인 AI 설정 열기" onPress={() => setMoreScreen("settings")} style={styles.aiSettingsAction}>⚙ 설정</Text></View>
+                <View style={styles.aiHeader}><View><Text accessibilityRole="header" style={styles.aiTitle}>AI 채팅</Text><Text style={styles.aiProviderStatus}>{aiScreen.providerLabel || "PROVIDER"} · {aiScreen.ready ? "연결됨" : "연결 필요"}</Text></View><Text accessibilityRole="button" accessibilityLabel="개인 AI 설정 열기" onPress={() => { setMoreScreen("settings"); setMoreMenuOpen(false); }} style={styles.aiSettingsAction}>⚙ 설정</Text></View>
                 <View accessibilityLabel="AI 대화" style={styles.aiConversation}>
                   {aiScreen.messages.map((item, index) => <View key={`${item.role}-${index}`} style={[styles.aiMessageGroup, item.role === "user" ? styles.aiMessageGroupUser : null]}>{item.role === "assistant" ? <View style={styles.aiAvatar}><Text style={styles.aiAvatarText}>M</Text></View> : null}<View style={[styles.aiMessageBubble, item.role === "user" ? styles.aiMessageUser : styles.aiMessageAssistant]}><Text style={item.role === "user" ? styles.aiMessageTextUser : styles.aiMessageTextAssistant}>{item.body}</Text></View></View>)}
                   {aiScreen.messages.length === 0 ? <View style={styles.aiMessageGroup}><View style={styles.aiAvatar}><Text style={styles.aiAvatarText}>M</Text></View><View style={[styles.aiMessageBubble, styles.aiMessageAssistant]}><Text style={styles.aiMessageTextAssistant}>안녕하세요, MoaWorks AI입니다. 무엇을 도와드릴까요?</Text></View></View> : null}
                 </View>
                 <View style={styles.aiInputBar}><Text style={styles.aiAddButton}>＋</Text><TextInput accessibilityLabel="개인 AI 질문" accessibilityHint="개인 AI에게 보낼 질문을 입력합니다." style={styles.aiInput} value={aiDraft} onChangeText={setAiDraft} placeholder="무엇이든 물어보세요..." maxLength={8000} editable={!personalAiPendingAction} /><Pressable accessibilityRole="button" accessibilityLabel="개인 AI 질문 보내기" accessibilityHint="입력한 질문을 연결된 개인 AI에 보냅니다." disabled={!personalAiTestReady || Boolean(personalAiPendingAction) || !aiDraft.trim()} onPress={() => { void askAi(); }} style={[styles.aiSendButton, !personalAiTestReady || Boolean(personalAiPendingAction) || !aiDraft.trim() ? styles.buttonDisabled : null]}><Text style={styles.aiSendText}>{personalAiPendingAction === "chat" ? "…" : "➤"}</Text></Pressable></View>
                 {!personalAiTestReady ? <Text accessibilityLiveRegion="polite" style={styles.aiReadinessNote}>현재 로그인 세션에서 연결 시험이 준비 상태가 되어야 질문을 보낼 수 있습니다.</Text> : null}
-                {personalAiError ? <Text accessibilityRole="alert" accessibilityLabel="개인 AI 요청을 처리하지 못했습니다." style={styles.error}>{personalAiError}</Text> : null}
+                {personalAiError ? <Text accessibilityRole="alert" accessibilityLabel="개인 AI 요청을 처리하지 못했습니다." style={styles.aiInlineError}>{personalAiError}</Text> : null}
               </View>
             ) : null}
 
@@ -1700,7 +1705,7 @@ export default function App() {
                   <Text style={styles.messengerHeaderIcon}>⌕</Text><Text style={styles.messengerHeaderIcon}>⌕</Text>
                 </View>
                 {rooms.length > 1 ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.messengerRoomStrip}>{rooms.map((room) => <Pressable key={room.roomId} accessibilityRole="button" accessibilityLabel={`${room.roomName} 대화방 열기`} onPress={() => { void openRoom(room.roomId); }} style={[styles.messengerRoomChip, messengerScreen.selectedRoom?.roomId === room.roomId ? styles.messengerRoomChipActive : null]}><Text style={styles.messengerRoomChipText}>{room.roomName}</Text>{room.unreadCount > 0 ? <Text style={styles.messengerUnreadBadge}>{room.unreadCount}</Text> : null}</Pressable>)}</ScrollView> : null}
-                {!messengerScreen.selectedRoom ? <View style={styles.messengerEmpty}><Text style={styles.messengerEmptyTitle}>참여 중인 대화방이 없습니다.</Text><Pressable accessibilityRole="button" accessibilityLabel="주소록에서 대화 시작" onPress={() => { setActiveTab("more"); setMoreScreen("directory"); if (token) void loadDirectory(token); }} style={styles.primaryCompactButton}><Text style={styles.primaryCompactButtonText}>주소록에서 대화 시작</Text></Pressable></View> : <>
+                {!messengerScreen.selectedRoom ? <View style={styles.messengerEmpty}><Text style={styles.messengerEmptyTitle}>참여 중인 대화방이 없습니다.</Text><Pressable accessibilityRole="button" accessibilityLabel="주소록에서 대화 시작" onPress={() => { setActiveTab("more"); setMoreScreen("directory"); setMoreMenuOpen(false); if (token) void loadDirectory(token); }} style={styles.primaryCompactButton}><Text style={styles.primaryCompactButtonText}>주소록에서 대화 시작</Text></Pressable></View> : <>
                   <View accessibilityLabel="메시지 목록" style={styles.messageCanvas}>
                     {messengerScreen.messages.map((item) => {
                       const mine = item.senderUserId === me?.userId;
@@ -3521,6 +3526,13 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     color: "#64748b",
     fontSize: 9,
+  },
+  aiInlineError: {
+    marginHorizontal: 12,
+    marginBottom: 12,
+    color: "#b91c1c",
+    fontSize: 10,
+    lineHeight: 15,
   },
   settingsCompactSection: {
     marginVertical: 9,

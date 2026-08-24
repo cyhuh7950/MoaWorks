@@ -14,13 +14,13 @@
   "minified": true,
   "artifact": {
     "fileName": "MoaWorks-Mobile-0.1.0-android-internal-release.apk",
-    "size": 59185984,
-    "sha256": "e2024db18cd70d808bdb513c77daf9def91b3f0c42c31c50abb09840abb2aafe"
+    "size": 59199396,
+    "sha256": "ee4e87ee7d04835bebfbc80ab563960f2cbd49f80cabbef11d9ce259f9a47bf1"
   },
   "bundle": {
     "fileName": "MoaWorks-Mobile-0.1.0-android-production.bundle",
-    "size": 980014,
-    "sha256": "7ac6d4e25cdd3219788e6fe40c1ff7b0aa664afe680814b29cd88a0f41d8bea1"
+    "size": 1013827,
+    "sha256": "cc88b46d69261ec10602e0fd38824d12e326c44e3a628272b6686e83f8c32f69"
   },
   "auditReachability": {
     "fileName": "MoaWorks-Mobile-0.1.0-android-internal-release.audit-reachability.json",
@@ -51,5 +51,5 @@
     "devices": 1
   },
   "status": "success",
-  "generatedAt": "2026-08-24T15:33:17.791Z"
+  "generatedAt": "2026-08-24T19:57:39.937Z"
 }
