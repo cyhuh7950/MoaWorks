@@ -26,8 +26,20 @@ function calendarLayoutModel() {
   };
 }
 
+function buildHomeViewModel({ userName = "", mailItems = [], documents = [], todaySchedules = [], rooms = [] } = {}) {
+  return {
+    greeting: `안녕하세요, ${String(userName).trim()}님!`,
+    summary: [
+      { id: "mail", label: "안 읽은 메일", count: mailItems.filter((item) => !item.isRead).length },
+      { id: "approval", label: "결재 대기", count: documents.filter((item) => item.status === "submitted").length },
+    ],
+    todaySchedules: todaySchedules.slice(0, 4),
+    recentRooms: rooms.slice(0, 3),
+  };
+}
+
 module.exports = {
+  buildHomeViewModel,
   calendarLayoutModel,
   navigationModel,
 };
-

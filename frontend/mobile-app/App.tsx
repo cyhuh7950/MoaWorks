@@ -6,7 +6,7 @@ import { createDirectoryActionGate, directoryUsers as readDirectoryUsers, direct
 import { buildPersonalAiChatPayload, buildPersonalAiConfigPayload, createPersonalAiActionGate, personalAiErrorMessage, readPersonalAiChatResponse, readPersonalAiConfig, readPersonalAiConnectionTest, readPersonalAiProviders } from "./personal-ai-api";
 import { normalizeBusinessSearchText, searchLoadedBusinessSummaries, updateBusinessSearchWarnings } from "./business-search";
 
-const { navigationModel } = require("./mobile-ui-design.js");
+const { buildHomeViewModel, navigationModel } = require("./mobile-ui-design.js");
 const mobileNavigation = navigationModel();
 
 type AuthUser = {
@@ -1138,6 +1138,14 @@ export default function App() {
     const matchesFilter = mailFilter === "all" || (mailFilter === "unread" ? !item.isRead : item.isStarred);
     return matchesQuery && matchesFilter;
   });
+  const todayKey = dateKey(new Date().toISOString(), timezone);
+  const homeView = buildHomeViewModel({
+    userName: me?.userName || "",
+    mailItems,
+    documents,
+    todaySchedules: schedules.filter((item) => dateKey(item.starts_at, timezone) === todayKey),
+    rooms,
+  });
   const activeTabLabel = activeTab === "home" ? "홈" : activeTab === "mail" ? "메일" : activeTab === "approval" ? "결재" : activeTab === "chat" ? "메신저" : activeTab === "calendar" ? "일정" : activeTab === "files" ? "파일" : "더보기";
 
   return (
@@ -1328,42 +1336,46 @@ export default function App() {
             ) : null}
 
             {activeTab === "home" ? (
-              <View style={styles.surfaceCard}>
-                <Text style={styles.surfaceKicker}>홈</Text>
-                <Text style={styles.surfaceTitle}>오늘의 업무를 빠르게 확인하세요</Text>
-                <View style={styles.quickGrid}>
-                  {homeQuickCards.map((item) => (
+              <View style={styles.homeScreen}>
+                <View style={styles.homeWelcome}>
+                  <Text accessibilityRole="header" style={styles.homeGreeting}>{homeView.greeting}</Text>
+                  <Text style={styles.homeDate}>{new Date().toLocaleDateString(locale, { month: "long", day: "numeric", weekday: "short" })}</Text>
+                  <Text style={styles.homeStatus}>알림 {notificationSummary?.unreadCount ?? 0}건 · {me.roleName}</Text>
+                </View>
+                <View style={styles.homeStats}>
+                  {homeView.summary.map((item: { id: "mail" | "approval"; label: string; count: number }) => (
                     <Pressable
-                      key={item.title}
+                      key={item.id}
                       accessibilityRole="button"
-                      accessibilityLabel={`${item.title} 화면 열기`}
-                      onPress={() => {
-                        const nextTab: MobileTab = item.id === "mail" ? "mail" : item.id === "approval" ? "approval" : item.id === "chat" ? "chat" : "home";
-                        if (nextTab !== "home") setActiveTab(nextTab);
-                      }}
-                      style={[styles.quickCard, item.tone]}
+                      accessibilityLabel={`${item.label} ${item.count}건 화면 열기`}
+                      accessibilityHint={`하단 ${item.label === "안 읽은 메일" ? "메일" : "결재"} 화면으로 이동합니다.`}
+                      onPress={() => handleTabPress(item.id)}
+                      style={styles.homeStatCard}
                     >
-                      <Text style={styles.quickCardTitle}>{item.title}</Text>
-                      <Text style={styles.quickCardNote}>{item.note}</Text>
+                      <Text style={styles.homeStatLabel}>{item.label}</Text>
+                      <Text style={styles.homeStatValue}>{item.count}<Text style={styles.homeStatUnit}>건</Text></Text>
                     </Pressable>
                   ))}
                 </View>
-                <View style={styles.homeDetailGrid}>
-                  <View style={styles.homeDetailCard}>
-                    <Text style={styles.listKicker}>오늘 일정</Text>
-                    <Text style={styles.emptyState}>표시할 일정이 없습니다.</Text>
-                    <Text style={styles.listBody}>일정 메뉴에서 연결 상태와 상세 내용을 확인하세요.</Text>
-                  </View>
-                  <View style={styles.homeDetailCard}>
-                    <Text style={styles.listKicker}>최근 대화</Text>
-                    {rooms.slice(0, 2).map((room) => (
+                <View style={styles.homeSection}>
+                  <View style={styles.homeSectionHeader}><Text style={styles.homeSectionTitle}>오늘의 일정</Text><Text onPress={() => handleTabPress("calendar")} style={styles.homeSectionLink}>전체</Text></View>
+                  {homeView.todaySchedules.map((item: WorkspaceSchedule) => (
+                    <Pressable key={item.id} onPress={() => handleTabPress("calendar")} style={styles.homeCompactRow}>
+                      <Text style={styles.homeRowTime}>{formatStamp(item.starts_at).slice(-5)}</Text>
+                      <Text style={styles.homeRowTitle} numberOfLines={1}>{item.title}</Text>
+                    </Pressable>
+                  ))}
+                  {homeView.todaySchedules.length === 0 ? <Text style={styles.homeEmpty}>오늘 등록된 일정이 없습니다.</Text> : null}
+                </View>
+                <View style={styles.homeSection}>
+                    <View style={styles.homeSectionHeader}><Text style={styles.homeSectionTitle}>최근 메신저</Text><Text onPress={() => handleTabPress("chat")} style={styles.homeSectionLink}>더보기</Text></View>
+                    {homeView.recentRooms.map((room: MessengerRoom) => (
                       <Pressable key={room.roomId} accessibilityRole="button" accessibilityLabel={`${room.roomName} 대화 열기`} onPress={() => { setActiveTab("chat"); void openRoom(room.roomId); }} style={styles.homeRecentRow}>
                         <Text style={styles.listTitle}>{room.roomName}</Text>
                         <Text style={styles.listBody}>{room.lastMessage || "최근 메시지 없음"}</Text>
                       </Pressable>
                     ))}
-                    {rooms.length === 0 ? <Text style={styles.emptyState}>최근 대화가 없습니다.</Text> : null}
-                  </View>
+                    {homeView.recentRooms.length === 0 ? <Text style={styles.homeEmpty}>최근 대화가 없습니다.</Text> : null}
                 </View>
               </View>
             ) : null}
@@ -1767,6 +1779,105 @@ const styles = StyleSheet.create({
   containerCompact: {
     padding: 12,
     gap: 12,
+  },
+  homeScreen: {
+    gap: 10,
+  },
+  homeWelcome: {
+    backgroundColor: "#07305a",
+    borderRadius: 14,
+    padding: 16,
+  },
+  homeGreeting: {
+    color: "#ffffff",
+    fontSize: 18,
+    fontWeight: "800",
+  },
+  homeDate: {
+    marginTop: 4,
+    color: "#dbeafe",
+    fontSize: 11,
+  },
+  homeStatus: {
+    marginTop: 8,
+    color: "#bae6fd",
+    fontSize: 10,
+  },
+  homeStats: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  homeStatCard: {
+    flex: 1,
+    minHeight: 84,
+    borderRadius: 12,
+    padding: 12,
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+  },
+  homeStatLabel: {
+    color: "#334155",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  homeStatValue: {
+    marginTop: 8,
+    color: "#0f172a",
+    fontSize: 24,
+    fontWeight: "800",
+  },
+  homeStatUnit: {
+    color: "#64748b",
+    fontSize: 10,
+  },
+  homeSection: {
+    backgroundColor: "#ffffff",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+    padding: 12,
+  },
+  homeSectionHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  homeSectionTitle: {
+    color: "#0f172a",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  homeSectionLink: {
+    color: "#0f766e",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  homeCompactRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: "#eef2f7",
+  },
+  homeRowTime: {
+    width: 42,
+    color: "#0f766e",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  homeRowTitle: {
+    flex: 1,
+    color: "#0f172a",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  homeEmpty: {
+    color: "#64748b",
+    fontSize: 10,
+    paddingVertical: 10,
   },
   hero: {
     borderRadius: 30,

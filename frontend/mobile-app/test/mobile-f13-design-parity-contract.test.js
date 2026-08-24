@@ -39,3 +39,21 @@ test("정본 밀도와 7열 달력 상수를 고정한다", () => {
   });
 });
 
+test("홈 view model은 사용자와 핵심 업무를 목업 순서로 만든다", () => {
+  const { buildHomeViewModel } = loadDesign();
+  const view = buildHomeViewModel({
+    userName: "김모아",
+    mailItems: [{ isRead: false }, { isRead: true }],
+    documents: [{ status: "submitted" }],
+    todaySchedules: [{ id: "s1", title: "회의" }],
+    rooms: [{ roomId: "r1", roomName: "전략 TF", lastMessage: "확인했습니다." }],
+  });
+
+  assert.equal(view.greeting, "안녕하세요, 김모아님!");
+  assert.deepEqual(view.summary.map(({ label, count }) => [label, count]), [
+    ["안 읽은 메일", 1],
+    ["결재 대기", 1],
+  ]);
+  assert.deepEqual(view.todaySchedules.map(({ id }) => id), ["s1"]);
+  assert.deepEqual(view.recentRooms.map(({ roomId }) => roomId), ["r1"]);
+});
