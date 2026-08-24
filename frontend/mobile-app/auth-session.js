@@ -41,8 +41,7 @@ async function requestJson({ apiBase, path, init, fetchImpl = fetch, invalidateS
     const detail = data.detail;
     const userMessage = sessionInvalidated
       ? sessionMessageFor(response.status)
-      : Array.isArray(detail) ? "일정 입력값을 확인하세요."
-        : detail?.userMessage || data.userMessage || "요청 처리 실패";
+      : detail?.userMessage || data.userMessage || "요청 처리 실패";
     const error = new Error(userMessage);
     error.status = response.status;
     error.detail = detail;

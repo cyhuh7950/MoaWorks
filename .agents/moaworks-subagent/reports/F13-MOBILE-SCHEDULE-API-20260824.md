@@ -57,3 +57,16 @@
 - release APK는 59,173,802 bytes, SHA256 `0FEE00957BBF5098DBE2CE4181B0856E1F81F7C22112C03BE031238FDB941866`이다.
 - `emulator-5554`에 streamed install `Success`, `com.moaworks.mobile/.MainActivity` cold launch와 로그인 화면·접근성 XML을 확인했다.
 - 실제 운영 계정이 없어 로그인 이후 일정 조회·생성과 일정 화면은 미검증으로 분리한다. 운영 데이터는 생성하지 않았다.
+
+## 최종 잔여 수정
+
+### 판정
+
+`PASS` — 공용 422 오류를 중립으로 유지하고, 일정 화면 빈 상태를 현재 표시 월 기준으로 보정했다.
+
+### RED/GREEN 및 실제 증적
+
+- RED: `node --test test/mobile-f13-schedule-api-contract.test.js`에서 공용 배열 detail의 일정 전용 문구 2건과 다른 월 일정이 있을 때의 빈 상태 wiring 1건이 실패했다.
+- GREEN: focused auth+schedule 17/17 PASS, 전체 `npm test` 69/69 PASS.
+- bundle: 권한 상승 `npm run bundle` 성공, `BUNDLE_SHA256=e5c37ffe7f3f3583c25d21da9bbb3329c8d5d83f1a0ce08f4819aa443647fc71`.
+- Android build/evidence는 지시대로 재실행하지 않았다. 실제 운영 API 호출·데이터 생성·배포도 수행하지 않았다.
