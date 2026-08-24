@@ -1771,33 +1771,6 @@ class DirectoryStore:
                 (row["id"],),
             )
 
-    def list_active_approval_approvers(self, actor_id: str) -> ApprovalApproverListResponse:
-        self.db.ensure_migrations_applied()
-        with self.db.connect() as connection:
-            with connection.cursor() as cursor:
-                actor = self._fetch_actor_summary(cursor, actor_id)
-                cursor.execute(
-                    """
-                    SELECT u.id, u.name, u.email, COALESCE(d.name, '미지정') AS department_name
-                    FROM users u
-                    JOIN roles r ON r.id = u.role_id
-                    LEFT JOIN departments d ON d.id = u.department_id
-                    WHERE u.company_id = %s
-                      AND u.status = 'active'
-                      AND r.status = 'active'
-                      AND (d.id IS NULL OR d.status = 'active')
-                    ORDER BY department_name ASC, u.name ASC, u.email ASC
-                    """,
-                    (actor.companyId,),
-                )
-                users = cursor.fetchall()
-        return ApprovalApproverListResponse(
-            users=[
-                ApprovalApproverView(userId=row["id"], userName=row["name"], userEmail=row["email"], departmentName=row["department_name"])
-                for row in users
-            ]
-        )
-
     def create_approval_document(self, actor_id: str, payload: ApprovalDocumentCreateRequest) -> ApprovalCreateResponse:
         self.db.ensure_migrations_applied()
         now = self._now()
@@ -2884,7 +2857,7 @@ class DirectoryStore:
             mailAccountStatus=row["mail_account_status"],
             permissions=permissions,
             consistencyIssues=consistency_issues,
-            mustChangePassword=bool(row["must_change_password"]),
+            mustChangePassword=bool(row.get("must_change_password", False)),
         )
 
     def _to_company_record(self, row: dict) -> CompanyRecord:

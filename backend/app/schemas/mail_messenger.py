@@ -166,12 +166,6 @@ class MailAttachmentUploadResponse(BaseModel):
 
 class MailAttachmentView(BaseModel):
     attachmentId: str | None = None
-    fileName: str
-    contentType: str
-    sizeBytes: int = Field(ge=0)
-
-
-class MailAttachmentView(BaseModel):
     fileName: str = Field(min_length=1)
     contentType: str = Field(default="application/octet-stream")
     sizeBytes: int = Field(default=0, ge=0)
