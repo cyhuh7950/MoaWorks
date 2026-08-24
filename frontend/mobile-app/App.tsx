@@ -6,7 +6,7 @@ import { createDirectoryActionGate, directoryUsers as readDirectoryUsers, direct
 import { buildPersonalAiChatPayload, buildPersonalAiConfigPayload, createPersonalAiActionGate, personalAiErrorMessage, readPersonalAiChatResponse, readPersonalAiConfig, readPersonalAiConnectionTest, readPersonalAiProviders } from "./personal-ai-api";
 import { normalizeBusinessSearchText, searchLoadedBusinessSummaries, updateBusinessSearchWarnings } from "./business-search";
 
-const { approvalViewModel, buildHomeViewModel, calendarViewModel, navigationModel } = require("./mobile-ui-design.js");
+const { aiViewModel, approvalViewModel, buildHomeViewModel, calendarViewModel, directoryViewModel, navigationModel } = require("./mobile-ui-design.js");
 const { buildMailSendPayload, mailboxRequestPath, mailboxViewModel } = require("./mail-compose.js");
 const { buildTranslationPayload, messengerViewModel } = require("./messenger-translation.js");
 const mobileNavigation = navigationModel();
@@ -298,6 +298,7 @@ export default function App() {
   const [moreScreen, setMoreScreen] = useState<Exclude<ScreenKey, MobileTab>>("directory");
   const [directoryUsers, setDirectoryUsers] = useState<DirectoryUser[]>([]);
   const [directoryQuery, setDirectoryQuery] = useState("");
+  const [directorySection, setDirectorySection] = useState<"all" | "favorites" | "recent">("all");
   const [directoryError, setDirectoryError] = useState("");
   const [directoryBusyUserId, setDirectoryBusyUserId] = useState("");
   const directoryActionGateRef = useRef(createDirectoryActionGate());
@@ -352,6 +353,7 @@ export default function App() {
       setApprovalView("progress");
       setSelectedApprovalId("");
       setApprovalComposeOpen(false);
+      setDirectorySection("all");
       setChatTranslationPending(false);
       chatTranslationGateRef.current = false;
       setMailboxTab("inbox");
@@ -403,6 +405,7 @@ export default function App() {
       setScheduleFormOpen(false);
       setDirectoryUsers(nextState.directoryUsers);
       setDirectoryQuery(nextState.directoryQuery);
+      setDirectorySection("all");
       setDirectoryError(nextState.directoryError);
       directoryActionGateRef.current.reset();
       setDirectoryBusyUserId(nextState.directoryBusyUserId);
@@ -1292,6 +1295,8 @@ export default function App() {
   const selectedApproval = approvalScreen.selected;
   const messengerScreen = messengerViewModel({ rooms, selectedRoomId, messages: roomMessages }) as { selectedRoom: MessengerRoom | null; messages: MessengerMessage[]; languageOptions: Array<{ value: string; label: string }> };
   const calendarScreen = calendarViewModel({ cells: buildMonthGrid(scheduleMonthKey), schedules: visibleSchedules, selectedDateKey: selectedScheduleDateKey, timezone }) as { columns: number; weekdayLabels: string[]; cells: Array<{ dateKey: string; day: number | null }>; selectedDateKey: string; selectedSchedules: WorkspaceSchedule[] };
+  const directoryScreen = directoryViewModel({ users: visibleDirectoryUsers, query: "", section: directorySection }) as { sections: string[]; rows: DirectoryUser[] };
+  const aiScreen = aiViewModel({ messages: aiMessages, provider: llmProvider, connectionStatus: llmConnectionStatus }) as { providerLabel: string; ready: boolean; messages: Array<{ role: "user" | "assistant"; body: string }> };
   const [approvalView, setApprovalView] = useState<ApprovalView>("progress");
   const [selectedApprovalId, setSelectedApprovalId] = useState("");
   const [approvalComposeOpen, setApprovalComposeOpen] = useState(false);
@@ -1383,16 +1388,16 @@ export default function App() {
             {activeTab === "calendar" ? (
               <View style={styles.calendarScreen}>
                 <View style={styles.calendarToolbar}>
-                  <Text accessibilityRole="button" accessibilityLabel="이전 달 일정 보기" onPress={() => changeScheduleMonth(-1)} style={styles.calendarArrow}>‹</Text>
+                  <Text accessibilityRole="button" accessibilityLabel="이전 달 일정 보기" accessibilityHint="표시 중인 달을 한 달 전으로 이동합니다." onPress={() => changeScheduleMonth(-1)} style={styles.calendarArrow}>‹</Text>
                   <Text accessibilityRole="header" accessibilityLiveRegion="polite" style={styles.calendarMonthTitle}>{`${Number(scheduleMonthKey.slice(0, 4))}년 ${Number(scheduleMonthKey.slice(5, 7))}월`}</Text>
-                  <Pressable accessibilityRole="button" accessibilityLabel="오늘 일정 보기" onPress={selectTodaySchedule} style={styles.calendarTodayButton}><Text style={styles.calendarTodayText}>오늘</Text></Pressable>
-                  <Text accessibilityRole="button" accessibilityLabel="다음 달 일정 보기" onPress={() => changeScheduleMonth(1)} style={styles.calendarArrow}>›</Text>
+                  <Pressable accessibilityRole="button" accessibilityLabel="오늘 일정 보기" accessibilityHint="오늘 날짜와 일정으로 이동합니다." onPress={selectTodaySchedule} style={styles.calendarTodayButton}><Text style={styles.calendarTodayText}>오늘</Text></Pressable>
+                  <Text accessibilityRole="button" accessibilityLabel="다음 달 일정 보기" accessibilityHint="표시 중인 달을 한 달 뒤로 이동합니다." onPress={() => changeScheduleMonth(1)} style={styles.calendarArrow}>›</Text>
                 </View>
                 <View style={styles.calendarWeekdays}>{calendarScreen.weekdayLabels.map((label, index) => <Text key={label} style={[styles.calendarWeekday, index === 0 ? styles.calendarSunday : null]}>{label}</Text>)}</View>
                 <View style={styles.calendarGrid}>{calendarScreen.cells.map((cell, index) => {
                   const daySchedules = visibleSchedules.filter((item) => dateKey(item.starts_at, timezone) === cell.dateKey);
                   const selected = Boolean(cell.dateKey) && cell.dateKey === calendarScreen.selectedDateKey;
-                  return <Pressable key={`${cell.dateKey}-${index}`} accessibilityRole={cell.dateKey ? "button" : undefined} accessibilityLabel={cell.dateKey ? `${cell.day}일 일정 ${daySchedules.length}건` : undefined} disabled={!cell.dateKey} onPress={() => setSelectedScheduleDateKey(cell.dateKey)} style={styles.calendarCompactCell}><Text style={[styles.calendarCompactDate, index % 7 === 0 ? styles.calendarSunday : null, selected ? styles.calendarSelectedDate : null]}>{cell.day || ""}</Text>{daySchedules.length > 0 ? <View style={styles.calendarEventDot} /> : null}</Pressable>;
+                  return <Pressable key={`${cell.dateKey}-${index}`} accessibilityRole={cell.dateKey ? "button" : undefined} accessibilityLabel={cell.dateKey ? `${cell.day}일 일정 ${daySchedules.length}건` : undefined} accessibilityHint={cell.dateKey ? "선택한 날짜의 일정 목록을 표시합니다." : undefined} disabled={!cell.dateKey} onPress={() => setSelectedScheduleDateKey(cell.dateKey)} style={styles.calendarCompactCell}><Text style={[styles.calendarCompactDate, index % 7 === 0 ? styles.calendarSunday : null, selected ? styles.calendarSelectedDate : null]}>{cell.day || ""}</Text>{daySchedules.length > 0 ? <View style={styles.calendarEventDot} /> : null}</Pressable>;
                 })}</View>
                 <View style={styles.selectedDayHeader}><Text style={styles.selectedDayTitle}>{calendarScreen.selectedDateKey ? `${Number(calendarScreen.selectedDateKey.slice(5, 7))}월 ${Number(calendarScreen.selectedDateKey.slice(8, 10))}일` : "선택일"}</Text><Text style={styles.selectedDayCount}>전체 {calendarScreen.selectedSchedules.length}건</Text></View>
                 <View accessibilityLabel="선택일 일정 목록" style={styles.selectedScheduleList}>
@@ -1405,31 +1410,32 @@ export default function App() {
                   <TextInput accessibilityLabel="일정 종료 시간" accessibilityHint="일정 종료 시각을 날짜와 시간 형식으로 입력합니다." style={styles.compactInput} value={scheduleForm.endsAt} onChangeText={(endsAt) => setScheduleForm((current) => ({ ...current, endsAt }))} placeholder="2026-08-24T10:00:00+09:00" />
                   <Pressable accessibilityRole="button" accessibilityLabel="일정 생성" disabled={scheduleSaving} onPress={() => { void createSchedule(); }} style={[styles.composeSendButton, scheduleSaving ? styles.buttonDisabled : null]}><Text style={styles.composeSendButtonText}>{scheduleSaving ? "저장 중" : "일정 저장"}</Text></Pressable>
                 </View> : null}
-                <Pressable accessibilityRole="button" accessibilityLabel={scheduleFormOpen ? "일정 만들기 닫기" : "일정 만들기"} onPress={() => setScheduleFormOpen((current) => !current)} style={styles.calendarCreateButton}><Text style={styles.calendarCreateText}>{scheduleFormOpen ? "닫기" : "＋ 일정 만들기"}</Text></Pressable>
+                <Pressable accessibilityRole="button" accessibilityLabel="일정 만들기" accessibilityHint="새 일정 입력 양식을 열거나 닫습니다." onPress={() => setScheduleFormOpen((current) => !current)} style={styles.calendarCreateButton}><Text style={styles.calendarCreateText}>{scheduleFormOpen ? "닫기" : "＋ 일정 만들기"}</Text></Pressable>
                 {scheduleError ? <Text accessibilityRole="alert" accessibilityLabel="일정 요청을 처리하지 못했습니다." style={styles.error}>{scheduleError}</Text> : null}
               </View>
             ) : null}
 
             {activeTab === "more" && moreScreen === "directory" ? (
-              <View style={styles.surfaceCard}>
-                <Text style={styles.surfaceKicker}>주소록</Text>
-                <Text accessibilityRole="header" style={styles.surfaceTitle}>사원 정보 검색</Text>
-                <TextInput accessibilityLabel="주소록 검색" accessibilityHint="이름, 부서, 역할 또는 이메일로 사원을 검색합니다." style={styles.input} value={directoryQuery} onChangeText={setDirectoryQuery} placeholder="이름, 부서, 역할, 이메일 검색" />
-                {visibleDirectoryUsers.map((member) => { const isSelf = member.id === me?.userId; return <View key={member.id} style={styles.directoryCard}><View style={styles.avatar}><Text style={styles.avatarText}>{member.name.slice(0, 1)}</Text></View><View style={styles.directoryInfo}><Text style={styles.listTitle}>{member.name}</Text><Text style={styles.listBody}>{member.department_name} · {member.role_name}</Text><Text style={styles.listBody}>{member.email}</Text></View><View style={styles.directoryActions}><Button title="메일" accessibilityLabel={`${member.name}에게 메일 보내기`} accessibilityHint="기본 메일 앱을 엽니다." onPress={() => openDirectoryMail(member.email)} disabled={!mailtoUrl(member.email)} /><Button title="전화" accessibilityLabel={`${member.name} 전화번호 미제공`} accessibilityHint="전화번호가 없어 사용할 수 없습니다." onPress={() => {}} disabled={true} /><Button title={isSelf ? "나" : directoryBusyUserId === member.id ? "생성 중" : "대화"} accessibilityLabel={`${member.name}와 대화 시작`} accessibilityHint="선택한 사원과 일대일 대화방을 엽니다." onPress={() => void startDirectRoom(member)} disabled={isSelf || directoryBusyUserId === member.id} /></View></View>; })}
+              <View style={styles.directoryScreen}>
+                <Text accessibilityRole="header" style={styles.directoryScreenTitle}>주소록</Text>
+                <TextInput accessibilityLabel="주소록 검색" accessibilityHint="이름, 부서, 역할 또는 이메일로 사원을 검색합니다." style={styles.directorySearchInput} value={directoryQuery} onChangeText={setDirectoryQuery} placeholder="이름, 부서, 직책 검색" />
+                <View style={styles.directorySections}>{(["all", "favorites", "recent"] as const).map((section, index) => <Pressable key={section} accessibilityRole="button" accessibilityLabel={`${directoryScreen.sections[index]} 주소록 보기`} onPress={() => setDirectorySection(section)} style={[styles.directorySection, directorySection === section ? styles.directorySectionActive : null]}><Text style={[styles.directorySectionText, directorySection === section ? styles.directorySectionTextActive : null]}>{directoryScreen.sections[index]}</Text></Pressable>)}</View>
+                <View style={styles.directoryListHeader}><Text style={styles.directoryListTitle}>{directorySection === "all" ? `전체 직원 (${directoryScreen.rows.length})` : directoryScreen.sections[["all", "favorites", "recent"].indexOf(directorySection)]}</Text></View>
+                {directoryScreen.rows.map((member) => { const isSelf = member.id === me?.userId; return <View key={member.id} style={styles.directoryCompactRow}><View style={styles.directoryInitial}><Text style={styles.directoryInitialText}>{member.name.slice(0, 1)}</Text></View><View style={styles.directoryCompactInfo}><Text style={styles.directoryMemberName}>{member.name} <Text style={styles.directoryMemberRole}>{member.role_name}</Text></Text><Text style={styles.directoryDepartment}>{member.department_name}</Text></View><View style={styles.directoryActions}><Pressable accessibilityRole="button" accessibilityLabel={`${member.name} 전화번호 미제공`} accessibilityHint="전화번호가 없어 사용할 수 없습니다." onPress={() => {}} disabled={true} style={styles.directoryIconDisabled}><Text style={styles.directoryIcon}>⌕</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel={`${member.name}에게 메일 보내기`} accessibilityHint="기본 메일 앱을 엽니다." onPress={() => openDirectoryMail(member.email)} disabled={!mailtoUrl(member.email)} style={styles.directoryIconButton}><Text style={styles.directoryIcon}>✉</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel={`${member.name}와 대화 시작`} accessibilityHint="선택한 사원과 일대일 대화방을 엽니다." onPress={() => void startDirectRoom(member)} disabled={isSelf || directoryBusyUserId === member.id} style={[styles.directoryIconButton, isSelf || directoryBusyUserId === member.id ? styles.directoryIconDisabled : null]}><Text style={styles.directoryIcon}>◌</Text></Pressable></View></View>; })}
                 {directoryError ? <Text accessibilityRole="alert" accessibilityLabel="주소록 요청을 처리하지 못했습니다." style={styles.directoryError}>{directoryError}</Text> : null}
-                {visibleDirectoryUsers.length === 0 && !directoryError ? <Text accessibilityLiveRegion="polite" style={styles.emptyState}>표시할 주소록 정보가 없습니다.</Text> : null}
+                {directoryScreen.rows.length === 0 && !directoryError ? <Text accessibilityLiveRegion="polite" style={styles.emptyState}>표시할 주소록 정보가 없습니다.</Text> : null}
               </View>
             ) : null}
 
             {activeTab === "more" && moreScreen === "ai" ? (
-              <View style={styles.surfaceCard}>
-                <Text style={styles.surfaceKicker}>AI 채팅</Text>
-                <Text accessibilityRole="header" style={styles.surfaceTitle}>연결된 LLM에게 질문하고 검색</Text>
-                <Text style={styles.surfaceHint}>개인 API 키는 설정 화면의 현재 입력 중에만 유지되며, 답변 요청은 MoaWorks 서버를 통해 처리합니다.</Text>
-                {aiMessages.map((item, index) => <View key={`${item.role}-${index}`} style={[styles.aiBubble, item.role === "user" ? styles.aiUserBubble : styles.aiAssistantBubble]}><Text style={styles.aiRole}>{item.role === "user" ? "나" : llmProvider}</Text><Text style={styles.listBody}>{item.body}</Text></View>)}
-                <TextInput accessibilityLabel="개인 AI 질문" accessibilityHint="개인 AI에게 보낼 질문을 입력합니다." style={[styles.input, styles.textarea]} value={aiDraft} onChangeText={setAiDraft} placeholder="질문을 입력하세요." multiline maxLength={8000} editable={!personalAiPendingAction} />
-                <Button accessibilityLabel="개인 AI 질문 보내기" accessibilityHint="입력한 질문을 연결된 개인 AI에 보냅니다." title={personalAiPendingAction === "chat" ? "답변 대기 중" : "질문 보내기"} disabled={!personalAiTestReady || Boolean(personalAiPendingAction) || !aiDraft.trim()} onPress={() => { void askAi(); }} />
-                {!personalAiTestReady ? <Text accessibilityLiveRegion="polite" style={styles.surfaceHint}>현재 로그인 세션에서 연결 시험이 준비 상태가 되어야 질문을 보낼 수 있습니다.</Text> : null}
+              <View style={styles.aiScreen}>
+                <View style={styles.aiHeader}><View><Text accessibilityRole="header" style={styles.aiTitle}>AI 채팅</Text><Text style={styles.aiProviderStatus}>{aiScreen.providerLabel || "PROVIDER"} · {aiScreen.ready ? "연결됨" : "연결 필요"}</Text></View><Text accessibilityRole="button" accessibilityLabel="개인 AI 설정 열기" onPress={() => setMoreScreen("settings")} style={styles.aiSettingsAction}>⚙ 설정</Text></View>
+                <View accessibilityLabel="AI 대화" style={styles.aiConversation}>
+                  {aiScreen.messages.map((item, index) => <View key={`${item.role}-${index}`} style={[styles.aiMessageGroup, item.role === "user" ? styles.aiMessageGroupUser : null]}>{item.role === "assistant" ? <View style={styles.aiAvatar}><Text style={styles.aiAvatarText}>M</Text></View> : null}<View style={[styles.aiMessageBubble, item.role === "user" ? styles.aiMessageUser : styles.aiMessageAssistant]}><Text style={item.role === "user" ? styles.aiMessageTextUser : styles.aiMessageTextAssistant}>{item.body}</Text></View></View>)}
+                  {aiScreen.messages.length === 0 ? <View style={styles.aiMessageGroup}><View style={styles.aiAvatar}><Text style={styles.aiAvatarText}>M</Text></View><View style={[styles.aiMessageBubble, styles.aiMessageAssistant]}><Text style={styles.aiMessageTextAssistant}>안녕하세요, MoaWorks AI입니다. 무엇을 도와드릴까요?</Text></View></View> : null}
+                </View>
+                <View style={styles.aiInputBar}><Text style={styles.aiAddButton}>＋</Text><TextInput accessibilityLabel="개인 AI 질문" accessibilityHint="개인 AI에게 보낼 질문을 입력합니다." style={styles.aiInput} value={aiDraft} onChangeText={setAiDraft} placeholder="무엇이든 물어보세요..." maxLength={8000} editable={!personalAiPendingAction} /><Pressable accessibilityRole="button" accessibilityLabel="개인 AI 질문 보내기" accessibilityHint="입력한 질문을 연결된 개인 AI에 보냅니다." disabled={!personalAiTestReady || Boolean(personalAiPendingAction) || !aiDraft.trim()} onPress={() => { void askAi(); }} style={[styles.aiSendButton, !personalAiTestReady || Boolean(personalAiPendingAction) || !aiDraft.trim() ? styles.buttonDisabled : null]}><Text style={styles.aiSendText}>{personalAiPendingAction === "chat" ? "…" : "➤"}</Text></Pressable></View>
+                {!personalAiTestReady ? <Text accessibilityLiveRegion="polite" style={styles.aiReadinessNote}>현재 로그인 세션에서 연결 시험이 준비 상태가 되어야 질문을 보낼 수 있습니다.</Text> : null}
                 {personalAiError ? <Text accessibilityRole="alert" accessibilityLabel="개인 AI 요청을 처리하지 못했습니다." style={styles.error}>{personalAiError}</Text> : null}
               </View>
             ) : null}
@@ -1494,6 +1500,9 @@ export default function App() {
                 <Button accessibilityLabel="개인 AI 연결 시험" title={personalAiPendingAction === "test" ? "연결 시험 중" : llmConnectionStatus === "ready" ? "연결됨 · 다시 시험" : "LLM 연결 시험"} disabled={Boolean(personalAiPendingAction) || personalAiConfigDirty || !llmProvider || !llmModel.trim()} onPress={() => { void testPersonalAiConnection(); }} />
                 <Button accessibilityLabel="개인 AI 설정 저장" title={personalAiPendingAction === "save" ? "설정 저장 중" : "개인 AI 설정 저장"} disabled={Boolean(personalAiPendingAction) || !llmProvider || !llmModel.trim()} onPress={() => { void savePersonalAiConfig(); }} />
                 {personalAiError ? <Text accessibilityRole="alert" accessibilityLabel="개인 AI 요청을 처리하지 못했습니다." style={styles.error}>{personalAiError}</Text> : null}
+                <View style={styles.settingsCompactSection}><Text style={styles.sectionLabel}>현재 사용자</Text><Text style={styles.settingsValue}>{me.userName} · {me.roleName}</Text><Text style={styles.settingsValue}>{me.userEmail}</Text></View>
+                <View style={styles.settingsCompactSection}><View style={styles.moduleToolbar}><Text style={styles.sectionLabel}>알림 {notificationSummary?.unreadCount ?? 0}건</Text><Text accessibilityRole="button" accessibilityLabel="알림 새로고침" onPress={() => { void refreshNotifications(); }} style={styles.homeSectionLink}>새로고침</Text></View>{notifications.slice(0, 5).map((item) => <Pressable key={item.notificationId} accessibilityRole="button" accessibilityLabel={`${item.title} 알림 읽음 처리`} disabled={item.status !== "unread"} onPress={() => { void executeAckNotification(item.notificationId); }} style={styles.settingsNotificationRow}><Text style={styles.listTitle}>{item.title}</Text><Text style={styles.listBody}>{item.message}</Text></Pressable>)}{notificationError ? <Text accessibilityRole="alert" style={styles.error}>{notificationError}</Text> : null}</View>
+                <View style={styles.settingsCompactSection}><Text style={styles.sectionLabel}>도움말</Text><Text style={styles.settingsValue}>정책 확인 경로: {uiContract.helpText}</Text>{sessionMessages.map((item) => <Text key={item} style={styles.settingsValue}>{item}</Text>)}</View>
                 <Button accessibilityLabel="로그아웃" title="로그아웃" onPress={() => clearSession("로그아웃되었습니다.")} />
               </View>
             ) : null}
@@ -1734,73 +1743,6 @@ export default function App() {
                 {fileError ? <Text style={styles.error}>{fileError}</Text> : null}
               </View>
             ) : null}
-
-            <View style={styles.surfaceCard}>
-              <Text style={styles.surfaceKicker}>알림</Text>
-              <Text style={styles.surfaceTitle}>빠른 확인과 폴백</Text>
-              <Text style={styles.surfaceHint}>
-                수신 모드: {notificationMode === "polling" ? "Polling" : "Fallback"} / 미읽음 {notificationSummary?.unreadCount ?? 0} / 긴급 {notificationSummary?.severityCount.CRITICAL ?? 0}
-              </Text>
-              <View style={styles.inlineButtons}>
-                <Button title="알림 새로고침" onPress={() => { void refreshNotifications(); }} />
-              </View>
-              {notificationError ? <Text style={styles.error}>{notificationError || uiContract.messages.error}</Text> : null}
-              {notifications.map((item) => (
-                <View key={item.notificationId} style={styles.listCard}>
-                  <View style={styles.listHeader}>
-                    <View>
-                      <Text style={styles.listKicker}>{item.category}</Text>
-                      <Text style={styles.listTitle}>{item.title}</Text>
-                    </View>
-                    <View style={[styles.statusPill, item.status === "unread" ? styles.statusUnread : styles.statusRead]}>
-                      <Text style={[styles.statusPillText, item.status === "unread" ? styles.statusUnreadText : styles.statusReadText]}>{item.status}</Text>
-                    </View>
-                  </View>
-                  <Text style={styles.listBody}>{item.message}</Text>
-                  <Button
-                    title="읽음 처리"
-                    disabled={item.status !== "unread"}
-                    onPress={() => {
-                      void executeAckNotification(item.notificationId);
-                    }}
-                  />
-                </View>
-              ))}
-              {notifications.length === 0 ? <Text style={styles.emptyState}>아직 표시할 알림이 없습니다.</Text> : null}
-            </View>
-
-            <View style={styles.surfaceCard}>
-              <Text style={styles.surfaceKicker}>현재 사용자</Text>
-              <Text style={styles.surfaceTitle}>프로필 / 역할 / 업무 권한</Text>
-              <View style={styles.profileCard}>
-                <Text style={styles.profileName}>{me?.userName || "로그인 후 표시"}</Text>
-                <Text style={styles.profileText}>{me?.roleName || "역할 미지정"}</Text>
-                <Text style={styles.profileText}>{me?.userEmail || "이메일 미확인"}</Text>
-                <Text style={styles.profileText}>결재 작성 권한: {can("approval:create") ? "있음" : "없음"}</Text>
-              </View>
-              <View style={styles.policyCard}>
-                {sessionMessages.map((item) => (
-                  <Text key={item} style={styles.policyText}>{item}</Text>
-                ))}
-              </View>
-            </View>
-
-            <View style={styles.surfaceCard}>
-              <Text style={styles.surfaceKicker}>설정 / Help</Text>
-              <Text style={styles.surfaceTitle}>정책 경로와 세션 정리</Text>
-              <View style={styles.policyCard}>
-                <Text style={styles.policyText}>정책 확인 경로: {uiContract.helpText}</Text>
-                <Text style={styles.policyText}>언어, 시간대, 알림 새로고침 기준은 공통 설정 계약을 따릅니다.</Text>
-              </View>
-              <View style={styles.buttonBlock}>
-                <Button
-                  title="로그아웃"
-                  onPress={() => {
-                    clearSession("로그아웃되었습니다.");
-                  }}
-                />
-              </View>
-            </View>
 
           </>
         ) : null}
@@ -3087,6 +3029,117 @@ const styles = StyleSheet.create({
     backgroundColor: "#f1f5f9",
     color: "#334155",
   },
+  directoryScreen: {
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#dce5ec",
+    padding: 12,
+  },
+  directoryScreenTitle: {
+    color: "#0f172a",
+    fontSize: 18,
+    fontWeight: "800",
+  },
+  directorySearchInput: {
+    marginTop: 10,
+    minHeight: 38,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+    backgroundColor: "#f8fafc",
+    paddingHorizontal: 11,
+    color: "#0f172a",
+    fontSize: 10,
+  },
+  directorySections: {
+    marginTop: 8,
+    flexDirection: "row",
+    borderBottomWidth: 1,
+    borderBottomColor: "#e2e8f0",
+  },
+  directorySection: {
+    flex: 1,
+    minHeight: 34,
+    alignItems: "center",
+    justifyContent: "center",
+    borderBottomWidth: 2,
+    borderBottomColor: "transparent",
+  },
+  directorySectionActive: {
+    borderBottomColor: "#0f9f9a",
+  },
+  directorySectionText: {
+    color: "#64748b",
+    fontSize: 9,
+    fontWeight: "700",
+  },
+  directorySectionTextActive: {
+    color: "#0f766e",
+    fontWeight: "800",
+  },
+  directoryListHeader: {
+    paddingVertical: 11,
+  },
+  directoryListTitle: {
+    color: "#334155",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  directoryCompactRow: {
+    minHeight: 56,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eef2f7",
+    paddingVertical: 7,
+  },
+  directoryInitial: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#e2e8f0",
+  },
+  directoryInitialText: {
+    color: "#334155",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  directoryCompactInfo: {
+    flex: 1,
+  },
+  directoryMemberName: {
+    color: "#0f172a",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  directoryMemberRole: {
+    color: "#475569",
+    fontSize: 9,
+    fontWeight: "600",
+  },
+  directoryDepartment: {
+    marginTop: 3,
+    color: "#64748b",
+    fontSize: 9,
+  },
+  directoryIconButton: {
+    width: 28,
+    height: 28,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  directoryIconDisabled: {
+    opacity: 0.35,
+  },
+  directoryIcon: {
+    color: "#0f82a0",
+    fontSize: 14,
+    fontWeight: "800",
+  },
   directoryCard: {
     marginTop: 12,
     flexDirection: "row",
@@ -3345,6 +3398,141 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     color: "#0f766e",
     fontWeight: "800",
+  },
+  aiScreen: {
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#dce5ec",
+    overflow: "hidden",
+  },
+  aiHeader: {
+    minHeight: 52,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 13,
+    borderBottomWidth: 1,
+    borderBottomColor: "#e2e8f0",
+  },
+  aiTitle: {
+    color: "#0f172a",
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  aiProviderStatus: {
+    marginTop: 2,
+    color: "#64748b",
+    fontSize: 8,
+  },
+  aiSettingsAction: {
+    color: "#0f766e",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  aiConversation: {
+    minHeight: 280,
+    gap: 10,
+    padding: 12,
+    backgroundColor: "#fbfdff",
+  },
+  aiMessageGroup: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+  },
+  aiMessageGroupUser: {
+    justifyContent: "flex-end",
+  },
+  aiAvatar: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#0f82c9",
+  },
+  aiAvatarText: {
+    color: "#ffffff",
+    fontSize: 9,
+    fontWeight: "800",
+  },
+  aiMessageBubble: {
+    maxWidth: "80%",
+    borderRadius: 11,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+  },
+  aiMessageAssistant: {
+    borderTopLeftRadius: 3,
+    backgroundColor: "#eef2f7",
+  },
+  aiMessageUser: {
+    borderTopRightRadius: 3,
+    backgroundColor: "#0f9f9a",
+  },
+  aiMessageTextAssistant: {
+    color: "#334155",
+    fontSize: 10,
+    lineHeight: 15,
+  },
+  aiMessageTextUser: {
+    color: "#ffffff",
+    fontSize: 10,
+    lineHeight: 15,
+  },
+  aiInputBar: {
+    margin: 10,
+    minHeight: 42,
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+  },
+  aiAddButton: {
+    width: 36,
+    color: "#475569",
+    fontSize: 18,
+    textAlign: "center",
+  },
+  aiInput: {
+    flex: 1,
+    color: "#0f172a",
+    fontSize: 10,
+    paddingVertical: 8,
+  },
+  aiSendButton: {
+    width: 34,
+    height: 34,
+    marginRight: 4,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#083b73",
+  },
+  aiSendText: {
+    color: "#ffffff",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  aiReadinessNote: {
+    marginHorizontal: 12,
+    marginBottom: 10,
+    color: "#64748b",
+    fontSize: 9,
+  },
+  settingsCompactSection: {
+    marginVertical: 9,
+    borderTopWidth: 1,
+    borderTopColor: "#e2e8f0",
+    paddingTop: 9,
+  },
+  settingsNotificationRow: {
+    marginTop: 6,
+    borderRadius: 10,
+    backgroundColor: "#f8fafc",
+    padding: 9,
   },
   providerRow: {
     flexDirection: "row",

@@ -67,10 +67,30 @@ function calendarViewModel({ cells = [], schedules = [], selectedDateKey = "", t
   };
 }
 
+function directoryViewModel({ users = [], query = "", section = "all" } = {}) {
+  const normalizedQuery = String(query).trim().toLowerCase();
+  const searched = users.filter((user) => !normalizedQuery || [user.name, user.department_name, user.role_name, user.email]
+    .some((value) => String(value || "").toLowerCase().includes(normalizedQuery)));
+  return {
+    sections: ["전체", "즐겨찾기", "최근 연락처"],
+    rows: section === "all" ? searched : [],
+  };
+}
+
+function aiViewModel({ messages = [], provider = "", connectionStatus = "unconfigured" } = {}) {
+  return {
+    providerLabel: String(provider).trim().toUpperCase(),
+    ready: connectionStatus === "ready",
+    messages,
+  };
+}
+
 module.exports = {
+  aiViewModel,
   approvalViewModel,
   buildHomeViewModel,
   calendarViewModel,
   calendarLayoutModel,
+  directoryViewModel,
   navigationModel,
 };

@@ -86,3 +86,25 @@ test("일정 view model은 7개 요일과 선택일 일정만 반환한다", () 
   assert.equal(view.columns, 7);
   assert.deepEqual(view.selectedSchedules.map(({ id }) => id), ["s1"]);
 });
+
+test("주소록 view model은 섹션과 검색 결과를 만든다", () => {
+  const { directoryViewModel } = loadDesign();
+  const view = directoryViewModel({
+    users: [{ id: "u1", name: "김모아", department_name: "기획", role_name: "팀장", email: "kim@example.com" }],
+    query: "기획",
+    section: "all",
+  });
+
+  assert.deepEqual(view.sections, ["전체", "즐겨찾기", "최근 연락처"]);
+  assert.deepEqual(view.rows.map(({ id }) => id), ["u1"]);
+});
+
+test("AI view model은 Provider 상태와 대화 순서를 보존한다", () => {
+  const { aiViewModel } = loadDesign();
+  const messages = [{ role: "assistant", body: "안녕하세요" }];
+  const view = aiViewModel({ messages, provider: "openai", connectionStatus: "ready" });
+
+  assert.equal(view.providerLabel, "OPENAI");
+  assert.equal(view.ready, true);
+  assert.deepEqual(view.messages, messages);
+});
