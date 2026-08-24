@@ -126,7 +126,21 @@ type WorkspaceFile = {
 };
 
 type AppLocale = "ko-KR" | "en-US" | "ja-JP" | "zh-CN" | "es-ES" | "fr-FR" | "de-DE";
-type MobileTab = "home" | "mail" | "approval" | "chat" | "files";
+type MobileTab = "home" | "mail" | "approval" | "chat" | "calendar" | "more" | "files";
+type ScreenKey = MobileTab | "directory" | "ai" | "search" | "settings";
+type LlmProvider = "CEREBRAS" | "GROQ" | "MISTRAL" | "OPENAI" | "UPSTAGE" | "GEMINI" | "OPENROUTER" | "ANTHROPIC" | "OLLAMA";
+type IconName = "home" | "mail" | "approval" | "chat" | "calendar" | "directory" | "ai" | "search" | "settings" | "more" | "files";
+
+const iconGlyphs: Record<IconName, string> = {
+  home: "⌂", mail: "✉", approval: "✓", chat: "◌", calendar: "▣", directory: "♙", ai: "✦", search: "⌕", settings: "⚙", more: "•••", files: "▤",
+};
+
+function MoaIcon({ name, color = "#0f766e", size = 18 }: { name: IconName; color?: string; size?: number }) {
+  return <Text accessibilityLabel={`${name} 아이콘`} style={{ color, fontSize: size, lineHeight: size + 2, fontWeight: "800", textAlign: "center" }}>{iconGlyphs[name]}</Text>;
+}
+
+const llmProviders: LlmProvider[] = ["CEREBRAS", "GROQ", "MISTRAL", "OPENAI", "UPSTAGE", "GEMINI", "OPENROUTER", "ANTHROPIC", "OLLAMA"];
+const directoryEntries: Array<{ name: string; team: string; role: string; email: string }> = [];
 
 const supportedLocales: AppLocale[] = ["ko-KR", "en-US", "ja-JP", "zh-CN", "es-ES", "fr-FR", "de-DE"];
 const supportedTimezones = ["Asia/Seoul", "Asia/Tokyo", "America/New_York", "America/Chicago", "Europe/Paris", "Europe/Berlin"];
@@ -230,7 +244,10 @@ export default function App() {
   const [chatError, setChatError] = useState("");
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
   const [fileError, setFileError] = useState("");
-  const [llmProvider, setLlmProvider] = useState("OpenAI");
+  const [moreScreen, setMoreScreen] = useState<Exclude<ScreenKey, MobileTab>>("directory");
+  const [directoryQuery, setDirectoryQuery] = useState("");
+  const [screenDensity, setScreenDensity] = useState<"standard" | "compact">("standard");
+  const [llmProvider, setLlmProvider] = useState<LlmProvider>("GROQ");
   const [llmApiKey, setLlmApiKey] = useState("");
   const [llmConnected, setLlmConnected] = useState(false);
   const [aiDraft, setAiDraft] = useState("");
@@ -784,7 +801,7 @@ export default function App() {
     const matchesFilter = mailFilter === "all" || (mailFilter === "unread" ? !item.isRead : item.isStarred);
     return matchesQuery && matchesFilter;
   });
-  const activeTabLabel = activeTab === "home" ? "홈" : activeTab === "mail" ? "메일" : activeTab === "approval" ? "결재" : activeTab === "chat" ? "메신저" : activeTab === "calendar" ? "일정" : "더보기";
+  const activeTabLabel = activeTab === "home" ? "홈" : activeTab === "mail" ? "메일" : activeTab === "approval" ? "결재" : activeTab === "chat" ? "메신저" : activeTab === "calendar" ? "일정" : activeTab === "files" ? "파일" : "더보기";
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -901,8 +918,53 @@ export default function App() {
                     <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} onPress={() => setMoreScreen(item.id as Exclude<ScreenKey, MobileTab>)} style={[styles.mobileSubTab, moreScreen === item.id ? styles.mobileSubTabActive : styles.mobileSubTabIdle]}><MoaIcon name={item.icon as IconName} color={moreScreen === item.id ? "#ffffff" : "#0f766e"} /><Text style={[styles.mobileTabLabel, moreScreen === item.id ? styles.mobileTabLabelActive : null]}>{item.label}</Text></Pressable>
                   ))}
                 </View>
-              ))}
+              ) : null}
             </View>
+            ) : null}
+
+            {activeTab === "calendar" ? (
+              <View style={styles.surfaceCard}>
+                <Text style={styles.surfaceKicker}>일정</Text>
+                <Text style={styles.surfaceTitle}>오늘의 일정</Text>
+                <Text style={styles.emptyState}>일정 데이터를 불러오면 이 화면에서 확인할 수 있습니다.</Text>
+              </View>
+            ) : null}
+
+            {activeTab === "more" && moreScreen === "directory" ? (
+              <View style={styles.surfaceCard}>
+                <Text style={styles.surfaceKicker}>주소록</Text>
+                <Text style={styles.surfaceTitle}>사원 정보 검색</Text>
+                <TextInput style={styles.input} value={directoryQuery} onChangeText={setDirectoryQuery} placeholder="이름, 부서, 이메일 검색" />
+                {directoryEntries.filter((item) => `${item.name}${item.team}${item.email}`.toLowerCase().includes(directoryQuery.toLowerCase())).map((item) => <View key={item.email} style={styles.directoryCard}><View style={styles.avatar}><Text style={styles.avatarText}>{item.name.slice(0, 1)}</Text></View><View style={styles.directoryInfo}><Text style={styles.listTitle}>{item.name}</Text><Text style={styles.listBody}>{item.team} · {item.role}</Text><Text style={styles.listBody}>{item.email}</Text></View></View>)}
+                {directoryEntries.length === 0 ? <Text style={styles.emptyState}>표시할 주소록 정보가 없습니다.</Text> : null}
+              </View>
+            ) : null}
+
+            {activeTab === "more" && moreScreen === "ai" ? (
+              <View style={styles.surfaceCard}>
+                <Text style={styles.surfaceKicker}>AI 채팅</Text>
+                <Text style={styles.surfaceTitle}>연결된 LLM에게 질문하고 검색</Text>
+                <Text style={styles.surfaceHint}>개인 API 키는 이 화면에서만 입력하며, 실제 Provider 호출은 서버 보안 프록시로 연결합니다.</Text>
+                {aiMessages.map((item, index) => <View key={`${item.role}-${index}`} style={[styles.aiBubble, item.role === "user" ? styles.aiUserBubble : styles.aiAssistantBubble]}><Text style={styles.aiRole}>{item.role === "user" ? "나" : llmProvider}</Text><Text style={styles.listBody}>{item.body}</Text></View>)}
+                <TextInput style={[styles.input, styles.textarea]} value={aiDraft} onChangeText={setAiDraft} placeholder="질문을 입력하세요." multiline />
+                <Button title="질문 보내기" onPress={askAi} />
+              </View>
+            ) : null}
+
+            {activeTab === "more" && moreScreen === "search" ? (
+              <View style={styles.surfaceCard}><Text style={styles.surfaceKicker}>업무 검색</Text><Text style={styles.surfaceTitle}>메일·결재·메신저 통합 검색</Text><TextInput style={styles.input} placeholder="검색어를 입력하세요." /><Text style={styles.emptyState}>검색어를 입력하면 관련 업무가 표시됩니다.</Text></View>
+            ) : null}
+
+            {activeTab === "more" && moreScreen === "settings" ? (
+              <View style={styles.surfaceCard}>
+                <Text style={styles.surfaceKicker}>설정</Text><Text style={styles.surfaceTitle}>앱 기본 설정</Text>
+                <Text style={styles.sectionLabel}>연결 서버</Text><TextInput style={styles.input} value={apiBase} onChangeText={setApiBase} autoCapitalize="none" />
+                <Text style={styles.sectionLabel}>화면 언어</Text><Text style={styles.settingsValue}>{locale}</Text><Text style={styles.sectionLabel}>시간대</Text><Text style={styles.settingsValue}>{timezone}</Text>
+                <Text style={styles.sectionLabel}>화면 밀도</Text><View style={styles.providerRow}><Text onPress={() => setScreenDensity("standard")} style={[styles.providerChip, screenDensity === "standard" ? styles.providerChipActive : null]}>표준</Text><Text onPress={() => setScreenDensity("compact")} style={[styles.providerChip, screenDensity === "compact" ? styles.providerChipActive : null]}>간결</Text></View>
+                <Text style={styles.sectionLabel}>LLM Provider</Text><View style={styles.providerRow}>{llmProviders.map((provider) => <Text key={provider} onPress={() => setLlmProvider(provider)} style={[styles.providerChip, llmProvider === provider ? styles.providerChipActive : null]}>{provider}</Text>)}</View>
+                <TextInput style={styles.input} value={llmApiKey} onChangeText={setLlmApiKey} placeholder="개인 LLM API 키" secureTextEntry autoCapitalize="none" /><Button title={llmConnected ? "연결됨 · 다시 테스트" : "LLM 연결 테스트"} onPress={connectLlm} /><Button title="설정 저장" onPress={saveAppSettings} />
+              </View>
+            ) : null}
 
             <View style={styles.surfaceCard}>
               <Text style={styles.surfaceKicker}>빠른 이동</Text>
@@ -913,7 +975,9 @@ export default function App() {
                   { id: "mail", label: "메일" },
                   { id: "approval", label: "결재" },
                   { id: "chat", label: "메신저" },
+                  { id: "calendar", label: "일정" },
                   { id: "files", label: "파일" },
+                  { id: "more", label: "더보기" },
                 ].map((item) => (
                   <Text
                     key={item.id}
@@ -1276,7 +1340,7 @@ export default function App() {
       </ScrollView>
       {me ? (
         <View style={styles.mobileBottomNav}>
-          {[{ id: "home", label: "홈", icon: "home" }, { id: "mail", label: "메일", icon: "mail" }, { id: "approval", label: "결재", icon: "approval" }, { id: "chat", label: "메신저", icon: "chat" }, { id: "calendar", label: "일정", icon: "calendar" }, { id: "more", label: "더보기", icon: "more" }].map((item) => (
+          {[{ id: "home", label: "홈", icon: "home" }, { id: "mail", label: "메일", icon: "mail" }, { id: "approval", label: "결재", icon: "approval" }, { id: "chat", label: "메신저", icon: "chat" }, { id: "calendar", label: "일정", icon: "calendar" }, { id: "files", label: "파일", icon: "files" }, { id: "more", label: "더보기", icon: "more" }].map((item) => (
             <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} onPress={() => handleTabPress(item.id as MobileTab)} style={[styles.mobileBottomNavItem, activeTab === item.id ? styles.mobileBottomNavItemActive : null]}>
               <MoaIcon name={item.icon as IconName} color={activeTab === item.id ? "#ffffff" : "#475569"} size={18} />
               <Text style={[styles.mobileBottomNavLabel, activeTab === item.id ? styles.mobileBottomNavLabelActive : null]}>{item.label}</Text>

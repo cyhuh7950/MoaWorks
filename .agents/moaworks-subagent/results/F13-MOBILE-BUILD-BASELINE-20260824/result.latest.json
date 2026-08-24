@@ -1,0 +1,20 @@
+{
+  "taskId": "F13-MOBILE-BUILD-BASELINE-20260824",
+  "issueId": "F13-MOBILE-BUILD-BASELINE",
+  "outcome": "FORMAL_FAILURE",
+  "summary": "App.tsx and the Android wrapper merge damage are repaired and all 59 Node contracts plus the production Babel TSX parser pass; the final smoke command remains blocked by an out-of-scope nowIso error after Metro writes the bundle.",
+  "reportPath": ".agents/moaworks-subagent/reports/F13-MOBILE-BUILD-BASELINE-20260824.md",
+  "modifiedFiles": ["frontend/mobile-app/App.tsx", "frontend/mobile-app/scripts/mobile-android-command.js", "frontend/mobile-app/test/mobile-build-contract.test.js", "docs/work-progress/moaworks-completion-v2.1/progress.jsonl", "docs/work-progress/moaworks-completion-v2.1/stage-04-f12-f14/progress.jsonl", "docs/work-progress/mobile-android-2026-08-21-update.jsonl", ".agents/moaworks-subagent/reports/F13-MOBILE-BUILD-BASELINE-20260824.md", ".agents/moaworks-subagent/results/F13-MOBILE-BUILD-BASELINE-20260824/result.latest.json"],
+  "verification": [
+    { "command": "npm test", "result": "PASS 59/59" },
+    { "command": "node --check scripts/mobile-android-command.js && node --check auth-session.js", "result": "PASS" },
+    { "command": "Babel transformFileSync App.tsx with @react-native/babel-preset", "result": "PASS" },
+    { "command": "npm run bundle", "result": "Metro wrote bundle, then FAIL: mobile-app-build-smoke.js nowIso is not defined" },
+    { "command": "npm run build:android", "result": "Gradle started; no release APK observed, unverified" },
+    { "command": "git diff --check", "result": "PASS" }
+  ],
+  "remaining": ["Fix or scope-authorize the pre-existing mobile-app-build-smoke.js nowIso failure, then rerun npm run bundle.", "Rerun Android release build and device validation after a release APK is produced."],
+  "scopeChange": false,
+  "requirementChange": false,
+  "majorRiskChange": false
+}

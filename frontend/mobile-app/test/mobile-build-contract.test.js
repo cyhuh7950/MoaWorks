@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 
 const root = path.resolve(__dirname, "..");
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
@@ -28,6 +29,21 @@ test("Android wrapper has no fixed Windows username and supports conventional JD
   assert.match(androidCommandSource, /JAVA_HOME/);
   assert.match(androidCommandSource, /ANDROID_(?:HOME|SDK_ROOT)/);
   assert.match(supportSource, /LOCALAPPDATA|Program Files/);
+});
+
+test("Android wrapper is executable JavaScript before any Android environment is required", () => {
+  const check = spawnSync(process.execPath, ["--check", path.join(root, "scripts", "mobile-android-command.js")], {
+    encoding: "utf8",
+  });
+  assert.equal(check.status, 0, check.stderr);
+});
+
+test("App TSX parses with the production React Native Babel preset", () => {
+  const parse = spawnSync(process.execPath, ["-e", "require('@babel/core').transformFileSync('App.tsx', { presets: ['module:@react-native/babel-preset'] });"], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  assert.equal(parse.status, 0, parse.stderr);
 });
 
 test("packager contract names an internal release APK and writes a SHA-256 manifest", () => {
