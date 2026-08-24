@@ -5,6 +5,7 @@ from typing import Any
 
 from app.services.translation_provider import (
     JsonTransport,
+    JsonResponseError,
     PROVIDER_PROFILES,
     UrllibJsonTransport,
 )
@@ -159,6 +160,8 @@ class PersonalAiProviderClient:
             return sanitize_personal_ai_output(output)
         except PersonalAiProviderError:
             raise
+        except JsonResponseError as exc:
+            raise self._invalid_response() from exc
         except Exception as exc:
             raise PersonalAiProviderError(
                 "PERSONAL_AI_PROVIDER_REQUEST_FAILED",

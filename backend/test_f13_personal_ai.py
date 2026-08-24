@@ -711,6 +711,53 @@ class PersonalAiProviderTest(unittest.TestCase):
             str(captured.exception), "personal AI provider response is invalid"
         )
 
+    def test_raw_oversize_and_non_object_responses_use_safe_invalid_response_code(
+        self,
+    ) -> None:
+        from app.services.personal_ai_provider import (
+            PersonalAiProviderClient,
+            PersonalAiProviderError,
+        )
+
+        for raw_response in (
+            b"x" * (2 * 1024 * 1024 + 1),
+            b"[]",
+            b'"text"',
+        ):
+            with self.subTest(response_size=len(raw_response)):
+                with (
+                    patch(
+                        "app.services.translation_provider.socket.getaddrinfo",
+                        return_value=[
+                            (2, 1, 6, "", ("8.8.8.8", 443)),
+                        ],
+                    ),
+                    patch(
+                        "app.services.translation_provider.urllib_request.build_opener"
+                    ) as build_opener,
+                ):
+                    response = build_opener.return_value.open.return_value.__enter__.return_value
+                    response.read.return_value = raw_response
+                    client = PersonalAiProviderClient()
+
+                    with self.assertRaises(PersonalAiProviderError) as captured:
+                        client.chat(
+                            {
+                                "provider": "openai",
+                                "model": "model-a",
+                                "apiKey": "fixture-personal-credential",
+                            },
+                            [{"role": "user", "content": "업무를 정리해 줘"}],
+                        )
+
+                self.assertEqual(
+                    captured.exception.code, "PERSONAL_AI_RESPONSE_INVALID"
+                )
+                self.assertEqual(
+                    str(captured.exception),
+                    "personal AI provider response is invalid",
+                )
+
     def test_connection_uses_nonstream_fixture_request_without_network(self) -> None:
         from app.services.personal_ai_provider import PersonalAiProviderClient
 
@@ -821,6 +868,31 @@ class PersonalAiServiceTest(unittest.TestCase):
         self.assertNotIn("external-body", rendered)
         self.assertNotIn("fixture-personal-credential", rendered)
         self.assertNotIn("internal-host", rendered)
+
+    def test_connection_invalid_response_preserves_safe_response_code(self) -> None:
+        from app.services.personal_ai_provider import PersonalAiProviderError
+        from app.services.personal_ai_service import PersonalAiService
+
+        store = self._configured_store(status_value="untested")
+        service = PersonalAiService(
+            store=store,
+            provider_client=FixturePersonalAiProviderClient(
+                connection_error=PersonalAiProviderError(
+                    "PERSONAL_AI_RESPONSE_INVALID",
+                    "personal AI provider response is invalid",
+                )
+            ),
+        )
+
+        result = service.test_connection(personal_ai_actor())
+
+        self.assertEqual(result.success, False)
+        self.assertEqual(result.code, "PERSONAL_AI_RESPONSE_INVALID")
+        self.assertEqual(result.connectionStatus, "error")
+        self.assertEqual(
+            store.get_config(personal_ai_actor())["lastTestCode"],
+            "PERSONAL_AI_RESPONSE_INVALID",
+        )
 
     def test_connection_rejects_missing_required_key(self) -> None:
         from app.services.personal_ai_service import PersonalAiService

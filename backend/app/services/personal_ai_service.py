@@ -61,6 +61,22 @@ class PersonalAiService:
         tested_at = datetime.now(UTC)
         try:
             self.provider_client.test_connection(config)
+        except PersonalAiProviderError as exc:
+            code = (
+                "PERSONAL_AI_RESPONSE_INVALID"
+                if exc.code == "PERSONAL_AI_RESPONSE_INVALID"
+                else "PERSONAL_AI_CONNECTION_FAILED"
+            )
+            self.store.record_test(actor, False, code)
+            return PersonalAiConnectionTestView(
+                success=False,
+                provider=str(config["provider"]),
+                model=str(config["model"]),
+                code=code,
+                message="개인 AI Provider 연결에 실패했습니다.",
+                connectionStatus="error",
+                testedAt=tested_at,
+            )
         except Exception:
             code = "PERSONAL_AI_CONNECTION_FAILED"
             self.store.record_test(actor, False, code)

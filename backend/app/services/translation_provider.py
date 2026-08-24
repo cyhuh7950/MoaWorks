@@ -77,6 +77,10 @@ class JsonTransport(Protocol):
     def get_json(self, *, url: str, headers: dict[str, str], timeout_seconds: float) -> dict: ...
 
 
+class JsonResponseError(ValueError):
+    """A transport response that cannot be accepted as a JSON object."""
+
+
 class UrllibJsonTransport:
     def __init__(self, *, allowed_private_hosts: set[str] | None = None) -> None:
         self.allowed_private_hosts = {item.lower() for item in (allowed_private_hosts or set())}
@@ -98,10 +102,15 @@ class UrllibJsonTransport:
         with opener.open(req, timeout=timeout_seconds) as response:
             raw = response.read(2 * 1024 * 1024 + 1)
         if len(raw) > 2 * 1024 * 1024:
-            raise ValueError("translation provider response is too large")
-        parsed = json.loads(raw.decode("utf-8"))
+            raise JsonResponseError("translation provider response is too large")
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise JsonResponseError(
+                "translation provider response must be valid JSON"
+            ) from exc
         if not isinstance(parsed, dict):
-            raise ValueError("translation provider response must be an object")
+            raise JsonResponseError("translation provider response must be an object")
         return parsed
 
     def _validate_public_https_url(self, url: str) -> None:
