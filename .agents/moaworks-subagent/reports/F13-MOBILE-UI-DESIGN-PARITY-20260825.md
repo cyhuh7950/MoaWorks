@@ -72,6 +72,6 @@
 ## 다음 조치
 
 1. 독립 재리뷰 Critical 0 / Important 0 / Minor 0 확인 완료.
-2. diff·JSONL·비밀값 부재 최종 확인 후 이 브랜치를 commit→main merge→push→delete한다.
-3. 신산님이 별도 필수로 지정한 관리자 비밀번호 재설정 기능을 새 브랜치에서 TDD로 구현한다.
+2. mobile feature Git lifecycle 완료: `e1eae1d`→main merge `5d220f0`→push 성공→feature branch 삭제.
+3. closeout 문서 branch 병합 후 신산님이 별도 필수로 지정한 관리자 비밀번호 재설정 기능을 새 브랜치에서 TDD로 구현한다.
 4. 이후 계획 순서대로 TalkBack 승인 검증과 물리 Android를 진행하고 iOS 보류 경계를 유지한다.
