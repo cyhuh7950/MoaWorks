@@ -807,6 +807,14 @@ export async function deleteUser(token: string, userId: string) {
   });
 }
 
+export async function resetUserPassword(token: string, userId: string, revokeSessions = true) {
+  return request<{ userId: string; temporaryPassword: string; mustChangePassword: boolean; sessionsRevoked: boolean }>(`/admin/users/${userId}/password-reset`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ revokeSessions }),
+  });
+}
+
 export async function verifyDomain(token: string, domain: string) {
   return request<DomainVerifyResponse>("/admin/domains/verify", {
     method: "POST",

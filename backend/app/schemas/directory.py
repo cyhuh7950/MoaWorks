@@ -113,6 +113,7 @@ class AuthUserSummary(BaseModel):
     permissions: list[str]
     departmentId: str | None = None
     departmentName: str | None = None
+    authSessionVersion: int = 0
 
 
 class ApprovalStatus(str, Enum):
@@ -463,6 +464,17 @@ class UserUpdateRequest(BaseModel):
     roleId: str | None = None
     status: str | None = None
     isDepartmentHead: bool | None = None
+
+
+class UserPasswordResetRequest(BaseModel):
+    revokeSessions: bool = True
+
+
+class UserPasswordResetResponse(BaseModel):
+    userId: str
+    temporaryPassword: str
+    mustChangePassword: bool = True
+    sessionsRevoked: bool
 
 
 class UserView(BaseModel):

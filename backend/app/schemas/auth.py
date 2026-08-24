@@ -29,7 +29,7 @@ class CurrentUserResponse(BaseModel):
 
 class PasswordChangeRequest(BaseModel):
     currentPassword: str = Field(min_length=1)
-    newPassword: str = Field(min_length=8)
+    newPassword: str = Field(min_length=8, max_length=128)
 
     @model_validator(mode="after")
     def validate_password_change(self) -> "PasswordChangeRequest":

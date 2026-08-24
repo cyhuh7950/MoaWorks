@@ -42,7 +42,18 @@ def get_current_user(authorization: str | None = Header(default=None)) -> AuthUs
         )
 
     try:
-        return DirectoryStore().get_user_summary(user_id)
+        user = DirectoryStore().get_user_summary(user_id)
+        token_version = payload.get("sessionVersion", 0)
+        if not isinstance(token_version, int) or token_version != getattr(user, "authSessionVersion", 0):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={
+                    "code": "AUTH_SESSION_REVOKED",
+                    "userMessage": "세션이 종료되었습니다. 다시 로그인하세요.",
+                    "adminMessage": "비밀번호 재설정으로 기존 세션이 폐기되었습니다.",
+                },
+            )
+        return user
     except PermissionError as exc:
         raise HTTPException(
             status_code=status.HTTP_423_LOCKED,

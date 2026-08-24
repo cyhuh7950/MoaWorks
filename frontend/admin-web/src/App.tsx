@@ -24,6 +24,7 @@ import {
   deleteAdminMessengerRoom,
   deleteRole,
   deleteUser,
+  resetUserPassword,
   downloadOrgImportTemplate,
   fetchDirectory,
   fetchHealth,
@@ -1873,6 +1874,23 @@ export default function App() {
     }
   }
 
+  async function handleUserPasswordReset() {
+    if (!token || !userForm.userId) return;
+    if (!window.confirm("임시 비밀번호를 발급하고 기존 세션을 종료하시겠습니까?")) return;
+    setLoading(true);
+    setErrors([]);
+    try {
+      const result = await resetUserPassword(token, userForm.userId, true);
+      window.alert(`임시 비밀번호(한 번만 표시): ${result.temporaryPassword}\n별도 보안 채널로 전달하세요.`);
+      setMessage("비밀번호를 재설정했습니다. 사용자는 첫 로그인 후 변경해야 합니다.");
+      await refreshDirectory();
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "비밀번호 재설정 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handleUserDelete(userId: string, userName: string) {
     if (!token) return;
     if (!window.confirm(`사용자 '${userName}'를 삭제 상태로 전환하시겠습니까?`)) {
@@ -2734,6 +2752,11 @@ export default function App() {
                   <button type="submit" disabled={loading}>
                     {userForm.userId ? copy.editUser : copy.createUser}
                   </button>
+                  {userForm.userId && (
+                    <button type="button" className="secondary" disabled={loading} onClick={() => void handleUserPasswordReset()}>
+                      비밀번호 재설정
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="secondary"

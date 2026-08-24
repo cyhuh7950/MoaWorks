@@ -19,6 +19,8 @@ from app.schemas.directory import (
     RoleUpdateRequest,
     UserCreateRequest,
     UserUpdateRequest,
+    UserPasswordResetRequest,
+    UserPasswordResetResponse,
     UserView,
 )
 from app.services.directory_store import DirectoryStore, DirectoryUserEmailConflictError
@@ -116,6 +118,15 @@ def update_user(
     _: AuthUserSummary = Depends(require_admin),
 ) -> UserView:
     return DirectoryStore().update_user(user_id, payload)
+
+
+@router.post("/users/{user_id}/password-reset", response_model=UserPasswordResetResponse)
+def reset_user_password(
+    user_id: str,
+    payload: UserPasswordResetRequest,
+    actor: AuthUserSummary = Depends(require_admin),
+) -> UserPasswordResetResponse:
+    return DirectoryStore().reset_user_password(actor, user_id, payload.revokeSessions)
 
 
 @router.delete("/users/{user_id}", response_model=UserView)
