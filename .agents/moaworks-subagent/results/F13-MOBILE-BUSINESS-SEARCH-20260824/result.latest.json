@@ -70,12 +70,13 @@
   ],
   "attemptedAlternatives": [
     "Sandbox bundle output and SDK access failures were retried only with the same approved commands outside the sandbox boundary",
-    "The result patch was reapplied after creating its task-specific parent directory"
+    "The result patch was reapplied after creating its task-specific parent directory",
+    "The post-commit progress parity diagnostic was rerun after inspecting the actual stage and changedFiles schema"
   ],
   "currentState": "Implementation and local Android verification are complete; operational authenticated content, complete server history, iOS, physical device, and deployment remain unverified.",
   "remediationProposal": "No code remediation remains in the approved scope. Validate operational authenticated content and iOS/device behavior separately when authorized.",
   "resumePoint": "어울1 independent acceptance; operational and iOS validation remain separate.",
-  "errorCount": 4,
+  "errorCount": 5,
   "repeatedRootCauseCount": 2,
   "review": {
     "critical": 0,

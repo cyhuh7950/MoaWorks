@@ -21,7 +21,7 @@
 - 확인함: 허용 field whitelist, 민감·상세 field 제외, malformed 안전 처리, 결정 정렬·50건 제한, session reset, safe partial warning, 접근성·범위 문구, 보호 handler 이동, syntax, diff, bundle, Android release/install/cold launch.
 - 미확인: 실제 authenticated content, complete server history 검색, 실제 계정에서의 결과 이동, iOS build/device, 물리 Android 기기, 배포.
 - 독립 리뷰: `Critical 0 / Important 0 / Minor 0`, Ready Yes. reviewer가 focused `18/18`, full `93/93`, `git diff --check`, bundle artifact hash를 독립 재확인했다.
-- 오류 횟수: TDD 의도 RED 제외 4회. WinGet `rg` launcher 1회, sandbox의 bundle output/Android SDK 경계 2회, result 부모 디렉터리 미존재로 인한 patch 중단 1회다. 동일 구체 근본 원인의 최대 반복은 2회이며 3회 중단 기준에 도달하지 않았다. sandbox 경계 오류는 동일 승인 명령의 외부 실행으로 복구했고 patch 오류는 디렉터리 생성 후 재적용했으며 제품 코드 수정은 필요하지 않았다.
+- 오류 횟수: TDD 의도 RED 제외 5회. WinGet `rg` launcher 1회, sandbox의 bundle output/Android SDK 경계 2회, result 부모 디렉터리 미존재로 인한 patch 중단 1회, post-commit progress 정합성 진단에서 실제 스키마와 다른 필드명을 가정한 명령 오류 1회다. 동일 구체 근본 원인의 최대 반복은 2회이며 3회 중단 기준에 도달하지 않았다. sandbox 경계 오류는 동일 승인 명령의 외부 실행으로 복구했고 patch 오류는 디렉터리 생성 후 재적용했으며, 진단 오류는 실제 `stage`·`changedFiles` 스키마를 확인한 뒤 다시 검증했다. 제품 코드 수정은 필요하지 않았다.
 - 남은 문제: 승인 범위의 코드 문제는 없다. 운영·전체 이력·iOS·물리 기기·배포 검증은 별도 환경과 승인으로 분리한다.
 
 ## 조치
