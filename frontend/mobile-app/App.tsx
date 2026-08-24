@@ -4,6 +4,7 @@ import { createMobileSessionAdapter, isSessionInvalidatedError, requestJson } fr
 import { buildMonthGrid, buildSchedulePayload, createSubmissionGate, filterSchedulesForMonth, monthKeyForDate, selectDefaultCalendar, scheduleErrorMessage, scheduleItems, shiftMonthKey, dateKey } from "./schedule-api";
 import { createDirectoryActionGate, directoryUsers as readDirectoryUsers, directRoomPayload, filterDirectoryUsers, mailtoUrl } from "./directory-api";
 import { buildPersonalAiChatPayload, buildPersonalAiConfigPayload, createPersonalAiActionGate, personalAiErrorMessage, readPersonalAiChatResponse, readPersonalAiConfig, readPersonalAiConnectionTest, readPersonalAiProviders } from "./personal-ai-api";
+import { normalizeBusinessSearchText, searchLoadedBusinessSummaries, updateBusinessSearchWarnings } from "./business-search";
 
 type AuthUser = {
   userId: string;
@@ -131,6 +132,15 @@ type WorkspaceCalendar = { id: string; name?: string; isDefault?: boolean };
 type DirectoryUser = { id: string; name: string; email: string; department_name: string; role_name: string };
 type WorkspaceSchedule = { id: string; title: string; starts_at: string; ends_at?: string; description?: string; location?: string };
 type ScheduleForm = { title: string; startsAt: string; endsAt: string; description: string; location: string };
+type BusinessSearchSource = "mail" | "approval" | "messenger" | "schedule" | "directory" | "file";
+type BusinessSearchCategory = BusinessSearchSource;
+type BusinessSearchResult = {
+  category: BusinessSearchCategory;
+  id: string;
+  title: string;
+  summary: string;
+  target: { screen: "mail" | "approval" | "chat" | "calendar" | "directory" | "files"; id: string };
+};
 
 type AppLocale = "ko-KR" | "en-US" | "ja-JP" | "zh-CN" | "es-ES" | "fr-FR" | "de-DE";
 type MobileTab = "home" | "mail" | "approval" | "chat" | "calendar" | "more" | "files";
@@ -204,6 +214,14 @@ const defaultUiContract: UiContract = {
 
 const MAIL_POLICY = "메일 서버 1개월 / 설치형 로컬 아카이브 무기한";
 const MESSENGER_POLICY = "메신저 서버 2주 / 설치형 대화 파일 보관";
+const BUSINESS_SEARCH_CATEGORY_LABELS: Record<BusinessSearchCategory, string> = {
+  mail: "메일",
+  approval: "결재",
+  messenger: "메신저",
+  schedule: "일정",
+  directory: "주소록",
+  file: "파일",
+};
 
 function resolveLocale(value: string | null): AppLocale {
   return supportedLocales.includes(value as AppLocale) ? (value as AppLocale) : "ko-KR";
@@ -267,6 +285,21 @@ export default function App() {
   const [directoryBusyUserId, setDirectoryBusyUserId] = useState("");
   const directoryActionGateRef = useRef(createDirectoryActionGate());
   const visibleDirectoryUsers = useMemo(() => filterDirectoryUsers(directoryUsers, directoryQuery), [directoryUsers, directoryQuery]);
+  const [businessSearchQuery, setBusinessSearchQuery] = useState("");
+  const [businessSearchSelectedResultId, setBusinessSearchSelectedResultId] = useState("");
+  const [businessSearchWarnings, setBusinessSearchWarnings] = useState<BusinessSearchSource[]>([]);
+  const businessSearchResults = useMemo(() => searchLoadedBusinessSummaries(businessSearchQuery, {
+    mailItems,
+    documents,
+    rooms,
+    schedules,
+    directoryUsers,
+    files,
+  }) as BusinessSearchResult[], [businessSearchQuery, mailItems, documents, rooms, schedules, directoryUsers, files]);
+  const businessSearchCategoryCounts = useMemo(() => (Object.keys(BUSINESS_SEARCH_CATEGORY_LABELS) as BusinessSearchCategory[])
+    .map((category) => ({ category, count: businessSearchResults.filter((result) => result.category === category).length }))
+    .filter((item) => item.count > 0), [businessSearchResults]);
+  const businessSearchHasQuery = normalizeBusinessSearchText(businessSearchQuery).length > 0;
   const [screenDensity, setScreenDensity] = useState<"standard" | "compact">("standard");
   const [personalAiProviders, setPersonalAiProviders] = useState<PersonalAiProviderOption[]>([]);
   const [llmProvider, setLlmProvider] = useState("openai");
@@ -294,6 +327,9 @@ export default function App() {
       setPersonalAiPendingAction("");
       setPersonalAiTestReady(false);
       setPersonalAiConfigDirty(false);
+      setBusinessSearchQuery("");
+      setBusinessSearchSelectedResultId("");
+      setBusinessSearchWarnings([]);
     },
     onSessionReset(nextState) {
       setToken(nextState.token);
@@ -329,6 +365,9 @@ export default function App() {
       setDirectoryError(nextState.directoryError);
       directoryActionGateRef.current.reset();
       setDirectoryBusyUserId(nextState.directoryBusyUserId);
+      setBusinessSearchQuery(nextState.businessSearchQuery);
+      setBusinessSearchSelectedResultId(nextState.businessSearchSelectedResultId);
+      setBusinessSearchWarnings(nextState.businessSearchWarnings);
       setActionReason(nextState.actionReason);
       setPersonalAiProviders(nextState.personalAiProviders);
       setLlmProvider(nextState.llmProvider);
@@ -348,6 +387,10 @@ export default function App() {
     },
   }));
   const activeTabError = activeTab === "files" ? fileError : activeTab === "calendar" ? scheduleError : activeTab === "mail" ? mailError : activeTab === "chat" ? chatError : "";
+
+  function markBusinessSearchSource(source: BusinessSearchSource, failed: boolean) {
+    setBusinessSearchWarnings((current) => updateBusinessSearchWarnings(current, source, failed) as BusinessSearchSource[]);
+  }
 
   async function loadPersonalAi(activeToken: string = token, context = sessionControllerRef.current.capture(activeToken)) {
     if (!activeToken || personalAiConfigDirty || !sessionControllerRef.current.isCurrent(context)) return;
@@ -596,10 +639,12 @@ export default function App() {
       }, context);
       if (!sessionControllerRef.current.isCurrent(context)) return;
       setDocuments(body.documents);
+      markBusinessSearchSource("approval", false);
       setMessage("");
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
       if (!sessionControllerRef.current.isCurrent(context)) return;
+      markBusinessSearchSource("approval", true);
       setMessage(error instanceof Error ? error.message : "조회 실패");
     }
   }
@@ -630,9 +675,11 @@ export default function App() {
         setSelectedMailDetail(null);
         setMailError("");
       }
+      markBusinessSearchSource("mail", false);
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
       if (!sessionControllerRef.current.isCurrent(context)) return;
+      markBusinessSearchSource("mail", true);
       const nextError = error instanceof Error ? error.message : "메일 조회 실패";
       setMailError(nextError);
       setMessage(nextError);
@@ -711,9 +758,11 @@ export default function App() {
         setRoomMessages([]);
         setChatError("");
       }
+      markBusinessSearchSource("messenger", false);
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
       if (!sessionControllerRef.current.isCurrent(context)) return;
+      markBusinessSearchSource("messenger", true);
       const nextError = error instanceof Error ? error.message : "메신저 조회 실패";
       setChatError(nextError);
       setMessage(nextError);
@@ -729,9 +778,11 @@ export default function App() {
       if (!sessionControllerRef.current.isCurrent(context)) return;
       setFiles(body.items ?? []);
       setFileError("");
+      markBusinessSearchSource("file", false);
     } catch (error) {
       if (isSessionInvalidatedError(error)) return;
       if (!sessionControllerRef.current.isCurrent(context)) return;
+      markBusinessSearchSource("file", true);
       setFileError(error instanceof Error ? error.message : "파일 조회 실패");
     }
   }
@@ -747,8 +798,10 @@ export default function App() {
       setCalendars(calendarBody.owned ?? []);
       setSchedules(scheduleItems(scheduleBody));
       setScheduleError("");
+      markBusinessSearchSource("schedule", false);
     } catch (error) {
       if (isSessionInvalidatedError(error) || !sessionControllerRef.current.isCurrent(context)) return;
+      markBusinessSearchSource("schedule", true);
       setScheduleError(scheduleErrorMessage(error));
     }
   }
@@ -760,8 +813,10 @@ export default function App() {
       if (!sessionControllerRef.current.isCurrent(context)) return;
       setDirectoryUsers(readDirectoryUsers(body));
       setDirectoryError("");
+      markBusinessSearchSource("directory", false);
     } catch (error) {
       if (isSessionInvalidatedError(error) || !sessionControllerRef.current.isCurrent(context)) return;
+      markBusinessSearchSource("directory", true);
       setDirectoryError(error instanceof Error ? error.message : "주소록 조회 실패");
     }
   }
@@ -843,6 +898,36 @@ export default function App() {
       const nextError = error instanceof Error ? error.message : "대화방 조회 실패";
       setChatError(nextError);
       setMessage(nextError);
+    }
+  }
+
+  function openBusinessSearchResult(result: BusinessSearchResult) {
+    setBusinessSearchSelectedResultId(`${result.category}:${result.id}`);
+    if (result.target.screen === "mail") {
+      setActiveTab("mail");
+      void openMail(result.id);
+      return;
+    }
+    if (result.target.screen === "chat") {
+      setActiveTab("chat");
+      void openRoom(result.id);
+      return;
+    }
+    if (result.target.screen === "approval") {
+      setActiveTab("approval");
+      return;
+    }
+    if (result.target.screen === "calendar") {
+      setActiveTab("calendar");
+      return;
+    }
+    if (result.target.screen === "directory") {
+      setActiveTab("more");
+      setMoreScreen("directory");
+      return;
+    }
+    if (result.target.screen === "files") {
+      setActiveTab("files");
     }
   }
 
@@ -1212,7 +1297,46 @@ export default function App() {
             ) : null}
 
             {activeTab === "more" && moreScreen === "search" ? (
-              <View style={styles.surfaceCard}><Text style={styles.surfaceKicker}>업무 검색</Text><Text style={styles.surfaceTitle}>메일·결재·메신저 통합 검색</Text><TextInput style={styles.input} placeholder="검색어를 입력하세요." /><Text style={styles.emptyState}>검색어를 입력하면 관련 업무가 표시됩니다.</Text></View>
+              <View style={styles.surfaceCard}>
+                <Text style={styles.surfaceKicker}>업무 검색</Text>
+                <Text style={styles.surfaceTitle}>현재 불러온 업무 통합 검색</Text>
+                <Text style={styles.surfaceHint}>메일·결재·메신저·일정·주소록·파일의 현재 로드된 요약만 검색하며, 완전한 서버 전체 이력 검색이 아닙니다.</Text>
+                <TextInput
+                  accessibilityLabel="업무 검색어"
+                  style={styles.input}
+                  value={businessSearchQuery}
+                  onChangeText={(value) => { setBusinessSearchQuery(value); setBusinessSearchSelectedResultId(""); }}
+                  placeholder="현재 불러온 업무 검색"
+                  maxLength={200}
+                />
+                {businessSearchWarnings.length > 0 ? (
+                  <Text accessibilityLiveRegion="polite" style={styles.error}>{`일부 업무를 불러오지 못했습니다: ${businessSearchWarnings.map((source) => BUSINESS_SEARCH_CATEGORY_LABELS[source]).join(", ")}. 현재 불러온 결과만 표시합니다.`}</Text>
+                ) : null}
+                {businessSearchHasQuery ? (
+                  <>
+                    <Text accessibilityLiveRegion="polite" style={styles.sectionLabel}>{`검색 결과 ${businessSearchResults.length}건`}</Text>
+                    <View style={styles.providerRow}>
+                      {businessSearchCategoryCounts.map(({ category, count }) => (
+                        <Text key={category} style={[styles.providerChip, styles.providerChipActive]}>{`${BUSINESS_SEARCH_CATEGORY_LABELS[category]} ${count}건`}</Text>
+                      ))}
+                    </View>
+                    {businessSearchResults.map((result) => (
+                      <Pressable
+                        key={`${result.category}:${result.id}`}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${BUSINESS_SEARCH_CATEGORY_LABELS[result.category]} ${result.title} 열기`}
+                        onPress={() => openBusinessSearchResult(result)}
+                        style={[styles.listCard, businessSearchSelectedResultId === `${result.category}:${result.id}` ? styles.mailRowSelected : null]}
+                      >
+                        <Text style={styles.surfaceKicker}>{BUSINESS_SEARCH_CATEGORY_LABELS[result.category]}</Text>
+                        <Text style={styles.listTitle}>{result.title}</Text>
+                        <Text style={styles.listBody}>{result.summary || "요약 정보 없음"}</Text>
+                      </Pressable>
+                    ))}
+                    {businessSearchResults.length === 0 ? <Text style={styles.emptyState}>현재 불러온 업무에서 일치하는 결과가 없습니다.</Text> : null}
+                  </>
+                ) : <Text style={styles.emptyState}>검색어를 입력하면 현재 불러온 업무에서 관련 결과를 표시합니다.</Text>}
+              </View>
             ) : null}
 
             {activeTab === "more" && moreScreen === "settings" ? (
