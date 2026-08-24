@@ -751,9 +751,6 @@ class DirectoryStore:
                 if next_is_department_head:
                     cursor.execute("UPDATE users SET is_department_head = FALSE, updated_at = %s WHERE department_id = %s AND id <> %s", (self._now(), next_department_id, user_id))
 
-                if next_is_department_head:
-                    cursor.execute("UPDATE users SET is_department_head = FALSE WHERE department_id = %s AND id <> %s", (next_department_id, user_id))
-
                 cursor.execute(
                     """
                     UPDATE users
@@ -763,11 +760,11 @@ class DirectoryStore:
                         role_id = %s,
                         is_department_head = %s,
                         status = %s,
-                        is_department_head = %s,
+                        must_change_password = %s,
                         updated_at = %s
                     WHERE id = %s
                     """,
-                    (next_name, next_password_hash, next_department_id, next_role_id, next_status, next_is_department_head, self._now(), user_id),
+                    (next_name, next_password_hash, next_department_id, next_role_id, next_is_department_head, next_status, next_must_change_password, self._now(), user_id),
                 )
                 cursor.execute(
                     """
