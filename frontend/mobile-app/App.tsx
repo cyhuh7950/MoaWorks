@@ -1249,7 +1249,7 @@ export default function App() {
               {activeTab === "more" ? (
                 <View style={styles.mobileSubNav}>
                   {[{ id: "directory", label: "주소록", icon: "directory" }, { id: "ai", label: "AI 채팅", icon: "ai" }, { id: "search", label: "업무 검색", icon: "search" }, { id: "settings", label: "설정", icon: "settings" }].map((item) => (
-                    <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} onPress={() => { setMoreScreen(item.id as Exclude<ScreenKey, MobileTab>); if (item.id === "directory" && token) void loadDirectory(token); if ((item.id === "settings" || (item.id === "ai" && !personalAiTestReady)) && token) void loadPersonalAi(token); }} style={[styles.mobileSubTab, moreScreen === item.id ? styles.mobileSubTabActive : styles.mobileSubTabIdle]}><MoaIcon name={item.icon as IconName} color={moreScreen === item.id ? "#ffffff" : "#0f766e"} /><Text style={[styles.mobileTabLabel, moreScreen === item.id ? styles.mobileTabLabelActive : null]}>{item.label}</Text></Pressable>
+                    <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} accessibilityHint="선택한 더보기 화면으로 이동합니다." onPress={() => { setMoreScreen(item.id as Exclude<ScreenKey, MobileTab>); if (item.id === "directory" && token) void loadDirectory(token); if ((item.id === "settings" || (item.id === "ai" && !personalAiTestReady)) && token) void loadPersonalAi(token); }} style={[styles.mobileSubTab, moreScreen === item.id ? styles.mobileSubTabActive : styles.mobileSubTabIdle]}><MoaIcon name={item.icon as IconName} color={moreScreen === item.id ? "#ffffff" : "#0f766e"} /><Text style={[styles.mobileTabLabel, moreScreen === item.id ? styles.mobileTabLabelActive : null]}>{item.label}</Text></Pressable>
                   ))}
                 </View>
               ) : null}
@@ -1259,50 +1259,51 @@ export default function App() {
             {activeTab === "calendar" ? (
               <View style={styles.surfaceCard}>
                 <Text style={styles.surfaceKicker}>일정</Text>
-                <Text style={styles.surfaceTitle}>오늘의 일정</Text>
-                <View style={styles.buttonPair}><Button title="이전 달" onPress={() => setScheduleMonthKey((value) => shiftMonthKey(value, -1))} /><Button title="다음 달" onPress={() => setScheduleMonthKey((value) => shiftMonthKey(value, 1))} /></View>
-                <Text style={styles.surfaceHint}>{`${Number(scheduleMonthKey.slice(0, 4))}년 ${Number(scheduleMonthKey.slice(5, 7))}월 · ${timezone}`}</Text>
+                <Text accessibilityRole="header" style={styles.surfaceTitle}>오늘의 일정</Text>
+                <View style={styles.buttonPair}><Button accessibilityLabel="이전 달 일정 보기" accessibilityHint="표시 중인 달을 한 달 전으로 이동합니다." title="이전 달" onPress={() => setScheduleMonthKey((value) => shiftMonthKey(value, -1))} /><Button accessibilityLabel="다음 달 일정 보기" accessibilityHint="표시 중인 달을 한 달 뒤로 이동합니다." title="다음 달" onPress={() => setScheduleMonthKey((value) => shiftMonthKey(value, 1))} /></View>
+                <Text accessibilityLiveRegion="polite" style={styles.surfaceHint}>{`${Number(scheduleMonthKey.slice(0, 4))}년 ${Number(scheduleMonthKey.slice(5, 7))}월 · ${timezone}`}</Text>
                 <View style={styles.calendarGrid}>{buildMonthGrid(scheduleMonthKey).map((cell, index) => <View key={`${cell.dateKey}-${index}`} style={styles.calendarCell}><Text style={styles.calendarDate}>{cell.day || ""}</Text>{visibleSchedules.filter((item) => dateKey(item.starts_at, timezone) === cell.dateKey).slice(0, 2).map((item) => <Text key={item.id} style={styles.calendarEvent}>{item.title}</Text>)}</View>)}</View>
                 {visibleSchedules.length === 0 ? <Text style={styles.emptyState}>표시할 일정이 없습니다.</Text> : null}
-                <TextInput accessibilityLabel="일정 제목" style={styles.input} value={scheduleForm.title} onChangeText={(title) => setScheduleForm((current) => ({ ...current, title }))} placeholder="일정 제목" />
-                <TextInput accessibilityLabel="일정 시작 시간" style={styles.input} value={scheduleForm.startsAt} onChangeText={(startsAt) => setScheduleForm((current) => ({ ...current, startsAt }))} placeholder="2026-08-24T09:00:00+09:00" />
-                <TextInput accessibilityLabel="일정 종료 시간" style={styles.input} value={scheduleForm.endsAt} onChangeText={(endsAt) => setScheduleForm((current) => ({ ...current, endsAt }))} placeholder="2026-08-24T10:00:00+09:00" />
-                <Button title={scheduleSaving ? "저장 중" : "일정 생성"} disabled={scheduleSaving} onPress={() => { void createSchedule(); }} />
-                {scheduleError ? <Text style={styles.error}>{scheduleError}</Text> : null}
+                <TextInput accessibilityLabel="일정 제목" accessibilityHint="생성할 일정의 제목을 입력합니다." style={styles.input} value={scheduleForm.title} onChangeText={(title) => setScheduleForm((current) => ({ ...current, title }))} placeholder="일정 제목" />
+                <TextInput accessibilityLabel="일정 시작 시간" accessibilityHint="일정 시작 시각을 날짜와 시간 형식으로 입력합니다." style={styles.input} value={scheduleForm.startsAt} onChangeText={(startsAt) => setScheduleForm((current) => ({ ...current, startsAt }))} placeholder="2026-08-24T09:00:00+09:00" />
+                <TextInput accessibilityLabel="일정 종료 시간" accessibilityHint="일정 종료 시각을 날짜와 시간 형식으로 입력합니다." style={styles.input} value={scheduleForm.endsAt} onChangeText={(endsAt) => setScheduleForm((current) => ({ ...current, endsAt }))} placeholder="2026-08-24T10:00:00+09:00" />
+                <Button accessibilityLabel="일정 생성" accessibilityHint="입력한 제목과 시간으로 일정을 생성합니다." title={scheduleSaving ? "저장 중" : "일정 생성"} disabled={scheduleSaving} onPress={() => { void createSchedule(); }} />
+                {scheduleError ? <Text accessibilityRole="alert" accessibilityLabel="일정 요청을 처리하지 못했습니다." style={styles.error}>{scheduleError}</Text> : null}
               </View>
             ) : null}
 
             {activeTab === "more" && moreScreen === "directory" ? (
               <View style={styles.surfaceCard}>
                 <Text style={styles.surfaceKicker}>주소록</Text>
-                <Text style={styles.surfaceTitle}>사원 정보 검색</Text>
-                <TextInput accessibilityLabel="주소록 검색" style={styles.input} value={directoryQuery} onChangeText={setDirectoryQuery} placeholder="이름, 부서, 역할, 이메일 검색" />
-                {visibleDirectoryUsers.map((member) => { const isSelf = member.id === me?.userId; return <View key={member.id} style={styles.directoryCard}><View style={styles.avatar}><Text style={styles.avatarText}>{member.name.slice(0, 1)}</Text></View><View style={styles.directoryInfo}><Text style={styles.listTitle}>{member.name}</Text><Text style={styles.listBody}>{member.department_name} · {member.role_name}</Text><Text style={styles.listBody}>{member.email}</Text></View><View style={styles.directoryActions}><Button title="메일" accessibilityLabel={`${member.name} 메일`} onPress={() => openDirectoryMail(member.email)} disabled={!mailtoUrl(member.email)} /><Button title="전화" accessibilityLabel="전화번호 미제공" onPress={() => {}} disabled={true} /><Button title={isSelf ? "나" : directoryBusyUserId === member.id ? "생성 중" : "대화"} accessibilityLabel={`${member.name} 대화 시작`} onPress={() => void startDirectRoom(member)} disabled={isSelf || directoryBusyUserId === member.id} /></View></View>; })}
-                {directoryError ? <Text style={styles.directoryError}>{directoryError}</Text> : null}
-                {visibleDirectoryUsers.length === 0 && !directoryError ? <Text style={styles.emptyState}>표시할 주소록 정보가 없습니다.</Text> : null}
+                <Text accessibilityRole="header" style={styles.surfaceTitle}>사원 정보 검색</Text>
+                <TextInput accessibilityLabel="주소록 검색" accessibilityHint="이름, 부서, 역할 또는 이메일로 사원을 검색합니다." style={styles.input} value={directoryQuery} onChangeText={setDirectoryQuery} placeholder="이름, 부서, 역할, 이메일 검색" />
+                {visibleDirectoryUsers.map((member) => { const isSelf = member.id === me?.userId; return <View key={member.id} style={styles.directoryCard}><View style={styles.avatar}><Text style={styles.avatarText}>{member.name.slice(0, 1)}</Text></View><View style={styles.directoryInfo}><Text style={styles.listTitle}>{member.name}</Text><Text style={styles.listBody}>{member.department_name} · {member.role_name}</Text><Text style={styles.listBody}>{member.email}</Text></View><View style={styles.directoryActions}><Button title="메일" accessibilityLabel={`${member.name}에게 메일 보내기`} accessibilityHint="기본 메일 앱을 엽니다." onPress={() => openDirectoryMail(member.email)} disabled={!mailtoUrl(member.email)} /><Button title="전화" accessibilityLabel={`${member.name} 전화번호 미제공`} accessibilityHint="전화번호가 없어 사용할 수 없습니다." onPress={() => {}} disabled={true} /><Button title={isSelf ? "나" : directoryBusyUserId === member.id ? "생성 중" : "대화"} accessibilityLabel={`${member.name}와 대화 시작`} accessibilityHint="선택한 사원과 일대일 대화방을 엽니다." onPress={() => void startDirectRoom(member)} disabled={isSelf || directoryBusyUserId === member.id} /></View></View>; })}
+                {directoryError ? <Text accessibilityRole="alert" accessibilityLabel="주소록 요청을 처리하지 못했습니다." style={styles.directoryError}>{directoryError}</Text> : null}
+                {visibleDirectoryUsers.length === 0 && !directoryError ? <Text accessibilityLiveRegion="polite" style={styles.emptyState}>표시할 주소록 정보가 없습니다.</Text> : null}
               </View>
             ) : null}
 
             {activeTab === "more" && moreScreen === "ai" ? (
               <View style={styles.surfaceCard}>
                 <Text style={styles.surfaceKicker}>AI 채팅</Text>
-                <Text style={styles.surfaceTitle}>연결된 LLM에게 질문하고 검색</Text>
+                <Text accessibilityRole="header" style={styles.surfaceTitle}>연결된 LLM에게 질문하고 검색</Text>
                 <Text style={styles.surfaceHint}>개인 API 키는 설정 화면의 현재 입력 중에만 유지되며, 답변 요청은 MoaWorks 서버를 통해 처리합니다.</Text>
                 {aiMessages.map((item, index) => <View key={`${item.role}-${index}`} style={[styles.aiBubble, item.role === "user" ? styles.aiUserBubble : styles.aiAssistantBubble]}><Text style={styles.aiRole}>{item.role === "user" ? "나" : llmProvider}</Text><Text style={styles.listBody}>{item.body}</Text></View>)}
-                <TextInput accessibilityLabel="개인 AI 질문" style={[styles.input, styles.textarea]} value={aiDraft} onChangeText={setAiDraft} placeholder="질문을 입력하세요." multiline maxLength={8000} editable={!personalAiPendingAction} />
-                <Button accessibilityLabel="개인 AI 질문 보내기" title={personalAiPendingAction === "chat" ? "답변 대기 중" : "질문 보내기"} disabled={!personalAiTestReady || Boolean(personalAiPendingAction) || !aiDraft.trim()} onPress={() => { void askAi(); }} />
-                {!personalAiTestReady ? <Text style={styles.surfaceHint}>현재 로그인 세션에서 연결 시험이 준비 상태가 되어야 질문을 보낼 수 있습니다.</Text> : null}
-                {personalAiError ? <Text style={styles.error}>{personalAiError}</Text> : null}
+                <TextInput accessibilityLabel="개인 AI 질문" accessibilityHint="개인 AI에게 보낼 질문을 입력합니다." style={[styles.input, styles.textarea]} value={aiDraft} onChangeText={setAiDraft} placeholder="질문을 입력하세요." multiline maxLength={8000} editable={!personalAiPendingAction} />
+                <Button accessibilityLabel="개인 AI 질문 보내기" accessibilityHint="입력한 질문을 연결된 개인 AI에 보냅니다." title={personalAiPendingAction === "chat" ? "답변 대기 중" : "질문 보내기"} disabled={!personalAiTestReady || Boolean(personalAiPendingAction) || !aiDraft.trim()} onPress={() => { void askAi(); }} />
+                {!personalAiTestReady ? <Text accessibilityLiveRegion="polite" style={styles.surfaceHint}>현재 로그인 세션에서 연결 시험이 준비 상태가 되어야 질문을 보낼 수 있습니다.</Text> : null}
+                {personalAiError ? <Text accessibilityRole="alert" accessibilityLabel="개인 AI 요청을 처리하지 못했습니다." style={styles.error}>{personalAiError}</Text> : null}
               </View>
             ) : null}
 
             {activeTab === "more" && moreScreen === "search" ? (
               <View style={styles.surfaceCard}>
                 <Text style={styles.surfaceKicker}>업무 검색</Text>
-                <Text style={styles.surfaceTitle}>현재 불러온 업무 통합 검색</Text>
+                <Text accessibilityRole="header" style={styles.surfaceTitle}>현재 불러온 업무 통합 검색</Text>
                 <Text style={styles.surfaceHint}>메일·결재·메신저·일정·주소록·파일의 현재 로드된 요약만 검색하며, 완전한 서버 전체 이력 검색이 아닙니다.</Text>
                 <TextInput
                   accessibilityLabel="업무 검색어"
+                  accessibilityHint="현재 로그인 세션에 불러온 업무 요약을 검색합니다."
                   style={styles.input}
                   value={businessSearchQuery}
                   onChangeText={(value) => { setBusinessSearchQuery(value); setBusinessSearchSelectedResultId(""); }}
@@ -1310,7 +1311,7 @@ export default function App() {
                   maxLength={200}
                 />
                 {businessSearchWarnings.length > 0 ? (
-                  <Text accessibilityLiveRegion="polite" style={styles.error}>{`일부 업무를 불러오지 못했습니다: ${businessSearchWarnings.map((source) => BUSINESS_SEARCH_CATEGORY_LABELS[source]).join(", ")}. 현재 불러온 결과만 표시합니다.`}</Text>
+                  <Text accessibilityRole="alert" accessibilityLabel="일부 업무를 불러오지 못했습니다. 현재 불러온 결과만 표시합니다." accessibilityLiveRegion="polite" style={styles.error}>{`일부 업무를 불러오지 못했습니다: ${businessSearchWarnings.map((source) => BUSINESS_SEARCH_CATEGORY_LABELS[source]).join(", ")}. 현재 불러온 결과만 표시합니다.`}</Text>
                 ) : null}
                 {businessSearchHasQuery ? (
                   <>
@@ -1325,6 +1326,7 @@ export default function App() {
                         key={`${result.category}:${result.id}`}
                         accessibilityRole="button"
                         accessibilityLabel={`${BUSINESS_SEARCH_CATEGORY_LABELS[result.category]} ${result.title} 열기`}
+                        accessibilityHint="선택한 업무 화면으로 이동합니다."
                         onPress={() => openBusinessSearchResult(result)}
                         style={[styles.listCard, businessSearchSelectedResultId === `${result.category}:${result.id}` ? styles.mailRowSelected : null]}
                       >
@@ -1349,11 +1351,11 @@ export default function App() {
                 <View style={styles.providerRow}>{personalAiProviders.map((option) => <Pressable key={option.provider} accessibilityRole="button" accessibilityLabel={`${option.label} Provider 선택`} disabled={Boolean(personalAiPendingAction)} onPress={() => { if (option.provider !== llmProvider) { setLlmProvider(option.provider); setLlmModel(""); setLlmApiKey(""); setLlmApiKeyConfigured(false); setLlmConnectionStatus("untested"); setPersonalAiTestReady(false); setPersonalAiConfigDirty(true); setLlmLastTestedAt(null); setPersonalAiError(""); } }} style={[styles.providerChip, llmProvider === option.provider ? styles.providerChipActive : null]}><Text>{option.label}</Text></Pressable>)}</View>
                 {personalAiProviders.length === 0 ? <Text style={styles.surfaceHint}>Provider 목록을 불러오지 못했습니다.</Text> : null}
                 <TextInput accessibilityLabel="개인 AI 모델" style={styles.input} value={llmModel} onChangeText={(value) => { setLlmModel(value); setLlmConnectionStatus("untested"); setPersonalAiTestReady(false); setPersonalAiConfigDirty(true); }} placeholder="모델 이름" autoCapitalize="none" maxLength={200} editable={!personalAiPendingAction} />
-                <TextInput accessibilityLabel="개인 AI API 키" style={styles.input} value={llmApiKey} onChangeText={(value) => { setLlmApiKey(value); setLlmConnectionStatus("untested"); setPersonalAiTestReady(false); setPersonalAiConfigDirty(true); }} placeholder={llmApiKeyConfigured ? "새 API 키를 입력할 때만 변경" : "개인 LLM API 키"} secureTextEntry autoCapitalize="none" maxLength={1000} editable={!personalAiPendingAction} />
-                <Text style={styles.surfaceHint}>{`설정 상태: ${llmApiKeyConfigured ? "API 키 설정됨" : "API 키 미설정"} · 연결 ${llmConnectionStatus} · 최근 시험 ${formatStamp(llmLastTestedAt)}`}</Text>
+                <TextInput accessibilityLabel="개인 AI API 키" accessibilityHint="개인 AI 연결에 사용할 API 키를 안전하게 입력합니다." style={styles.input} value={llmApiKey} onChangeText={(value) => { setLlmApiKey(value); setLlmConnectionStatus("untested"); setPersonalAiTestReady(false); setPersonalAiConfigDirty(true); }} placeholder={llmApiKeyConfigured ? "새 API 키를 입력할 때만 변경" : "개인 LLM API 키"} secureTextEntry autoCapitalize="none" maxLength={1000} editable={!personalAiPendingAction} />
+                <Text accessibilityLiveRegion="polite" style={styles.surfaceHint}>{`설정 상태: ${llmApiKeyConfigured ? "API 키 설정됨" : "API 키 미설정"} · 연결 ${llmConnectionStatus} · 최근 시험 ${formatStamp(llmLastTestedAt)}`}</Text>
                 <Button accessibilityLabel="개인 AI 연결 시험" title={personalAiPendingAction === "test" ? "연결 시험 중" : llmConnectionStatus === "ready" ? "연결됨 · 다시 시험" : "LLM 연결 시험"} disabled={Boolean(personalAiPendingAction) || personalAiConfigDirty || !llmProvider || !llmModel.trim()} onPress={() => { void testPersonalAiConnection(); }} />
                 <Button accessibilityLabel="개인 AI 설정 저장" title={personalAiPendingAction === "save" ? "설정 저장 중" : "개인 AI 설정 저장"} disabled={Boolean(personalAiPendingAction) || !llmProvider || !llmModel.trim()} onPress={() => { void savePersonalAiConfig(); }} />
-                {personalAiError ? <Text style={styles.error}>{personalAiError}</Text> : null}
+                {personalAiError ? <Text accessibilityRole="alert" accessibilityLabel="개인 AI 요청을 처리하지 못했습니다." style={styles.error}>{personalAiError}</Text> : null}
               </View>
             ) : null}
 
@@ -1372,6 +1374,9 @@ export default function App() {
                 ].map((item) => (
                   <Text
                     key={item.id}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${item.label} 빠른 이동`}
+                    accessibilityHint="선택한 업무 탭으로 이동합니다."
                     onPress={() => handleTabPress(item.id as MobileTab)}
                     style={[styles.mobileTab, activeTab === item.id ? styles.mobileTabActive : styles.mobileTabIdle]}
                   >
@@ -1730,7 +1735,7 @@ export default function App() {
       {me ? (
         <View style={styles.mobileBottomNav}>
           {[{ id: "home", label: "홈", icon: "home" }, { id: "mail", label: "메일", icon: "mail" }, { id: "approval", label: "결재", icon: "approval" }, { id: "chat", label: "메신저", icon: "chat" }, { id: "calendar", label: "일정", icon: "calendar" }, { id: "files", label: "파일", icon: "files" }, { id: "more", label: "더보기", icon: "more" }].map((item) => (
-            <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} onPress={() => handleTabPress(item.id as MobileTab)} style={[styles.mobileBottomNavItem, activeTab === item.id ? styles.mobileBottomNavItemActive : null]}>
+            <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} accessibilityHint="선택한 업무 탭으로 이동합니다." onPress={() => handleTabPress(item.id as MobileTab)} style={[styles.mobileBottomNavItem, activeTab === item.id ? styles.mobileBottomNavItemActive : null]}>
               <MoaIcon name={item.icon as IconName} color={activeTab === item.id ? "#ffffff" : "#475569"} size={18} />
               <Text style={[styles.mobileBottomNavLabel, activeTab === item.id ? styles.mobileBottomNavLabelActive : null]}>{item.label}</Text>
             </Pressable>
