@@ -369,6 +369,7 @@ export default function App() {
   }
 
   async function doLogin() {
+    let loginContext: { generation: number; token: string } | null = null;
     try {
       const loginResult = await sessionControllerRef.current.login({
         apiBase,
@@ -377,15 +378,23 @@ export default function App() {
       });
       if (!loginResult.committed) return;
       const context = loginResult.context;
+      loginContext = context;
       setToken(loginResult.login.accessToken);
       setMe(loginResult.me.user);
       setMessage("로그인 성공");
-      await loadApprovals(loginResult.login.accessToken, context);
-      await loadNotifications(loginResult.login.accessToken, context);
-      await loadMail(loginResult.login.accessToken, undefined, context);
-      await loadRooms(loginResult.login.accessToken, undefined, context);
-      await loadFiles(loginResult.login.accessToken, context);
+      const initialRequests = await sessionControllerRef.current.runInitialRequests(context, [
+        () => loadApprovals(loginResult.login.accessToken, context),
+        () => loadNotifications(loginResult.login.accessToken, context),
+        () => loadMail(loginResult.login.accessToken, undefined, context),
+        () => loadRooms(loginResult.login.accessToken, undefined, context),
+        () => loadFiles(loginResult.login.accessToken, context),
+      ]);
+      if (!initialRequests.applied) return;
     } catch (error) {
+      const loginAttempt = (error as { loginAttempt?: { generation: number } }).loginAttempt;
+      const errorContext = (error as { sessionContext?: { generation: number; token: string } }).sessionContext ?? loginContext;
+      if (loginAttempt && !sessionControllerRef.current.isAttemptCurrent(loginAttempt)) return;
+      if (errorContext && !sessionControllerRef.current.isCurrent(errorContext)) return;
       if (isSessionInvalidatedError(error)) return;
       setMessage(error instanceof Error ? error.message : "로그인 실패");
     }

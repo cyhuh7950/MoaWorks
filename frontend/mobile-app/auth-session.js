@@ -122,23 +122,37 @@ function createAuthSessionController({ onLoginCommitted = () => {}, onSessionCle
 
   async function login({ apiBase, identifier, password, fetchImpl }) {
     const attempt = beginLogin();
-    const loginBody = await requestJson({
-      apiBase,
-      path: "/auth/login",
-      init: {
-        method: "POST",
-        body: JSON.stringify({ email: normalizeLoginIdentifier(identifier), password }),
-      },
-      fetchImpl,
-    });
+    let loginBody;
+    try {
+      loginBody = await requestJson({
+        apiBase,
+        path: "/auth/login",
+        init: {
+          method: "POST",
+          body: JSON.stringify({ email: normalizeLoginIdentifier(identifier), password }),
+        },
+        fetchImpl,
+      });
+    } catch (error) {
+      if (!isAttemptCurrent(attempt)) return { committed: false };
+      error.loginAttempt = attempt;
+      throw error;
+    }
     if (!isAttemptCurrent(attempt)) return { committed: false };
-    const meBody = await requestForAttempt({
-      apiBase,
-      path: "/auth/me",
-      init: { headers: { Authorization: `Bearer ${loginBody.accessToken}` } },
-      attempt,
-      fetchImpl,
-    });
+    let meBody;
+    try {
+      meBody = await requestForAttempt({
+        apiBase,
+        path: "/auth/me",
+        init: { headers: { Authorization: `Bearer ${loginBody.accessToken}` } },
+        attempt,
+        fetchImpl,
+      });
+    } catch (error) {
+      if (!error.sessionCleared && !isAttemptCurrent(attempt)) return { committed: false };
+      error.loginAttempt = attempt;
+      throw error;
+    }
     if (!isAttemptCurrent(attempt)) return { committed: false };
     const context = commitLogin(attempt, loginBody.accessToken, meBody.user);
     return context ? { committed: true, context, login: loginBody, me: meBody } : { committed: false };
@@ -207,15 +221,31 @@ function createMobileSessionAdapter({ onLoginCommitted = () => {}, onSessionRese
     return { applied: true, value };
   }
 
+  async function runInitialRequests(context, tasks) {
+    for (const task of tasks) {
+      try {
+        await task();
+      } catch (error) {
+        if (!controller.isCurrent(context)) return { applied: false };
+        error.sessionContext = context;
+        throw error;
+      }
+      if (!controller.isCurrent(context)) return { applied: false };
+    }
+    return { applied: true };
+  }
+
   return {
     beginLogin: controller.beginLogin,
     capture: controller.capture,
     commitLogin: controller.commitLogin,
+    isAttemptCurrent: controller.isAttemptCurrent,
     isCurrent: controller.isCurrent,
     requestForSession: controller.requestForSession,
     login: controller.login,
     clearSession: controller.logout,
     applyProtectedResponse,
+    runInitialRequests,
   };
 }
 

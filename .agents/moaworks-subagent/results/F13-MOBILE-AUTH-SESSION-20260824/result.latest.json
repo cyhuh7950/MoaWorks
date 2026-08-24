@@ -2,19 +2,21 @@
   "taskId": "F13-MOBILE-AUTH-SESSION-20260824",
   "issueId": "F13-MOBILE-AUTH-SESSION",
   "outcome": "SUCCESS",
-  "summary": "F13 재작업 2에서 App이 실제 사용하는 production session adapter로 중앙 reset과 보호 응답 반영을 연결했다. generation/token이 현재일 때만 응답을 반영하며, auth/me 실패·현재 401/403·로그아웃은 인증, 업무/선택/오류/form 및 개인 LLM 연결 상태를 중앙 초기화한다.",
+  "summary": "F13 최종 재작업에서 production session adapter가 이전 auth/login 401·403·네트워크 실패를 최신 로그인에 전달하지 않게 하고, 로그인 직후 결재·알림·메일·메신저·파일 초기 요청도 같은 generation/token context에 끝까지 귀속했다.",
   "reportPath": ".agents/moaworks-subagent/reports/F13-MOBILE-AUTH-SESSION-20260824.md",
   "modifiedFiles": [
     "frontend/mobile-app/App.tsx",
     "frontend/mobile-app/auth-session.js",
     "frontend/mobile-app/test/mobile-f13-auth-session-contract.test.js",
-    "frontend/mobile-app/test/mobile-f13-files-reconnect-contract.test.js"
+    "frontend/mobile-app/test/mobile-f13-files-reconnect-contract.test.js",
+    "docs/work-progress/moaworks-completion-v2.1/stage-04-f12-f14/progress.jsonl",
+    "docs/work-progress/mobile-android-2026-08-21-update.jsonl"
   ],
   "verification": [
     {
       "command": "node --test test\\mobile-f13-auth-session-contract.test.js test\\mobile-f13-files-reconnect-contract.test.js",
       "status": "PASS",
-      "result": "10/10 passed; the production adapter covers auth/me failure, full 401/403 reset, delayed mail/room responses after logout, stale-session 401, and reversed duplicate login responses"
+      "result": "12/12 passed; the production adapter covers auth/me failure, full 401/403 reset, delayed mail/room responses, stale login 401/403/network failures, stale initial-request success/failure, and reversed duplicate login responses"
     },
     {
       "command": "node --check auth-session.js",
@@ -24,7 +26,7 @@
     {
       "command": "npm test",
       "status": "BASELINE_FAILURE",
-      "result": "54/55 passed; existing Android wrapper hardcoded user path contract failure remains"
+      "result": "56/57 passed; existing Android wrapper hardcoded user path contract failure remains"
     },
     {
       "command": "npm run bundle",
@@ -44,14 +46,14 @@
   ],
   "directCause": null,
   "evidence": [
-    "F13 executable production session adapter contract 7/7 passed",
+    "F13 executable production session adapter contract 9/9 passed",
     "F13 files reconnect contract 3/3 passed",
-    "full mobile contracts 54/55 with the documented Android wrapper baseline failure"
+    "full mobile contracts 56/57 with the documented Android wrapper baseline failure"
   ],
   "attemptedAlternatives": [
     "bundle was retried with workspace write access; it remained blocked because node_modules is absent"
   ],
-  "currentState": "Local production session adapter and generation-bound auth/session contracts pass; bundle and device/operational verification remain unverified.",
+  "currentState": "Local production adapter guards stale login failures and stale initial requests; bundle and device/operational verification remain unverified.",
   "remediationProposal": "Restore dependencies, then run bundle and Android device checks for operational authentication and session-expiry behavior.",
   "resumePoint": "Start with dependency restoration and Metro bundle verification.",
   "scopeChange": false,

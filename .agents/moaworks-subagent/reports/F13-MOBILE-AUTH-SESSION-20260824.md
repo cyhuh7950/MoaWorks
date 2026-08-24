@@ -73,3 +73,24 @@
 
 - F13 구현 동일 근본 원인 재시도 오류: 0회. 이 RED는 TDD 기대 실패이며, Android wrapper 기준선 실패와 bundle 의존성 부재는 별도 상태다.
 - 다음 조치: 의존성을 복구한 뒤 bundle과 Android 실기기에서 운영 로그인·`/auth/me` 거부·401/403·로그아웃·재시작을 검증한다.
+
+## 최종 재작업 — 이전 로그인 실패·초기 요청 generation 귀속
+
+### 조치
+
+- `createAuthSessionController.login`은 `/auth/login` 및 `/auth/me` 실패를 throw하기 전에 해당 login attempt가 현재인지 확인한다. 이전 attempt의 401·403·네트워크 실패는 `{ committed: false }`로 종료해 최신 로그인 메시지나 세션을 바꾸지 않는다.
+- production `createMobileSessionAdapter.runInitialRequests`가 로그인 context의 결재·알림·메일·메신저·파일 초기 요청을 순차 실행한다. context가 바뀌면 이전 요청의 성공·실패 모두 `{ applied: false }`로 끝내고 새 세션 상태·메시지를 변경하지 않는다.
+- `App.tsx`의 `doLogin`은 이 orchestration을 실제 사용하고, catch에서 login attempt/context가 더 이상 현재가 아니면 오류 메시지를 반영하지 않는다. 기준선 JSX 닫힘·미정의 화면 상태와 Android wrapper는 수정하지 않았다.
+
+### TDD 및 검증 증적
+
+- RED: `node --test test\mobile-f13-auth-session-contract.test.js` — 7/9 통과, 2개 기대 실패. 이전 login 401이 `Error: old failure`로 전파됐고 `adapter.runInitialRequests is not a function`이었다.
+- GREEN: 같은 auth 계약 9/9 통과(이전 login 401·403·네트워크 실패, 이전 초기 요청 성공·실패 모두 포함).
+- PASS: `node --test test\mobile-f13-auth-session-contract.test.js test\mobile-f13-files-reconnect-contract.test.js` — 12/12; `node --check auth-session.js`; 금지 개발 우회·내부 주소·영속 저장소 검색 무결과; `git diff --check`.
+- 기준선: `npm test` — 56/57. 실패 1건은 변경 금지 Android wrapper의 기존 `Users/cyhuh` 사용자 경로 검사다.
+- 미검증: bundle은 `node_modules` 부재로 차단된 상태이며 Android 실기기·실운영 HTTP 인증은 실행하지 않았다. 기준선 App JSX 닫힘과 `screenDensity`·`moreScreen`·`setMoreScreen`·`ScreenKey` 미정의도 이번 범위에서 수정하지 않았다.
+
+### 최종 상태
+
+- F13 구현 동일 근본 원인 재시도 오류: 0회. RED는 TDD 기대 실패이고 Android wrapper 및 기준선 App JSX 결함은 별도 상태다.
+- 다음 조치: 의존성 복구 후 bundle과 Android/운영 HTTP에서 로그인·`/auth/me` 거부·401/403·로그아웃·재시작을 검증한다.

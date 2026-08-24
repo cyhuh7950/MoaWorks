@@ -254,6 +254,80 @@ test("연속 로그인 응답이 역전되어도 최신 로그인만 인증 상�
   assert.deepEqual(state.user, { userId: "second" });
 });
 
+test("새 로그인 성공 뒤 이전 auth login 401 또는 네트워크 실패는 adapter에서 무시한다", async () => {
+  for (const lateFailure of [
+    () => response(401, { detail: { userMessage: "old failure" } }),
+    () => response(403, { detail: { userMessage: "old forbidden" } }),
+    () => Promise.reject(new Error("old network failure")),
+  ]) {
+    const state = createState();
+    const adapter = createAdapter(state);
+    const delayedLogin = deferred();
+    const previousLogin = adapter.login({
+      apiBase: "https://api.moaworks.sinsan.kr/api/v1",
+      identifier: "previous",
+      password: "not-recorded",
+      fetchImpl: async () => delayedLogin.promise,
+    });
+    const currentLogin = adapter.login({
+      apiBase: "https://api.moaworks.sinsan.kr/api/v1",
+      identifier: "current",
+      password: "not-recorded",
+      fetchImpl: async (url) => url.endsWith("/auth/login")
+        ? response(200, { accessToken: "current-token", user: { userId: "current" } })
+        : response(200, { user: { userId: "current" } }),
+    });
+
+    await currentLogin;
+    state.message = "현재 로그인 성공";
+    const failure = lateFailure();
+    if (failure instanceof Promise) {
+      delayedLogin.reject(await failure.catch((error) => error));
+    } else {
+      delayedLogin.resolve(failure);
+    }
+
+    assert.deepEqual(await previousLogin, { committed: false });
+    assert.equal(state.token, "current-token");
+    assert.deepEqual(state.user, { userId: "current" });
+    assert.equal(state.message, "현재 로그인 성공");
+  }
+});
+
+test("새 세션이 시작되면 이전 로그인 초기 요청의 성공과 실패를 모두 무시한다", async () => {
+  for (const lateResult of [
+    () => ({ documents: [{ id: "old-document" }] }),
+    () => Promise.reject(new Error("old initial request failure")),
+  ]) {
+    const state = createState();
+    const adapter = createAdapter(state);
+    const oldContext = activate(adapter, state, "old-token", "old-user");
+    const delayedRequest = deferred();
+    const initialRequests = adapter.runInitialRequests(oldContext, [
+      () => adapter.applyProtectedResponse(oldContext, () => delayedRequest.promise, (value) => {
+        state.documents = value.documents;
+        state.message = "이전 요청 성공";
+      }),
+    ]);
+    activate(adapter, state, "new-token", "new-user");
+    state.documents = [{ id: "new-document" }];
+    state.message = "새 세션 준비 완료";
+
+    const result = lateResult();
+    if (result instanceof Promise) {
+      delayedRequest.reject(await result.catch((error) => error));
+    } else {
+      delayedRequest.resolve(result);
+    }
+
+    assert.deepEqual(await initialRequests, { applied: false });
+    assert.equal(state.token, "new-token");
+    assert.deepEqual(state.user, { userId: "new-user" });
+    assert.deepEqual(state.documents, [{ id: "new-document" }]);
+    assert.equal(state.message, "새 세션 준비 완료");
+  }
+});
+
 test("App은 중앙 reset과 mail/room 보호 응답에 production adapter를 연결한다", () => {
   assert.match(appSource, /createMobileSessionAdapter\(/);
   assert.match(appSource, /function clearSession[\s\S]*?\.clearSession\(nextMessage\)/);
