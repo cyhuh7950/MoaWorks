@@ -2849,6 +2849,7 @@ class DirectoryStore:
             permissions=self._permissions(row["permissions"]),
             departmentId=row.get("department_id"),
             departmentName=row.get("department_name"),
+            mustChangePassword=bool(row.get("must_change_password", False)),
             authSessionVersion=int(row.get("auth_session_version", 0)),
         )
 

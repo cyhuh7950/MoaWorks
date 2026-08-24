@@ -25,6 +25,18 @@ def test_reset_contract_does_not_log_plaintext_password():
     assert 'reason="temporary_password' not in source
 
 
+def test_auth_summary_carries_must_change_password_for_user_web_gate():
+    schema = (ROOT / "app" / "schemas" / "directory.py").read_text(encoding="utf-8")
+    store = (ROOT / "app" / "services" / "directory_store.py").read_text(encoding="utf-8")
+    assert "mustChangePassword: bool" in schema
+    assert "mustChangePassword=bool(row.get(\"must_change_password\", False))" in store
+
+
+def test_change_password_returns_fresh_user_summary():
+    service = (ROOT / "app" / "services" / "auth_service.py").read_text(encoding="utf-8")
+    assert "return PasswordChangeResponse(message=\"비밀번호를 변경했습니다.\", user=self.store.get_user_summary(user.userId))" in service
+
+
 def test_admin_web_has_reset_api_and_action():
     api = (ROOT.parent / "frontend" / "admin-web" / "src" / "api.ts").read_text(encoding="utf-8")
     app = (ROOT.parent / "frontend" / "admin-web" / "src" / "App.tsx").read_text(encoding="utf-8")

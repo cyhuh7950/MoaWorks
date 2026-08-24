@@ -90,5 +90,5 @@ class AuthService:
                 status_before="active", status_after="active", reason="self_service",
             )
             connection.commit()
-        return PasswordChangeResponse(message="비밀번호를 변경했습니다.", user=user)
+        return PasswordChangeResponse(message="비밀번호를 변경했습니다.", user=self.store.get_user_summary(user.userId))
 
