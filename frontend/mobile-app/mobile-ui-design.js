@@ -14,6 +14,8 @@ const more = Object.freeze([
   Object.freeze({ id: "settings", label: "설정", icon: "settings" }),
 ]);
 
+const { dateKey } = require("./schedule-api.js");
+
 function navigationModel() {
   return { bottom, more };
 }
@@ -54,9 +56,21 @@ function approvalViewModel({ documents = [], view = "progress", selectedId = "" 
   };
 }
 
+function calendarViewModel({ cells = [], schedules = [], selectedDateKey = "", timezone = "Asia/Seoul" } = {}) {
+  const selectedSchedules = schedules.filter((schedule) => dateKey(schedule.starts_at, timezone) === selectedDateKey);
+  return {
+    columns: 7,
+    weekdayLabels: ["일", "월", "화", "수", "목", "금", "토"],
+    cells,
+    selectedDateKey,
+    selectedSchedules,
+  };
+}
+
 module.exports = {
   approvalViewModel,
   buildHomeViewModel,
+  calendarViewModel,
   calendarLayoutModel,
   navigationModel,
 };

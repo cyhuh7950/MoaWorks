@@ -6,7 +6,7 @@ import { createDirectoryActionGate, directoryUsers as readDirectoryUsers, direct
 import { buildPersonalAiChatPayload, buildPersonalAiConfigPayload, createPersonalAiActionGate, personalAiErrorMessage, readPersonalAiChatResponse, readPersonalAiConfig, readPersonalAiConnectionTest, readPersonalAiProviders } from "./personal-ai-api";
 import { normalizeBusinessSearchText, searchLoadedBusinessSummaries, updateBusinessSearchWarnings } from "./business-search";
 
-const { approvalViewModel, buildHomeViewModel, navigationModel } = require("./mobile-ui-design.js");
+const { approvalViewModel, buildHomeViewModel, calendarViewModel, navigationModel } = require("./mobile-ui-design.js");
 const { buildMailSendPayload, mailboxRequestPath, mailboxViewModel } = require("./mail-compose.js");
 const { buildTranslationPayload, messengerViewModel } = require("./messenger-translation.js");
 const mobileNavigation = navigationModel();
@@ -290,6 +290,8 @@ export default function App() {
   const [scheduleError, setScheduleError] = useState("");
   const [scheduleForm, setScheduleForm] = useState<ScheduleForm>({ title: "", startsAt: "", endsAt: "", description: "", location: "" });
   const [scheduleMonthKey, setScheduleMonthKey] = useState(() => monthKeyForDate(new Date(), timezone));
+  const [selectedScheduleDateKey, setSelectedScheduleDateKey] = useState(() => dateKey(new Date().toISOString(), timezone));
+  const [scheduleFormOpen, setScheduleFormOpen] = useState(false);
   const [scheduleSaving, setScheduleSaving] = useState(false);
   const scheduleSubmissionGateRef = useRef(createSubmissionGate());
   const visibleSchedules = useMemo(() => filterSchedulesForMonth(schedules, scheduleMonthKey, timezone), [schedules, scheduleMonthKey, timezone]);
@@ -336,6 +338,8 @@ export default function App() {
       setMe(nextUser);
       scheduleSubmissionGateRef.current.reset();
       setScheduleSaving(false);
+      setSelectedScheduleDateKey(dateKey(new Date().toISOString(), timezone));
+      setScheduleFormOpen(false);
       directoryActionGateRef.current.reset();
       setDirectoryBusyUserId("");
       personalAiActionGateRef.current.reset();
@@ -395,6 +399,8 @@ export default function App() {
       setScheduleForm(nextState.scheduleForm);
       scheduleSubmissionGateRef.current.reset();
       setScheduleSaving(false);
+      setSelectedScheduleDateKey(dateKey(new Date().toISOString(), timezone));
+      setScheduleFormOpen(false);
       setDirectoryUsers(nextState.directoryUsers);
       setDirectoryQuery(nextState.directoryQuery);
       setDirectoryError(nextState.directoryError);
@@ -1107,6 +1113,18 @@ export default function App() {
     }
   }
 
+  function changeScheduleMonth(amount: number) {
+    const nextMonth = shiftMonthKey(scheduleMonthKey, amount);
+    setScheduleMonthKey(nextMonth);
+    setSelectedScheduleDateKey(`${nextMonth}-01`);
+  }
+
+  function selectTodaySchedule() {
+    const today = dateKey(new Date().toISOString(), timezone);
+    setScheduleMonthKey(today.slice(0, 7));
+    setSelectedScheduleDateKey(today);
+  }
+
   async function action(documentId: string, type: "submit" | "withdraw" | "redraft") {
     const context = sessionControllerRef.current.capture(token);
     try {
@@ -1273,6 +1291,7 @@ export default function App() {
   const approvalScreen = approvalViewModel({ documents, view: approvalView, selectedId: selectedApprovalId }) as { tabs: string[]; rows: Approval[]; selected: Approval | null };
   const selectedApproval = approvalScreen.selected;
   const messengerScreen = messengerViewModel({ rooms, selectedRoomId, messages: roomMessages }) as { selectedRoom: MessengerRoom | null; messages: MessengerMessage[]; languageOptions: Array<{ value: string; label: string }> };
+  const calendarScreen = calendarViewModel({ cells: buildMonthGrid(scheduleMonthKey), schedules: visibleSchedules, selectedDateKey: selectedScheduleDateKey, timezone }) as { columns: number; weekdayLabels: string[]; cells: Array<{ dateKey: string; day: number | null }>; selectedDateKey: string; selectedSchedules: WorkspaceSchedule[] };
   const [approvalView, setApprovalView] = useState<ApprovalView>("progress");
   const [selectedApprovalId, setSelectedApprovalId] = useState("");
   const [approvalComposeOpen, setApprovalComposeOpen] = useState(false);
@@ -1362,17 +1381,31 @@ export default function App() {
             ) : null}
 
             {activeTab === "calendar" ? (
-              <View style={styles.surfaceCard}>
-                <Text style={styles.surfaceKicker}>일정</Text>
-                <Text accessibilityRole="header" style={styles.surfaceTitle}>오늘의 일정</Text>
-                <View style={styles.buttonPair}><Button accessibilityLabel="이전 달 일정 보기" accessibilityHint="표시 중인 달을 한 달 전으로 이동합니다." title="이전 달" onPress={() => setScheduleMonthKey((value) => shiftMonthKey(value, -1))} /><Button accessibilityLabel="다음 달 일정 보기" accessibilityHint="표시 중인 달을 한 달 뒤로 이동합니다." title="다음 달" onPress={() => setScheduleMonthKey((value) => shiftMonthKey(value, 1))} /></View>
-                <Text accessibilityLiveRegion="polite" style={styles.surfaceHint}>{`${Number(scheduleMonthKey.slice(0, 4))}년 ${Number(scheduleMonthKey.slice(5, 7))}월 · ${timezone}`}</Text>
-                <View style={styles.calendarGrid}>{buildMonthGrid(scheduleMonthKey).map((cell, index) => <View key={`${cell.dateKey}-${index}`} style={styles.calendarCell}><Text style={styles.calendarDate}>{cell.day || ""}</Text>{visibleSchedules.filter((item) => dateKey(item.starts_at, timezone) === cell.dateKey).slice(0, 2).map((item) => <Text key={item.id} style={styles.calendarEvent}>{item.title}</Text>)}</View>)}</View>
-                {visibleSchedules.length === 0 ? <Text style={styles.emptyState}>표시할 일정이 없습니다.</Text> : null}
-                <TextInput accessibilityLabel="일정 제목" accessibilityHint="생성할 일정의 제목을 입력합니다." style={styles.input} value={scheduleForm.title} onChangeText={(title) => setScheduleForm((current) => ({ ...current, title }))} placeholder="일정 제목" />
-                <TextInput accessibilityLabel="일정 시작 시간" accessibilityHint="일정 시작 시각을 날짜와 시간 형식으로 입력합니다." style={styles.input} value={scheduleForm.startsAt} onChangeText={(startsAt) => setScheduleForm((current) => ({ ...current, startsAt }))} placeholder="2026-08-24T09:00:00+09:00" />
-                <TextInput accessibilityLabel="일정 종료 시간" accessibilityHint="일정 종료 시각을 날짜와 시간 형식으로 입력합니다." style={styles.input} value={scheduleForm.endsAt} onChangeText={(endsAt) => setScheduleForm((current) => ({ ...current, endsAt }))} placeholder="2026-08-24T10:00:00+09:00" />
-                <Button accessibilityLabel="일정 생성" accessibilityHint="입력한 제목과 시간으로 일정을 생성합니다." title={scheduleSaving ? "저장 중" : "일정 생성"} disabled={scheduleSaving} onPress={() => { void createSchedule(); }} />
+              <View style={styles.calendarScreen}>
+                <View style={styles.calendarToolbar}>
+                  <Text accessibilityRole="button" accessibilityLabel="이전 달 일정 보기" onPress={() => changeScheduleMonth(-1)} style={styles.calendarArrow}>‹</Text>
+                  <Text accessibilityRole="header" accessibilityLiveRegion="polite" style={styles.calendarMonthTitle}>{`${Number(scheduleMonthKey.slice(0, 4))}년 ${Number(scheduleMonthKey.slice(5, 7))}월`}</Text>
+                  <Pressable accessibilityRole="button" accessibilityLabel="오늘 일정 보기" onPress={selectTodaySchedule} style={styles.calendarTodayButton}><Text style={styles.calendarTodayText}>오늘</Text></Pressable>
+                  <Text accessibilityRole="button" accessibilityLabel="다음 달 일정 보기" onPress={() => changeScheduleMonth(1)} style={styles.calendarArrow}>›</Text>
+                </View>
+                <View style={styles.calendarWeekdays}>{calendarScreen.weekdayLabels.map((label, index) => <Text key={label} style={[styles.calendarWeekday, index === 0 ? styles.calendarSunday : null]}>{label}</Text>)}</View>
+                <View style={styles.calendarGrid}>{calendarScreen.cells.map((cell, index) => {
+                  const daySchedules = visibleSchedules.filter((item) => dateKey(item.starts_at, timezone) === cell.dateKey);
+                  const selected = Boolean(cell.dateKey) && cell.dateKey === calendarScreen.selectedDateKey;
+                  return <Pressable key={`${cell.dateKey}-${index}`} accessibilityRole={cell.dateKey ? "button" : undefined} accessibilityLabel={cell.dateKey ? `${cell.day}일 일정 ${daySchedules.length}건` : undefined} disabled={!cell.dateKey} onPress={() => setSelectedScheduleDateKey(cell.dateKey)} style={styles.calendarCompactCell}><Text style={[styles.calendarCompactDate, index % 7 === 0 ? styles.calendarSunday : null, selected ? styles.calendarSelectedDate : null]}>{cell.day || ""}</Text>{daySchedules.length > 0 ? <View style={styles.calendarEventDot} /> : null}</Pressable>;
+                })}</View>
+                <View style={styles.selectedDayHeader}><Text style={styles.selectedDayTitle}>{calendarScreen.selectedDateKey ? `${Number(calendarScreen.selectedDateKey.slice(5, 7))}월 ${Number(calendarScreen.selectedDateKey.slice(8, 10))}일` : "선택일"}</Text><Text style={styles.selectedDayCount}>전체 {calendarScreen.selectedSchedules.length}건</Text></View>
+                <View accessibilityLabel="선택일 일정 목록" style={styles.selectedScheduleList}>
+                  {calendarScreen.selectedSchedules.map((item, index) => <View key={item.id} style={[styles.selectedScheduleRow, index === calendarScreen.selectedSchedules.length - 1 ? styles.selectedScheduleAlert : null]}><Text style={styles.selectedScheduleTime}>{formatStamp(item.starts_at).slice(-5)}</Text><View style={styles.selectedScheduleBody}><Text style={styles.selectedScheduleTitle}>{item.title}</Text><Text style={styles.selectedScheduleMeta}>{item.ends_at ? `${formatStamp(item.starts_at).slice(-5)} - ${formatStamp(item.ends_at).slice(-5)}` : formatStamp(item.starts_at)}{item.location ? ` · ${item.location}` : ""}</Text></View></View>)}
+                  {calendarScreen.selectedSchedules.length === 0 ? <Text style={styles.calendarEmpty}>선택한 날짜에 일정이 없습니다.</Text> : null}
+                </View>
+                {scheduleFormOpen ? <View style={styles.scheduleComposeCard}>
+                  <TextInput accessibilityLabel="일정 제목" accessibilityHint="생성할 일정의 제목을 입력합니다." style={styles.compactInput} value={scheduleForm.title} onChangeText={(title) => setScheduleForm((current) => ({ ...current, title }))} placeholder="일정 제목" />
+                  <TextInput accessibilityLabel="일정 시작 시간" accessibilityHint="일정 시작 시각을 날짜와 시간 형식으로 입력합니다." style={styles.compactInput} value={scheduleForm.startsAt} onChangeText={(startsAt) => setScheduleForm((current) => ({ ...current, startsAt }))} placeholder="2026-08-24T09:00:00+09:00" />
+                  <TextInput accessibilityLabel="일정 종료 시간" accessibilityHint="일정 종료 시각을 날짜와 시간 형식으로 입력합니다." style={styles.compactInput} value={scheduleForm.endsAt} onChangeText={(endsAt) => setScheduleForm((current) => ({ ...current, endsAt }))} placeholder="2026-08-24T10:00:00+09:00" />
+                  <Pressable accessibilityRole="button" accessibilityLabel="일정 생성" disabled={scheduleSaving} onPress={() => { void createSchedule(); }} style={[styles.composeSendButton, scheduleSaving ? styles.buttonDisabled : null]}><Text style={styles.composeSendButtonText}>{scheduleSaving ? "저장 중" : "일정 저장"}</Text></Pressable>
+                </View> : null}
+                <Pressable accessibilityRole="button" accessibilityLabel={scheduleFormOpen ? "일정 만들기 닫기" : "일정 만들기"} onPress={() => setScheduleFormOpen((current) => !current)} style={styles.calendarCreateButton}><Text style={styles.calendarCreateText}>{scheduleFormOpen ? "닫기" : "＋ 일정 만들기"}</Text></Pressable>
                 {scheduleError ? <Text accessibilityRole="alert" accessibilityLabel="일정 요청을 처리하지 못했습니다." style={styles.error}>{scheduleError}</Text> : null}
               </View>
             ) : null}
@@ -3089,6 +3122,58 @@ const styles = StyleSheet.create({
     maxWidth: "100%",
   },
   directoryError: { color: "#9f1239", marginTop: 8, fontSize: 12 },
+  calendarScreen: {
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#dce5ec",
+    padding: 14,
+  },
+  calendarToolbar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    minHeight: 38,
+  },
+  calendarArrow: {
+    width: 28,
+    color: "#334155",
+    fontSize: 22,
+    textAlign: "center",
+  },
+  calendarMonthTitle: {
+    flex: 1,
+    color: "#0f172a",
+    fontSize: 14,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  calendarTodayButton: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  calendarTodayText: {
+    color: "#475569",
+    fontSize: 9,
+    fontWeight: "700",
+  },
+  calendarWeekdays: {
+    marginTop: 8,
+    flexDirection: "row",
+  },
+  calendarWeekday: {
+    width: "14.285%",
+    color: "#475569",
+    fontSize: 9,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  calendarSunday: {
+    color: "#ef4444",
+  },
   calendarHeader: {
     marginTop: 14,
     flexDirection: "row",
@@ -3101,10 +3186,116 @@ const styles = StyleSheet.create({
     color: "#0f172a",
   },
   calendarGrid: {
-    marginTop: 14,
+    marginTop: 4,
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 6,
+  },
+  calendarCompactCell: {
+    width: "14.285%",
+    minHeight: 36,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  calendarCompactDate: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    color: "#334155",
+    fontSize: 10,
+    lineHeight: 24,
+    textAlign: "center",
+  },
+  calendarSelectedDate: {
+    backgroundColor: "#0f9f9a",
+    color: "#ffffff",
+    fontWeight: "800",
+  },
+  calendarEventDot: {
+    marginTop: 2,
+    width: 3,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: "#0f9f9a",
+  },
+  selectedDayHeader: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#e2e8f0",
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  selectedDayTitle: {
+    color: "#0f172a",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  selectedDayCount: {
+    color: "#64748b",
+    fontSize: 9,
+  },
+  selectedScheduleList: {
+    marginTop: 7,
+  },
+  selectedScheduleRow: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    borderLeftWidth: 2,
+    borderLeftColor: "#0f9f9a",
+    borderBottomWidth: 1,
+    borderBottomColor: "#eef2f7",
+    paddingVertical: 7,
+    paddingHorizontal: 9,
+  },
+  selectedScheduleAlert: {
+    borderLeftColor: "#ef4444",
+  },
+  selectedScheduleTime: {
+    width: 46,
+    color: "#0f172a",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  selectedScheduleBody: {
+    flex: 1,
+  },
+  selectedScheduleTitle: {
+    color: "#334155",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  selectedScheduleMeta: {
+    marginTop: 3,
+    color: "#64748b",
+    fontSize: 8,
+  },
+  calendarEmpty: {
+    color: "#94a3b8",
+    fontSize: 10,
+    paddingVertical: 16,
+    textAlign: "center",
+  },
+  scheduleComposeCard: {
+    marginTop: 10,
+    borderRadius: 12,
+    padding: 10,
+    backgroundColor: "#f8fafc",
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+  },
+  calendarCreateButton: {
+    marginTop: 12,
+    alignSelf: "flex-end",
+    borderRadius: 999,
+    backgroundColor: "#0f9f9a",
+    paddingHorizontal: 15,
+    paddingVertical: 9,
+  },
+  calendarCreateText: {
+    color: "#ffffff",
+    fontSize: 10,
+    fontWeight: "800",
   },
   calendarDay: {
     width: "13.5%",

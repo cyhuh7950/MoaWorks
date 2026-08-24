@@ -72,3 +72,17 @@ test("결재 view model은 상태 탭과 선택 문서를 일관되게 만든다
   assert.deepEqual(view.rows.map(({ id }) => id), ["d2"]);
   assert.equal(view.selected.id, "d2");
 });
+
+test("일정 view model은 7개 요일과 선택일 일정만 반환한다", () => {
+  const { calendarViewModel } = loadDesign();
+  const view = calendarViewModel({
+    cells: Array.from({ length: 35 }, (_, index) => ({ dateKey: `2026-08-${String(index + 1).padStart(2, "0")}`, day: index + 1 })),
+    schedules: [{ id: "s1", title: "회의", starts_at: "2026-08-24T10:00:00+09:00" }],
+    selectedDateKey: "2026-08-24",
+    timezone: "Asia/Seoul",
+  });
+
+  assert.deepEqual(view.weekdayLabels, ["일", "월", "화", "수", "목", "금", "토"]);
+  assert.equal(view.columns, 7);
+  assert.deepEqual(view.selectedSchedules.map(({ id }) => id), ["s1"]);
+});
