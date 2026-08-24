@@ -70,3 +70,12 @@
 - GREEN: focused auth+schedule 17/17 PASS, 전체 `npm test` 69/69 PASS.
 - bundle: 권한 상승 `npm run bundle` 성공, `BUNDLE_SHA256=e5c37ffe7f3f3583c25d21da9bbb3329c8d5d83f1a0ce08f4819aa443647fc71`.
 - Android build/evidence는 지시대로 재실행하지 않았다. 실제 운영 API 호출·데이터 생성·배포도 수행하지 않았다.
+
+## 어울1 최종 APK 재검증
+
+- HEAD `9110ad5`에서 focused 17/17, 전체 모바일 69/69, production bundle을 새로 실행했다.
+- bundle SHA256은 `e5c37ffe7f3f3583c25d21da9bbb3329c8d5d83f1a0ce08f4819aa443647fc71`이다.
+- Android release는 `BUILD SUCCESSFUL in 24s`, 64 actionable tasks(9 executed, 55 up-to-date)로 완료됐다.
+- 최종 APK는 59,173,808 bytes, SHA256 `FD3DBF88B96BCB9783AC0AC67091BB61E2E9F3AA9BFC5300BEA732A1F8967D7E`이다.
+- emulator-5554 streamed install `Success`, `com.moaworks.mobile/.MainActivity` cold launch 후 로그인 화면 PNG와 접근성 XML을 최신화했다.
+- 실제 운영 계정 기반 일정 조회·생성은 계속 미검증이며 운영 데이터는 생성하지 않았다.
