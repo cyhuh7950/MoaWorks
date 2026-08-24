@@ -14,9 +14,10 @@
 - 변경 결과: 네 화면 제목에 `header`, 입력·버튼·결과·navigation에 고정 name/hint, 월·빈 결과·AI 연결·검색 결과/설정 상태에 `polite`, 요청/부분 오류에 `alert`와 고정 안전 접근성 이름을 추가했다. 서버 원문 오류의 visible text는 유지하고 접근성 이름만 안전 문구로 덮었다.
 - 비밀 보호: API-key 입력은 고정 label/hint와 `secureTextEntry`를 유지한다. AST 계약은 모든 `accessibility*` 속성의 `llmApiKey`, `apiKeyDraft`, `password`, `token` 참조를 차단하고 동적 name root를 승인 목록으로 제한한다.
 - 동작 불변: API path, request body, session adapter, state reset, search activation, schedule/directory/AI request handler와 visible data logic은 수정하지 않았다. 관련 focused 38/38과 전체 100/100이 통과했다.
-- 수정 파일: 아래 최종 actual diff 9개와 result/progress의 `modifiedFiles`가 일치한다.
+- 수정 파일: `16afcca..HEAD` 누적 actual diff 10개와 result/progress의 `modifiedFiles`가 일치한다.
   - `docs/superpowers/plans/2026-08-24-mobile-task6-accessibility-plan.md`
   - `docs/workorders/f13-mobile-task6-accessibility-2026-08-24.md`
+  - `docs/workorders/f13-mobile-task6-accessibility-worker-prompt-2026-08-24.md`
   - `frontend/mobile-app/App.tsx`
   - `frontend/mobile-app/test/mobile-f13-accessibility-contract.test.js`
   - `frontend/mobile-app/test/mobile-f13-directory-api-contract.test.js`
@@ -32,8 +33,8 @@
 - emulator: `emulator-5554` online, `adb install -r` Success, `LaunchState: COLD`, `Status: ok`, `TotalTime: 1817ms`.
 - 접근성 tree: UIAutomator dump PASS. 비인증 로그인 화면에서 package `com.moaworks.mobile`, 아이디/이메일·비밀번호 content-desc, password=true, 로그인 button content-desc를 확인했다.
 - 독립 리뷰: 최초 Critical 0 / Important 5 / Minor 1. 최소 보완 뒤 재리뷰 Critical 0 / Important 0 / Minor 0.
-- 오류 횟수: 5. `rg.exe` ACL 거부 1회는 PowerShell 조회로 대체했고, 초기 calendar AST selector 오류 1회는 JSX consequent 제한으로 교정했다. 기존 directory exact-label 계약 실패 1회는 target+action 새 계약으로 갱신했고, bundle sandbox `EPERM` 1회는 승인된 재실행으로 복구했다. 최초 parity 진단의 untracked 디렉터리 축약 가정 오류 1회는 `--untracked-files=all`로 보정해 actual/result/stage/mobile 9/9 일치를 확인했다.
-- 동일 근본 원인 반복: 0회. 3회 중단 기준에 도달하지 않았다.
+- 오류 횟수: 6. `rg.exe` ACL 거부 1회는 PowerShell 조회로 대체했고, 초기 calendar AST selector 오류 1회는 JSX consequent 제한으로 교정했다. 기존 directory exact-label 계약 실패 1회는 target+action 새 계약으로 갱신했고, bundle sandbox `EPERM` 1회는 승인된 재실행으로 복구했다. 최초 parity 진단의 untracked 디렉터리 축약 가정 오류 1회는 `--untracked-files=all`로 보정했다. 이후 worktree status 9개만 누적 diff로 간주한 기준점 오류 1회는 메인 독립 검수에서 확인해 `git diff --name-only 16afcca..HEAD` 기준 actual/result/stage/mobile 10/10으로 정정했다.
+- 동일 근본 원인 반복: parity 진단 기준 오류 2회. 3회 중단 기준에는 도달하지 않았다.
 - 문서 정리: 메인 확인에서 지적된 plan/workorder EOF 불필요 빈 줄 각 1개만 제거했다. 요구 내용은 변경하지 않았다.
 
 ## 실제 화면 및 기능 확인
