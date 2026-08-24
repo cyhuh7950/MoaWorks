@@ -645,7 +645,7 @@ export default function App() {
     }
   }
 
-  function openDirectoryMail(email: string) { const url = mailtoUrl(email); if (url) void Linking.openURL(url); }
+  function openDirectoryMail(email: string) { const url = mailtoUrl(email); if (url) void Linking.openURL(url).catch(() => setDirectoryError("메일 앱을 열 수 없습니다.")); }
 
   async function createSchedule() {
     if (!scheduleSubmissionGateRef.current.tryEnter()) return;
@@ -732,6 +732,10 @@ export default function App() {
   function handleTabPress(nextTab: MobileTab) {
     setActiveTab(nextTab);
     if (!token) return;
+    if (nextTab === "more" && moreScreen === "directory") {
+      void loadDirectory(token);
+      return;
+    }
     if (nextTab === "mail") {
       void loadMail(token);
       return;
@@ -1050,8 +1054,8 @@ export default function App() {
                 <Text style={styles.surfaceKicker}>주소록</Text>
                 <Text style={styles.surfaceTitle}>사원 정보 검색</Text>
                 <TextInput accessibilityLabel="주소록 검색" style={styles.input} value={directoryQuery} onChangeText={setDirectoryQuery} placeholder="이름, 부서, 역할, 이메일 검색" />
-                {visibleDirectoryUsers.map((member) => <View key={member.id} style={styles.directoryCard}><View style={styles.avatar}><Text style={styles.avatarText}>{member.name.slice(0, 1)}</Text></View><View style={styles.directoryInfo}><Text style={styles.listTitle}>{member.name}</Text><Text style={styles.listBody}>{member.department_name} · {member.role_name}</Text><Text style={styles.listBody}>{member.email}</Text></View><View style={styles.buttonPair}><Button title="메일" accessibilityLabel={`${member.name} 메일`} onPress={() => openDirectoryMail(member.email)} disabled={!mailtoUrl(member.email)} /><Button title="전화" accessibilityLabel="전화번호 미제공" onPress={() => {}} disabled={true} /><Button title={directoryBusyUserId === member.id ? "생성 중" : "대화"} accessibilityLabel={`${member.name} 대화 시작`} onPress={() => void startDirectRoom(member)} disabled={directoryBusyUserId === member.id} /></View></View>)}
-                {directoryError ? <Text style={styles.errorText}>{directoryError}</Text> : null}
+                {visibleDirectoryUsers.map((member) => { const isSelf = member.id === me?.userId; return <View key={member.id} style={styles.directoryCard}><View style={styles.avatar}><Text style={styles.avatarText}>{member.name.slice(0, 1)}</Text></View><View style={styles.directoryInfo}><Text style={styles.listTitle}>{member.name}</Text><Text style={styles.listBody}>{member.department_name} · {member.role_name}</Text><Text style={styles.listBody}>{member.email}</Text></View><View style={styles.directoryActions}><Button title="메일" accessibilityLabel={`${member.name} 메일`} onPress={() => openDirectoryMail(member.email)} disabled={!mailtoUrl(member.email)} /><Button title="전화" accessibilityLabel="전화번호 미제공" onPress={() => {}} disabled={true} /><Button title={isSelf ? "나" : directoryBusyUserId === member.id ? "생성 중" : "대화"} accessibilityLabel={`${member.name} 대화 시작`} onPress={() => void startDirectRoom(member)} disabled={isSelf || directoryBusyUserId === member.id} /></View></View>; })}
+                {directoryError ? <Text style={styles.directoryError}>{directoryError}</Text> : null}
                 {visibleDirectoryUsers.length === 0 && !directoryError ? <Text style={styles.emptyState}>표시할 주소록 정보가 없습니다.</Text> : null}
               </View>
             ) : null}
@@ -2069,7 +2073,7 @@ const styles = StyleSheet.create({
   directoryCard: {
     marginTop: 12,
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     gap: 12,
     padding: 14,
     borderRadius: 18,
@@ -2094,6 +2098,13 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 4,
   },
+  directoryActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 4,
+    maxWidth: "100%",
+  },
+  directoryError: { color: "#9f1239", marginTop: 8, fontSize: 12 },
   calendarHeader: {
     marginTop: 14,
     flexDirection: "row",

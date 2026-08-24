@@ -48,3 +48,13 @@ test("App은 directory API/reset/메일/비활성 전화/direct room production 
   assert.match(appSource, /directRoomPayload\(member\)/);
   assert.match(appSource, /if \(!directoryActionGateRef\.current\.tryEnter\(member\.id\)\) return;/);
 });
+
+test("App은 더보기 기본 주소록 진입에서 재조회하고 본인 direct/메일 실패/좁은 행을 안전하게 처리한다", () => {
+  assert.match(appSource, /if \(nextTab === "more" && moreScreen === "directory"\) \{\s*void loadDirectory\(token\);/);
+  assert.match(appSource, /const isSelf = member\.id === me\?\.userId;/);
+  assert.match(appSource, /disabled=\{isSelf \|\| directoryBusyUserId === member\.id\}/);
+  assert.match(appSource, /Linking\.openURL\(url\)\.catch\(\(\) => setDirectoryError\(/);
+  assert.doesNotMatch(appSource, /styles\.errorText/);
+  assert.match(appSource, /style=\{styles\.directoryActions\}/);
+  assert.match(appSource, /directoryActions:\s*\{[\s\S]*?flexWrap: "wrap"/);
+});
