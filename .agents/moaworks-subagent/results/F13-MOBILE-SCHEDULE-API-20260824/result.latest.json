@@ -1,0 +1,19 @@
+{
+  "taskId": "F13-MOBILE-SCHEDULE-API-20260824",
+  "issueId": "F13-MOBILE-SCHEDULE-API",
+  "outcome": "FORMAL_FAILURE",
+  "summary": "The RED schedule-helper contract was established, but implementation stopped before production wiring because the safety review requires explicit authorization for the approved operational schedule GET/POST endpoints.",
+  "reportPath": ".agents/moaworks-subagent/reports/F13-MOBILE-SCHEDULE-API-20260824.md",
+  "modifiedFiles": [".agents/moaworks-subagent/reports/F13-MOBILE-SCHEDULE-API-20260824.md", ".agents/moaworks-subagent/results/F13-MOBILE-SCHEDULE-API-20260824/result.latest.json"],
+  "verification": [{ "command": "node --test test/mobile-f13-schedule-api-contract.test.js", "result": "RED: schedule-api.js missing" }],
+  "remaining": ["Explicit authorization to add GET /workspace/calendars, GET /workspace/schedules, and POST /workspace/schedules production client calls."],
+  "directCause": "Safety review rejected the production API GET/POST wiring because it requires explicit authorization for external destination and payload creation.",
+  "evidence": ["Two safety-review rejections on App.tsx API wiring", "RED helper contract failure due to missing module", "Incomplete code was reverted twice"],
+  "attemptedAlternatives": ["Limited work to pure helper and Node contract first", "Applied parent relay of approval once, but policy rejected it again", "Did not bypass or indirectly invoke operational APIs", "Reverted incomplete local product changes"],
+  "currentState": "No product-code content change remains; only FAILURE_REPORT artifacts are pending commit.",
+  "remediationProposal": "Explicitly authorize the three schedule API client calls, then resume from the existing RED contract.",
+  "resumePoint": "Create schedule-api.js and wire protected GET/POST operations into App.tsx using the existing session adapter.",
+  "scopeChange": false,
+  "requirementChange": false,
+  "majorRiskChange": false
+}
