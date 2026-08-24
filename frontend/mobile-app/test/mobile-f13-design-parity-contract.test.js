@@ -57,3 +57,18 @@ test("홈 view model은 사용자와 핵심 업무를 목업 순서로 만든다
   assert.deepEqual(view.todaySchedules.map(({ id }) => id), ["s1"]);
   assert.deepEqual(view.recentRooms.map(({ roomId }) => roomId), ["r1"]);
 });
+
+test("결재 view model은 상태 탭과 선택 문서를 일관되게 만든다", () => {
+  const { approvalViewModel } = loadDesign();
+  const documents = [
+    { id: "d1", status: "draft", title: "초안" },
+    { id: "d2", status: "submitted", title: "진행" },
+    { id: "d3", status: "approved", title: "완료" },
+  ];
+
+  const view = approvalViewModel({ documents, view: "progress", selectedId: "missing" });
+
+  assert.deepEqual(view.tabs, ["초안", "진행 중", "완료"]);
+  assert.deepEqual(view.rows.map(({ id }) => id), ["d2"]);
+  assert.equal(view.selected.id, "d2");
+});

@@ -38,7 +38,24 @@ function buildHomeViewModel({ userName = "", mailItems = [], documents = [], tod
   };
 }
 
+function approvalViewModel({ documents = [], view = "progress", selectedId = "" } = {}) {
+  const statusGroups = {
+    draft: new Set(["draft"]),
+    progress: new Set(["submitted"]),
+    complete: new Set(["approved", "rejected", "withdrawn"]),
+  };
+  const activeStatuses = statusGroups[view] || statusGroups.progress;
+  const rows = documents.filter((document) => activeStatuses.has(document.status));
+  const selected = rows.find((document) => document.id === selectedId) || rows[0] || null;
+  return {
+    tabs: ["초안", "진행 중", "완료"],
+    rows,
+    selected,
+  };
+}
+
 module.exports = {
+  approvalViewModel,
   buildHomeViewModel,
   calendarLayoutModel,
   navigationModel,

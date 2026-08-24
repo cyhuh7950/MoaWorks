@@ -6,7 +6,7 @@ import { createDirectoryActionGate, directoryUsers as readDirectoryUsers, direct
 import { buildPersonalAiChatPayload, buildPersonalAiConfigPayload, createPersonalAiActionGate, personalAiErrorMessage, readPersonalAiChatResponse, readPersonalAiConfig, readPersonalAiConnectionTest, readPersonalAiProviders } from "./personal-ai-api";
 import { normalizeBusinessSearchText, searchLoadedBusinessSummaries, updateBusinessSearchWarnings } from "./business-search";
 
-const { buildHomeViewModel, navigationModel } = require("./mobile-ui-design.js");
+const { approvalViewModel, buildHomeViewModel, navigationModel } = require("./mobile-ui-design.js");
 const { buildMailSendPayload, mailboxRequestPath, mailboxViewModel } = require("./mail-compose.js");
 const mobileNavigation = navigationModel();
 
@@ -150,6 +150,7 @@ type AppLocale = "ko-KR" | "en-US" | "ja-JP" | "zh-CN" | "es-ES" | "fr-FR" | "de
 type MobileTab = "home" | "mail" | "approval" | "chat" | "calendar" | "more" | "files";
 type ScreenKey = MobileTab | "directory" | "ai" | "search" | "settings";
 type MailboxTab = "inbox" | "starred" | "sent" | "drafts";
+type ApprovalView = "draft" | "progress" | "complete";
 type PersonalAiProviderOption = { provider: string; label: string; apiKeyRequired: boolean };
 type PersonalAiConnectionStatus = "unconfigured" | "untested" | "ready" | "error";
 type PersonalAiConfig = { provider: string; model: string; apiKeyConfigured: boolean; connectionStatus: PersonalAiConnectionStatus; lastTestCode: string | null; lastTestedAt: string | null };
@@ -340,6 +341,9 @@ export default function App() {
       setBusinessSearchQuery("");
       setBusinessSearchSelectedResultId("");
       setBusinessSearchWarnings([]);
+      setApprovalView("progress");
+      setSelectedApprovalId("");
+      setApprovalComposeOpen(false);
       setMailboxTab("inbox");
       setMailComposeOpen(false);
       setMailComposeForm({ to: "", subject: "", bodyText: "" });
@@ -352,6 +356,9 @@ export default function App() {
       setPassword(nextState.password);
       setDocuments(nextState.documents);
       setCreateForm(nextState.createForm);
+      setApprovalView("progress");
+      setSelectedApprovalId("");
+      setApprovalComposeOpen(false);
       setNotifications(nextState.notifications);
       setNotificationSummary(nextState.notificationSummary);
       setNotificationError(nextState.notificationError);
@@ -1222,6 +1229,11 @@ export default function App() {
     todaySchedules: schedules.filter((item) => dateKey(item.starts_at, timezone) === todayKey),
     rooms,
   });
+  const approvalScreen = approvalViewModel({ documents, view: approvalView, selectedId: selectedApprovalId }) as { tabs: string[]; rows: Approval[]; selected: Approval | null };
+  const selectedApproval = approvalScreen.selected;
+  const [approvalView, setApprovalView] = useState<ApprovalView>("progress");
+  const [selectedApprovalId, setSelectedApprovalId] = useState("");
+  const [approvalComposeOpen, setApprovalComposeOpen] = useState(false);
   const activeTabLabel = activeTab === "home" ? "홈" : activeTab === "mail" ? "메일" : activeTab === "approval" ? "결재" : activeTab === "chat" ? "메신저" : activeTab === "calendar" ? "일정" : activeTab === "files" ? "파일" : "더보기";
 
   return (
@@ -1546,25 +1558,53 @@ export default function App() {
             ) : null}
 
             {activeTab === "approval" ? (
-              <View style={styles.surfaceCard}>
-                <Text style={styles.surfaceKicker}>결재</Text>
-                <Text style={styles.surfaceTitle}>긴급 승인 / 대기 문서 / 최근 처리</Text>
-                <View style={styles.quickGrid}>
-                  {recentApprovalActions.map((item, index) => (
-                    <View key={item} style={[styles.quickCard, index === 0 ? styles.quickDanger : styles.quickInk]}>
-                      <Text style={styles.quickCardTitle}>{item}</Text>
-                      <Text style={styles.quickCardNote}>모바일에서 바로 실행할 수 있는 1차 처리 흐름</Text>
-                    </View>
+              <View style={styles.approvalScreen}>
+                <View style={styles.moduleToolbar}>
+                  <View><Text style={styles.moduleKicker}>APPROVAL</Text><Text accessibilityRole="header" style={styles.moduleTitle}>결재</Text></View>
+                  {can("approval:create") ? <Text accessibilityRole="button" accessibilityLabel="결재 초안 작성" onPress={() => setApprovalComposeOpen((current) => !current)} style={styles.approvalCreateAction}>{approvalComposeOpen ? "닫기" : "＋ 기안"}</Text> : null}
+                </View>
+                <View accessibilityLabel="결재 상태" style={styles.approvalTabs}>
+                  {(["draft", "progress", "complete"] as ApprovalView[]).map((view, index) => (
+                    <Pressable key={view} accessibilityRole="button" accessibilityLabel={`${approvalScreen.tabs[index]} 결재 보기`} onPress={() => { setApprovalView(view); setSelectedApprovalId(""); }} style={[styles.approvalTab, approvalView === view ? styles.approvalTabActive : null]}>
+                      <Text style={[styles.approvalTabText, approvalView === view ? styles.approvalTabTextActive : null]}>{approvalScreen.tabs[index]}{view === "progress" ? ` ${approvalScreen.rows.length}` : ""}</Text>
+                    </Pressable>
                   ))}
                 </View>
-                {urgentApprovals.length === 0 ? <Text style={styles.emptyState}>승인 대기 문서가 없습니다.</Text> : null}
-                {urgentApprovals.map((doc) => (
-                  <View key={doc.id} style={styles.listCard}>
-                    <Text style={styles.listKicker}>{doc.status}</Text>
-                    <Text style={styles.listTitle}>{doc.title}</Text>
-                    <Text style={styles.listBody}>긴급 문서는 모바일에서 즉시 승인/반려/회수 흐름으로 이동합니다.</Text>
+                {approvalComposeOpen ? (
+                  <View style={styles.approvalComposeCard}>
+                    <TextInput accessibilityLabel="결재 제목" style={styles.compactInput} value={createForm.title} onChangeText={(title) => setCreateForm((current) => ({ ...current, title }))} placeholder="제목" />
+                    <TextInput accessibilityLabel="결재 내용" style={[styles.compactInput, styles.composeBody]} value={createForm.content} onChangeText={(content) => setCreateForm((current) => ({ ...current, content }))} placeholder="내용" multiline textAlignVertical="top" />
+                    <TextInput accessibilityLabel="결재자 사용자 아이디" style={styles.compactInput} value={createForm.approverUserIds} onChangeText={(approverUserIds) => setCreateForm((current) => ({ ...current, approverUserIds }))} placeholder="결재자 사용자ID (콤마 구분)" autoCapitalize="none" />
+                    <Pressable accessibilityRole="button" accessibilityLabel="결재 초안 저장" onPress={() => { void createApprovalDocument(); }} style={styles.composeSendButton}><Text style={styles.composeSendButtonText}>초안 저장</Text></Pressable>
                   </View>
-                ))}
+                ) : null}
+                {approvalScreen.rows.length > 1 ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.approvalDocumentStrip}>
+                  {approvalScreen.rows.map((doc) => <Pressable key={doc.id} accessibilityRole="button" accessibilityLabel={`${doc.title} 결재 선택`} onPress={() => setSelectedApprovalId(doc.id)} style={[styles.approvalDocumentChip, selectedApproval?.id === doc.id ? styles.approvalDocumentChipActive : null]}><Text numberOfLines={1} style={styles.approvalDocumentChipText}>{doc.title}</Text></Pressable>)}
+                </ScrollView> : null}
+                {!selectedApproval ? <Text style={styles.emptyState}>해당 상태의 결재 문서가 없습니다.</Text> : (
+                  <View style={styles.approvalDetailCard}>
+                    <Text style={styles.approvalSectionLabel}>기안 문서</Text>
+                    <Text style={styles.approvalDetailTitle}>{selectedApproval.title}</Text>
+                    <View style={styles.approvalMetaGrid}>
+                      <Text style={styles.approvalMetaLabel}>기안자</Text><Text style={styles.approvalMetaValue}>{selectedApproval.creatorUserName}</Text>
+                      <Text style={styles.approvalMetaLabel}>상태</Text><Text style={styles.approvalMetaValue}>{selectedApproval.status}</Text>
+                    </View>
+                    <View style={styles.approvalDivider} />
+                    <Text style={styles.approvalSectionLabel}>상세 내용</Text>
+                    <Text style={styles.approvalDetailBody}>{selectedApproval.content || "내용이 없습니다."}</Text>
+                    <View style={styles.approvalDivider} />
+                    <Text style={styles.approvalSectionLabel}>결재선</Text>
+                    {(selectedApproval.lines ?? []).map((line, index) => <View key={`${line.sequence}-${line.approverUserId}`} style={styles.approvalLine}><Text style={styles.approvalLineStep}>{index + 1}</Text><Text style={styles.approvalLineName}>{line.approverUserName}</Text><Text style={styles.approvalLineStatus}>{line.status}</Text></View>)}
+                    {(selectedApproval.lines ?? []).length === 0 ? <Text style={styles.approvalDetailMeta}>등록된 결재선이 없습니다.</Text> : null}
+                    {selectedApproval.status === "submitted" && can("approval:act") && currentApprover(selectedApproval)?.approverUserId === me?.userId ? <TextInput accessibilityLabel="결재 처리 사유" style={styles.compactInput} value={actionReason} onChangeText={setActionReason} placeholder="처리 사유" /> : null}
+                    <View style={styles.approvalActions}>
+                      {selectedApproval.status === "draft" && selectedApproval.creatorUserId === me?.userId && can("approval:submit") ? <Pressable accessibilityRole="button" accessibilityLabel="결재 상신" onPress={() => { void action(selectedApproval.id, "submit"); }} style={styles.approvalPrimaryAction}><Text style={styles.approvalPrimaryActionText}>상신</Text></Pressable> : null}
+                      {selectedApproval.status === "submitted" && selectedApproval.creatorUserId === me?.userId && can("approval:withdraw") ? <Pressable accessibilityRole="button" accessibilityLabel="결재 회수" onPress={() => { void action(selectedApproval.id, "withdraw"); }} style={styles.approvalRejectAction}><Text style={styles.approvalRejectActionText}>회수</Text></Pressable> : null}
+                      {selectedApproval.status === "rejected" && selectedApproval.creatorUserId === me?.userId && can("approval:rework") ? <Pressable accessibilityRole="button" accessibilityLabel="결재 재기안" onPress={() => { void action(selectedApproval.id, "redraft"); }} style={styles.approvalPrimaryAction}><Text style={styles.approvalPrimaryActionText}>재기안</Text></Pressable> : null}
+                      {selectedApproval.status === "submitted" && can("approval:act") && currentApprover(selectedApproval)?.approverUserId === me?.userId ? <><Pressable accessibilityRole="button" accessibilityLabel="결재 반려" onPress={() => { void actionWithReason(selectedApproval.id, "reject"); }} style={styles.approvalRejectAction}><Text style={styles.approvalRejectActionText}>반려</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel="결재 승인" onPress={() => { void actionWithReason(selectedApproval.id, "approve"); }} style={styles.approvalPrimaryAction}><Text style={styles.approvalPrimaryActionText}>승인</Text></Pressable></> : null}
+                    </View>
+                  </View>
+                )}
               </View>
             ) : null}
 
@@ -1704,85 +1744,6 @@ export default function App() {
               </View>
             </View>
 
-            {can("approval:create") ? (
-              <View style={styles.surfaceCard}>
-                <Text style={styles.surfaceKicker}>결재 작성</Text>
-                <Text style={styles.surfaceTitle}>모바일 빠른 상신</Text>
-                <Text style={styles.sectionLabel}>제목</Text>
-                <TextInput
-                  style={styles.input}
-                  value={createForm.title}
-                  onChangeText={(value) => setCreateForm((current) => ({ ...current, title: value }))}
-                />
-                <Text style={styles.sectionLabel}>내용</Text>
-                <TextInput
-                  style={[styles.input, styles.textarea]}
-                  value={createForm.content}
-                  onChangeText={(value) => setCreateForm((current) => ({ ...current, content: value }))}
-                  multiline
-                />
-                <Text style={styles.sectionLabel}>결재자 사용자ID (콤마 구분)</Text>
-                <TextInput
-                  style={styles.input}
-                  value={createForm.approverUserIds}
-                  onChangeText={(value) => setCreateForm((current) => ({ ...current, approverUserIds: value }))}
-                  autoCapitalize="none"
-                />
-                <View style={styles.buttonBlock}>
-                  <Button title="결재 초안 저장" onPress={() => { void createApprovalDocument(); }} />
-                </View>
-              </View>
-            ) : null}
-
-            <View style={styles.surfaceCard}>
-              <Text style={styles.surfaceKicker}>결재 목록</Text>
-              <Text style={styles.surfaceTitle}>상태별 문서 보기</Text>
-              {documents.map((doc) => {
-                const currentLine = currentApprover(doc);
-                return (
-                  <View key={doc.id} style={styles.listCard}>
-                    <View style={styles.listHeader}>
-                      <View>
-                        <Text style={styles.listKicker}>{doc.status}</Text>
-                        <Text style={styles.listTitle}>{doc.title}</Text>
-                      </View>
-                      <View style={[styles.statusPill, styles.statusApproval]}>
-                        <Text style={[styles.statusPillText, styles.statusApprovalText]}>{doc.creatorUserName}</Text>
-                      </View>
-                    </View>
-                    <Text style={styles.listBody}>
-                      현재 결재선: {currentLine ? `${currentLine.approverUserName} / ${currentLine.status}` : "대기 없음"}
-                    </Text>
-                    {doc.status === "draft" && doc.creatorUserId === me?.userId && can("approval:submit") ? (
-                      <View style={styles.buttonBlock}>
-                        <Button title="상신" onPress={() => action(doc.id, "submit")} />
-                      </View>
-                    ) : null}
-                    {doc.status === "submitted" && doc.creatorUserId === me?.userId && can("approval:withdraw") ? (
-                      <View style={styles.buttonBlock}>
-                        <Button title="회수" onPress={() => action(doc.id, "withdraw")} />
-                      </View>
-                    ) : null}
-                    {doc.status === "rejected" && doc.creatorUserId === me?.userId && can("approval:rework") ? (
-                      <View style={styles.buttonBlock}>
-                        <Button title="재기안" onPress={() => action(doc.id, "redraft")} />
-                      </View>
-                    ) : null}
-                    {doc.status === "submitted" && can("approval:act") && currentApprover(doc)?.approverUserId === me?.userId ? (
-                      <>
-                        <Text style={styles.sectionLabel}>처리 사유</Text>
-                        <TextInput style={styles.input} value={actionReason} onChangeText={setActionReason} />
-                        <View style={styles.buttonPair}>
-                          <View style={styles.buttonHalf}><Button title="승인" onPress={() => actionWithReason(doc.id, "approve")} /></View>
-                          <View style={styles.buttonHalf}><Button title="반려" color="#9f1239" onPress={() => actionWithReason(doc.id, "reject")} /></View>
-                        </View>
-                      </>
-                    ) : null}
-                  </View>
-                );
-              })}
-              {documents.length === 0 ? <Text style={styles.emptyState}>아직 문서가 없습니다.</Text> : null}
-            </View>
           </>
         ) : null}
       </ScrollView>
@@ -2611,6 +2572,181 @@ const styles = StyleSheet.create({
     marginTop: 10,
     color: "#94a3b8",
     fontSize: 9,
+  },
+  approvalScreen: {
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#dce5ec",
+    padding: 14,
+  },
+  approvalCreateAction: {
+    color: "#0f766e",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  approvalTabs: {
+    marginTop: 12,
+    flexDirection: "row",
+    borderBottomWidth: 1,
+    borderBottomColor: "#dbe4ec",
+  },
+  approvalTab: {
+    flex: 1,
+    minHeight: 36,
+    alignItems: "center",
+    justifyContent: "center",
+    borderBottomWidth: 2,
+    borderBottomColor: "transparent",
+  },
+  approvalTabActive: {
+    borderBottomColor: "#0f766e",
+  },
+  approvalTabText: {
+    color: "#64748b",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  approvalTabTextActive: {
+    color: "#0f766e",
+    fontWeight: "800",
+  },
+  approvalComposeCard: {
+    marginTop: 10,
+    borderRadius: 12,
+    padding: 10,
+    backgroundColor: "#f8fafc",
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+  },
+  approvalDocumentStrip: {
+    gap: 6,
+    paddingTop: 10,
+  },
+  approvalDocumentChip: {
+    maxWidth: 150,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: "#f1f5f9",
+  },
+  approvalDocumentChipActive: {
+    backgroundColor: "#ccfbf1",
+  },
+  approvalDocumentChipText: {
+    color: "#334155",
+    fontSize: 9,
+    fontWeight: "700",
+  },
+  approvalDetailCard: {
+    marginTop: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#dbe4ec",
+    backgroundColor: "#ffffff",
+    padding: 12,
+  },
+  approvalSectionLabel: {
+    color: "#475569",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  approvalDetailTitle: {
+    marginTop: 7,
+    color: "#0f172a",
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  approvalMetaGrid: {
+    marginTop: 8,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    rowGap: 5,
+  },
+  approvalMetaLabel: {
+    width: "22%",
+    color: "#64748b",
+    fontSize: 9,
+  },
+  approvalMetaValue: {
+    width: "78%",
+    color: "#334155",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  approvalDivider: {
+    marginVertical: 10,
+    height: 1,
+    backgroundColor: "#e2e8f0",
+  },
+  approvalDetailBody: {
+    marginTop: 7,
+    color: "#334155",
+    fontSize: 11,
+    lineHeight: 17,
+  },
+  approvalDetailMeta: {
+    marginTop: 7,
+    color: "#64748b",
+    fontSize: 9,
+  },
+  approvalLine: {
+    marginTop: 7,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  approvalLineStep: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "#ccfbf1",
+    color: "#0f766e",
+    fontSize: 9,
+    fontWeight: "800",
+    textAlign: "center",
+    lineHeight: 18,
+  },
+  approvalLineName: {
+    flex: 1,
+    color: "#334155",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  approvalLineStatus: {
+    color: "#64748b",
+    fontSize: 9,
+  },
+  approvalActions: {
+    marginTop: 12,
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 8,
+  },
+  approvalRejectAction: {
+    minWidth: 86,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: "#ef4444",
+    paddingVertical: 9,
+    alignItems: "center",
+  },
+  approvalRejectActionText: {
+    color: "#dc2626",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  approvalPrimaryAction: {
+    minWidth: 86,
+    borderRadius: 9,
+    backgroundColor: "#0f9f9a",
+    paddingVertical: 9,
+    alignItems: "center",
+  },
+  approvalPrimaryActionText: {
+    color: "#ffffff",
+    fontSize: 11,
+    fontWeight: "800",
   },
   statusPill: {
     paddingHorizontal: 12,
