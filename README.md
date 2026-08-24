@@ -51,5 +51,6 @@ MoaWorks는 100인 이하 소기업을 위한 다국어 오픈소스 그룹웨�
 - [설치·운영·장애 대응 매뉴얼 v2.1](docs/moaworks-installation-operations-manual-v2.1-2026-08-05.md)
 - [F14 QA·설계 추적 대장](docs/reports/moaworks-f14-qa-traceability-2026-08-05.md)
 - [외부 메일 운영 완성 작업계획서](docs/MoaWorks_Mail_Operations_Completion_Work_Plan_v2.1_2026-08-04.md)
+- [기여 가이드](docs/CONTRIBUTING.md) · [보안 정책](docs/SECURITY.md) · [릴리스 절차](docs/release.md) · [롤백 절차](docs/rollback.md)
 
 과거 phase 문서는 당시 단계 증적으로 보존한다. 신규 설치는 위 v2.1 매뉴얼을 우선한다.
