@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, AppState, Button, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, AppState, Button, Linking, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { createMobileSessionAdapter, isSessionInvalidatedError, requestJson } from "./auth-session";
 import { buildMonthGrid, buildSchedulePayload, createSubmissionGate, filterSchedulesForMonth, monthKeyForDate, selectDefaultCalendar, scheduleErrorMessage, scheduleItems, shiftMonthKey, dateKey } from "./schedule-api";
+import { createDirectoryActionGate, directoryUsers as readDirectoryUsers, directRoomPayload, filterDirectoryUsers, mailtoUrl } from "./directory-api";
 
 type AuthUser = {
   userId: string;
@@ -126,6 +127,7 @@ type WorkspaceFile = {
   updated_at: string;
 };
 type WorkspaceCalendar = { id: string; name?: string; isDefault?: boolean };
+type DirectoryUser = { id: string; name: string; email: string; department_name: string; role_name: string };
 type WorkspaceSchedule = { id: string; title: string; starts_at: string; ends_at?: string; description?: string; location?: string };
 type ScheduleForm = { title: string; startsAt: string; endsAt: string; description: string; location: string };
 
@@ -144,7 +146,6 @@ function MoaIcon({ name, color = "#0f766e", size = 18 }: { name: IconName; color
 }
 
 const llmProviders: LlmProvider[] = ["CEREBRAS", "GROQ", "MISTRAL", "OPENAI", "UPSTAGE", "GEMINI", "OPENROUTER", "ANTHROPIC", "OLLAMA"];
-const directoryEntries: Array<{ name: string; team: string; role: string; email: string }> = [];
 
 const supportedLocales: AppLocale[] = ["ko-KR", "en-US", "ja-JP", "zh-CN", "es-ES", "fr-FR", "de-DE"];
 const supportedTimezones = ["Asia/Seoul", "Asia/Tokyo", "America/New_York", "America/Chicago", "Europe/Paris", "Europe/Berlin"];
@@ -257,7 +258,12 @@ export default function App() {
   const scheduleSubmissionGateRef = useRef(createSubmissionGate());
   const visibleSchedules = useMemo(() => filterSchedulesForMonth(schedules, scheduleMonthKey, timezone), [schedules, scheduleMonthKey, timezone]);
   const [moreScreen, setMoreScreen] = useState<Exclude<ScreenKey, MobileTab>>("directory");
+  const [directoryUsers, setDirectoryUsers] = useState<DirectoryUser[]>([]);
   const [directoryQuery, setDirectoryQuery] = useState("");
+  const [directoryError, setDirectoryError] = useState("");
+  const [directoryBusyUserId, setDirectoryBusyUserId] = useState("");
+  const directoryActionGateRef = useRef(createDirectoryActionGate());
+  const visibleDirectoryUsers = useMemo(() => filterDirectoryUsers(directoryUsers, directoryQuery), [directoryUsers, directoryQuery]);
   const [screenDensity, setScreenDensity] = useState<"standard" | "compact">("standard");
   const [llmProvider, setLlmProvider] = useState<LlmProvider>("GROQ");
   const [llmApiKey, setLlmApiKey] = useState("");
@@ -270,6 +276,8 @@ export default function App() {
       setMe(nextUser);
       scheduleSubmissionGateRef.current.reset();
       setScheduleSaving(false);
+      directoryActionGateRef.current.reset();
+      setDirectoryBusyUserId("");
     },
     onSessionReset(nextState) {
       setToken(nextState.token);
@@ -300,6 +308,11 @@ export default function App() {
       setScheduleForm(nextState.scheduleForm);
       scheduleSubmissionGateRef.current.reset();
       setScheduleSaving(false);
+      setDirectoryUsers(nextState.directoryUsers);
+      setDirectoryQuery(nextState.directoryQuery);
+      setDirectoryError(nextState.directoryError);
+      directoryActionGateRef.current.reset();
+      setDirectoryBusyUserId(nextState.directoryBusyUserId);
       setActionReason(nextState.actionReason);
       setLlmProvider(nextState.llmProvider);
       setLlmApiKey(nextState.llmApiKey);
@@ -426,6 +439,7 @@ export default function App() {
         () => loadRooms(loginResult.login.accessToken, undefined, context),
         () => loadFiles(loginResult.login.accessToken, context),
         () => loadSchedules(loginResult.login.accessToken, context),
+        () => loadDirectory(loginResult.login.accessToken, context),
       ]);
       if (!initialRequests.applied) return;
     } catch (error) {
@@ -602,6 +616,37 @@ export default function App() {
     }
   }
 
+  async function loadDirectory(activeToken: string = token, context = sessionControllerRef.current.capture(activeToken)) {
+    if (!activeToken) return;
+    try {
+      const body = await request<{ users: DirectoryUser[] }>("/workspace/directory", { headers: { Authorization: `Bearer ${activeToken}` } }, context);
+      if (!sessionControllerRef.current.isCurrent(context)) return;
+      setDirectoryUsers(readDirectoryUsers(body));
+      setDirectoryError("");
+    } catch (error) {
+      if (isSessionInvalidatedError(error) || !sessionControllerRef.current.isCurrent(context)) return;
+      setDirectoryError(error instanceof Error ? error.message : "주소록 조회 실패");
+    }
+  }
+
+  async function startDirectRoom(member: DirectoryUser) {
+    if (!directoryActionGateRef.current.tryEnter(member.id)) return;
+    const context = sessionControllerRef.current.capture(token);
+    try {
+      setDirectoryBusyUserId(member.id);
+      const body = await request<{ roomId: string }>("/messenger/rooms", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(directRoomPayload(member)) }, context);
+      if (!sessionControllerRef.current.isCurrent(context)) return;
+      setActiveTab("chat");
+      await loadRooms(token, body.roomId, context);
+    } catch (error) {
+      if (!isSessionInvalidatedError(error) && sessionControllerRef.current.isCurrent(context)) setDirectoryError(error instanceof Error ? error.message : "대화방 생성 실패");
+    } finally {
+      if (sessionControllerRef.current.isCurrent(context)) { directoryActionGateRef.current.release(member.id); setDirectoryBusyUserId(""); }
+    }
+  }
+
+  function openDirectoryMail(email: string) { const url = mailtoUrl(email); if (url) void Linking.openURL(url); }
+
   async function createSchedule() {
     if (!scheduleSubmissionGateRef.current.tryEnter()) return;
     const context = sessionControllerRef.current.capture(token);
@@ -633,6 +678,7 @@ export default function App() {
       loadRooms(activeToken, undefined, context),
       loadFiles(activeToken, context),
       loadSchedules(activeToken, context),
+      loadDirectory(activeToken, context),
     ]);
   }
 
@@ -976,7 +1022,7 @@ export default function App() {
               {activeTab === "more" ? (
                 <View style={styles.mobileSubNav}>
                   {[{ id: "directory", label: "주소록", icon: "directory" }, { id: "ai", label: "AI 채팅", icon: "ai" }, { id: "search", label: "업무 검색", icon: "search" }, { id: "settings", label: "설정", icon: "settings" }].map((item) => (
-                    <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} onPress={() => setMoreScreen(item.id as Exclude<ScreenKey, MobileTab>)} style={[styles.mobileSubTab, moreScreen === item.id ? styles.mobileSubTabActive : styles.mobileSubTabIdle]}><MoaIcon name={item.icon as IconName} color={moreScreen === item.id ? "#ffffff" : "#0f766e"} /><Text style={[styles.mobileTabLabel, moreScreen === item.id ? styles.mobileTabLabelActive : null]}>{item.label}</Text></Pressable>
+                    <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} onPress={() => { setMoreScreen(item.id as Exclude<ScreenKey, MobileTab>); if (item.id === "directory" && token) void loadDirectory(token); }} style={[styles.mobileSubTab, moreScreen === item.id ? styles.mobileSubTabActive : styles.mobileSubTabIdle]}><MoaIcon name={item.icon as IconName} color={moreScreen === item.id ? "#ffffff" : "#0f766e"} /><Text style={[styles.mobileTabLabel, moreScreen === item.id ? styles.mobileTabLabelActive : null]}>{item.label}</Text></Pressable>
                   ))}
                 </View>
               ) : null}
@@ -1003,9 +1049,10 @@ export default function App() {
               <View style={styles.surfaceCard}>
                 <Text style={styles.surfaceKicker}>주소록</Text>
                 <Text style={styles.surfaceTitle}>사원 정보 검색</Text>
-                <TextInput style={styles.input} value={directoryQuery} onChangeText={setDirectoryQuery} placeholder="이름, 부서, 이메일 검색" />
-                {directoryEntries.filter((item) => `${item.name}${item.team}${item.email}`.toLowerCase().includes(directoryQuery.toLowerCase())).map((item) => <View key={item.email} style={styles.directoryCard}><View style={styles.avatar}><Text style={styles.avatarText}>{item.name.slice(0, 1)}</Text></View><View style={styles.directoryInfo}><Text style={styles.listTitle}>{item.name}</Text><Text style={styles.listBody}>{item.team} · {item.role}</Text><Text style={styles.listBody}>{item.email}</Text></View></View>)}
-                {directoryEntries.length === 0 ? <Text style={styles.emptyState}>표시할 주소록 정보가 없습니다.</Text> : null}
+                <TextInput accessibilityLabel="주소록 검색" style={styles.input} value={directoryQuery} onChangeText={setDirectoryQuery} placeholder="이름, 부서, 역할, 이메일 검색" />
+                {visibleDirectoryUsers.map((member) => <View key={member.id} style={styles.directoryCard}><View style={styles.avatar}><Text style={styles.avatarText}>{member.name.slice(0, 1)}</Text></View><View style={styles.directoryInfo}><Text style={styles.listTitle}>{member.name}</Text><Text style={styles.listBody}>{member.department_name} · {member.role_name}</Text><Text style={styles.listBody}>{member.email}</Text></View><View style={styles.buttonPair}><Button title="메일" accessibilityLabel={`${member.name} 메일`} onPress={() => openDirectoryMail(member.email)} disabled={!mailtoUrl(member.email)} /><Button title="전화" accessibilityLabel="전화번호 미제공" onPress={() => {}} disabled={true} /><Button title={directoryBusyUserId === member.id ? "생성 중" : "대화"} accessibilityLabel={`${member.name} 대화 시작`} onPress={() => void startDirectRoom(member)} disabled={directoryBusyUserId === member.id} /></View></View>)}
+                {directoryError ? <Text style={styles.errorText}>{directoryError}</Text> : null}
+                {visibleDirectoryUsers.length === 0 && !directoryError ? <Text style={styles.emptyState}>표시할 주소록 정보가 없습니다.</Text> : null}
               </View>
             ) : null}
 
