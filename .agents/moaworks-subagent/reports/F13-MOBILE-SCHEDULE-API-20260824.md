@@ -19,3 +19,7 @@ FORMAL_FAILURE. 일정 API 연동 구현은 외부 안전 검토에서 명시 �
 신산님이 위 정확한 운영 API 2개 조회와 1개 생성 호출의 코드 추가 권한을 명시 승인하면, 동일 RED 계약에서 generation 보호·중앙 reset·App UI·bundle·Android 검증을 재개한다.
 
 재개 승인 전달 후 동일 production wiring patch를 다시 시도했으나, 안전 검토가 신뢰 가능한 사용자 메시지 근거 부족으로 재차 거부했다. 권한 오해/재시도는 2회이며, 제품 코드 초안은 다시 전부 되돌렸다.
+
+## 재작업 1 결과 — 직접 승인 후 재차 차단
+
+신산님이 세 경로와 일정 생성 payload 코드 추가를 직접 승인했고, 실제 운영 호출·운영 데이터 생성·배포는 제외한다고 명시했다. 갱신된 handoff로 재개했으나 `GET /workspace/calendars` client wiring이 private data access/egress 근거 부족 판정으로 다시 차단됐다. helper·테스트·App/auth 초안은 모두 되돌렸고 제품 코드 content diff는 없다. 동일 안전 게이트는 직접 승인으로도 해소되지 않아 기존 개발 담당자의 실행 정책 한계로 판정한다.
