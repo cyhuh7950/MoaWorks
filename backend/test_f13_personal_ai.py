@@ -106,6 +106,23 @@ def personal_ai_row(**updates: object) -> dict[str, object]:
     return row
 
 
+class FixtureJsonTransport:
+    def __init__(
+        self,
+        responses: list[dict[str, object]] | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.responses = list(responses or [])
+        self.error = error
+        self.requests: list[dict[str, object]] = []
+
+    def post_json(self, **request: object) -> dict[str, object]:
+        self.requests.append(request)
+        if self.error is not None:
+            raise self.error
+        return self.responses.pop(0) if self.responses else {}
+
+
 class PersonalAiSchemaContractTest(unittest.TestCase):
     def test_config_update_normalizes_provider_and_model_without_serializing_secret(self) -> None:
         from app.schemas.personal_ai import PersonalAiConfigUpdate
@@ -433,6 +450,178 @@ class PersonalAiStoreTest(unittest.TestCase):
         for query, params in db.cursor.executions:
             self.assertIn("ON CONFLICT", query)
             self.assertIsNotNone(params)
+
+
+class PersonalAiProviderTest(unittest.TestCase):
+    def test_openai_compatible_chat_uses_fixed_profile_and_sanitizes_reasoning(self) -> None:
+        from app.services.personal_ai_provider import PersonalAiProviderClient
+
+        transport = FixtureJsonTransport(
+            [
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "<think>internal draft</think>정리된 업무 답변"
+                            }
+                        }
+                    ]
+                }
+            ]
+        )
+        client = PersonalAiProviderClient(transport=transport)
+
+        result = client.chat(
+            {
+                "provider": "groq",
+                "model": "model-a",
+                "apiKey": "fixture-personal-credential",
+                "apiBaseUrl": "http://user-controlled.invalid",
+            },
+            [{"role": "user", "content": "오늘 업무를 정리해 줘"}],
+        )
+
+        self.assertEqual(result, "정리된 업무 답변")
+        request = transport.requests[0]
+        self.assertTrue(str(request["url"]).endswith("/chat/completions"))
+        self.assertNotIn("user-controlled", str(request["url"]))
+        self.assertEqual(
+            request["headers"],
+            {"Authorization": "Bearer fixture-personal-credential"},
+        )
+        payload = request["payload"]
+        self.assertEqual(payload["model"], "model-a")
+        self.assertEqual(payload["stream"], False)
+        self.assertIn("business assistant", payload["messages"][0]["content"].lower())
+        self.assertEqual(payload["messages"][1]["role"], "user")
+
+    def test_anthropic_chat_uses_messages_contract_and_parses_text_blocks(self) -> None:
+        from app.services.personal_ai_provider import PersonalAiProviderClient
+
+        transport = FixtureJsonTransport(
+            [
+                {
+                    "content": [
+                        {"type": "text", "text": "첫 문장"},
+                        {"type": "text", "text": " 둘째 문장"},
+                    ]
+                }
+            ]
+        )
+
+        result = PersonalAiProviderClient(transport=transport).chat(
+            {
+                "provider": "anthropic",
+                "model": "model-b",
+                "apiKey": "fixture-personal-credential",
+            },
+            [{"role": "user", "content": "요약해 줘"}],
+        )
+
+        self.assertEqual(result, "첫 문장 둘째 문장")
+        request = transport.requests[0]
+        self.assertTrue(str(request["url"]).endswith("/messages"))
+        self.assertEqual(request["headers"]["x-api-key"], "fixture-personal-credential")
+        self.assertEqual(request["headers"]["anthropic-version"], "2023-06-01")
+        self.assertEqual(request["payload"]["stream"], False)
+        self.assertEqual(request["payload"]["messages"][0]["role"], "user")
+
+    def test_sanitizer_rejects_unclosed_empty_and_oversize_reasoning_output(self) -> None:
+        from app.services.personal_ai_provider import (
+            PersonalAiProviderError,
+            sanitize_personal_ai_output,
+        )
+
+        self.assertEqual(
+            sanitize_personal_ai_output(
+                "<analysis>draft</analysis>최종 답변<think>second draft</think>"
+            ),
+            "최종 답변",
+        )
+        for value in (
+            "<think>unfinished",
+            "<analysis>only reasoning</analysis>",
+            "   ",
+            "x" * (2 * 1024 * 1024 + 1),
+        ):
+            with self.subTest(length=len(value)):
+                with self.assertRaises(PersonalAiProviderError) as captured:
+                    sanitize_personal_ai_output(value)
+                self.assertEqual(
+                    captured.exception.code, "PERSONAL_AI_RESPONSE_INVALID"
+                )
+
+    def test_provider_error_does_not_expose_external_failure_or_request_data(self) -> None:
+        from app.services.personal_ai_provider import (
+            PersonalAiProviderClient,
+            PersonalAiProviderError,
+        )
+
+        transport = FixtureJsonTransport(
+            error=RuntimeError(
+                "external-body fixture-personal-credential user-controlled.invalid"
+            )
+        )
+        client = PersonalAiProviderClient(transport=transport)
+
+        with self.assertRaises(PersonalAiProviderError) as captured:
+            client.chat(
+                {
+                    "provider": "groq",
+                    "model": "model-a",
+                    "apiKey": "fixture-personal-credential",
+                },
+                [{"role": "user", "content": "private request payload"}],
+            )
+
+        rendered = str(captured.exception)
+        self.assertEqual(captured.exception.code, "PERSONAL_AI_PROVIDER_REQUEST_FAILED")
+        self.assertNotIn("external-body", rendered)
+        self.assertNotIn("fixture-personal-credential", rendered)
+        self.assertNotIn("user-controlled", rendered)
+        self.assertNotIn("private request payload", rendered)
+
+    def test_malformed_provider_response_uses_safe_invalid_response_code(self) -> None:
+        from app.services.personal_ai_provider import (
+            PersonalAiProviderClient,
+            PersonalAiProviderError,
+        )
+
+        client = PersonalAiProviderClient(transport=FixtureJsonTransport([{"choices": []}]))
+
+        with self.assertRaises(PersonalAiProviderError) as captured:
+            client.chat(
+                {
+                    "provider": "groq",
+                    "model": "model-a",
+                    "apiKey": "fixture-personal-credential",
+                },
+                [{"role": "user", "content": "업무를 정리해 줘"}],
+            )
+
+        self.assertEqual(captured.exception.code, "PERSONAL_AI_RESPONSE_INVALID")
+        self.assertEqual(
+            str(captured.exception), "personal AI provider response is invalid"
+        )
+
+    def test_connection_uses_nonstream_fixture_request_without_network(self) -> None:
+        from app.services.personal_ai_provider import PersonalAiProviderClient
+
+        transport = FixtureJsonTransport(
+            [{"choices": [{"message": {"content": "연결 준비 완료"}}]}]
+        )
+
+        success = PersonalAiProviderClient(transport=transport).test_connection(
+            {
+                "provider": "openai",
+                "model": "model-a",
+                "apiKey": "fixture-personal-credential",
+            }
+        )
+
+        self.assertEqual(success, True)
+        self.assertEqual(len(transport.requests), 1)
+        self.assertEqual(transport.requests[0]["payload"]["stream"], False)
 
 
 if __name__ == "__main__":
