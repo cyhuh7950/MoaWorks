@@ -44,6 +44,7 @@ async function requestJson({ apiBase, path, init, fetchImpl = fetch, invalidateS
       : detail?.userMessage || data.userMessage || "요청 처리 실패";
     const error = new Error(userMessage);
     error.status = response.status;
+    error.detail = detail;
     error.sessionInvalidated = sessionInvalidated;
     throw error;
   }
@@ -196,6 +197,10 @@ function createClearedMobileSessionState(message = "") {
     chatError: "",
     files: [],
     fileError: "",
+    calendars: [],
+    schedules: [],
+    scheduleError: "",
+    scheduleForm: { title: "", startsAt: "", endsAt: "", description: "", location: "" },
     actionReason: "확인",
     llmProvider: "OpenAI",
     llmApiKey: "",
