@@ -38,6 +38,7 @@ import {
   fetchOperationalBackups,
   fetchApprovalAuditLogs,
   fetchOrgImportBatch,
+  fetchPublicUiContract,
   fetchUiContract,
   getStoredToken,
   initializeSetup,
@@ -169,6 +170,7 @@ type UserForm = {
   userId: string;
   name: string;
   loginId: string;
+  password: string;
   departmentId: string;
   roleId: string;
   status: string;
@@ -196,6 +198,7 @@ const initialUserForm: UserForm = {
   userId: "",
   name: "",
   loginId: "",
+  password: "",
   departmentId: "",
   roleId: "",
   status: "active",
@@ -775,6 +778,8 @@ export default function App() {
   });
   const [form, setForm] = useState<SetupForm>(initialForm);
   const [loginForm, setLoginForm] = useState<LoginForm>({ loginId: "", password: "" });
+  const [publicUiContractState, setPublicUiContractState] = useState<PublicUiContractState>("pending");
+  const [publicUiContractError, setPublicUiContractError] = useState("");
   const [userForm, setUserForm] = useState<UserForm>(initialUserForm);
   const [userSearch, setUserSearch] = useState("");
   const [userStatusFilter, setUserStatusFilter] = useState("visible");
@@ -1830,13 +1835,14 @@ export default function App() {
         await createUser(token, {
           name: userForm.name,
           loginId: userForm.loginId,
+          password: userForm.password,
           departmentId: userForm.departmentId,
           roleId: userForm.roleId,
           status: userForm.status,
           userType: "user",
           isDepartmentHead: userForm.isDepartmentHead,
         });
-        setMessage("사용자가 생성되었고, 초기 비밀번호는 아이디와 동일하게 설정되었습니다.");
+        setMessage("사용자가 생성되었습니다. 입력한 초기 비밀번호를 사용자에게 안전하게 전달하세요.");
       }
       setUserForm((current) => ({
         ...initialUserForm,
@@ -2024,6 +2030,7 @@ export default function App() {
       userId: user.userId,
       name: user.userName,
       loginId: user.userEmail.split("@")[0] || "",
+      password: "",
       departmentId: user.departmentId,
       roleId: user.roleId,
       status: user.status === "deleted" ? "inactive" : user.status,
@@ -2672,9 +2679,15 @@ export default function App() {
                     <input value={userForm.name} onChange={(e) => setUserForm({ ...userForm, name: e.target.value })} />
                   </label>
                   <label className="compact-field">
-                    <span>아이디 <InlineHint label="이메일과 초기 비밀번호는 아이디 기준으로 자동 구성됩니다." /></span>
+                    <span>아이디 <InlineHint label="회사 도메인과 결합해 이메일 주소를 자동 구성합니다." /></span>
                     <input value={userForm.loginId} disabled={Boolean(userForm.userId)} onChange={(e) => setUserForm({ ...userForm, loginId: e.target.value.toLowerCase() })} placeholder="hong.gildong" />
                   </label>
+                  {!userForm.userId && (
+                    <label className="compact-field">
+                      <span>초기 비밀번호 <InlineHint label="8자 이상으로 설정하고 사용자에게 별도 보안 채널로 전달하세요." /></span>
+                      <input type="password" minLength={8} required value={userForm.password} onChange={(e) => setUserForm({ ...userForm, password: e.target.value })} autoComplete="new-password" />
+                    </label>
+                  )}
                   <label className="compact-field">
                     <span>자동 생성 이메일</span>
                     <input value={userEmailPreview} readOnly />
