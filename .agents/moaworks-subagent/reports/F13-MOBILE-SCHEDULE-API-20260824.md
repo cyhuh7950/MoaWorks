@@ -48,3 +48,12 @@
 ### 최종 bundle 재실행
 
 - 일반 sandbox 실행의 build-evidence EPERM은 권한 상승 재실행으로 해소했다. `npm run bundle` exit 0, `BUNDLE_SHA256=6d8ea77f14cd34239aaa453a9e8549dd279300ca84bbb0fd3a8bb20af8cf357d`.
+
+## 어울1 독립 검증
+
+- focused auth+schedule 15/15 PASS, 전체 모바일 67/67 PASS를 HEAD `736ca33`에서 새로 실행했다.
+- production bundle exit 0, SHA256 `6d8ea77f14cd34239aaa453a9e8549dd279300ca84bbb0fd3a8bb20af8cf357d`를 재확인했다.
+- 권한 상승 환경에서 Android SDK/JDK 탐색이 정상화되어 `npm run build:android`가 `BUILD SUCCESSFUL in 1m 29s`, 64 actionable tasks로 완료됐다.
+- release APK는 59,173,802 bytes, SHA256 `0FEE00957BBF5098DBE2CE4181B0856E1F81F7C22112C03BE031238FDB941866`이다.
+- `emulator-5554`에 streamed install `Success`, `com.moaworks.mobile/.MainActivity` cold launch와 로그인 화면·접근성 XML을 확인했다.
+- 실제 운영 계정이 없어 로그인 이후 일정 조회·생성과 일정 화면은 미검증으로 분리한다. 운영 데이터는 생성하지 않았다.
