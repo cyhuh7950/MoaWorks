@@ -254,6 +254,11 @@ const adminMenus: Array<{ key: AdminMenuKey; label: string; description: string 
   { key: "help", label: "도움말/정책", description: "정책 경로와 운영 가이드" },
 ];
 
+function resolveDefaultCompanyDomain(): string {
+  const hostname = typeof window === "undefined" ? "" : window.location.hostname.trim().toLowerCase();
+  return hostname === "moaworks.sinsan.kr" || hostname.endsWith(".moaworks.sinsan.kr") ? "moaworks.sinsan.kr" : "moaworks.local";
+}
+
 const defaultUiContract: UiContract = {
   brand: {
     primary: "#0f766e",
@@ -263,7 +268,7 @@ const defaultUiContract: UiContract = {
   },
   company: {
     name: "MoaWorks",
-    domain: "moaworks.local",
+    domain: resolveDefaultCompanyDomain(),
     logoDataUrl: "",
   },
   menuOrder: ["메일", "결재", "메신저", "일정", "주소록", "조직도", "파일", "설정"],
