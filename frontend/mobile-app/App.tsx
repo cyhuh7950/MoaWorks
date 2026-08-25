@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, AppState, Button, Linking, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, AppState, Button, Linking, Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { createMobileSessionAdapter, isSessionInvalidatedError, requestJson } from "./auth-session";
 import { buildMonthGrid, buildSchedulePayload, createSubmissionGate, filterSchedulesForMonth, monthKeyForDate, selectDefaultCalendar, scheduleErrorMessage, scheduleItems, shiftMonthKey, dateKey } from "./schedule-api";
 import { createDirectoryActionGate, directoryUsers as readDirectoryUsers, directRoomPayload, filterDirectoryUsers, mailtoUrl } from "./directory-api";
@@ -302,8 +302,15 @@ export default function App() {
   const [directorySection, setDirectorySection] = useState<"all" | "favorites" | "recent">("all");
   const [directoryError, setDirectoryError] = useState("");
   const [directoryBusyUserId, setDirectoryBusyUserId] = useState("");
+  const [employeeSearchQuery, setEmployeeSearchQuery] = useState("");
+  const [employeeSearchResults, setEmployeeSearchResults] = useState<DirectoryUser[]>([]);
+  const [employeeSearchOpen, setEmployeeSearchOpen] = useState(false);
   const directoryActionGateRef = useRef(createDirectoryActionGate());
   const visibleDirectoryUsers = useMemo(() => filterDirectoryUsers(directoryUsers, directoryQuery), [directoryUsers, directoryQuery]);
+  function runEmployeeSearch() {
+    setEmployeeSearchResults(filterDirectoryUsers(directoryUsers, employeeSearchQuery));
+    setEmployeeSearchOpen(true);
+  }
   const [businessSearchQuery, setBusinessSearchQuery] = useState("");
   const [businessSearchSelectedResultId, setBusinessSearchSelectedResultId] = useState("");
   const [businessSearchWarnings, setBusinessSearchWarnings] = useState<BusinessSearchSource[]>([]);
@@ -1519,6 +1526,25 @@ export default function App() {
                   <Text style={styles.homeDate}>{new Date().toLocaleDateString(locale, { month: "long", day: "numeric", weekday: "short" })}</Text>
                   <Text style={styles.homeStatus}>알림 {notificationSummary?.unreadCount ?? 0}건 · {me.roleName}</Text>
                 </View>
+                <View style={styles.homeTools}>
+                  <TextInput
+                    accessibilityLabel="홈 임직원 검색"
+                    accessibilityHint="이름, 부서, 역할 또는 이메일로 임직원을 검색합니다."
+                    placeholder="임직원 검색"
+                    value={employeeSearchQuery}
+                    onChangeText={setEmployeeSearchQuery}
+                    onSubmitEditing={runEmployeeSearch}
+                    style={styles.homeEmployeeSearchInput}
+                    returnKeyType="search"
+                  />
+                  <Pressable accessibilityRole="button" accessibilityLabel="임직원 검색 실행" onPress={runEmployeeSearch} style={styles.homeToolButton}>
+                    <Text style={styles.homeToolButtonText}>검색</Text>
+                  </Pressable>
+                  <Pressable accessibilityRole="button" accessibilityLabel="AI 채팅 열기" onPress={() => { setActiveTab("more"); setMoreScreen("ai"); setMoreMenuOpen(false); }} style={styles.homeAiButton}>
+                    <MoaIcon name="ai" color="#ffffff" size={16} />
+                    <Text style={styles.homeToolButtonText}>AI 채팅</Text>
+                  </Pressable>
+                </View>
                 <View style={styles.homeStats}>
                   {homeView.summary.map((item: { id: "mail" | "approval"; label: string; count: number }) => (
                     <Pressable
@@ -1752,6 +1778,25 @@ export default function App() {
           </>
         ) : null}
       </ScrollView>
+      <Modal visible={employeeSearchOpen} transparent animationType="fade" onRequestClose={() => setEmployeeSearchOpen(false)}>
+        <View style={styles.employeeSearchBackdrop}>
+          <View accessibilityViewIsModal style={styles.employeeSearchModal}>
+            <View style={styles.employeeSearchModalHeader}>
+              <Text accessibilityRole="header" style={styles.employeeSearchModalTitle}>임직원 검색 결과</Text>
+              <Pressable accessibilityRole="button" accessibilityLabel="임직원 검색 결과 닫기" onPress={() => setEmployeeSearchOpen(false)}>
+                <Text style={styles.employeeSearchClose}>닫기</Text>
+              </Pressable>
+            </View>
+            {employeeSearchResults.length === 0 ? <Text style={styles.employeeSearchEmpty}>검색 결과가 없습니다.</Text> : employeeSearchResults.map((member) => (
+              <View key={member.id} style={styles.employeeSearchResult}>
+                <Text style={styles.employeeSearchName}>{member.name}</Text>
+                <Text style={styles.employeeSearchMeta}>{member.department_name} · {member.role_name}</Text>
+                <Text style={styles.employeeSearchEmail}>{member.email}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+      </Modal>
       {me ? (
         <View style={styles.mobileBottomNav}>
           {mobileNavigation.bottom.map((item: { id: string; label: string; icon: IconName }) => (
@@ -1947,6 +1992,102 @@ const styles = StyleSheet.create({
     color: "#64748b",
     fontSize: 10,
     paddingVertical: 10,
+  },
+  homeTools: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  homeEmployeeSearchInput: {
+    flex: 1,
+    minHeight: 40,
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    color: "#0f172a",
+    backgroundColor: "#ffffff",
+    fontSize: 11,
+  },
+  homeToolButton: {
+    minHeight: 40,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#0f766e",
+  },
+  homeAiButton: {
+    minHeight: 40,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    flexDirection: "row",
+    gap: 4,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#334155",
+  },
+  homeToolButtonText: {
+    color: "#ffffff",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  employeeSearchBackdrop: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
+    backgroundColor: "rgba(15, 23, 42, 0.55)",
+  },
+  employeeSearchModal: {
+    width: "100%",
+    maxWidth: 420,
+    maxHeight: "80%",
+    borderRadius: 16,
+    padding: 16,
+    backgroundColor: "#ffffff",
+  },
+  employeeSearchModalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
+  employeeSearchModalTitle: {
+    color: "#0f172a",
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  employeeSearchClose: {
+    color: "#0f766e",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  employeeSearchResult: {
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#e2e8f0",
+  },
+  employeeSearchName: {
+    color: "#0f172a",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  employeeSearchMeta: {
+    marginTop: 3,
+    color: "#475569",
+    fontSize: 10,
+  },
+  employeeSearchEmail: {
+    marginTop: 2,
+    color: "#0f766e",
+    fontSize: 10,
+  },
+  employeeSearchEmpty: {
+    color: "#64748b",
+    fontSize: 11,
+    paddingVertical: 20,
+    textAlign: "center",
   },
   hero: {
     borderRadius: 30,
