@@ -9,6 +9,7 @@ from app.schemas.mail_messenger import (
     MailDraftRequest,
     MailSendRequest,
 )
+from app.services import mail_html_sanitizer as sanitizer_module
 from app.services.mail_html_sanitizer import (
     extract_cid_references,
     sanitize_mail_html,
@@ -53,6 +54,27 @@ def test_malformed_comment_cannot_hide_active_content(html: str) -> None:
 @pytest.mark.parametrize(
     "html",
     [
+        "<![CDATA[<script>alert(1)</script>]]>",
+        "<![CDATA[<img src=x onerror=alert(1)>]]>",
+        '<![CDATA[<span style="background:url(https://tracker.example/x)">본문</span>]]>',
+        '<![CDATA[<a href="javascript:alert(1)">링크</a>]]>',
+    ],
+)
+def test_marked_section_cannot_hide_active_content(html: str) -> None:
+    """Accepting declarations that expose active markup in nh3 must fail."""
+    with pytest.raises(ValueError):
+        sanitize_mail_html(html, set())
+
+
+def test_declaration_is_rejected() -> None:
+    """Accepting declarations outside the supported fragment grammar must fail."""
+    with pytest.raises(ValueError):
+        sanitize_mail_html("<!DOCTYPE html><p>본문</p>", set())
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
         "a" * 1_048_576,
         "가" * 349_525 + "a",
     ],
@@ -66,6 +88,15 @@ def test_mail_html_accepts_exactly_one_mib_in_utf8_bytes(html: str) -> None:
     assert len(cleaned.encode("utf-8")) == 1_048_576
 
 
+def test_mail_html_accepts_one_mib_ampersand_input_before_entity_expansion() -> None:
+    """Reapplying the raw input budget to nh3 entity expansion must fail."""
+    html = "&" * 1_048_576
+
+    cleaned = sanitize_mail_html(html, set())
+
+    assert cleaned == "&amp;" * 1_048_576
+
+
 @pytest.mark.parametrize(
     "html",
     [
@@ -74,8 +105,17 @@ def test_mail_html_accepts_exactly_one_mib_in_utf8_bytes(html: str) -> None:
     ],
     ids=["ascii", "multibyte"],
 )
-def test_mail_html_rejects_one_mib_plus_one_utf8_byte(html: str) -> None:
+def test_mail_html_rejects_one_mib_plus_one_utf8_byte(
+    html: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Allowing a body one byte above the parser budget must fail this test."""
+    def fail_if_parser_runs(*args: object, **kwargs: object) -> None:
+        raise AssertionError("oversized input reached a parser")
+
+    monkeypatch.setattr(sanitizer_module, "_MailHtmlSecurityScanner", fail_if_parser_runs)
+    monkeypatch.setattr(sanitizer_module.nh3, "clean", fail_if_parser_runs)
+
     with pytest.raises(ValueError):
         sanitize_mail_html(html, set())
 
@@ -123,6 +163,27 @@ def test_external_image_candidate_attributes_are_removed() -> None:
     )
 
     assert cleaned == '<img src="cid:image@example.invalid" alt="사진">'
+
+
+def test_cid_image_with_quoted_greater_than_is_preserved() -> None:
+    """Treating a quoted greater-than sign as the image boundary must fail."""
+    cleaned = sanitize_mail_html(
+        '<img alt="x > y" src="cid:image@example.invalid">',
+        {"image@example.invalid"},
+    )
+
+    assert cleaned == '<img alt="x > y" src="cid:image@example.invalid">'
+    assert extract_cid_references(cleaned) == {"image@example.invalid"}
+
+
+def test_non_cid_image_with_quoted_greater_than_is_removed_without_tail() -> None:
+    """Leaving an attribute tail after removing a non-CID image must fail."""
+    cleaned = sanitize_mail_html(
+        '<p>앞<img alt="x > y" src="https://tracker.example/x.png">뒤</p>',
+        set(),
+    )
+
+    assert cleaned == "<p>앞뒤</p>"
 
 
 @pytest.mark.parametrize(

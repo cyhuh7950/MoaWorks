@@ -102,8 +102,6 @@ _UNSAFE_STYLE = re.compile(
     r"url\(|expression\(|var\(|--|@import|behavior|binding|/\*|\*/|\\",
     re.IGNORECASE,
 )
-_SANITIZED_IMAGE_TAG = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
-_SANITIZED_IMAGE_SOURCE = re.compile(r'\bsrc="([^"]*)"', re.IGNORECASE)
 _MAX_MAIL_HTML_BYTES = 1_048_576
 
 
@@ -137,6 +135,12 @@ class _CidReferenceParser(HTMLParser):
 
 
 class _MailHtmlSecurityScanner(_CidReferenceParser):
+    def handle_decl(self, decl: str) -> None:
+        raise ValueError("메일 HTML에 선언을 포함할 수 없습니다.")
+
+    def unknown_decl(self, data: str) -> None:
+        raise ValueError("메일 HTML에 marked section을 포함할 수 없습니다.")
+
     def handle_starttag(
         self,
         tag: str,
@@ -176,6 +180,37 @@ class _MailHtmlSecurityScanner(_CidReferenceParser):
     handle_startendtag = handle_starttag
 
 
+class _NonCidImageRemovingParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.parts: list[str] = []
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        if tag.lower() == "img":
+            sources = [value for name, value in attrs if name.lower() == "src"]
+            if len(sources) != 1 or _content_id_from_source(sources[0]) is None:
+                return
+        self.parts.append(self.get_starttag_text())
+
+    handle_startendtag = handle_starttag
+
+    def handle_endtag(self, tag: str) -> None:
+        self.parts.append(f"</{tag}>")
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
+
+    def handle_entityref(self, name: str) -> None:
+        self.parts.append(f"&{name};")
+
+    def handle_charref(self, name: str) -> None:
+        self.parts.append(f"&#{name};")
+
+
 def _contains_unsafe_style(value: str) -> bool:
     compact = re.sub(r"[\x00-\x20]+", "", value)
     return bool(_UNSAFE_STYLE.search(compact))
@@ -212,13 +247,10 @@ def _validate_html_comments(html: str) -> None:
 
 
 def _remove_non_cid_images(html: str) -> str:
-    def keep_allowed_image(match: re.Match[str]) -> str:
-        source = _SANITIZED_IMAGE_SOURCE.search(match.group(0))
-        if source is None or _content_id_from_source(source.group(1)) is None:
-            return ""
-        return match.group(0)
-
-    return _SANITIZED_IMAGE_TAG.sub(keep_allowed_image, html)
+    parser = _NonCidImageRemovingParser()
+    parser.feed(html)
+    parser.close()
+    return "".join(parser.parts)
 
 
 def _is_safe_link(value: str | None) -> bool:
@@ -312,6 +344,13 @@ def _filter_attribute(tag: str, attribute: str, value: str) -> str | None:
     return value
 
 
+def _extract_cid_references(html: str) -> set[str]:
+    parser = _CidReferenceParser()
+    parser.feed(html)
+    parser.close()
+    return parser.references
+
+
 def extract_cid_references(html: str | None) -> set[str]:
     """Extract inline image content IDs from an HTML fragment."""
     if html is None:
@@ -319,10 +358,7 @@ def extract_cid_references(html: str | None) -> set[str]:
     if not isinstance(html, str):
         raise ValueError("메일 HTML 형식이 올바르지 않습니다.")
     _validate_html_size(html)
-    parser = _CidReferenceParser()
-    parser.feed(html)
-    parser.close()
-    return parser.references
+    return _extract_cid_references(html)
 
 
 def sanitize_mail_html(
@@ -363,6 +399,6 @@ def sanitize_mail_html(
         url_relative="deny",
     )
     cleaned = _remove_non_cid_images(cleaned)
-    if extract_cid_references(cleaned) != allowed_content_ids:
+    if _extract_cid_references(cleaned) != allowed_content_ids:
         raise ValueError("정화된 본문 CID와 인라인 이미지가 일치하지 않습니다.")
     return cleaned
