@@ -113,6 +113,37 @@ def test_bogus_declaration_families_are_rejected(
 @pytest.mark.parametrize(
     ("html", "expected"),
     [
+        (
+            '<img src="cid:x@example.invalid" alt="<!ENTITY x>">',
+            '<img src="cid:x@example.invalid" alt="<!ENTITY x>">',
+        ),
+        (
+            "<img src='cid:x@example.invalid' alt='<!entity x>'>",
+            '<img src="cid:x@example.invalid" alt="<!entity x>">',
+        ),
+        (
+            '<img alt="left < middle <!ENTITY x> > right" '
+            'src="cid:x@example.invalid">',
+            '<img alt="left < middle <!ENTITY x> > right" '
+            'src="cid:x@example.invalid">',
+        ),
+    ],
+    ids=["double-quoted", "single-quoted", "quoted-less-and-greater-than"],
+)
+def test_declaration_like_text_in_quoted_attributes_is_preserved(
+    html: str,
+    expected: str,
+) -> None:
+    """Treating quoted attribute text as document markup must fail this test."""
+    cleaned = sanitize_mail_html(html, {"x@example.invalid"})
+
+    assert cleaned == expected
+    assert extract_cid_references(cleaned) == {"x@example.invalid"}
+
+
+@pytest.mark.parametrize(
+    ("html", "expected"),
+    [
         ("<!-- 정상 주석 --><p>본문</p>", "<p>본문</p>"),
         ("<!-- <!ENTITY x 'ok'> --><p>본문</p>", "<p>본문</p>"),
         ("<p>1 < 2! 안전</p>", "<p>1 &lt; 2! 안전</p>"),

@@ -247,17 +247,71 @@ def _validate_html_comments(html: str) -> None:
 
 
 def _validate_html_declarations(html: str) -> None:
+    state = "data"
     offset = 0
-    while True:
-        opening = html.find("<!", offset)
-        if opening < 0:
-            return
-        if not html.startswith("<!--", opening):
+    while offset < len(html):
+        if state == "comment":
+            if html.startswith("-->", offset):
+                state = "data"
+                offset += 3
+                continue
+            offset += 1
+            continue
+
+        if state == "single-quoted-attribute":
+            if html[offset] == "'":
+                state = "tag"
+            offset += 1
+            continue
+
+        if state == "double-quoted-attribute":
+            if html[offset] == '"':
+                state = "tag"
+            offset += 1
+            continue
+
+        if state == "data":
+            if html.startswith("<!--", offset):
+                state = "comment"
+                offset += 4
+                continue
+            if html.startswith("<!", offset):
+                raise ValueError("메일 HTML에 선언을 포함할 수 없습니다.")
+            if html[offset] == "<":
+                tag_name_offset = offset + 1
+                is_end_tag = (
+                    tag_name_offset < len(html)
+                    and html[tag_name_offset] == "/"
+                )
+                if is_end_tag:
+                    tag_name_offset += 1
+                if (
+                    tag_name_offset < len(html)
+                    and html[tag_name_offset].isascii()
+                    and html[tag_name_offset].isalpha()
+                ):
+                    state = "end-tag" if is_end_tag else "tag"
+            offset += 1
+            continue
+
+        if html.startswith("<!", offset):
             raise ValueError("메일 HTML에 선언을 포함할 수 없습니다.")
-        closing = html.find("-->", opening + 4)
-        if closing < 0:
-            raise ValueError("메일 HTML 주석 형식이 올바르지 않습니다.")
-        offset = closing + 3
+        if html[offset] == ">":
+            state = "data"
+        elif state == "tag" and html[offset] == "=":
+            state = "before-attribute-value"
+        elif state == "before-attribute-value":
+            if html[offset].isspace():
+                pass
+            elif html[offset] == "'":
+                state = "single-quoted-attribute"
+            elif html[offset] == '"':
+                state = "double-quoted-attribute"
+            else:
+                state = "unquoted-attribute"
+        elif state == "unquoted-attribute" and html[offset].isspace():
+            state = "tag"
+        offset += 1
 
 
 def _remove_non_cid_images(html: str) -> str:
