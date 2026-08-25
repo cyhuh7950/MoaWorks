@@ -855,7 +855,7 @@ export async function fetchMailDeliveryStatus(token: string): Promise<MailDelive
 }
 
 export async function fetchMailDeliveryQueue(token: string): Promise<MailDeliveryQueueResponse> {
-  return request<MailDeliveryQueueResponse>("/mail/delivery/queue", {
+  return request<MailDeliveryQueueResponse>("/admin/mail-delivery/queue", {
     headers: authHeaders(token),
   });
 }
