@@ -98,6 +98,15 @@ class MailDeliveryRoutingTest(unittest.TestCase):
         self.assertIn("provider=self_hosted", detail)
         self.assertNotIn("plain-secret", detail)
 
+    def test_self_hosted_relay_without_explicit_timeout_uses_gateway_safe_default(self) -> None:
+        relay_provider = provider("self_hosted")
+        relay_provider.pop("timeout_sec")
+
+        self.adapter.send(envelope(), relay_provider)
+
+        _, _, timeout_sec, *_ = self.self_transport.calls[0]
+        self.assertEqual(timeout_sec, 60)
+
     def test_legacy_self_hosted_key_remains_compatible(self) -> None:
         detail = self.adapter.send(envelope(), provider("self_hosted_smtp"))
 

@@ -316,7 +316,7 @@ class MailProviderRoutingAdapter:
             receipt = self.self_hosted_transport.send(
                 message,
                 helo_name=str(provider.get("helo_name") or f"mail.{sender_domain}"),
-                timeout_sec=int(provider.get("timeout_sec") or 20),
+                timeout_sec=int(provider.get("timeout_sec") or (60 if provider.get("relay_host") else 20)),
                 dkim_config=dkim_config,
                 relay_host=str(provider.get("relay_host") or ""),
                 relay_port=int(provider.get("relay_port") or 25),
