@@ -174,5 +174,9 @@ postmap /etc/postfix/transport
 postmap /etc/postfix/relay-recipient-verification
 chown root:root /etc/postfix/transport /etc/postfix/transport.db /etc/postfix/relay-recipient-verification /etc/postfix/relay-recipient-verification.db
 chmod 0644 /etc/postfix/transport /etc/postfix/transport.db /etc/postfix/relay-recipient-verification /etc/postfix/relay-recipient-verification.db
+mkdir -p /var/spool/postfix/etc
+cp /etc/resolv.conf /var/spool/postfix/etc/resolv.conf
+cp /etc/hosts /var/spool/postfix/etc/hosts
+chmod 0644 /var/spool/postfix/etc/resolv.conf /var/spool/postfix/etc/hosts
 postfix check
 exec postfix start-fg

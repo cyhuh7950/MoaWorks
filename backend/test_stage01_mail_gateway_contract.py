@@ -204,6 +204,14 @@ class MailGatewayContractTest(unittest.TestCase):
         self.assertNotIn("mynetworks = 0.0.0.0/0", main_cf)
         self.assertNotIn("permit_mynetworks", main_cf)
 
+    def test_postfix_chroot_receives_container_dns_files_for_rspamd_resolution(self) -> None:
+        entrypoint = (ROOT / "deploy" / "mail-gateway" / "entrypoint.sh").read_text(encoding="utf-8")
+
+        self.assertIn("mkdir -p /var/spool/postfix/etc", entrypoint)
+        self.assertIn("cp /etc/resolv.conf /var/spool/postfix/etc/resolv.conf", entrypoint)
+        self.assertIn("cp /etc/hosts /var/spool/postfix/etc/hosts", entrypoint)
+        self.assertIn("chmod 0644 /var/spool/postfix/etc/resolv.conf /var/spool/postfix/etc/hosts", entrypoint)
+
     def test_relay_recipient_verification_is_scoped_to_configured_relay_domains(self) -> None:
         main_cf = (ROOT / "deploy" / "mail-gateway" / "main.cf").read_text(encoding="utf-8")
         entrypoint = (ROOT / "deploy" / "mail-gateway" / "entrypoint.sh").read_text(encoding="utf-8")
