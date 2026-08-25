@@ -148,12 +148,18 @@ class MailAttachmentMeta(BaseModel):
     fileName: str = Field(min_length=1, max_length=255)
     contentType: str = Field(default="application/octet-stream", max_length=255)
     sizeBytes: int = Field(default=0, gt=0)
+    disposition: Literal["attachment", "inline"] = "attachment"
+    contentId: str | None = Field(default=None, max_length=255, exclude=True)
     storageKey: str | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
     def require_upload_reference(self):
         if not self.uploadId and not self.storageKey:
             raise ValueError("실제 업로드된 첨부만 사용할 수 있습니다.")
+        if self.disposition == "inline" and self.contentId is None:
+            raise ValueError("인라인 첨부에는 콘텐츠 ID가 필요합니다.")
+        if self.disposition == "attachment" and self.contentId is not None:
+            raise ValueError("일반 첨부에는 콘텐츠 ID를 지정할 수 없습니다.")
         return self
 
 
@@ -162,6 +168,9 @@ class MailAttachmentUploadResponse(BaseModel):
     fileName: str
     contentType: str
     sizeBytes: int = Field(gt=0)
+    disposition: Literal["attachment", "inline"] = "attachment"
+    contentId: str | None = Field(default=None, max_length=255)
+    previewPath: str | None = None
 
 
 class MailAttachmentView(BaseModel):
@@ -169,6 +178,9 @@ class MailAttachmentView(BaseModel):
     fileName: str = Field(min_length=1)
     contentType: str = Field(default="application/octet-stream")
     sizeBytes: int = Field(default=0, ge=0)
+    disposition: Literal["attachment", "inline"] = "attachment"
+    contentId: str | None = Field(default=None, max_length=255)
+    previewPath: str | None = None
 
 
 class MailSendRequest(BaseModel):
