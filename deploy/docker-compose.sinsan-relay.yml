@@ -1,7 +1,7 @@
 services:
   mail-gateway:
     environment:
-      SMTP_RELAY_DOMAINS: moaworks.sinsan.kr
+      SMTP_RELAY_DOMAINS: dev.moaworks.sinsan.kr
       SMTP_RELAY_TRANSPORT_HOST: 210.217.186.151
       SMTP_RELAY_TRANSPORT_PORT: 2525
     volumes:
