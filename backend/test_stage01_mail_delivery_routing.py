@@ -20,8 +20,12 @@ class FakeSelfHostedTransport:
         relay_host: str = "",
         relay_port: int = 25,
         tls_mode: str = "opportunistic",
+        username: str = "",
+        password: str = "",
     ) -> DeliveryReceipt:
-        self.calls.append((message, helo_name, timeout_sec, dkim_config, relay_host, relay_port, tls_mode))
+        self.calls.append(
+            (message, helo_name, timeout_sec, dkim_config, relay_host, relay_port, tls_mode, username, password)
+        )
         return DeliveryReceipt("self_hosted", f"smtp://{relay_host}:{relay_port}", True)
 
 
@@ -85,11 +89,14 @@ class MailDeliveryRoutingTest(unittest.TestCase):
 
         self.assertEqual(len(self.self_transport.calls), 1)
         self.assertEqual(len(self.oci_transport.calls), 0)
-        message, _, _, _, relay_host, relay_port, _ = self.self_transport.calls[0]
+        message, _, _, _, relay_host, relay_port, _, username, password = self.self_transport.calls[0]
         self.assertEqual(message.envelope_from, "bounce+queue-1@moaworks.sinsan.kr")
         self.assertEqual(relay_host, "smtp.email.ap-seoul-1.oci.oraclecloud.com")
         self.assertEqual(relay_port, 587)
+        self.assertEqual(username, "oci-user")
+        self.assertEqual(password, "plain-secret")
         self.assertIn("provider=self_hosted", detail)
+        self.assertNotIn("plain-secret", detail)
 
     def test_legacy_self_hosted_key_remains_compatible(self) -> None:
         detail = self.adapter.send(envelope(), provider("self_hosted_smtp"))

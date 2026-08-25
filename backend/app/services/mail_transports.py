@@ -142,11 +142,16 @@ class SelfHostedSmtpTransport:
         relay_host: str = "",
         relay_port: int = 25,
         tls_mode: str = "opportunistic",
+        username: str = "",
+        password: str = "",
     ) -> DeliveryReceipt:
         prepared = _build_message(message)
         if dkim_config is not None:
             self.dkim_signer.sign(prepared, dkim_config)
         normalized_relay_host = relay_host.strip().rstrip(".").lower()
+        normalized_username = username.strip()
+        if normalized_relay_host and bool(normalized_username) != bool(password):
+            raise MailTransportFailure("자체 SMTP 릴레이 자격증명이 완전하지 않습니다.", transient=False)
         if normalized_relay_host:
             candidates = [(normalized_relay_host, relay_port)]
         else:
@@ -170,6 +175,8 @@ class SelfHostedSmtpTransport:
                     if starttls_required or (not normalized_relay_host and smtp.has_extn("starttls")):
                         smtp.starttls(context=ssl.create_default_context())
                         smtp.ehlo(helo_name)
+                    if normalized_relay_host and normalized_username:
+                        smtp.login(normalized_username, password)
                     refused = smtp.send_message(
                         prepared,
                         from_addr=message.envelope_from or message.sender_email,
@@ -188,6 +195,8 @@ class SelfHostedSmtpTransport:
             last_error,
             (TimeoutError, OSError, smtplib.SMTPServerDisconnected, smtplib.SMTPConnectError),
         )
+        if isinstance(last_error, smtplib.SMTPAuthenticationError):
+            raise MailTransportFailure("자체 SMTP 릴레이 인증 실패", transient=False) from last_error
         if isinstance(last_error, smtplib.SMTPResponseException):
             transient = 400 <= int(last_error.smtp_code) < 500
         raise MailTransportFailure(f"자체 SMTP 발송 실패: {last_error}", transient=transient) from last_error
@@ -312,6 +321,8 @@ class MailProviderRoutingAdapter:
                 relay_host=str(provider.get("relay_host") or ""),
                 relay_port=int(provider.get("relay_port") or 25),
                 tls_mode=str(provider.get("tls_mode") or "opportunistic"),
+                username=str(provider.get("username") or ""),
+                password=str(provider.get("password") or ""),
             )
         elif provider_type == "oci_email_delivery":
             password = str(provider.get("password") or "")

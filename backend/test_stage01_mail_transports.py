@@ -116,11 +116,38 @@ class MailTransportTest(unittest.TestCase):
             relay_host="mail.dev.moaworks.sinsan.kr",
             relay_port=2525,
             tls_mode="starttls",
+            username="sinsan-submit",
+            password="submission-secret",
         )
 
         self.assertEqual(calls, [("mail.dev.moaworks.sinsan.kr", 2525, 20)])
         self.assertIn(("starttls", True), smtp.calls)
+        self.assertLess(smtp.calls.index(("starttls", True)), smtp.calls.index(("login", "sinsan-submit")))
+        send_index = next(index for index, call in enumerate(smtp.calls) if call[0] == "send_message")
+        self.assertLess(smtp.calls.index(("login", "sinsan-submit")), send_index)
         self.assertEqual(receipt.endpoint, "smtp://mail.dev.moaworks.sinsan.kr:2525")
+
+    def test_self_hosted_authentication_error_does_not_expose_password(self) -> None:
+        smtp = FakeSmtp(auth_error=True)
+        transport = SelfHostedSmtpTransport(
+            mx_resolver=lambda _domain: self.fail("인증 릴레이 설정 시 수신자 MX를 조회하면 안 됩니다."),
+            smtp_factory=lambda **_: smtp,
+        )
+
+        with self.assertRaisesRegex(MailTransportFailure, "자체 SMTP 릴레이 인증 실패") as raised:
+            transport.send(
+                sample_message(),
+                helo_name="mail.moaworks.sinsan.kr",
+                timeout_sec=20,
+                relay_host="mail.dev.moaworks.sinsan.kr",
+                relay_port=2525,
+                tls_mode="starttls",
+                username="sinsan-submit",
+                password="submission-secret",
+            )
+
+        self.assertNotIn("submission-secret", str(raised.exception))
+        self.assertFalse(raised.exception.transient)
 
     def test_oci_relay_requires_tls_and_authenticates(self) -> None:
         smtp = FakeSmtp()
