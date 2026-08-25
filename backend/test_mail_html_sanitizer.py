@@ -75,6 +75,67 @@ def test_declaration_is_rejected() -> None:
 @pytest.mark.parametrize(
     "html",
     [
+        '<!ENTITY x "ok"><p>tail</p>',
+        '<!entity x "ok"><p>tail</p>',
+        "<!foo><p>tail</p>",
+        "<! foo><p>tail</p>",
+        "<![if IE]><p>tail</p><![endif]>",
+        "<![IF IE]><p>tail</p><![ENDIF]>",
+        "<![IGNORE[<script>alert(1)</script>]]>",
+        "<! [ignore[<p>tail</p>]]>",
+    ],
+    ids=[
+        "entity",
+        "entity-lowercase",
+        "bogus-name",
+        "bogus-name-whitespace",
+        "conditional",
+        "conditional-uppercase",
+        "ignore-section",
+        "ignore-section-whitespace",
+    ],
+)
+def test_bogus_declaration_families_are_rejected(
+    html: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Treating a non-comment declaration as a harmless comment must fail."""
+    def fail_if_parser_runs(*args: object, **kwargs: object) -> None:
+        raise AssertionError("bogus declaration reached a parser")
+
+    monkeypatch.setattr(sanitizer_module, "_MailHtmlSecurityScanner", fail_if_parser_runs)
+    monkeypatch.setattr(sanitizer_module.nh3, "clean", fail_if_parser_runs)
+
+    with pytest.raises(ValueError):
+        sanitize_mail_html(html, set())
+
+
+@pytest.mark.parametrize(
+    ("html", "expected"),
+    [
+        ("<!-- 정상 주석 --><p>본문</p>", "<p>본문</p>"),
+        ("<!-- <!ENTITY x 'ok'> --><p>본문</p>", "<p>본문</p>"),
+        ("<p>1 < 2! 안전</p>", "<p>1 &lt; 2! 안전</p>"),
+        ("<p>기호 &lt;! 는 텍스트</p>", "<p>기호 &lt;! 는 텍스트</p>"),
+    ],
+    ids=[
+        "comment",
+        "declaration-text-in-comment",
+        "raw-less-than",
+        "escaped-less-than",
+    ],
+)
+def test_valid_comments_and_plain_text_symbols_are_preserved(
+    html: str,
+    expected: str,
+) -> None:
+    """Rejecting valid comments or ordinary less-than text must fail."""
+    assert sanitize_mail_html(html, set()) == expected
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
         "a" * 1_048_576,
         "가" * 349_525 + "a",
     ],

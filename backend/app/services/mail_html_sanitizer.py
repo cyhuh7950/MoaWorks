@@ -246,6 +246,20 @@ def _validate_html_comments(html: str) -> None:
         offset = closing + 3
 
 
+def _validate_html_declarations(html: str) -> None:
+    offset = 0
+    while True:
+        opening = html.find("<!", offset)
+        if opening < 0:
+            return
+        if not html.startswith("<!--", opening):
+            raise ValueError("메일 HTML에 선언을 포함할 수 없습니다.")
+        closing = html.find("-->", opening + 4)
+        if closing < 0:
+            raise ValueError("메일 HTML 주석 형식이 올바르지 않습니다.")
+        offset = closing + 3
+
+
 def _remove_non_cid_images(html: str) -> str:
     parser = _NonCidImageRemovingParser()
     parser.feed(html)
@@ -379,6 +393,7 @@ def sanitize_mail_html(
         raise ValueError("메일 HTML 형식이 올바르지 않습니다.")
     _validate_html_size(html)
     _validate_html_comments(html)
+    _validate_html_declarations(html)
 
     scanner = _MailHtmlSecurityScanner()
     scanner.feed(html)
