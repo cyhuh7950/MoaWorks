@@ -128,10 +128,13 @@ class MailDetailTest(unittest.TestCase):
             sizeBytes=1234,
         )
         self.assertEqual(view.model_dump(mode="json"), {
+            "disposition": "attachment",
+            "contentId": None,
             "attachmentId": "attachment-1",
             "fileName": "report.pdf",
             "contentType": "application/pdf",
             "sizeBytes": 1234,
+            "previewPath": None,
         })
 
     def test_attachment_query_does_not_select_or_return_storage_key(self):
