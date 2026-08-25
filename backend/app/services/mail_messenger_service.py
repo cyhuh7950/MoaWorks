@@ -10,6 +10,7 @@ from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 from app.core.config import settings
 from app.services.mail_delivery_service import MailDeliveryPolicy, MailDeliveryService
+from app.services.mail_html_sanitizer import sanitize_mail_html
 
 from app.schemas.directory import AuthUserSummary
 from app.schemas.mail_messenger import (
@@ -190,6 +191,7 @@ class MailMessengerService:
     def update_scheduled_mail(self, actor: AuthUserSummary, mail_id: str, payload) -> MailDetailResponse:
         if not payload.to and not payload.cc and not payload.bcc:
             raise ValueError("수신자를 1명 이상 입력해야 합니다.")
+        body_html = self._sanitize_resolved_body_html(payload.bodyHtml, [])
         self.db.ensure_migrations_applied()
         now = self._now()
         with self.db.connect() as connection, connection.cursor() as cursor:
@@ -206,7 +208,7 @@ class MailMessengerService:
             cursor.execute(
                 """UPDATE mail_messages SET subject=%s,body_text=%s,body_html=%s,scheduled_at=%s,updated_at=%s
                 WHERE id=%s RETURNING *""",
-                (payload.subject.strip(), payload.bodyText, payload.bodyHtml, payload.scheduledAt, now, mail_id),
+                (payload.subject.strip(), payload.bodyText, body_html, payload.scheduledAt, now, mail_id),
             )
             updated = cursor.fetchone()
             self._write_mail_event_audit(cursor, company_id=actor.companyId, actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id, event="mail.scheduled.updated", status_before="scheduled", status_after="scheduled", now=now, reason="scheduled mail user update")
@@ -1065,6 +1067,26 @@ class MailMessengerService:
         separator_html = '<hr data-mail-signature-separator="true">'
         final_html = signature_html + separator_html + body_html if signature["position"] == "body_top" else body_html + separator_html + signature_html
         return final_text, final_html
+
+    @staticmethod
+    def _sanitize_resolved_body_html(
+        body_html: str | None,
+        resolved_attachments: list[dict],
+    ) -> str | None:
+        inline_content_ids: set[str] = set()
+        for attachment in resolved_attachments:
+            disposition = attachment.get("content_disposition", "attachment")
+            content_id = attachment.get("content_id")
+            if disposition == "attachment":
+                if content_id is not None:
+                    raise ValueError("일반 첨부에는 콘텐츠 ID를 지정할 수 없습니다.")
+                continue
+            if disposition != "inline" or not isinstance(content_id, str) or not content_id:
+                raise ValueError("인라인 첨부의 콘텐츠 ID가 올바르지 않습니다.")
+            if content_id in inline_content_ids:
+                raise ValueError("인라인 첨부의 콘텐츠 ID가 중복되었습니다.")
+            inline_content_ids.add(content_id)
+        return sanitize_mail_html(body_html, inline_content_ids)
 
     def save_draft(self, actor: AuthUserSummary, payload: MailDraftRequest) -> MailSendResponse:
         return self._save_mail(actor, payload, status_value="draft")
@@ -2442,6 +2464,14 @@ class MailMessengerService:
             raise ValueError("같은 첨부 파일을 중복 사용할 수 없습니다.")
         if sum(item["size_bytes"] for item in resolved_attachments) > settings.mail_attachment_max_total_bytes:
             raise ValueError("첨부 파일의 전체 용량 제한을 초과했습니다.")
+        payload = payload.model_copy(
+            update={
+                "bodyHtml": self._sanitize_resolved_body_html(
+                    payload.bodyHtml,
+                    resolved_attachments,
+                )
+            }
+        )
 
         now = self._now()
         mail_id = self._new_id("mailmsg")
