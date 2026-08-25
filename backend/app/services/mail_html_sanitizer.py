@@ -313,6 +313,9 @@ def _validate_html_declarations(html: str) -> None:
             state = "tag"
         offset += 1
 
+    if state != "data":
+        raise ValueError("메일 HTML 태그 형식이 올바르지 않습니다.")
+
 
 def _remove_non_cid_images(html: str) -> str:
     parser = _NonCidImageRemovingParser()

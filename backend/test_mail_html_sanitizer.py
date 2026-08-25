@@ -142,6 +142,31 @@ def test_declaration_like_text_in_quoted_attributes_is_preserved(
 
 
 @pytest.mark.parametrize(
+    "html",
+    [
+        '<p>safe</p><span title="unterminated <!ENTITY x>',
+        "<p>safe</p><span title='unterminated <!ENTITY x>",
+        "<p>safe</p><span",
+        "<p>safe</p></span",
+        "<p>safe</p><span title=",
+        "<p>safe</p><span title=unterminated",
+    ],
+    ids=[
+        "double-quoted-attribute",
+        "single-quoted-attribute",
+        "start-tag",
+        "end-tag",
+        "before-attribute-value",
+        "unquoted-attribute-value",
+    ],
+)
+def test_incomplete_markup_at_eof_is_rejected(html: str) -> None:
+    """Accepting EOF while the lexical scan is inside markup must fail."""
+    with pytest.raises(ValueError):
+        sanitize_mail_html(html, set())
+
+
+@pytest.mark.parametrize(
     ("html", "expected"),
     [
         ("<!-- 정상 주석 --><p>본문</p>", "<p>본문</p>"),
