@@ -115,6 +115,33 @@ case "$tls_mode" in
         ;;
 esac
 
+auth_enabled="$(printf '%s' "${SMTP_AUTH_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')"
+smtpd_sasl_auth_enable="no"
+case "$auth_enabled" in
+    false)
+        ;;
+    true)
+        if [ "$tls_mode" != "certificate" ]; then
+            echo "SMTP AUTH requires certificate TLS mode" >&2
+            exit 1
+        fi
+        : "${SMTP_SUBMISSION_USERNAME:?SMTP_SUBMISSION_USERNAME is required when SMTP_AUTH_ENABLED=true}"
+        : "${SMTP_SUBMISSION_PASSWORD_HASH:?SMTP_SUBMISSION_PASSWORD_HASH is required when SMTP_AUTH_ENABLED=true}"
+        case "$SMTP_SUBMISSION_USERNAME" in
+            *[!A-Za-z0-9._@-]*|'') echo "SMTP_SUBMISSION_USERNAME is invalid" >&2; exit 1 ;;
+        esac
+        case "$SMTP_SUBMISSION_PASSWORD_HASH" in
+            "{SHA512-CRYPT}"*) ;;
+            *) echo "SMTP_SUBMISSION_PASSWORD_HASH must use SHA512-CRYPT" >&2; exit 1 ;;
+        esac
+        smtpd_sasl_auth_enable="yes"
+        ;;
+    *)
+        echo "SMTP_AUTH_ENABLED must be true or false" >&2
+        exit 1
+        ;;
+esac
+
 : "${POSTGRES_HOST:?POSTGRES_HOST is required}"
 : "${POSTGRES_PORT:?POSTGRES_PORT is required}"
 : "${POSTGRES_DB:?POSTGRES_DB is required}"
@@ -164,8 +191,9 @@ SMTP_RELAY_DOMAINS="$relay_domains"
 SMTPD_TLS_SECURITY_LEVEL="$smtpd_tls_security_level"
 SMTPD_TLS_CERT_FILE="$smtpd_tls_cert_file"
 SMTPD_TLS_KEY_FILE="$smtpd_tls_key_file"
-export SMTP_RELAY_DOMAINS SMTPD_TLS_SECURITY_LEVEL SMTPD_TLS_CERT_FILE SMTPD_TLS_KEY_FILE
-envsubst '${MAIL_HOSTNAME} ${SMTP_RELAY_DOMAINS} ${SMTPD_TLS_SECURITY_LEVEL} ${SMTPD_TLS_CERT_FILE} ${SMTPD_TLS_KEY_FILE}' < /etc/postfix/main.cf.template > /etc/postfix/main.cf
+SMTPD_SASL_AUTH_ENABLE="$smtpd_sasl_auth_enable"
+export SMTP_RELAY_DOMAINS SMTPD_TLS_SECURITY_LEVEL SMTPD_TLS_CERT_FILE SMTPD_TLS_KEY_FILE SMTPD_SASL_AUTH_ENABLE
+envsubst '${MAIL_HOSTNAME} ${SMTP_RELAY_DOMAINS} ${SMTPD_TLS_SECURITY_LEVEL} ${SMTPD_TLS_CERT_FILE} ${SMTPD_TLS_KEY_FILE} ${SMTPD_SASL_AUTH_ENABLE}' < /etc/postfix/main.cf.template > /etc/postfix/main.cf
 envsubst < /etc/postfix/pgsql-virtual-domains.cf.template > /etc/postfix/pgsql-virtual-domains.cf
 envsubst < /etc/postfix/pgsql-virtual-recipients.cf.template > /etc/postfix/pgsql-virtual-recipients.cf
 chown root:postfix /etc/postfix/pgsql-virtual-domains.cf /etc/postfix/pgsql-virtual-recipients.cf
@@ -178,5 +206,12 @@ mkdir -p /var/spool/postfix/etc
 cp /etc/resolv.conf /var/spool/postfix/etc/resolv.conf
 cp /etc/hosts /var/spool/postfix/etc/hosts
 chmod 0644 /var/spool/postfix/etc/resolv.conf /var/spool/postfix/etc/hosts
+if [ "$auth_enabled" = "true" ]; then
+    printf '%s:%s\n' "$SMTP_SUBMISSION_USERNAME" "$SMTP_SUBMISSION_PASSWORD_HASH" > /etc/dovecot/submission-users
+    chown root:dovecot /etc/dovecot/submission-users
+    chmod 0640 /etc/dovecot/submission-users
+    doveconf -c /etc/dovecot/dovecot.conf >/dev/null
+    dovecot -c /etc/dovecot/dovecot.conf
+fi
 postfix check
 exec postfix start-fg

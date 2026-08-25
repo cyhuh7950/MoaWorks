@@ -141,7 +141,7 @@ class MailGatewayContractTest(unittest.TestCase):
             [
                 self.envsubst,
                 "${MAIL_HOSTNAME} ${SMTP_RELAY_DOMAINS} ${SMTPD_TLS_SECURITY_LEVEL} "
-                "${SMTPD_TLS_CERT_FILE} ${SMTPD_TLS_KEY_FILE}",
+                "${SMTPD_TLS_CERT_FILE} ${SMTPD_TLS_KEY_FILE} ${SMTPD_SASL_AUTH_ENABLE}",
             ],
             input=template,
             env=process_environment,
@@ -309,6 +309,52 @@ class MailGatewayContractTest(unittest.TestCase):
         )
         self.assertNotEqual(0, unknown.returncode)
         self.assertIn("SMTP_TLS_MODE must be disabled or certificate", unknown.stderr)
+
+    def test_smtp_auth_requires_certificate_tls_mode(self) -> None:
+        result = self._run_entrypoint_tls_validation(
+            SMTP_AUTH_ENABLED="true",
+            SMTP_TLS_MODE="disabled",
+            MAIL_HOSTNAME="mail.dev.moaworks.sinsan.kr",
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("SMTP AUTH requires certificate TLS mode", result.stderr)
+        self.assertNotIn("POSTGRES_HOST is required", result.stderr)
+
+    def test_rendered_gateway_allows_authenticated_relay_only_after_tls(self) -> None:
+        rendered = self._render_main_cf(
+            MAIL_HOSTNAME="mail.dev.moaworks.sinsan.kr",
+            SMTP_RELAY_DOMAINS="",
+            SMTPD_TLS_SECURITY_LEVEL="may",
+            SMTPD_TLS_CERT_FILE="/run/tls/fullchain.pem",
+            SMTPD_TLS_KEY_FILE="/run/tls/privkey.pem",
+            SMTPD_SASL_AUTH_ENABLE="yes",
+        )
+
+        self.assertIn("smtpd_sasl_type = dovecot", rendered)
+        self.assertIn("smtpd_sasl_path = private/auth", rendered)
+        self.assertIn("smtpd_sasl_auth_enable = yes", rendered)
+        self.assertIn("smtpd_tls_auth_only = yes", rendered)
+        restrictions = next(
+            line for line in rendered.splitlines() if line.startswith("smtpd_recipient_restrictions =")
+        )
+        self.assertLess(restrictions.index("permit_sasl_authenticated"), restrictions.index("reject_unlisted_recipient"))
+        self.assertIn("reject_unauth_destination", restrictions)
+
+    def test_wsl_gateway_packages_and_configures_dovecot_auth_socket(self) -> None:
+        dockerfile = (ROOT / "deploy" / "mail-gateway" / "Dockerfile").read_text(encoding="utf-8")
+        entrypoint = (ROOT / "deploy" / "mail-gateway" / "entrypoint.sh").read_text(encoding="utf-8")
+        compose = (ROOT / "deploy" / "docker-compose.wsl.yml").read_text(encoding="utf-8")
+        dovecot_config = ROOT / "deploy" / "mail-gateway" / "dovecot.conf"
+
+        self.assertIn("dovecot-core", dockerfile)
+        self.assertTrue(dovecot_config.is_file())
+        self.assertIn("/var/spool/postfix/private/auth", dovecot_config.read_text(encoding="utf-8"))
+        self.assertIn("SMTP_SUBMISSION_PASSWORD_HASH", entrypoint)
+        self.assertIn("dovecot -c /etc/dovecot/dovecot.conf", entrypoint)
+        self.assertIn("SMTP_AUTH_ENABLED: ${SMTP_AUTH_ENABLED:-false}", compose)
+        self.assertIn('"25:25"', compose)
+        self.assertNotIn('"2525:25"', compose)
 
     def test_certificate_mode_rejects_missing_invalid_hostname_and_key_mismatch(self) -> None:
         if not Path(self.bash).exists() or not Path(self.openssl).exists():
