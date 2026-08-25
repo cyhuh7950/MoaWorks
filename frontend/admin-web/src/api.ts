@@ -791,7 +791,7 @@ export async function createUser(
 export async function updateUser(
   token: string,
   userId: string,
-  payload: { name?: string; password?: string; departmentId?: string; roleId?: string; status?: string; isDepartmentHead?: boolean },
+  payload: { name?: string; password?: string; departmentId?: string; roleId?: string; status?: string; userType?: string; isDepartmentHead?: boolean },
 ) {
   return request<UserView>(`/admin/users/${userId}`, {
     method: "PATCH",

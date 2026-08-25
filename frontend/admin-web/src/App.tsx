@@ -1834,6 +1834,7 @@ export default function App() {
           departmentId: userForm.departmentId,
           roleId: userForm.roleId,
           status: userForm.status,
+          userType: userForm.userType,
           isDepartmentHead: userForm.isDepartmentHead,
         });
         setMessage("사용자 정보가 수정되었습니다.");
@@ -2729,8 +2730,15 @@ export default function App() {
                     </select>
                   </label>
                   <label className="compact-field">
-                    <span>권한 역할 <InlineHint label="일반 사용자 생성 화면에서는 역할만 선택하고 계정 유형은 자동으로 user 처리됩니다." /></span>
-                    <select value={userForm.roleId} onChange={(e) => setUserForm({ ...userForm, roleId: e.target.value })}>
+                    <span>권한 역할 <InlineHint label="관리자 역할을 선택하면 계정 분류도 관리자(admin)로 맞춰집니다." /></span>
+                    <select value={userForm.roleId} onChange={(e) => {
+                      const selectedRole = activeRoles.find((item) => item.id === e.target.value);
+                      setUserForm({
+                        ...userForm,
+                        roleId: e.target.value,
+                        userType: selectedRole?.name === "관리자" ? "admin" : selectedRole?.name === "일반사용자" ? "user" : userForm.userType,
+                      });
+                    }}>
                       {activeRoles.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                     </select>
                   </label>
@@ -2743,7 +2751,22 @@ export default function App() {
                   </label>
                   <label className="compact-field">
                     <span>계정 분류</span>
-                    <input value={userTypeSummary} readOnly />
+                    {userForm.userId ? (
+                      <select value={userForm.userType} onChange={(event) => {
+                        const nextUserType = event.target.value;
+                        const fallbackRoleName = nextUserType === "admin" ? "관리자" : "일반사용자";
+                        const currentRole = activeRoles.find((item) => item.id === userForm.roleId);
+                        const fallbackRole = activeRoles.find((item) => item.name === fallbackRoleName);
+                        setUserForm({
+                          ...userForm,
+                          userType: nextUserType,
+                          roleId: currentRole?.name === "관리자" || nextUserType === "admin" ? fallbackRole?.id || userForm.roleId : userForm.roleId,
+                        });
+                      }}>
+                        <option value="user">일반 사용자(user)</option>
+                        <option value="admin">관리자(admin)</option>
+                      </select>
+                    ) : <input value={userTypeSummary} readOnly />}
                   </label>
                   <label className="compact-field">
                     <span>부서장 여부 <InlineHint label="부서당 한 명만 부서장으로 지정됩니다. 새 부서장을 지정하면 기존 지정은 해제됩니다." /></span>

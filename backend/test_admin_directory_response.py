@@ -11,6 +11,7 @@ from app.services.directory_store import DirectoryStore
 class _RecordingCursor:
     def __init__(self) -> None:
         self.executions: list[tuple[str, tuple | None]] = []
+        self.fetchone_results: list[dict] = []
 
     def __enter__(self):
         return self
@@ -20,6 +21,9 @@ class _RecordingCursor:
 
     def execute(self, statement: str, parameters: tuple | None = None) -> None:
         self.executions.append((statement, parameters))
+
+    def fetchone(self):
+        return self.fetchone_results.pop(0)
 
 
 class _RecordingConnection:
@@ -94,6 +98,7 @@ class AdminDirectoryResponseTest(unittest.TestCase):
             "department_id": "department-1",
             "role_id": "role-1",
             "user_status": "active",
+            "user_type": "user",
             "is_department_head": False,
             "password_hash": "stored-password-hash",
             "must_change_password": True,
@@ -111,6 +116,7 @@ class AdminDirectoryResponseTest(unittest.TestCase):
                 departmentId="department-2",
                 roleId="role-2",
                 status="inactive",
+                userType="admin",
                 isDepartmentHead=False,
             ),
         )
@@ -119,6 +125,7 @@ class AdminDirectoryResponseTest(unittest.TestCase):
             item for item in cursor.executions
             if "UPDATE users" in item[0] and "SET name = %s" in item[0]
         )
+        self.assertEqual(statement.count("user_type = %s"), 1)
         self.assertEqual(statement.count("is_department_head = %s"), 1)
         self.assertIn("must_change_password = %s", statement)
         self.assertEqual(statement.count("%s"), len(parameters or ()))
@@ -131,6 +138,7 @@ class AdminDirectoryResponseTest(unittest.TestCase):
                 "role-2",
                 False,
                 "inactive",
+                "admin",
                 True,
                 datetime(2026, 8, 24, tzinfo=timezone.utc),
                 "user-1",
@@ -138,6 +146,32 @@ class AdminDirectoryResponseTest(unittest.TestCase):
         )
         self.assertTrue(connection.committed)
         self.assertEqual(result, {"user_id": "user-1"})
+
+    def test_update_user_cannot_demote_last_admin(self) -> None:
+        cursor = _RecordingCursor()
+        cursor.fetchone_results.append({"count": 1})
+        connection = _RecordingConnection(cursor)
+        store = DirectoryStore.__new__(DirectoryStore)
+        store.db = _RecordingDatabase(connection)
+        store._fetch_user_access_row = lambda *args: {
+            "user_id": "admin-1",
+            "company_id": "company-1",
+            "user_name": "관리자",
+            "department_id": "department-1",
+            "role_id": "role-1",
+            "user_status": "active",
+            "user_type": "admin",
+            "is_department_head": False,
+            "password_hash": "stored-password-hash",
+            "must_change_password": False,
+        }
+        store._fetch_required_department = lambda *args: {"status": "active"}
+        store._fetch_required_role = lambda *args: {"status": "active"}
+
+        with self.assertRaisesRegex(ValueError, "마지막 관리자"):
+            store.update_user("admin-1", UserUpdateRequest(userType="user"))
+
+        self.assertFalse(connection.committed)
 
 
 if __name__ == "__main__":

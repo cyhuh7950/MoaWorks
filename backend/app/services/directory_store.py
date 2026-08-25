@@ -735,6 +735,9 @@ class DirectoryStore:
                 next_department_id = payload.departmentId or current["department_id"]
                 next_role_id = payload.roleId or current["role_id"]
                 next_status = payload.status or current["user_status"]
+                next_user_type = (payload.userType or current["user_type"]).strip().lower()
+                if next_user_type not in {"admin", "user"}:
+                    raise ValueError("계정 분류는 admin 또는 user만 사용할 수 있습니다.")
                 next_is_department_head = current["is_department_head"] if payload.isDepartmentHead is None else payload.isDepartmentHead
                 next_password_hash = (
                     self.security.hash_password(payload.password)
@@ -750,6 +753,16 @@ class DirectoryStore:
                 if role["status"] == "deleted":
                     raise ValueError("삭제된 권한 역할은 선택할 수 없습니다.")
 
+                if current["user_type"] == "admin" and (
+                    next_user_type != "admin" or next_status == "deleted"
+                ):
+                    cursor.execute(
+                        "SELECT COUNT(*) AS count FROM users WHERE user_type = 'admin' AND status != 'deleted'"
+                    )
+                    admin_count = int(cursor.fetchone()["count"])
+                    if admin_count <= 1:
+                        raise ValueError("마지막 관리자 계정은 일반 사용자로 변경할 수 없습니다.")
+
                 if next_is_department_head:
                     cursor.execute("UPDATE users SET is_department_head = FALSE, updated_at = %s WHERE department_id = %s AND id <> %s", (self._now(), next_department_id, user_id))
 
@@ -762,11 +775,12 @@ class DirectoryStore:
                         role_id = %s,
                         is_department_head = %s,
                         status = %s,
+                        user_type = %s,
                         must_change_password = %s,
                         updated_at = %s
                     WHERE id = %s
                     """,
-                    (next_name, next_password_hash, next_department_id, next_role_id, next_is_department_head, next_status, next_must_change_password, self._now(), user_id),
+                    (next_name, next_password_hash, next_department_id, next_role_id, next_is_department_head, next_status, next_user_type, next_must_change_password, self._now(), user_id),
                 )
                 cursor.execute(
                     """

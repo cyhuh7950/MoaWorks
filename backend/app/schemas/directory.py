@@ -464,6 +464,7 @@ class UserUpdateRequest(BaseModel):
     departmentId: str | None = None
     roleId: str | None = None
     status: str | None = None
+    userType: str | None = None
     isDepartmentHead: bool | None = None
 
 
