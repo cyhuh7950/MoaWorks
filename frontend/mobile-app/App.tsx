@@ -268,6 +268,7 @@ export default function App() {
   const [mailItems, setMailItems] = useState<MailSummary[]>([]);
   const [selectedMailId, setSelectedMailId] = useState("");
   const [selectedMailDetail, setSelectedMailDetail] = useState<MailDetail | null>(null);
+  const [mailDetailExpanded, setMailDetailExpanded] = useState(false);
   const [mailError, setMailError] = useState("");
   const [mailQuery, setMailQuery] = useState("");
   const [mailFilter, setMailFilter] = useState<"all" | "unread" | "starred">("all");
@@ -722,12 +723,14 @@ export default function App() {
         }, context), (detail) => {
           setSelectedMailId(targetMailId);
           setSelectedMailDetail(detail);
+          setMailDetailExpanded(false);
           setMailError("");
         });
         if (!detailResponse.applied) return;
       } else {
         setSelectedMailId("");
         setSelectedMailDetail(null);
+        setMailDetailExpanded(false);
         setMailError("");
       }
       markBusinessSearchSource("mail", false);
@@ -758,6 +761,7 @@ export default function App() {
       }, context), (detail) => {
         setSelectedMailId(mailId);
         setSelectedMailDetail(detail);
+        setMailDetailExpanded(true);
         if (mailboxTab === "inbox" || mailboxTab === "starred") {
           setMailItems((current) => current.map((item) => (item.mailId === mailId ? { ...item, isRead: true } : item)));
         }
@@ -797,6 +801,7 @@ export default function App() {
     setMailFilter(nextMailbox === "starred" ? "starred" : "all");
     setSelectedMailId("");
     setSelectedMailDetail(null);
+    setMailDetailExpanded(false);
     if (token) void loadMail(token, undefined, sessionControllerRef.current.capture(token), nextMailbox);
   }
 
@@ -1591,7 +1596,7 @@ export default function App() {
                     <Text style={styles.primaryCompactButtonText}>＋ 새 메일</Text>
                   </Pressable>
                 </View>
-                <View accessibilityLabel="메일함" style={styles.mailboxTabs}>
+                <View accessibilityLabel="메일함" style={[styles.mailboxTabs, styles.mailboxTabsCompact]}>
                   {([
                     { id: "inbox", label: "받은메일함" },
                     { id: "starred", label: "중요" },
@@ -1634,14 +1639,14 @@ export default function App() {
                     </Pressable>
                   ))}
                 </View> : null}
-                <View accessibilityLabel="메일 목록" style={styles.mailList}>
+                <View accessibilityLabel="메일 목록" style={[styles.mailList, styles.mailListCompact]}>
                   {visibleMailItems.map((item) => (
                     <Pressable
                       key={item.mailId}
                       accessibilityRole="button"
                       accessibilityLabel={`${item.senderEmail} ${item.subject} 메일 열기`}
                       onPress={() => { void openMail(item.mailId); }}
-                      style={[styles.mailRow, !item.isRead ? styles.mailRowUnread : null, selectedMailId === item.mailId ? styles.mailRowSelected : null]}
+                      style={[styles.mailRow, styles.mailRowCompact, !item.isRead ? styles.mailRowUnread : null, selectedMailId === item.mailId ? styles.mailRowSelected : null]}
                     >
                       <View style={styles.mailRowMain}>
                         <View style={styles.mailRowTop}>
@@ -1660,11 +1665,13 @@ export default function App() {
                 {visibleMailItems.length === 0 ? <Text style={styles.emptyState}>조건에 맞는 메일이 없습니다.</Text> : null}
                 {selectedMailDetail ? (
                   <View style={styles.mailDetailCard}>
-                    <View style={styles.mailDetailHeader}><Text style={styles.mailDetailKicker}>메일 상세</Text>{mailboxTab === "inbox" || mailboxTab === "starred" ? <Text accessibilityRole="button" accessibilityLabel="중요 표시 전환" onPress={() => { void toggleMailStarState(selectedMailDetail.mailId); }} style={styles.mailDetailAction}>★ 중요</Text> : null}</View>
-                    <Text style={styles.mailDetailTitle}>{selectedMailDetail.subject}</Text>
-                    <Text style={styles.mailDetailMeta}>{selectedMailDetail.senderEmail} · {formatStamp(selectedMailDetail.sentAt || selectedMailDetail.createdAt)}</Text>
-                    <Text style={styles.mailDetailBody}>{selectedMailDetail.bodyText}</Text>
-                    <Text style={styles.mailDetailMeta}>수신: {selectedMailDetail.recipients.map((item) => item.recipientEmail).join(", ") || "-"}</Text>
+                    <View style={styles.mailDetailHeader}><Text style={styles.mailDetailKicker}>메일 상세</Text><Pressable accessibilityRole="button" accessibilityLabel={mailDetailExpanded ? "메일 상세 닫기" : "메일 상세 열기"} onPress={() => setMailDetailExpanded((current) => !current)}><Text style={styles.mailDetailAction}>{mailDetailExpanded ? "닫기" : "열기"}</Text></Pressable>{mailboxTab === "inbox" || mailboxTab === "starred" ? <Text accessibilityRole="button" accessibilityLabel="중요 표시 전환" onPress={() => { void toggleMailStarState(selectedMailDetail.mailId); }} style={styles.mailDetailAction}>★ 중요</Text> : null}</View>
+                    {mailDetailExpanded ? <>
+                      <Text style={styles.mailDetailTitle}>{selectedMailDetail.subject}</Text>
+                      <Text style={styles.mailDetailMeta}>{selectedMailDetail.senderEmail} · {formatStamp(selectedMailDetail.sentAt || selectedMailDetail.createdAt)}</Text>
+                      <Text style={styles.mailDetailBody}>{selectedMailDetail.bodyText}</Text>
+                      <Text style={styles.mailDetailMeta}>수신: {selectedMailDetail.recipients.map((item) => item.recipientEmail).join(", ") || "-"}</Text>
+                    </> : null}
                   </View>
                 ) : null}
                 {mailError ? <Text style={styles.error}>{mailError}</Text> : null}
@@ -2464,10 +2471,10 @@ const styles = StyleSheet.create({
   },
   mailScreen: {
     backgroundColor: "#ffffff",
-    borderRadius: 16,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#dce5ec",
-    padding: 14,
+    borderColor: "#e2e8f0",
+    padding: 10,
   },
   moduleToolbar: {
     flexDirection: "row",
@@ -2502,6 +2509,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     borderBottomWidth: 1,
     borderBottomColor: "#dbe4ec",
+  },
+  mailboxTabsCompact: {
+    marginTop: 8,
+    minHeight: 30,
   },
   mailboxTab: {
     flex: 1,
@@ -2619,6 +2630,9 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "#dbe4ec",
   },
+  mailListCompact: {
+    marginTop: 6,
+  },
   mailRow: {
     minHeight: 58,
     paddingVertical: 8,
@@ -2626,6 +2640,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#e2e8f0",
     backgroundColor: "#ffffff",
+  },
+  mailRowCompact: {
+    minHeight: 48,
+    paddingVertical: 5,
+    paddingHorizontal: 6,
   },
   mailRowUnread: {
     backgroundColor: "#f0fdfa",
@@ -2677,9 +2696,9 @@ const styles = StyleSheet.create({
     fontSize: 11,
   },
   mailDetailCard: {
-    marginTop: 10,
-    borderRadius: 12,
-    padding: 12,
+    marginTop: 8,
+    borderRadius: 8,
+    padding: 8,
     backgroundColor: "#f8fafc",
     borderWidth: 1,
     borderColor: "#dbe4ec",
