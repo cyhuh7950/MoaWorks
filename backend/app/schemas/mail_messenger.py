@@ -149,10 +149,10 @@ class MailAttachmentDispositionContract(BaseModel):
 
     @field_validator("contentId", mode="before")
     @classmethod
-    def normalize_content_id(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return value.strip()
+    def normalize_content_id(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
 
     @model_validator(mode="after")
     def require_disposition_content_id_pair(self):

@@ -74,6 +74,41 @@ class MailInlineAttachmentContractTests(unittest.TestCase):
         self.assertEqual(item.disposition, "inline")
         self.assertEqual(item.contentId, "mw-1@moaworks.invalid")
 
+    def test_meta_rejects_non_string_content_id_with_validation_error(self) -> None:
+        """Leaking AttributeError for a JSON number CID must fail this test."""
+        with self.assertRaises(ValidationError):
+            MailAttachmentMeta(
+                uploadId="d" * 32,
+                fileName="a.png",
+                contentType="image/png",
+                sizeBytes=1,
+                disposition="inline",
+                contentId=123,
+            )
+
+    def test_upload_response_rejects_non_string_content_id_with_validation_error(self) -> None:
+        """Leaking AttributeError for a response JSON number CID must fail this test."""
+        with self.assertRaises(ValidationError):
+            MailAttachmentUploadResponse(
+                uploadId="e" * 32,
+                fileName="a.png",
+                contentType="image/png",
+                sizeBytes=1,
+                disposition="inline",
+                contentId=123,
+            )
+
+    def test_view_rejects_non_string_content_id_with_validation_error(self) -> None:
+        """Leaking AttributeError for a view JSON number CID must fail this test."""
+        with self.assertRaises(ValidationError):
+            MailAttachmentView(
+                fileName="a.png",
+                contentType="image/png",
+                sizeBytes=1,
+                disposition="inline",
+                contentId=123,
+            )
+
     def test_upload_and_view_keep_attachment_safe_defaults(self) -> None:
         """Removing API response defaults or exposing a default CID must fail this test."""
         uploaded = MailAttachmentUploadResponse(
