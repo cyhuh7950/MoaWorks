@@ -1729,7 +1729,7 @@ export default function App() {
             ) : null}
 
             {activeTab === "chat" ? (
-              <View style={styles.messengerScreen}>
+              <View style={[styles.messengerScreen, styles.messengerScreenFlat]}>
                 <View style={styles.messengerHeader}>
                   <View style={styles.messengerAvatar}><Text style={styles.messengerAvatarText}>{messengerScreen.selectedRoom?.roomName?.slice(0, 1) || "M"}</Text></View>
                   <View style={styles.messengerHeaderText}><Text accessibilityRole="header" style={styles.messengerRoomTitle}>{messengerScreen.selectedRoom?.roomName || "메신저"}</Text><Text style={styles.messengerRoomMeta}>{messengerScreen.selectedRoom ? `참여자 ${messengerScreen.selectedRoom.participantIds.length}명` : "대화방을 선택해 주세요"}</Text></View>
@@ -1744,7 +1744,7 @@ export default function App() {
                     })}
                     {messengerScreen.messages.length === 0 ? <Text style={styles.messengerEmptyMessages}>아직 메시지가 없습니다.</Text> : null}
                   </View>
-                  <View accessibilityLabel="대화 번역 언어" style={styles.translationControl}>
+                  <View accessibilityLabel="대화 번역 언어" style={[styles.translationControl, styles.messengerLanguageSwitcher]}>
                     <Pressable accessibilityRole="button" accessibilityLabel="한국어 번역 선택" disabled={chatTranslationPending} onPress={() => { void updateRoomTranslation("ko"); }} style={styles.translationOption}><Text style={[styles.translationOptionText, messengerScreen.selectedRoom?.translationLocale === "ko" ? styles.translationOptionTextActive : null]}>한국어</Text></Pressable>
                     <Text style={styles.translationSwap}>↔</Text>
                     <Pressable accessibilityRole="button" accessibilityLabel="English 번역 선택" disabled={chatTranslationPending} onPress={() => { void updateRoomTranslation("en"); }} style={styles.translationOption}><Text style={[styles.translationOptionText, messengerScreen.selectedRoom?.translationLocale === "en" ? styles.translationOptionTextActive : null]}>English</Text></Pressable>
@@ -2927,6 +2927,12 @@ const styles = StyleSheet.create({
     borderColor: "#dce5ec",
     overflow: "hidden",
   },
+  messengerScreenFlat: {
+    backgroundColor: "transparent",
+    borderRadius: 0,
+    borderWidth: 0,
+    overflow: "visible",
+  },
   messengerHeader: {
     minHeight: 58,
     flexDirection: "row",
@@ -3072,6 +3078,9 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     borderColor: "#0f9f9a",
+  },
+  messengerLanguageSwitcher: {
+    marginHorizontal: 12,
   },
   translationOption: {
     flex: 1,
