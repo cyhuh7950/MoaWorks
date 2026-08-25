@@ -1433,7 +1433,7 @@ export default function App() {
             ) : null}
 
             {activeTab === "more" && moreScreen === "directory" ? (
-              <View style={styles.directoryScreen}>
+              <View style={[styles.directoryScreen, styles.directoryScreenFlat]}>
                 <Text accessibilityRole="header" style={styles.directoryScreenTitle}>주소록</Text>
                 <TextInput accessibilityLabel="주소록 검색" accessibilityHint="이름, 부서, 역할 또는 이메일로 사원을 검색합니다." style={styles.directorySearchInput} value={directoryQuery} onChangeText={setDirectoryQuery} placeholder="이름, 부서, 직책 검색" />
                 <View style={styles.directorySections}>{(["all", "favorites", "recent"] as const).map((section, index) => <Pressable key={section} accessibilityRole="button" accessibilityLabel={`${directoryScreen.sections[index]} 주소록 보기`} onPress={() => setDirectorySection(section)} style={[styles.directorySection, directorySection === section ? styles.directorySectionActive : null]}><Text style={[styles.directorySectionText, directorySection === section ? styles.directorySectionTextActive : null]}>{directoryScreen.sections[index]}</Text></Pressable>)}</View>
@@ -3216,6 +3216,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#dce5ec",
     padding: 12,
+  },
+  directoryScreenFlat: {
+    backgroundColor: "transparent",
+    borderWidth: 0,
+    borderRadius: 0,
+    padding: 0,
   },
   directoryScreenTitle: {
     color: "#0f172a",
