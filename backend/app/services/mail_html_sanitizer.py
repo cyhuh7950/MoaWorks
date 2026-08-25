@@ -102,6 +102,9 @@ _UNSAFE_STYLE = re.compile(
     r"url\(|expression\(|var\(|--|@import|behavior|binding|/\*|\*/|\\",
     re.IGNORECASE,
 )
+_SANITIZED_IMAGE_TAG = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+_SANITIZED_IMAGE_SOURCE = re.compile(r'\bsrc="([^"]*)"', re.IGNORECASE)
+_MAX_MAIL_HTML_BYTES = 1_048_576
 
 
 def _content_id_from_source(source: str | None) -> str | None:
@@ -152,8 +155,16 @@ class _MailHtmlSecurityScanner(_CidReferenceParser):
 
         if normalized_tag == "img":
             sources = [value for name, value in attrs if name.lower() == "src"]
-            if len(sources) != 1 or _content_id_from_source(sources[0]) is None:
-                raise ValueError("메일 본문 이미지는 허용된 CID만 참조할 수 있습니다.")
+            if len(sources) > 1:
+                raise ValueError("메일 본문 이미지 주소가 중복되었습니다.")
+            if sources:
+                source = sources[0]
+                if (
+                    isinstance(source, str)
+                    and source.strip().lower().startswith("cid:")
+                    and _content_id_from_source(source) is None
+                ):
+                    raise ValueError("메일 본문 이미지 CID 형식이 올바르지 않습니다.")
 
         if normalized_tag == "a":
             for name, value in attrs:
@@ -168,6 +179,46 @@ class _MailHtmlSecurityScanner(_CidReferenceParser):
 def _contains_unsafe_style(value: str) -> bool:
     compact = re.sub(r"[\x00-\x20]+", "", value)
     return bool(_UNSAFE_STYLE.search(compact))
+
+
+def _validate_html_size(html: str) -> None:
+    if len(html.encode("utf-8")) > _MAX_MAIL_HTML_BYTES:
+        raise ValueError("메일 HTML 크기는 UTF-8 기준 1 MiB 이하여야 합니다.")
+
+
+def _validate_html_comments(html: str) -> None:
+    offset = 0
+    while True:
+        opening = html.find("<!--", offset)
+        closing = html.find("-->", offset)
+        if opening < 0:
+            if closing >= 0:
+                raise ValueError("메일 HTML 주석 형식이 올바르지 않습니다.")
+            return
+        if 0 <= closing < opening:
+            raise ValueError("메일 HTML 주석 형식이 올바르지 않습니다.")
+
+        content_start = opening + 4
+        if html.startswith(">", content_start) or html.startswith("->", content_start):
+            raise ValueError("메일 HTML 주석 형식이 올바르지 않습니다.")
+
+        closing = html.find("-->", content_start)
+        if closing < 0:
+            raise ValueError("메일 HTML 주석 형식이 올바르지 않습니다.")
+        comment = html[content_start:closing]
+        if "<!--" in comment or "--" in comment:
+            raise ValueError("메일 HTML 주석 형식이 올바르지 않습니다.")
+        offset = closing + 3
+
+
+def _remove_non_cid_images(html: str) -> str:
+    def keep_allowed_image(match: re.Match[str]) -> str:
+        source = _SANITIZED_IMAGE_SOURCE.search(match.group(0))
+        if source is None or _content_id_from_source(source.group(1)) is None:
+            return ""
+        return match.group(0)
+
+    return _SANITIZED_IMAGE_TAG.sub(keep_allowed_image, html)
 
 
 def _is_safe_link(value: str | None) -> bool:
@@ -267,6 +318,7 @@ def extract_cid_references(html: str | None) -> set[str]:
         return set()
     if not isinstance(html, str):
         raise ValueError("메일 HTML 형식이 올바르지 않습니다.")
+    _validate_html_size(html)
     parser = _CidReferenceParser()
     parser.feed(html)
     parser.close()
@@ -289,6 +341,8 @@ def sanitize_mail_html(
         return None
     if not isinstance(html, str):
         raise ValueError("메일 HTML 형식이 올바르지 않습니다.")
+    _validate_html_size(html)
+    _validate_html_comments(html)
 
     scanner = _MailHtmlSecurityScanner()
     scanner.feed(html)
@@ -308,6 +362,7 @@ def sanitize_mail_html(
         filter_style_properties=ALLOWED_STYLES,
         url_relative="deny",
     )
+    cleaned = _remove_non_cid_images(cleaned)
     if extract_cid_references(cleaned) != allowed_content_ids:
         raise ValueError("정화된 본문 CID와 인라인 이미지가 일치하지 않습니다.")
     return cleaned

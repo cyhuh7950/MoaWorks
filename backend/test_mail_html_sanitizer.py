@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
-from app.schemas.mail_messenger import MailAttachmentMeta, MailDraftRequest
+from app.schemas.mail_messenger import (
+    MailAttachmentMeta,
+    MailDraftRequest,
+    MailSendRequest,
+)
 from app.services.mail_html_sanitizer import (
     extract_cid_references,
     sanitize_mail_html,
@@ -16,8 +22,6 @@ from app.services.mail_messenger_service import MailMessengerService
         "<script>alert(1)</script>",
         '<iframe src="https://tracker.example/frame"></iframe>',
         '<p onclick="alert(1)">본문</p>',
-        '<img src="https://tracker.example/x">',
-        '<img src="data:image/png;base64,AAAA">',
         '<span style="background:url(https://tracker.example/x)">본문</span>',
         '<span style="background-image:u/**/rl(https://tracker.example/x)">본문</span>',
         '<span style="color:var(--mail-color)">본문</span>',
@@ -25,8 +29,53 @@ from app.services.mail_messenger_service import MailMessengerService
         '<a href="java&#x0a;script:alert(1)">링크</a>',
     ],
 )
-def test_active_or_remote_content_is_rejected(html: str) -> None:
-    """Allowing active or remotely loaded content must fail this test."""
+def test_active_or_unsafe_content_is_rejected(html: str) -> None:
+    """Allowing active elements, handlers, CSS, or links must fail this test."""
+    with pytest.raises(ValueError):
+        sanitize_mail_html(html, set())
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        "<!--><script>alert(1)</script>-->",
+        "<!--><img src=x onerror=alert(1)>-->",
+        '<!--><span style="background:url(https://tracker.example/x)">본문</span>-->',
+        '<!--><a href="javascript:alert(1)">링크</a>-->',
+    ],
+)
+def test_malformed_comment_cannot_hide_active_content(html: str) -> None:
+    """Parser disagreement accepting hidden active content must fail this test."""
+    with pytest.raises(ValueError):
+        sanitize_mail_html(html, set())
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        "a" * 1_048_576,
+        "가" * 349_525 + "a",
+    ],
+    ids=["ascii", "multibyte"],
+)
+def test_mail_html_accepts_exactly_one_mib_in_utf8_bytes(html: str) -> None:
+    """Counting characters instead of UTF-8 bytes at the inclusive limit must fail."""
+    cleaned = sanitize_mail_html(html, set())
+
+    assert cleaned is not None
+    assert len(cleaned.encode("utf-8")) == 1_048_576
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        "a" * 1_048_577,
+        "가" * 349_525 + "ab",
+    ],
+    ids=["ascii", "multibyte"],
+)
+def test_mail_html_rejects_one_mib_plus_one_utf8_byte(html: str) -> None:
+    """Allowing a body one byte above the parser budget must fail this test."""
     with pytest.raises(ValueError):
         sanitize_mail_html(html, set())
 
@@ -74,6 +123,25 @@ def test_external_image_candidate_attributes_are_removed() -> None:
     )
 
     assert cleaned == '<img src="cid:image@example.invalid" alt="사진">'
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "https://tracker.example/x.png",
+        "data:image/png;base64,AAAA",
+        "/mail/image.png",
+        "images/image.png",
+    ],
+)
+def test_non_cid_images_are_removed_without_rejecting_safe_text(source: str) -> None:
+    """Rejecting the whole forwarded body or retaining a non-CID image must fail."""
+    cleaned = sanitize_mail_html(
+        f'<blockquote><p>전달 앞<img src="{source}" alt="추적">전달 뒤</p></blockquote>',
+        set(),
+    )
+
+    assert cleaned == "<blockquote><p>전달 앞전달 뒤</p></blockquote>"
 
 
 @pytest.mark.parametrize(
@@ -148,6 +216,18 @@ class _NoDatabaseAccess:
         raise AssertionError("unsafe HTML reached the database boundary")
 
 
+class _DatabaseBoundaryReached(RuntimeError):
+    pass
+
+
+class _DatabaseBoundaryProbe:
+    def ensure_migrations_applied(self) -> None:
+        return None
+
+    def connect(self):
+        raise _DatabaseBoundaryReached("safe HTML reached the database boundary")
+
+
 class _AttachmentStorageWithoutCanonicalCid:
     def resolve(self, actor, attachment: MailAttachmentMeta) -> dict:
         return {
@@ -201,6 +281,112 @@ def test_scheduled_update_rejects_unsafe_html_before_database_access() -> None:
 
     with pytest.raises(ValueError):
         service.update_scheduled_mail(service, "mail-1", payload)
+
+
+def test_safe_draft_forward_and_schedule_create_reach_database_boundary() -> None:
+    """Rejecting safe existing compose flows after image removal must fail this test."""
+    service = MailMessengerService.__new__(MailMessengerService)
+    service.db = _DatabaseBoundaryProbe()
+    service.attachment_storage = _AttachmentStorageWithoutCanonicalCid()
+    safe_html = (
+        '<blockquote><p>전달 앞<img src="https://tracker.example/x.png" alt="추적">'
+        "전달 뒤</p></blockquote>"
+    )
+    payloads = [
+        (
+            MailDraftRequest(subject="초안", bodyText="본문", bodyHtml=safe_html),
+            "draft",
+        ),
+        (
+            MailDraftRequest(
+                subject="Fwd: 제목",
+                bodyText="전달 본문",
+                bodyHtml=safe_html,
+                composeAction="forward",
+                sourceMailId="mailmsg_source",
+            ),
+            "draft",
+        ),
+        (
+            MailSendRequest(
+                to=["to@example.invalid"],
+                subject="예약",
+                bodyText="본문",
+                bodyHtml=safe_html,
+                scheduledAt=datetime.now(UTC) + timedelta(minutes=5),
+            ),
+            "scheduled",
+        ),
+    ]
+
+    for payload, status_value in payloads:
+        with pytest.raises(_DatabaseBoundaryReached):
+            service._save_mail(service, payload, status_value=status_value)
+
+
+def test_safe_scheduled_update_reaches_database_boundary() -> None:
+    """Rejecting a safe scheduled update after remote image removal must fail."""
+    service = MailMessengerService.__new__(MailMessengerService)
+    service.db = _DatabaseBoundaryProbe()
+    payload = type(
+        "ScheduledPayload",
+        (),
+        {
+            "to": ["to@example.invalid"],
+            "cc": [],
+            "bcc": [],
+            "bodyHtml": '<p>앞<img src="data:image/png;base64,AAAA" alt="제거">뒤</p>',
+        },
+    )()
+
+    with pytest.raises(_DatabaseBoundaryReached):
+        service.update_scheduled_mail(service, "mail-1", payload)
+
+
+@pytest.mark.parametrize(
+    ("payload", "status_value"),
+    [
+        (
+            MailDraftRequest(
+                subject="초안",
+                bodyText="본문",
+                bodyHtml="<!--><script>alert(1)</script>-->",
+            ),
+            "draft",
+        ),
+        (
+            MailDraftRequest(
+                subject="Fwd: 제목",
+                bodyText="전달 본문",
+                bodyHtml="<!--><img src=x onerror=alert(1)>-->",
+                composeAction="forward",
+                sourceMailId="mailmsg_source",
+            ),
+            "draft",
+        ),
+        (
+            MailSendRequest(
+                to=["to@example.invalid"],
+                subject="예약",
+                bodyText="본문",
+                bodyHtml='<!--><a href="javascript:alert(1)">링크</a>-->',
+                scheduledAt=datetime.now(UTC) + timedelta(minutes=5),
+            ),
+            "scheduled",
+        ),
+    ],
+)
+def test_active_html_is_rejected_before_draft_forward_or_schedule_storage(
+    payload: MailDraftRequest | MailSendRequest,
+    status_value: str,
+) -> None:
+    """Letting malformed active HTML reach any create storage path must fail."""
+    service = MailMessengerService.__new__(MailMessengerService)
+    service.db = _NoDatabaseAccess()
+    service.attachment_storage = _AttachmentStorageWithoutCanonicalCid()
+
+    with pytest.raises(ValueError):
+        service._save_mail(service, payload, status_value=status_value)
 
 
 def test_none_and_plain_text_only_html_keep_existing_contract() -> None:
