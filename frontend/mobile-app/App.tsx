@@ -1663,15 +1663,13 @@ export default function App() {
                   ))}
                 </View>
                 {visibleMailItems.length === 0 ? <Text style={styles.emptyState}>조건에 맞는 메일이 없습니다.</Text> : null}
-                {selectedMailDetail ? (
+                {selectedMailDetail && mailDetailExpanded ? (
                   <View style={styles.mailDetailCard}>
-                    <View style={styles.mailDetailHeader}><Text style={styles.mailDetailKicker}>메일 상세</Text>{mailDetailExpanded ? <Pressable accessibilityRole="button" accessibilityLabel="메일 상세 닫기" onPress={() => setMailDetailExpanded(false)}><Text style={styles.mailDetailAction}>닫기</Text></Pressable> : <Pressable accessibilityRole="button" accessibilityLabel="메일 상세 열기" onPress={() => setMailDetailExpanded(true)}><Text style={styles.mailDetailAction}>열기</Text></Pressable>}{mailboxTab === "inbox" || mailboxTab === "starred" ? <Text accessibilityRole="button" accessibilityLabel="중요 표시 전환" onPress={() => { void toggleMailStarState(selectedMailDetail.mailId); }} style={styles.mailDetailAction}>★ 중요</Text> : null}</View>
-                    {mailDetailExpanded ? <>
-                      <Text style={styles.mailDetailTitle}>{selectedMailDetail.subject}</Text>
-                      <Text style={styles.mailDetailMeta}>{selectedMailDetail.senderEmail} · {formatStamp(selectedMailDetail.sentAt || selectedMailDetail.createdAt)}</Text>
-                      <Text style={styles.mailDetailBody}>{selectedMailDetail.bodyText}</Text>
-                      <Text style={styles.mailDetailMeta}>수신: {selectedMailDetail.recipients.map((item) => item.recipientEmail).join(", ") || "-"}</Text>
-                    </> : null}
+                    <View style={styles.mailDetailHeader}><Text style={styles.mailDetailKicker}>메일 상세</Text><Pressable accessibilityRole="button" accessibilityLabel="메일 상세 닫기" onPress={() => setMailDetailExpanded(false)}><Text style={styles.mailDetailAction}>닫기</Text></Pressable>{mailboxTab === "inbox" || mailboxTab === "starred" ? <Text accessibilityRole="button" accessibilityLabel="중요 표시 전환" onPress={() => { void toggleMailStarState(selectedMailDetail.mailId); }} style={styles.mailDetailAction}>★ 중요</Text> : null}</View>
+                    <Text style={styles.mailDetailTitle}>{selectedMailDetail.subject}</Text>
+                    <Text style={styles.mailDetailMeta}>{selectedMailDetail.senderEmail} · {formatStamp(selectedMailDetail.sentAt || selectedMailDetail.createdAt)}</Text>
+                    <Text style={styles.mailDetailBody}>{selectedMailDetail.bodyText}</Text>
+                    <Text style={styles.mailDetailMeta}>수신: {selectedMailDetail.recipients.map((item) => item.recipientEmail).join(", ") || "-"}</Text>
                   </View>
                 ) : null}
                 {mailError ? <Text style={styles.error}>{mailError}</Text> : null}
@@ -2470,11 +2468,10 @@ const styles = StyleSheet.create({
     lineHeight: 21,
   },
   mailScreen: {
-    backgroundColor: "#ffffff",
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-    padding: 10,
+    backgroundColor: "transparent",
+    borderRadius: 0,
+    borderWidth: 0,
+    padding: 0,
   },
   moduleToolbar: {
     flexDirection: "row",
