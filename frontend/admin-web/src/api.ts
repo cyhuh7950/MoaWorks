@@ -618,6 +618,18 @@ export type ContentListResponse<T> = {
 
 const defaultApiBase = "/api/v1";
 
+export class ApiRequestError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+
+  constructor(message: string, status: number, code: string | null = null) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
 function normalizeBrowserApiBase(value: string | null | undefined) {
   if (!value) {
     return defaultApiBase;
@@ -665,7 +677,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     const detail = data.detail;
     const detailMessage = typeof detail === "string" ? detail : detail?.userMessage ?? detail?.adminMessage;
-    throw new Error(data.adminMessage ?? data.userMessage ?? detailMessage ?? "요청 처리에 실패했습니다.");
+    throw new ApiRequestError(
+      data.adminMessage ?? data.userMessage ?? detailMessage ?? "요청 처리에 실패했습니다.",
+      response.status,
+      typeof detail === "object" && detail !== null && typeof detail.code === "string" ? detail.code : null,
+    );
   }
   return data as T;
 }

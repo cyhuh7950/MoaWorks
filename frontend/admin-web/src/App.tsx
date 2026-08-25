@@ -2,6 +2,7 @@ import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 
 import {
   acknowledgeMonitoringAlert,
+  ApiRequestError,
   apiBase,
   applyOrgImport,
   bulkContentMessageStatus,
@@ -890,6 +891,10 @@ export default function App() {
     }
   }
 
+  function isUnauthorizedError(error: unknown): boolean {
+    return error instanceof ApiRequestError && error.status === 401;
+  }
+
   function clearTransientFeedback() {
     setMessage("");
     setErrors([]);
@@ -1531,7 +1536,7 @@ export default function App() {
   useEffect(() => {
     if (token && health?.initialized) {
       void refreshDirectory(token).catch((error) => {
-        resetAdminSession(error instanceof Error ? error.message : "관리 데이터 조회 실패");
+        resetAdminSession(isUnauthorizedError(error) ? "관리자 세션이 만료되었습니다. 다시 로그인해 주세요." : error instanceof Error ? error.message : "관리 데이터 조회 실패");
       });
       void refreshMonitoring(token).catch((error) => {
         setErrors((current) => [...current, error instanceof Error ? error.message : "운영 모니터링 조회 실패"]);
@@ -1540,6 +1545,10 @@ export default function App() {
         setErrors((current) => [...current, error instanceof Error ? error.message : "운영 백업 조회 실패"]);
       });
       void refreshMailDelivery(token).catch((error) => {
+        if (isUnauthorizedError(error)) {
+          resetAdminSession("관리자 세션이 만료되었습니다. 메일 설정을 다시 조회하려면 로그인해 주세요.");
+          return;
+        }
         setErrors((current) => [...current, error instanceof Error ? error.message : "자체 SMTP 상태 조회 실패"]);
       });
       void refreshAdminMessengerRooms(token).catch((error) => {
