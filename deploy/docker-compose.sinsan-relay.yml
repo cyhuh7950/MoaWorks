@@ -4,3 +4,6 @@ services:
       SMTP_RELAY_DOMAINS: moaworks.sinsan.kr
       SMTP_RELAY_TRANSPORT_HOST: 210.217.186.151
       SMTP_RELAY_TRANSPORT_PORT: 2525
+    volumes:
+      - /home/ubuntu/npm/letsencrypt/archive/npm-26:/run/moaworks-mail-tls/archive/npm-26:ro
+      - /home/ubuntu/npm/letsencrypt/live/npm-26:/run/moaworks-mail-tls/live/npm-26:ro
