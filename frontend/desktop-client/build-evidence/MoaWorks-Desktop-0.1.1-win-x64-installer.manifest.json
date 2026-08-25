@@ -3,25 +3,25 @@
   "version": "0.1.1",
   "platform": "win32",
   "arch": "x64",
-  "generatedAt": "2026-08-24T13:59:24.145Z",
+  "generatedAt": "2026-08-25T04:03:55.891Z",
   "artifacts": [
     {
       "role": "installer",
       "file": "MoaWorks-Desktop-0.1.1-Setup.exe",
       "bytes": 139823616,
-      "sha256": "f366b79cdfa879a5da6d3e4565e3b769cbe48e30f986374e5ee0541f2f3028f3"
+      "sha256": "db052a1a5a6f746d68027d03b03161438c5f853f779b4aa038d74cd24483a578"
     },
     {
       "role": "update-package",
       "file": "MoaWorksDesktop-0.1.1-full.nupkg",
       "bytes": 139069986,
-      "sha256": "13cad866422802c6a9c2a190c99afbd16aa3228791da6ceefd9236a3f20b7667"
+      "sha256": "d009bb056d265beafdf1d1c6c5744665c9724df4978bb59eb6ade278da7e1aab"
     },
     {
       "role": "update-index",
       "file": "RELEASES",
       "bytes": 86,
-      "sha256": "47e4941888095ff146a7047df7cf13c87af55c324ef42391424d18eccb004a82"
+      "sha256": "e0fbb39211a6846949fa07fca427afa66dd94f151def4ead852b8f52456ddc17"
     },
     {
       "role": "runtime-asar",
