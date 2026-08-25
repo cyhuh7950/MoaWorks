@@ -13,7 +13,7 @@ ALTER TABLE mail_attachments
 ALTER TABLE mail_attachments
     ADD CONSTRAINT mail_attachments_inline_content_id_check
     CHECK (
-        (content_disposition = 'inline' AND content_id IS NOT NULL)
+        (content_disposition = 'inline' AND content_id IS NOT NULL AND btrim(content_id) <> '')
         OR (content_disposition = 'attachment' AND content_id IS NULL)
     );
 
