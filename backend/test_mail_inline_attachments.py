@@ -153,8 +153,11 @@ class MailInlineAttachmentContractTests(unittest.TestCase):
         self.assertIn("dropconstraintifexistsmail_attachments_inline_content_id_check", normalized)
         self.assertIn("addconstraintmail_attachments_inline_content_id_check", normalized)
         self.assertIn("content_dispositionin('attachment','inline')", normalized)
-        self.assertIn("content_disposition='inline'andcontent_idisnotnull", normalized)
-        self.assertIn("btrim(content_id)<>''", normalized)
+        self.assertIn(
+            "content_disposition='inline'andcontent_idisnotnullandcontent_id~'[^[:space:]]'",
+            normalized,
+        )
+        self.assertNotIn("btrim(content_id)", normalized)
         self.assertIn("content_disposition='attachment'andcontent_idisnull", normalized)
         self.assertIn(
             "createuniqueindexifnotexistsuq_mail_attachments_message_content_id"
