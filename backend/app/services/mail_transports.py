@@ -132,21 +132,42 @@ class SelfHostedSmtpTransport:
         self.smtp_factory = smtp_factory
         self.dkim_signer = dkim_signer or DkimPySigner()
 
-    def send(self, message: OutboundMessage, *, helo_name: str, timeout_sec: int, dkim_config: DkimSigningConfig | None = None) -> DeliveryReceipt:
+    def send(
+        self,
+        message: OutboundMessage,
+        *,
+        helo_name: str,
+        timeout_sec: int,
+        dkim_config: DkimSigningConfig | None = None,
+        relay_host: str = "",
+        relay_port: int = 25,
+        tls_mode: str = "opportunistic",
+    ) -> DeliveryReceipt:
         prepared = _build_message(message)
         if dkim_config is not None:
             self.dkim_signer.sign(prepared, dkim_config)
-        recipient_domain = message.recipient_email.rsplit("@", 1)[1].lower()
-        candidates = [host.strip().rstrip(".").lower() for host in self.mx_resolver(recipient_domain) if host.strip()]
+        normalized_relay_host = relay_host.strip().rstrip(".").lower()
+        if normalized_relay_host:
+            candidates = [(normalized_relay_host, relay_port)]
+        else:
+            recipient_domain = message.recipient_email.rsplit("@", 1)[1].lower()
+            candidates = [
+                (host.strip().rstrip(".").lower(), 25)
+                for host in self.mx_resolver(recipient_domain)
+                if host.strip()
+            ]
         if not candidates:
             raise MailTransportFailure("외부 SMTP 대상 MX를 찾지 못했습니다.", transient=False)
 
         last_error: Exception | None = None
-        for host in candidates:
+        for host, port in candidates:
             try:
-                with self.smtp_factory(host=host, port=25, timeout=max(3, min(timeout_sec, 60))) as smtp:
+                with self.smtp_factory(host=host, port=port, timeout=max(3, min(timeout_sec, 60))) as smtp:
                     smtp.ehlo(helo_name)
-                    if smtp.has_extn("starttls"):
+                    starttls_required = normalized_relay_host and tls_mode == "starttls"
+                    if starttls_required and not smtp.has_extn("starttls"):
+                        raise ValueError("자체 SMTP 릴레이가 STARTTLS를 제공하지 않습니다.")
+                    if starttls_required or (not normalized_relay_host and smtp.has_extn("starttls")):
                         smtp.starttls(context=ssl.create_default_context())
                         smtp.ehlo(helo_name)
                     refused = smtp.send_message(
@@ -158,7 +179,7 @@ class SelfHostedSmtpTransport:
                         raise ValueError("상대 SMTP 서버가 수신자를 거부했습니다.")
                 return DeliveryReceipt(
                     provider_key="self_hosted",
-                    endpoint=f"smtp://{host}:25",
+                    endpoint=f"smtp://{host}:{port}",
                     remote_smtp_accepted=True,
                 )
             except Exception as exc:  # pragma: no cover - multi-host network path
@@ -288,6 +309,9 @@ class MailProviderRoutingAdapter:
                 helo_name=str(provider.get("helo_name") or f"mail.{sender_domain}"),
                 timeout_sec=int(provider.get("timeout_sec") or 20),
                 dkim_config=dkim_config,
+                relay_host=str(provider.get("relay_host") or ""),
+                relay_port=int(provider.get("relay_port") or 25),
+                tls_mode=str(provider.get("tls_mode") or "opportunistic"),
             )
         elif provider_type == "oci_email_delivery":
             password = str(provider.get("password") or "")

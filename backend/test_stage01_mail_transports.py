@@ -96,6 +96,32 @@ class MailTransportTest(unittest.TestCase):
         self.assertTrue(receipt.remote_smtp_accepted)
         self.assertEqual(receipt.provider_key, "self_hosted")
 
+    def test_self_hosted_uses_configured_wsl_relay_instead_of_recipient_mx(self) -> None:
+        smtp = FakeSmtp()
+        calls: list[tuple[str, int, int]] = []
+
+        def factory(*, host: str, port: int, timeout: int):
+            calls.append((host, port, timeout))
+            return smtp
+
+        transport = SelfHostedSmtpTransport(
+            mx_resolver=lambda _domain: self.fail("WSL relay 설정 시 수신자 MX를 조회하면 안 됩니다."),
+            smtp_factory=factory,
+        )
+
+        receipt = transport.send(
+            sample_message(),
+            helo_name="mail.moaworks.sinsan.kr",
+            timeout_sec=20,
+            relay_host="mail.dev.moaworks.sinsan.kr",
+            relay_port=2525,
+            tls_mode="starttls",
+        )
+
+        self.assertEqual(calls, [("mail.dev.moaworks.sinsan.kr", 2525, 20)])
+        self.assertIn(("starttls", True), smtp.calls)
+        self.assertEqual(receipt.endpoint, "smtp://mail.dev.moaworks.sinsan.kr:2525")
+
     def test_oci_relay_requires_tls_and_authenticates(self) -> None:
         smtp = FakeSmtp()
         calls: list[tuple[str, int, int]] = []
