@@ -1678,12 +1678,12 @@ export default function App() {
             ) : null}
 
             {activeTab === "approval" ? (
-              <View style={styles.approvalScreen}>
+              <View style={[styles.approvalScreen, styles.approvalScreenFlat]}>
                 <View style={styles.moduleToolbar}>
                   <View><Text style={styles.moduleKicker}>APPROVAL</Text><Text accessibilityRole="header" style={styles.moduleTitle}>결재</Text></View>
                   {can("approval:create") ? <Text accessibilityRole="button" accessibilityLabel="결재 초안 작성" onPress={() => setApprovalComposeOpen((current) => !current)} style={styles.approvalCreateAction}>{approvalComposeOpen ? "닫기" : "＋ 기안"}</Text> : null}
                 </View>
-                <View accessibilityLabel="결재 상태" style={styles.approvalTabs}>
+                <View accessibilityLabel="결재 상태" style={[styles.approvalTabs, styles.approvalTabsCompact]}>
                   {(["draft", "progress", "complete"] as ApprovalView[]).map((view, index) => (
                     <Pressable key={view} accessibilityRole="button" accessibilityLabel={`${approvalScreen.tabs[index]} 결재 보기`} onPress={() => { setApprovalView(view); setSelectedApprovalId(""); }} style={[styles.approvalTab, approvalView === view ? styles.approvalTabActive : null]}>
                       <Text style={[styles.approvalTabText, approvalView === view ? styles.approvalTabTextActive : null]}>{approvalScreen.tabs[index]}{view === "progress" ? ` ${approvalScreen.rows.length}` : ""}</Text>
@@ -2742,6 +2742,12 @@ const styles = StyleSheet.create({
     borderColor: "#dce5ec",
     padding: 14,
   },
+  approvalScreenFlat: {
+    backgroundColor: "transparent",
+    borderRadius: 0,
+    borderWidth: 0,
+    padding: 0,
+  },
   approvalCreateAction: {
     color: "#0f766e",
     fontSize: 11,
@@ -2752,6 +2758,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     borderBottomWidth: 1,
     borderBottomColor: "#dbe4ec",
+  },
+  approvalTabsCompact: {
+    marginTop: 8,
+    minHeight: 32,
   },
   approvalTab: {
     flex: 1,
