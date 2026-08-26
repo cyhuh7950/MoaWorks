@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
 
 
@@ -909,16 +909,61 @@ def get_mail_delivery_status(
 @router.post("/attachments", response_model=MailAttachmentUploadResponse)
 async def upload_attachment(
     file: UploadFile = File(...),
+    disposition: str = Form(default="attachment"),
     user: AuthUserSummary = Depends(permission_required("mail:send")),
 ) -> MailAttachmentUploadResponse:
     try:
-        content = await file.read(settings.mail_attachment_max_file_bytes + 1)
-        return _service().stage_attachment(
+        if disposition not in {"attachment", "inline"}:
+            raise ValueError("첨부 방식이 올바르지 않습니다.")
+        content = await file.read(
+            5 * 1024 * 1024 + 1
+            if disposition == "inline"
+            else settings.mail_attachment_max_file_bytes + 1
+        )
+        stage = _service().stage_inline_image if disposition == "inline" else _service().stage_attachment
+        return stage(
             user,
             file.filename or "attachment.bin",
             file.content_type or "application/octet-stream",
             content,
         )
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+def _inline_preview_response(item: dict) -> Response:
+    return Response(
+        content=item["content"],
+        media_type=item["contentType"],
+        headers={
+            "Content-Disposition": "inline",
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.get("/attachments/staged/{upload_id}/preview")
+def preview_staged_attachment(
+    upload_id: str,
+    user: AuthUserSummary = Depends(permission_required("mail:send")),
+) -> Response:
+    try:
+        return _inline_preview_response(_service().open_staged_preview(user, upload_id))
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.get("/{mail_id}/attachments/{attachment_id}/preview")
+def preview_persisted_attachment(
+    mail_id: str,
+    attachment_id: str,
+    user: AuthUserSummary = Depends(permission_required("mail:read")),
+) -> Response:
+    try:
+        return _inline_preview_response(_service().open_persisted_preview(user, mail_id, attachment_id))
     except Exception as exc:
         _handle_error(exc)
         raise

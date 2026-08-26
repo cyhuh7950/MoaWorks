@@ -545,6 +545,27 @@ class MailMessengerService:
         self.attachment_storage.cleanup_expired()
         return self.attachment_storage.stage(actor, file_name, content_type, content)
 
+    def stage_inline_image(
+        self,
+        actor: AuthUserSummary,
+        file_name: str,
+        content_type: str,
+        content: bytes,
+    ):
+        self.attachment_storage.cleanup_expired()
+        return self.attachment_storage.stage_inline_image(actor, file_name, content_type, content)
+
+    def open_staged_preview(self, actor: AuthUserSummary, upload_id: str) -> dict:
+        return self.attachment_storage.open_staged_preview(actor, upload_id)
+
+    def open_persisted_preview(
+        self,
+        actor: AuthUserSummary,
+        mail_id: str,
+        attachment_id: str,
+    ) -> dict:
+        return self.attachment_storage.open_persisted_preview(actor, mail_id, attachment_id, self.db)
+
     def list_recent_recipients(self, actor: AuthUserSummary, limit: int = 20) -> MailRecentRecipientListResponse:
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection:
