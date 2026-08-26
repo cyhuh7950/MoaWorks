@@ -299,6 +299,7 @@ class MailMessengerService:
                     cursor.fetchone()
                     self._write_mail_event_audit(cursor, company_id=actor.companyId, actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id, event="mail.scheduled.updated", status_before="scheduled", status_after="scheduled", now=now, reason="scheduled mail user update")
                     self._mark_attachment_sidecars(resolved_attachments, sidecar_snapshots)
+                    self._detach_attachment_sidecars(removed_sidecar_snapshots)
                 connection.commit()
             except Exception as primary_error:
                 self._compensate_attachment_transaction(
@@ -307,7 +308,6 @@ class MailMessengerService:
                     primary_error,
                 )
                 raise
-        self._detach_attachment_sidecars(removed_sidecar_snapshots)
         return self.get_mail(actor, mail_id, "scheduled")
 
     def cancel_scheduled_mail(self, actor: AuthUserSummary, mail_id: str):
@@ -1242,17 +1242,29 @@ class MailMessengerService:
             primary_error.add_note(f"attachment {operation} failed: {compensation_error}")
 
     def _detach_attachment_sidecars(self, snapshots: dict[str, bytes]) -> None:
+        errors: list[Exception] = []
         for upload_id, snapshot in snapshots.items():
             try:
                 metadata = json.loads(snapshot.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
-                raise ValueError("메일 첨부 저장 상태가 올바르지 않습니다.") from exc
-            metadata["attached"] = False
-            metadata.pop("attachedAt", None)
-            self.attachment_storage._metadata_path(upload_id).write_text(
-                json.dumps(metadata, ensure_ascii=False),
-                encoding="utf-8",
-            )
+                error = ValueError("메일 첨부 저장 상태가 올바르지 않습니다.")
+                error.__cause__ = exc
+                errors.append(error)
+                continue
+            try:
+                metadata["attached"] = False
+                metadata.pop("attachedAt", None)
+                self.attachment_storage._metadata_path(upload_id).write_text(
+                    json.dumps(metadata, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            primary_error = errors[0]
+            for secondary_error in errors[1:]:
+                primary_error.add_note(f"attachment detach failed: {secondary_error}")
+            raise primary_error
 
     def _canonical_persisted_attachment(
         self,
