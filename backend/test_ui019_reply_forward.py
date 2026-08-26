@@ -24,6 +24,18 @@ class FakeCursor:
         return self.rows
 
 
+class DispositionFilteringCursor(FakeCursor):
+    def fetchall(self):
+        query = self.executions[-1][0].lower()
+        if "content_disposition = 'attachment'" in query:
+            return [
+                row
+                for row in self.rows
+                if row.get("content_disposition", "attachment") == "attachment"
+            ]
+        return self.rows
+
+
 class Ui019ReplyForwardTests(unittest.TestCase):
     @staticmethod
     def actor(user_id: str = "user-a", company_id: str = "company-a"):
@@ -116,6 +128,7 @@ class Ui019ReplyForwardTests(unittest.TestCase):
             storage = MailAttachmentStorage(Path(directory))
             with self.assertRaises(ValueError):
                 storage.stored_path("mail/inbound/aa/" + digest + "/../raw.eml")
+
     def test_source_attachment_query_rejects_partial_or_foreign_selection(self):
         service = MailMessengerService.__new__(MailMessengerService)
         service._fetch_accessible_mail = lambda cursor, actor, mail_id: {"mail_id": mail_id}
@@ -151,6 +164,32 @@ class Ui019ReplyForwardTests(unittest.TestCase):
                 self.actor(),
                 "mailmsg_source",
                 ["attach_a", "attach_b"],
+            )
+
+    def test_forward_clone_rejects_inline_source_attachment(self):
+        """Forward attachment cloning must never reinterpret an inline row as an ordinary file."""
+        service = MailMessengerService.__new__(MailMessengerService)
+        service._fetch_accessible_mail = lambda cursor, actor, mail_id: {"mail_id": mail_id}
+        cursor = DispositionFilteringCursor(
+            [
+                {
+                    "id": "attach_inline",
+                    "file_name": "body.png",
+                    "content_type": "image/png",
+                    "size_bytes": 8,
+                    "storage_key": "mail/uploads/" + "c" * 32 + ".bin",
+                    "content_disposition": "inline",
+                    "content_id": "body@moaworks.invalid",
+                }
+            ]
+        )
+
+        with self.assertRaises(PermissionError):
+            service._fetch_source_attachments(
+                cursor,
+                self.actor(),
+                "mailmsg_source",
+                ["attach_inline"],
             )
 
     def test_migration_and_service_persist_source_relation_without_storage_reuse(self):

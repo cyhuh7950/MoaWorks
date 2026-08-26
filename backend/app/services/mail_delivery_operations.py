@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
+from secrets import compare_digest
 import smtplib
 import ssl
 from uuid import uuid4
@@ -214,15 +216,95 @@ class MailDeliveryOperations:
                 cursor.execute("""UPDATE mail_delivery_queue SET status='processing',worker_id=%s,lease_expires_at=%s,updated_at=%s
                 WHERE id=%s RETURNING id""", (worker_id, now + timedelta(minutes=2), now, job["queue_id"]))
                 cursor.fetchone()
-                cursor.execute("SELECT file_name,content_type,storage_key FROM mail_attachments WHERE message_id=%s AND storage_key IS NOT NULL", (job["mail_id"],))
+                cursor.execute(
+                    """SELECT file_name,content_type,size_bytes,storage_key,content_disposition,content_id
+                    FROM mail_attachments
+                    WHERE message_id=%s AND storage_key IS NOT NULL
+                    ORDER BY created_at ASC""",
+                    (job["mail_id"],),
+                )
                 job = dict(job)
-                job["attachments"] = [{"file_name": row["file_name"], "content_type": row["content_type"],
-                                       "path": str(self.storage.stored_path(row["storage_key"]))} for row in cursor.fetchall()]
+                job["attachments"] = [self._queue_attachment(row) for row in cursor.fetchall()]
                 provider = self._provider_by_id(cursor, job["provider_config_id"], job["company_id"])
                 provider["password"] = self.security.decrypt_secret(provider["encrypted_password"]) if provider["username"] else ""
                 provider["dkim_private_key"] = self.security.decrypt_secret(provider["encrypted_dkim_private_key"]) if provider.get("encrypted_dkim_private_key") else ""
             connection.commit()
         return job, provider
+
+    def _queue_attachment(self, row: dict) -> dict:
+        path = self.storage.stored_path(row["storage_key"])
+        digest = sha256()
+        with path.open("rb") as attachment_file:
+            for chunk in iter(lambda: attachment_file.read(1024 * 1024), b""):
+                digest.update(chunk)
+        content_sha256 = digest.hexdigest()
+        actual_size = path.stat().st_size
+        if actual_size != int(row["size_bytes"]):
+            raise ValueError("메일 첨부 저장 상태가 올바르지 않습니다.")
+
+        disposition = row.get("content_disposition") or "attachment"
+        content_id = row.get("content_id")
+        if disposition not in {"attachment", "inline"}:
+            raise ValueError("메일 첨부 저장 상태가 올바르지 않습니다.")
+        if (disposition == "attachment" and content_id is not None) or (
+            disposition == "inline" and (not isinstance(content_id, str) or not content_id)
+        ):
+            raise ValueError("메일 첨부 저장 상태가 올바르지 않습니다.")
+
+        try:
+            upload_id = self.storage._upload_id_from_storage_key(row["storage_key"])
+        except ValueError:
+            if disposition != "attachment":
+                raise ValueError("메일 첨부 저장 상태가 올바르지 않습니다.")
+            return {
+                "file_name": row["file_name"],
+                "content_type": row["content_type"],
+                "path": str(path),
+                "size_bytes": actual_size,
+                "content_disposition": "attachment",
+                "content_id": None,
+                "sha256": content_sha256,
+            }
+
+        try:
+            metadata = self.storage._load_metadata(upload_id)
+            canonical_content_type = metadata.get("normalized_content_type", metadata["contentType"])
+            canonical_size = int(metadata.get("normalized_size_bytes", metadata["sizeBytes"]))
+            expected_sha256 = metadata["sha256"]
+            canonical = (
+                metadata["fileName"],
+                canonical_content_type,
+                canonical_size,
+                metadata["storageKey"],
+                metadata.get("content_disposition"),
+                metadata.get("content_id"),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("메일 첨부 저장 상태가 올바르지 않습니다.") from exc
+        persisted = (
+            row["file_name"],
+            row["content_type"],
+            int(row["size_bytes"]),
+            row["storage_key"],
+            disposition,
+            content_id,
+        )
+        if (
+            canonical != persisted
+            or metadata.get("attached") is not True
+            or not isinstance(expected_sha256, str)
+            or not compare_digest(expected_sha256, content_sha256)
+        ):
+            raise ValueError("메일 첨부 저장 상태가 올바르지 않습니다.")
+        return {
+            "file_name": metadata["fileName"],
+            "content_type": canonical_content_type,
+            "path": str(path),
+            "size_bytes": canonical_size,
+            "content_disposition": metadata.get("content_disposition", "attachment"),
+            "content_id": metadata.get("content_id"),
+            "sha256": content_sha256,
+        }
 
     def finalize_claim(self, worker_id, job, result):
         now, attempt = datetime.now(UTC), int(job["attempt_count"]) + 1
