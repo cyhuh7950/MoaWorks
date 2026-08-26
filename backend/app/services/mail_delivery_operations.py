@@ -270,13 +270,14 @@ class MailDeliveryOperations:
             metadata = self.storage._load_metadata(upload_id)
             canonical_content_type = metadata.get("normalized_content_type", metadata["contentType"])
             canonical_size = int(metadata.get("normalized_size_bytes", metadata["sizeBytes"]))
-            expected_sha256 = metadata["sha256"]
+            canonical_disposition = metadata.get("content_disposition", "attachment")
+            expected_sha256 = metadata.get("sha256")
             canonical = (
                 metadata["fileName"],
                 canonical_content_type,
                 canonical_size,
                 metadata["storageKey"],
-                metadata.get("content_disposition"),
+                canonical_disposition,
                 metadata.get("content_id"),
             )
         except (KeyError, TypeError, ValueError) as exc:
@@ -292,8 +293,17 @@ class MailDeliveryOperations:
         if (
             canonical != persisted
             or metadata.get("attached") is not True
-            or not isinstance(expected_sha256, str)
-            or not compare_digest(expected_sha256, content_sha256)
+            or (
+                canonical_disposition == "inline"
+                and not isinstance(expected_sha256, str)
+            )
+            or (
+                expected_sha256 is not None
+                and (
+                    not isinstance(expected_sha256, str)
+                    or not compare_digest(expected_sha256, content_sha256)
+                )
+            )
         ):
             raise ValueError("메일 첨부 저장 상태가 올바르지 않습니다.")
         return {
@@ -301,7 +311,7 @@ class MailDeliveryOperations:
             "content_type": canonical_content_type,
             "path": str(path),
             "size_bytes": canonical_size,
-            "content_disposition": metadata.get("content_disposition", "attachment"),
+            "content_disposition": canonical_disposition,
             "content_id": metadata.get("content_id"),
             "sha256": content_sha256,
         }

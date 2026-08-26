@@ -203,6 +203,7 @@ class MailMessengerService:
         self.db.ensure_migrations_applied()
         now = self._now()
         sidecar_snapshots: dict[str, bytes] = {}
+        removed_sidecar_snapshots: dict[str, bytes] = {}
         with self.db.connect() as connection:
             try:
                 with connection.cursor() as cursor:
@@ -235,6 +236,12 @@ class MailMessengerService:
                         if content_id in referenced_content_ids:
                             retained_attachments.append(attachment)
                         else:
+                            upload_id = self.attachment_storage._upload_id_from_storage_key(
+                                attachment["storage_key"]
+                            )
+                            snapshot = self.attachment_storage._metadata_path(upload_id).read_bytes()
+                            sidecar_snapshots.setdefault(upload_id, snapshot)
+                            removed_sidecar_snapshots[upload_id] = snapshot
                             removed_inline_ids.append(attachment["id"])
 
                     all_attachments = retained_attachments + resolved_attachments
@@ -293,10 +300,14 @@ class MailMessengerService:
                     self._write_mail_event_audit(cursor, company_id=actor.companyId, actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id, event="mail.scheduled.updated", status_before="scheduled", status_after="scheduled", now=now, reason="scheduled mail user update")
                     self._mark_attachment_sidecars(resolved_attachments, sidecar_snapshots)
                 connection.commit()
-            except Exception:
-                connection.rollback()
-                self._restore_attachment_sidecars(sidecar_snapshots)
+            except Exception as primary_error:
+                self._compensate_attachment_transaction(
+                    connection,
+                    sidecar_snapshots,
+                    primary_error,
+                )
                 raise
+        self._detach_attachment_sidecars(removed_sidecar_snapshots)
         return self.get_mail(actor, mail_id, "scheduled")
 
     def cancel_scheduled_mail(self, actor: AuthUserSummary, mail_id: str):
@@ -1202,12 +1213,46 @@ class MailMessengerService:
         for attachment in attachments:
             upload_id = attachment["upload_id"]
             metadata_path = self.attachment_storage._metadata_path(upload_id)
-            snapshots[upload_id] = metadata_path.read_bytes()
+            snapshots.setdefault(upload_id, metadata_path.read_bytes())
             self.attachment_storage.mark_attached(upload_id)
 
-    def _restore_attachment_sidecars(self, snapshots: dict[str, bytes]) -> None:
+    def _restore_attachment_sidecars(self, snapshots: dict[str, bytes]) -> list[Exception]:
+        errors: list[Exception] = []
         for upload_id, metadata in snapshots.items():
-            self.attachment_storage._metadata_path(upload_id).write_bytes(metadata)
+            try:
+                self.attachment_storage._metadata_path(upload_id).write_bytes(metadata)
+            except Exception as exc:
+                errors.append(exc)
+        return errors
+
+    def _compensate_attachment_transaction(
+        self,
+        connection,
+        snapshots: dict[str, bytes],
+        primary_error: Exception,
+    ) -> None:
+        compensation_errors: list[tuple[str, Exception]] = []
+        try:
+            connection.rollback()
+        except Exception as exc:
+            compensation_errors.append(("rollback", exc))
+        for restore_error in self._restore_attachment_sidecars(snapshots):
+            compensation_errors.append(("sidecar restore", restore_error))
+        for operation, compensation_error in compensation_errors:
+            primary_error.add_note(f"attachment {operation} failed: {compensation_error}")
+
+    def _detach_attachment_sidecars(self, snapshots: dict[str, bytes]) -> None:
+        for upload_id, snapshot in snapshots.items():
+            try:
+                metadata = json.loads(snapshot.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
+                raise ValueError("메일 첨부 저장 상태가 올바르지 않습니다.") from exc
+            metadata["attached"] = False
+            metadata.pop("attachedAt", None)
+            self.attachment_storage._metadata_path(upload_id).write_text(
+                json.dumps(metadata, ensure_ascii=False),
+                encoding="utf-8",
+            )
 
     def _canonical_persisted_attachment(
         self,
@@ -1227,10 +1272,11 @@ class MailMessengerService:
 
         try:
             metadata = self.attachment_storage._load_metadata(upload_id)
+            canonical_disposition = metadata.get("content_disposition", "attachment")
             content, content_sha256 = self.attachment_storage._read_verified_upload(
                 upload_id,
                 metadata,
-                require_sha256=True,
+                require_sha256=canonical_disposition == "inline",
             )
             canonical_content_type = metadata.get("normalized_content_type", metadata["contentType"])
             canonical_size = int(metadata.get("normalized_size_bytes", metadata["sizeBytes"]))
@@ -1239,7 +1285,7 @@ class MailMessengerService:
                 canonical_content_type,
                 canonical_size,
                 metadata["storageKey"],
-                metadata.get("content_disposition", "attachment"),
+                canonical_disposition,
                 metadata.get("content_id"),
             )
         except (KeyError, OSError, TypeError, ValueError) as exc:
@@ -1258,7 +1304,10 @@ class MailMessengerService:
             or metadata.get("attached") is not True
             or canonical_size != len(content)
             or canonical != persisted
-            or metadata.get("sha256") != content_sha256
+            or (
+                canonical_disposition == "inline"
+                and metadata.get("sha256") != content_sha256
+            )
         ):
             raise ValueError("메일 첨부 저장 상태가 올바르지 않습니다.")
         return {
@@ -1278,9 +1327,12 @@ class MailMessengerService:
             try:
                 yield connection, snapshots
                 connection.commit()
-            except Exception:
-                connection.rollback()
-                self._restore_attachment_sidecars(snapshots)
+            except Exception as primary_error:
+                self._compensate_attachment_transaction(
+                    connection,
+                    snapshots,
+                    primary_error,
+                )
                 raise
 
     def save_draft(self, actor: AuthUserSummary, payload: MailDraftRequest) -> MailSendResponse:

@@ -196,9 +196,16 @@ class PersistenceCursor:
 
 
 class PersistenceConnection:
-    def __init__(self, cursor: PersistenceCursor, *, fail_commit: bool = False) -> None:
+    def __init__(
+        self,
+        cursor: PersistenceCursor,
+        *,
+        fail_commit: bool = False,
+        fail_rollback: bool = False,
+    ) -> None:
         self._cursor = cursor
         self.fail_commit = fail_commit
+        self.fail_rollback = fail_rollback
         self.commit_count = 0
         self.rollback_count = 0
 
@@ -218,6 +225,8 @@ class PersistenceConnection:
 
     def rollback(self) -> None:
         self.rollback_count += 1
+        if self.fail_rollback:
+            raise RuntimeError("rollback failed")
 
 
 class PersistenceDatabase:
@@ -227,12 +236,17 @@ class PersistenceDatabase:
         existing_attachments: list[dict] | None = None,
         scheduled_message: dict | None = None,
         fail_commit: bool = False,
+        fail_rollback: bool = False,
     ) -> None:
         self.cursor = PersistenceCursor(
             existing_attachments=existing_attachments,
             scheduled_message=scheduled_message,
         )
-        self.connection = PersistenceConnection(self.cursor, fail_commit=fail_commit)
+        self.connection = PersistenceConnection(
+            self.cursor,
+            fail_commit=fail_commit,
+            fail_rollback=fail_rollback,
+        )
         self.migration_checks = 0
 
     def ensure_migrations_applied(self) -> None:
@@ -351,7 +365,7 @@ class DownloadDatabase:
 class MailInlinePersistenceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.owner = actor()
-        self.now = datetime(2026, 8, 26, 3, 0, tzinfo=UTC)
+        self.now = datetime.now(UTC) + timedelta(days=1)
 
     def service(
         self,
@@ -403,6 +417,239 @@ class MailInlinePersistenceTests(unittest.TestCase):
     @staticmethod
     def metadata(storage: MailAttachmentStorage, upload_id: str) -> dict:
         return json.loads(storage._metadata_path(upload_id).read_text(encoding="utf-8"))
+
+    @staticmethod
+    def make_legacy_ordinary_sidecar(
+        storage: MailAttachmentStorage,
+        upload_id: str,
+    ) -> dict:
+        metadata = json.loads(storage._metadata_path(upload_id).read_text(encoding="utf-8"))
+        for key in (
+            "sha256",
+            "content_disposition",
+            "content_id",
+            "normalized_content_type",
+            "normalized_size_bytes",
+        ):
+            metadata.pop(key, None)
+        storage._metadata_path(upload_id).write_text(
+            json.dumps(metadata, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return metadata
+
+    def test_scheduled_update_accepts_legacy_ordinary_sidecar_without_inline_fields(self) -> None:
+        """Legacy ordinary rows remain reusable without Task 4 canonical inline fields."""
+        with TemporaryDirectory() as temp_dir:
+            storage = MailAttachmentStorage(Path(temp_dir))
+            uploaded = storage.stage(self.owner, "legacy.txt", "text/plain", b"legacy ordinary")
+            metadata = self.make_legacy_ordinary_sidecar(storage, uploaded.uploadId)
+            storage.mark_attached(uploaded.uploadId)
+            database = PersistenceDatabase(
+                existing_attachments=[
+                    {
+                        "id": "attachment-legacy",
+                        "file_name": uploaded.fileName,
+                        "content_type": uploaded.contentType,
+                        "size_bytes": uploaded.sizeBytes,
+                        "storage_key": metadata["storageKey"],
+                        "content_disposition": "attachment",
+                        "content_id": None,
+                    }
+                ],
+                scheduled_message={"id": "mail-scheduled", "status": "scheduled"},
+            )
+            service = self.service(storage, database)
+            payload = MailScheduledUpdateRequest(
+                to=["outside@example.net"],
+                subject="legacy ordinary",
+                bodyText="body",
+                bodyHtml="<p>body</p>",
+                scheduledAt=self.now + timedelta(hours=2),
+            )
+
+            result = service.update_scheduled_mail(self.owner, "mail-scheduled", payload)
+
+            self.assertEqual(result.mailId, "mail-scheduled")
+            self.assertEqual(database.connection.commit_count, 1)
+            self.assertTrue(self.metadata(storage, uploaded.uploadId)["attached"])
+
+    def test_scheduled_update_rejects_legacy_ordinary_size_type_or_path_mismatch(self) -> None:
+        """Legacy compatibility must not weaken persisted row integrity checks."""
+        for mismatch in ("size", "type", "path"):
+            with self.subTest(mismatch=mismatch), TemporaryDirectory() as temp_dir:
+                storage = MailAttachmentStorage(Path(temp_dir))
+                uploaded = storage.stage(self.owner, "legacy.txt", "text/plain", b"legacy ordinary")
+                metadata = self.make_legacy_ordinary_sidecar(storage, uploaded.uploadId)
+                storage.mark_attached(uploaded.uploadId)
+                row = {
+                    "id": "attachment-legacy",
+                    "file_name": uploaded.fileName,
+                    "content_type": uploaded.contentType,
+                    "size_bytes": uploaded.sizeBytes,
+                    "storage_key": metadata["storageKey"],
+                    "content_disposition": "attachment",
+                    "content_id": None,
+                }
+                if mismatch == "size":
+                    row["size_bytes"] += 1
+                elif mismatch == "type":
+                    row["content_type"] = "application/octet-stream"
+                else:
+                    other = storage.stage(self.owner, "other.txt", "text/plain", b"other")
+                    other_metadata = self.make_legacy_ordinary_sidecar(storage, other.uploadId)
+                    storage.mark_attached(other.uploadId)
+                    row["storage_key"] = other_metadata["storageKey"]
+                database = PersistenceDatabase(
+                    existing_attachments=[row],
+                    scheduled_message={"id": "mail-scheduled", "status": "scheduled"},
+                )
+                service = self.service(storage, database)
+                payload = MailScheduledUpdateRequest(
+                    to=["outside@example.net"],
+                    subject="legacy mismatch",
+                    bodyText="body",
+                    bodyHtml="<p>body</p>",
+                    scheduledAt=self.now + timedelta(hours=2),
+                )
+
+                with self.assertRaisesRegex(ValueError, "저장 상태"):
+                    service.update_scheduled_mail(self.owner, "mail-scheduled", payload)
+
+                self.assertEqual(database.connection.rollback_count, 1)
+
+    def test_scheduled_update_detaches_only_removed_inline_after_commit(self) -> None:
+        """Removed persisted inline sidecars become cleanup eligible only after DB commit."""
+        with TemporaryDirectory() as temp_dir:
+            storage = MailAttachmentStorage(Path(temp_dir))
+            uploads = [
+                storage.stage_inline_image(
+                    self.owner,
+                    f"image-{index}.png",
+                    "image/png",
+                    image_bytes("PNG", size=(index + 2, 2)),
+                )
+                for index in range(2)
+            ]
+            for uploaded in uploads:
+                storage.mark_attached(uploaded.uploadId)
+            rows = []
+            for index, uploaded in enumerate(uploads):
+                metadata = self.metadata(storage, uploaded.uploadId)
+                rows.append(
+                    {
+                        "id": f"attachment-{index}",
+                        "file_name": uploaded.fileName,
+                        "content_type": uploaded.contentType,
+                        "size_bytes": uploaded.sizeBytes,
+                        "storage_key": metadata["storageKey"],
+                        "content_disposition": "inline",
+                        "content_id": uploaded.contentId,
+                    }
+                )
+            database = PersistenceDatabase(
+                existing_attachments=rows,
+                scheduled_message={"id": "mail-scheduled", "status": "scheduled"},
+            )
+            service = self.service(storage, database)
+            payload = MailScheduledUpdateRequest(
+                to=["outside@example.net"],
+                subject="remove one inline",
+                bodyText="body",
+                bodyHtml=f'<img src="cid:{uploads[1].contentId}">',
+                scheduledAt=self.now + timedelta(hours=2),
+            )
+
+            service.update_scheduled_mail(self.owner, "mail-scheduled", payload)
+
+            removed = self.metadata(storage, uploads[0].uploadId)
+            retained = self.metadata(storage, uploads[1].uploadId)
+            self.assertFalse(removed["attached"])
+            self.assertNotIn("attachedAt", removed)
+            self.assertTrue(retained["attached"])
+
+    def test_scheduled_update_restores_removed_and_new_sidecars_on_mark_or_commit_failure(self) -> None:
+        """A failed update preserves removed persisted and newly staged sidecar states."""
+        for failure in ("mark", "commit"):
+            with self.subTest(failure=failure), TemporaryDirectory() as temp_dir:
+                storage_class = FailingMarkStorage if failure == "mark" else MailAttachmentStorage
+                storage = storage_class(Path(temp_dir))
+                removed = storage.stage_inline_image(
+                    self.owner, "removed.png", "image/png", image_bytes("PNG", size=(2, 2))
+                )
+                MailAttachmentStorage.mark_attached(storage, removed.uploadId)
+                removed_metadata = self.metadata(storage, removed.uploadId)
+                newly_staged = storage.stage_inline_image(
+                    self.owner, "new.png", "image/png", image_bytes("PNG", size=(3, 2))
+                )
+                database = PersistenceDatabase(
+                    existing_attachments=[
+                        {
+                            "id": "attachment-removed",
+                            "file_name": removed.fileName,
+                            "content_type": removed.contentType,
+                            "size_bytes": removed.sizeBytes,
+                            "storage_key": removed_metadata["storageKey"],
+                            "content_disposition": "inline",
+                            "content_id": removed.contentId,
+                        }
+                    ],
+                    scheduled_message={"id": "mail-scheduled", "status": "scheduled"},
+                    fail_commit=failure == "commit",
+                )
+                service = self.service(storage, database)
+                payload = MailScheduledUpdateRequest(
+                    to=["outside@example.net"],
+                    subject=f"failure {failure}",
+                    bodyText="body",
+                    bodyHtml=f'<img src="cid:{newly_staged.contentId}">',
+                    scheduledAt=self.now + timedelta(hours=2),
+                    attachments=[self.attachment_meta(newly_staged)],
+                )
+
+                with self.assertRaises(OSError if failure == "mark" else RuntimeError):
+                    service.update_scheduled_mail(self.owner, "mail-scheduled", payload)
+
+                self.assertTrue(self.metadata(storage, removed.uploadId)["attached"])
+                self.assertFalse(self.metadata(storage, newly_staged.uploadId)["attached"])
+
+    def test_attachment_transaction_attempts_rollback_and_every_restore_without_masking_primary(self) -> None:
+        """Compensation failures never stop later restores or replace the business error."""
+        with TemporaryDirectory() as temp_dir:
+            storage = MailAttachmentStorage(Path(temp_dir))
+            first = storage.stage(self.owner, "first.txt", "text/plain", b"first")
+            second = storage.stage(self.owner, "second.txt", "text/plain", b"second")
+            first_path = storage._metadata_path(first.uploadId)
+            second_path = storage._metadata_path(second.uploadId)
+            first_snapshot = first_path.read_bytes()
+            second_snapshot = second_path.read_bytes()
+            database = PersistenceDatabase(fail_rollback=True)
+            service = self.service(storage, database)
+            original_write_bytes = Path.write_bytes
+            attempted: list[Path] = []
+
+            def failing_first_restore(path: Path, content: bytes) -> int:
+                attempted.append(path)
+                if path == first_path:
+                    raise OSError("first restore failed")
+                return original_write_bytes(path, content)
+
+            with self.assertRaisesRegex(ValueError, "primary business failure") as raised:
+                with patch.object(Path, "write_bytes", new=failing_first_restore):
+                    with service._attachment_transaction() as (_connection, snapshots):
+                        snapshots[first.uploadId] = first_snapshot
+                        snapshots[second.uploadId] = second_snapshot
+                        first_path.write_text("changed-first", encoding="utf-8")
+                        second_path.write_text("changed-second", encoding="utf-8")
+                        raise ValueError("primary business failure")
+
+            self.assertEqual(database.connection.rollback_count, 1)
+            self.assertEqual(attempted, [first_path, second_path])
+            self.assertEqual(second_path.read_bytes(), second_snapshot)
+            self.assertEqual(str(raised.exception), "primary business failure")
+            notes = " ".join(getattr(raised.exception, "__notes__", []))
+            self.assertIn("rollback failed", notes)
+            self.assertIn("first restore failed", notes)
 
     def test_draft_send_and_schedule_persist_canonical_inline_metadata(self) -> None:
         """Dropping canonical disposition/CID from any compose persistence path must fail."""
@@ -950,6 +1197,108 @@ class MailInlineQueueAndDownloadTests(unittest.TestCase):
             self.assertEqual(envelope["sha256"], metadata["sha256"])
             self.assertEqual(Path(envelope["path"]).read_bytes(), storage.stored_path(metadata["storageKey"]).read_bytes())
             self.assertNotIn("storage_key", envelope)
+
+    def test_queue_claim_accepts_legacy_ordinary_and_calculates_actual_sha256(self) -> None:
+        """A legacy ordinary sidecar without canonical inline fields remains queueable."""
+        with TemporaryDirectory() as temp_dir:
+            storage = MailAttachmentStorage(Path(temp_dir))
+            content = b"legacy queue ordinary"
+            uploaded = storage.stage(self.owner, "legacy.txt", "text/plain", content)
+            metadata = json.loads(storage._metadata_path(uploaded.uploadId).read_text(encoding="utf-8"))
+            for key in (
+                "sha256",
+                "content_disposition",
+                "content_id",
+                "normalized_content_type",
+                "normalized_size_bytes",
+            ):
+                metadata.pop(key, None)
+            storage._metadata_path(uploaded.uploadId).write_text(
+                json.dumps(metadata, ensure_ascii=False), encoding="utf-8"
+            )
+            storage.mark_attached(uploaded.uploadId)
+            attachment = {
+                "file_name": uploaded.fileName,
+                "content_type": uploaded.contentType,
+                "size_bytes": uploaded.sizeBytes,
+                "storage_key": metadata["storageKey"],
+                "content_disposition": "attachment",
+                "content_id": None,
+            }
+            operations = MailDeliveryOperations(db=self.database(attachment), storage=storage)
+
+            claimed = operations.claim_next("worker-1")
+
+            self.assertIsNotNone(claimed)
+            envelope = claimed[0]["attachments"][0]
+            self.assertEqual(envelope["content_disposition"], "attachment")
+            self.assertIsNone(envelope["content_id"])
+            self.assertEqual(envelope["sha256"], sha256(content).hexdigest())
+
+    def test_queue_claim_rejects_legacy_ordinary_size_type_or_path_mismatch(self) -> None:
+        """Legacy queue compatibility still validates size, type, and storage identity."""
+        for mismatch in ("size", "type", "path"):
+            with self.subTest(mismatch=mismatch), TemporaryDirectory() as temp_dir:
+                storage = MailAttachmentStorage(Path(temp_dir))
+                uploaded = storage.stage(self.owner, "legacy.txt", "text/plain", b"legacy")
+                metadata = json.loads(storage._metadata_path(uploaded.uploadId).read_text(encoding="utf-8"))
+                for key in ("sha256", "content_disposition", "content_id"):
+                    metadata.pop(key, None)
+                storage._metadata_path(uploaded.uploadId).write_text(
+                    json.dumps(metadata, ensure_ascii=False), encoding="utf-8"
+                )
+                storage.mark_attached(uploaded.uploadId)
+                attachment = {
+                    "file_name": uploaded.fileName,
+                    "content_type": uploaded.contentType,
+                    "size_bytes": uploaded.sizeBytes,
+                    "storage_key": metadata["storageKey"],
+                    "content_disposition": "attachment",
+                    "content_id": None,
+                }
+                if mismatch == "size":
+                    attachment["size_bytes"] += 1
+                elif mismatch == "type":
+                    attachment["content_type"] = "application/octet-stream"
+                else:
+                    other = storage.stage(self.owner, "other.txt", "text/plain", b"other")
+                    other_metadata = json.loads(
+                        storage._metadata_path(other.uploadId).read_text(encoding="utf-8")
+                    )
+                    storage.mark_attached(other.uploadId)
+                    attachment["storage_key"] = other_metadata["storageKey"]
+                database = self.database(attachment)
+                operations = MailDeliveryOperations(db=database, storage=storage)
+
+                with self.assertRaisesRegex(ValueError, "저장 상태"):
+                    operations.claim_next("worker-1")
+
+                self.assertEqual(database.connection.commit_count, 0)
+
+    def test_queue_claim_still_requires_complete_untampered_inline_sidecar(self) -> None:
+        """Legacy ordinary compatibility never relaxes the canonical inline contract."""
+        for mutation in ("sha", "disposition", "cid", "tamper"):
+            with self.subTest(mutation=mutation), TemporaryDirectory() as temp_dir:
+                storage = MailAttachmentStorage(Path(temp_dir))
+                uploaded, metadata, attachment = self.persisted_inline(storage, self.owner)
+                if mutation == "sha":
+                    metadata.pop("sha256")
+                elif mutation == "disposition":
+                    metadata.pop("content_disposition")
+                elif mutation == "cid":
+                    metadata.pop("content_id")
+                else:
+                    storage.stored_path(metadata["storageKey"]).write_bytes(
+                        b"x" * attachment["size_bytes"]
+                    )
+                if mutation != "tamper":
+                    storage._metadata_path(uploaded.uploadId).write_text(
+                        json.dumps(metadata, ensure_ascii=False), encoding="utf-8"
+                    )
+                operations = MailDeliveryOperations(db=self.database(attachment), storage=storage)
+
+                with self.assertRaisesRegex(ValueError, "저장 상태"):
+                    operations.claim_next("worker-1")
 
     def test_queue_claim_rejects_tampered_inline_binary(self) -> None:
         """A persisted inline binary whose SHA no longer matches its sidecar must never enter the queue."""
