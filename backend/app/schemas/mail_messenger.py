@@ -269,7 +269,7 @@ class MailSendRequest(BaseModel):
 
 class MailScheduledUpdateRequest(MailSendRequest):
     scheduledAt: datetime
-    attachments: list[MailAttachmentMeta] = Field(default_factory=list, max_length=0)
+    attachments: list[MailAttachmentMeta] = Field(default_factory=list, max_length=10)
     sourceMailId: None = None
     copiedAttachmentIds: list[str] = Field(default_factory=list, max_length=0)
     confirmed: bool = True
