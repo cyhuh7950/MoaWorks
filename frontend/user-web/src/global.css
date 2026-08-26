@@ -1602,18 +1602,25 @@ textarea {
   height: 34px;
 }
 
-.user-mail-compose-field textarea {
-  height: 100%;
-  min-height: 160px;
-  padding: 10px;
-  resize: vertical;
-  line-height: 1.5;
-}
-
 .user-mail-compose-field.is-body {
   flex: 1 1 240px;
   min-height: 0;
   align-items: stretch;
+}
+
+.user-mail-compose-field.is-body > .mail-rich-text-editor {
+  min-width: 0;
+  min-height: 160px;
+}
+
+.user-mail-inline-image-unavailable {
+  display: inline-block;
+  padding: 4px 6px;
+  border: 1px solid #f0b9b9;
+  border-radius: 6px;
+  color: #9f1239;
+  background: #fff1f2;
+  font-size: 12px;
 }
 
 .user-mail-compose-recipients button,

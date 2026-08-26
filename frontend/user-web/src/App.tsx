@@ -1,4 +1,5 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { JSONContent } from "@tiptap/core";
 
 import {
   ackNotification,
@@ -73,6 +74,7 @@ import {
   fetchMailTags,
   fetchMailTrash,
   fetchMailDetail,
+  fetchMailInlinePreview,
   fetchRecentMailRecipients,
   fetchRecentMailRecipientSettings,
   deleteRecentMailRecipient,
@@ -138,6 +140,7 @@ import {
   updateMailFolder,
   updateMailTag,
   type MailAttachment,
+  type MailAttachmentView,
   withdrawApproval,
   type ApprovalApprover,
   type ApprovalBasicPreferences,
@@ -201,11 +204,16 @@ import { UserHome } from "./UserHome";
 import { CompactWarning, ConfirmModal, FeedbackState, ToastViewport, useFeedbackQueue } from "./components/FeedbackSystem";
 import { CommonPopup } from "./components/CommonPopup";
 import {
-  applyOutgoingTranslationPreview,
-  buildOutgoingTranslationTexts,
   normalizeOutgoingTranslationLocale,
   OUTGOING_TRANSLATION_LOCALES,
 } from "./mailOutgoingTranslation";
+import { MailRichTextEditor } from "./MailRichTextEditor";
+import type { InlineImageDraft } from "./mailInlineImages";
+import {
+  applyTranslatedSegments,
+  extractTranslationSegments,
+  projectMailDocument,
+} from "./mailRichText";
 
 type MessengerRoomLifecycleAction = "none" | "transfer" | "leave" | "delete";
 import {
@@ -454,6 +462,8 @@ type MailComposeForm = {
   bcc: string;
   subject: string;
   bodyText: string;
+  bodyHtml: string;
+  bodyDocument: JSONContent;
   scheduledAt: string;
 };
 
@@ -478,16 +488,66 @@ const MAIL_ATTACHMENT_LIMITS = {
   maxTotalBytes: 25 * 1024 * 1024,
 };
 
+function createMailDocument(bodyText = "", inlineImages: Array<{ contentId: string; alt: string }> = []): JSONContent {
+  const paragraphs = bodyText.replace(/\r\n?/g, "\n").split("\n").map((line) => (
+    line ? { type: "paragraph", content: [{ type: "text", text: line }] } : { type: "paragraph" }
+  ));
+  return {
+    type: "doc",
+    content: [...(paragraphs.length ? paragraphs : [{ type: "paragraph" }]), ...inlineImages.map((image) => ({
+      type: "image",
+      attrs: { contentId: image.contentId, src: `cid:${image.contentId}`, alt: image.alt || "본문 이미지" },
+    }))],
+  };
+}
+
+function createMailComposeForm(values: Partial<Omit<MailComposeForm, "bodyHtml" | "bodyDocument" | "bodyText">> & { bodyText?: string; bodyHtml?: string | null } = {}): MailComposeForm {
+  const inlineImages = values.bodyHtml && typeof DOMParser !== "undefined"
+    ? [...new DOMParser().parseFromString(values.bodyHtml, "text/html").querySelectorAll('img[src^="cid:"]')]
+      .map((image) => ({ contentId: image.getAttribute("src")?.slice(4) ?? "", alt: image.getAttribute("alt") ?? "본문 이미지" }))
+      .filter((image) => Boolean(image.contentId))
+    : [];
+  const bodyDocument = createMailDocument(values.bodyText ?? "", inlineImages);
+  const projection = projectMailDocument(bodyDocument);
+  return {
+    to: values.to ?? "",
+    cc: values.cc ?? "",
+    bcc: values.bcc ?? "",
+    subject: values.subject ?? "",
+    bodyText: projection.bodyText,
+    bodyHtml: projection.bodyHtml,
+    bodyDocument,
+    scheduledAt: values.scheduledAt ?? "",
+  };
+}
 
 function createEmptyMailComposeForm(): MailComposeForm {
+  return createMailComposeForm();
+}
+
+function buildOutgoingRichTranslationPlan(form: MailComposeForm, targetLocale: string) {
+  const { segments } = extractTranslationSegments(form.bodyDocument);
+  if (segments.some((segment) => !segment.text.trim())) {
+    throw new Error("빈 본문 번역 구간은 허용되지 않습니다.");
+  }
+  const target = normalizeOutgoingTranslationLocale(targetLocale);
+  const subject = form.subject.trim();
   return {
-    to: "",
-    cc: "",
-    bcc: "",
-    subject: "",
-    bodyText: "",
-    scheduledAt: "",
+    texts: [subject, ...segments.map((segment) => segment.text)]
+      .filter(Boolean)
+      .map((text) => ({ text, sourceLocale: "auto" as const, targetLocale: target })),
+    subjectIncluded: Boolean(subject),
+    segments,
   };
+}
+
+function applyOutgoingRichTranslationPreview(
+  current: MailComposeForm,
+  preview: { subject: string; segments: Array<{ id: string; text: string }> },
+): MailComposeForm {
+  const bodyDocument = applyTranslatedSegments(current.bodyDocument, preview.segments);
+  const projection = projectMailDocument(bodyDocument);
+  return { ...current, subject: preview.subject, bodyDocument, bodyText: projection.bodyText, bodyHtml: projection.bodyHtml };
 }
 type ReasonAction = {
   documentId: string;
@@ -586,7 +646,7 @@ function escapeMailHtml(value: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function sanitizeMailHtml(html: string, allowRemoteImages: boolean): string {
+function sanitizeMailHtml(html: string, allowRemoteImages: boolean, allowedInlineObjectUrls = new Set<string>()): string {
   const documentNode = new DOMParser().parseFromString(html, "text/html");
   documentNode.querySelectorAll("script,iframe,object,embed,form,input,button,meta,link,base,video,audio,source,svg,math").forEach((node) => node.remove());
   documentNode.querySelectorAll("style").forEach((styleElement) => {
@@ -619,6 +679,9 @@ function sanitizeMailHtml(html: string, allowRemoteImages: boolean): string {
     }
     if (element instanceof HTMLImageElement) {
       const source = element.getAttribute("src") || "";
+      if (allowedInlineObjectUrls.has(source)) {
+        return;
+      }
       if (!/^(https?:|data:image\/(?:png|gif|jpeg|webp);base64,)/i.test(source)) {
         element.removeAttribute("src");
       } else if (!allowRemoteImages && /^https?:/i.test(source)) {
@@ -632,6 +695,28 @@ function sanitizeMailHtml(html: string, allowRemoteImages: boolean): string {
     'body{margin:0;padding:12px;color:#0f172a;background:#fff;font:12px/1.6 Arial,sans-serif;overflow-wrap:anywhere}' +
     'img{max-width:100%;height:auto}table{max-width:100%;border-collapse:collapse}a{color:#0f766e}' +
     '</style></head><body>' + documentNode.body.innerHTML + '</body></html>';
+}
+
+function replaceMailInlineCids(
+  html: string,
+  attachments: MailAttachmentView[],
+  previewUrls: Record<string, string>,
+): string {
+  const documentNode = new DOMParser().parseFromString(html, "text/html");
+  const allowed = new Set(attachments.filter((attachment) => attachment.disposition === "inline").map((attachment) => attachment.contentId).filter(Boolean));
+  documentNode.querySelectorAll("img[src^=\"cid:\"]").forEach((image) => {
+    const contentId = image.getAttribute("src")?.slice(4) ?? "";
+    const previewUrl = allowed.has(contentId) ? previewUrls[contentId] : undefined;
+    if (previewUrl) {
+      image.setAttribute("src", previewUrl);
+      return;
+    }
+    const fallback = documentNode.createElement("span");
+    fallback.className = "user-mail-inline-image-unavailable";
+    fallback.textContent = `[본문 이미지를 표시할 수 없습니다${image.getAttribute("alt") ? `: ${image.getAttribute("alt")}` : ""}]`;
+    image.replaceWith(fallback);
+  });
+  return documentNode.body.innerHTML;
 }
 
 function buildForwardMailHtml(detail: MailDetail, bodyText: string): string {
@@ -1521,7 +1606,7 @@ export default function App() {
   const [translationLoading, setTranslationLoading] = useState(false);
   const [translationError, setTranslationError] = useState("");
   const [mailTranslationKind, setMailTranslationKind] = useState<"incoming" | "outgoing" | null>(null);
-  const [mailTranslationPreview, setMailTranslationPreview] = useState<{ subject: string; body: string; mailId?: string } | null>(null);
+  const [mailTranslationPreview, setMailTranslationPreview] = useState<{ subject: string; body: string; segments?: Array<{ id: string; text: string }>; mailId?: string } | null>(null);
   const [outgoingTranslationTargetLocale, setOutgoingTranslationTargetLocale] = useState("en");
   const [outgoingTranslationOpen, setOutgoingTranslationOpen] = useState(false);
   const [showTranslatedMail, setShowTranslatedMail] = useState(false);
@@ -1571,6 +1656,7 @@ export default function App() {
   const [mailComposePosition, setMailComposePosition] = useState<{ left: number; top: number } | null>(null);
   const [mailDetailExpanded, setMailDetailExpanded] = useState(false);
   const [selectedMailDetail, setSelectedMailDetail] = useState<MailDetail | null>(null);
+  const [mailDetailInlinePreviewUrls, setMailDetailInlinePreviewUrls] = useState<Record<string, string>>({});
   const [showRemoteMailImages, setShowRemoteMailImages] = useState(false);
   const [mailReadReceiptOpen, setMailReadReceiptOpen] = useState(false);
   const [mailDetailLoading, setMailDetailLoading] = useState(false);
@@ -1578,6 +1664,9 @@ export default function App() {
   const [mailDeliveryStatus, setMailDeliveryStatus] = useState<MailDeliveryStatusResponse | null>(null);
   const [mailComposeForm, setMailComposeForm] = useState<MailComposeForm>(createEmptyMailComposeForm);
   const [mailComposeFiles, setMailComposeFiles] = useState<MailComposeFile[]>([]);
+  const [mailComposeInlineImages, setMailComposeInlineImages] = useState<InlineImageDraft[]>([]);
+  const mailComposeInlineImagesRef = useRef<InlineImageDraft[]>([]);
+  const mailComposeInlineImageRequestRef = useRef(0);
   const [mailComposeSourceDetail, setMailComposeSourceDetail] = useState<MailDetail | null>(null);
   const [editingScheduledMailId, setEditingScheduledMailId] = useState("");
   const mailComposeToRef = useRef<HTMLInputElement>(null);
@@ -1586,7 +1675,7 @@ export default function App() {
   const [recipientSuggestions, setRecipientSuggestions] = useState<RecipientSuggestion[]>([]);
   const [recipientPickerSource, setRecipientPickerSource] = useState<RecipientPickerSource>("contact");
   const [recipientPickerQuery, setRecipientPickerQuery] = useState("");
-  const selectedForwardAttachments = mailComposeSourceDetail?.attachments.filter((item) => selectedForwardAttachmentIds.includes(item.attachmentId)) ?? [];
+  const selectedForwardAttachments = mailComposeSourceDetail?.attachments.filter((item) => item.disposition !== "inline" && selectedForwardAttachmentIds.includes(item.attachmentId)) ?? [];
 
   async function refreshHeaderProfile() {
     if (!token || !me) return;
@@ -1601,9 +1690,10 @@ export default function App() {
     setHeaderProfile(profile); setHeaderProfilePhotoUrl(nextUrl);
   }
   const mailComposeNewAttachmentBytes = mailComposeFiles.reduce((sum, item) => sum + item.file.size, 0);
+  const mailComposeInlineImageBytes = mailComposeInlineImages.reduce((sum, item) => sum + item.sizeBytes, 0);
   const mailComposeSourceAttachmentBytes = selectedForwardAttachments.reduce((sum, item) => sum + item.sizeBytes, 0);
-  const mailComposeAttachmentBytes = mailComposeNewAttachmentBytes + mailComposeSourceAttachmentBytes;
-  const mailComposeAttachmentCount = mailComposeFiles.length + selectedForwardAttachments.length;
+  const mailComposeAttachmentBytes = mailComposeNewAttachmentBytes + mailComposeInlineImageBytes + mailComposeSourceAttachmentBytes;
+  const mailComposeAttachmentCount = mailComposeFiles.length + mailComposeInlineImages.length + selectedForwardAttachments.length;
   const [recipientPickerLoading, setRecipientPickerLoading] = useState(false);
   const [mailError, setMailError] = useState("");
   const [mailLoading, setMailLoading] = useState(false);
@@ -1896,6 +1986,7 @@ export default function App() {
     setMailComposeContext("new");
     setMailComposePosition(null);
     setMailComposeFiles([]);
+    clearMailComposeInlineImages();
     setMailComposeSourceDetail(null);
     setEditingScheduledMailId("");
     setSelectedForwardAttachmentIds([]);
@@ -2099,26 +2190,44 @@ export default function App() {
 
   async function translateOutgoingMail() {
     if (!token || !translationUiVisible) return;
-    const subject = mailComposeForm.subject.trim(); const body = mailComposeForm.bodyText.trim();
-    const texts = buildOutgoingTranslationTexts(mailComposeForm, outgoingTranslationTargetLocale);
     setOutgoingTranslationOpen(true);
     setMailTranslationPreview(null);
     setMailTranslationKind("outgoing");
-    if (!texts.length) { setTranslationError("번역할 제목 또는 본문을 입력하세요."); return; }
+    let plan: ReturnType<typeof buildOutgoingRichTranslationPlan>;
+    try {
+      plan = buildOutgoingRichTranslationPlan(mailComposeForm, outgoingTranslationTargetLocale);
+    } catch (error) {
+      setTranslationError(normalizeClientError(error, "메일 본문 번역을 준비하지 못했습니다."));
+      return;
+    }
+    if (!plan.texts.length) { setTranslationError("번역할 제목 또는 본문을 입력하세요."); return; }
     setTranslationLoading(true); setTranslationError("");
     try {
-      const response = await requestTranslation({ texts, includeSource: true, useCache: true }, token);
+      const response = await requestTranslation({ texts: plan.texts, includeSource: true, useCache: true }, token);
+      if (response.items.length !== plan.texts.length || response.items.some((item, index) => item.originalText !== plan.texts[index]?.text)) {
+        setTranslationError("번역 응답이 원문 구간과 일치하지 않아 본문을 변경하지 않았습니다.");
+        return;
+      }
       let index = 0;
-      const translatedSubject = subject ? response.items[index++]?.translatedText || subject : "";
-      const translatedBody = body ? response.items[index]?.translatedText || body : "";
-      setMailTranslationPreview({ subject: translatedSubject, body: translatedBody });
+      const translatedSubject = plan.subjectIncluded ? response.items[index++]?.translatedText || mailComposeForm.subject : mailComposeForm.subject;
+      const segments = plan.segments.map((segment) => ({ id: segment.id, text: response.items[index++]?.translatedText ?? segment.text }));
+      const translatedDocument = applyTranslatedSegments(mailComposeForm.bodyDocument, segments);
+      const projection = projectMailDocument(translatedDocument);
+      setMailTranslationPreview({ subject: translatedSubject, body: projection.bodyText, segments });
     } catch (error) { setTranslationError(normalizeClientError(error, "메일 번역 실패")); }
     finally { setTranslationLoading(false); }
   }
 
   function applyOutgoingTranslation() {
-    if (!mailTranslationPreview || mailTranslationKind !== "outgoing") return;
-    setMailComposeForm((current) => applyOutgoingTranslationPreview(current, mailTranslationPreview));
+    const preview = mailTranslationPreview;
+    if (!preview?.segments || mailTranslationKind !== "outgoing") return;
+    const translatedSegments = preview.segments;
+    try {
+      setMailComposeForm((current) => applyOutgoingRichTranslationPreview(current, { subject: preview.subject, segments: translatedSegments }));
+    } catch (error) {
+      setTranslationError(normalizeClientError(error, "번역 결과를 본문에 적용하지 못했습니다."));
+      return;
+    }
     setOutgoingTranslationOpen(false); setMailTranslationPreview(null); setTranslationError("");
   }
 
@@ -2145,7 +2254,12 @@ export default function App() {
     if (!selectedMailDetail || activeMailFolder !== "scheduled") return;
     const values = (kind: string) => selectedMailDetail.recipients.filter((item) => item.recipientKind === kind).map((item) => item.recipientEmail).join(", ");
     setEditingScheduledMailId(selectedMailDetail.mailId);
-    setMailComposeForm({ to: values("to"), cc: values("cc"), bcc: values("bcc"), subject: selectedMailDetail.subject, bodyText: selectedMailDetail.bodyText, scheduledAt: selectedMailDetail.scheduledAt ? new Date(selectedMailDetail.scheduledAt).toISOString().slice(0, 16) : "" });
+    setMailComposeForm(createMailComposeForm({
+      to: values("to"), cc: values("cc"), bcc: values("bcc"), subject: selectedMailDetail.subject,
+      bodyText: selectedMailDetail.bodyText, bodyHtml: selectedMailDetail.bodyHtml,
+      scheduledAt: selectedMailDetail.scheduledAt ? new Date(selectedMailDetail.scheduledAt).toISOString().slice(0, 16) : "",
+    }));
+    void hydrateComposeInlineImages(selectedMailDetail.attachments);
     setQuickComposeMode("mail");
   }
 
@@ -3224,6 +3338,112 @@ export default function App() {
     setMailComposeFiles((current) => current.filter((item) => item.id !== id));
   }
 
+  function replaceMailComposeInlineImages(next: InlineImageDraft[]) {
+    const nextUrls = new Set(next.map((item) => item.objectUrl));
+    for (const url of new Set(mailComposeInlineImagesRef.current.map((item) => item.objectUrl))) {
+      if (!nextUrls.has(url)) URL.revokeObjectURL(url);
+    }
+    mailComposeInlineImagesRef.current = next;
+    setMailComposeInlineImages(next);
+  }
+
+  function clearMailComposeInlineImages() {
+    mailComposeInlineImageRequestRef.current += 1;
+    replaceMailComposeInlineImages([]);
+  }
+
+  function handleMailDocumentChange(document: JSONContent) {
+    try {
+      const projection = projectMailDocument(document);
+      const referencedContentIds = new Set(projection.contentIds);
+      replaceMailComposeInlineImages(mailComposeInlineImagesRef.current.filter((item) => referencedContentIds.has(item.contentId)));
+      setMailComposeForm((current) => ({
+        ...current,
+        bodyDocument: document,
+        bodyHtml: projection.bodyHtml,
+        bodyText: projection.bodyText,
+      }));
+      setMailError("");
+    } catch {
+      setMailError("메일 본문을 저장 형식으로 변환하지 못했습니다.");
+    }
+  }
+
+  async function uploadComposeInlineImage(file: File): Promise<InlineImageDraft> {
+    if (!token) throw new Error("로그인 후 본문 이미지를 올릴 수 있습니다.");
+    if (mailComposeAttachmentCount >= MAIL_ATTACHMENT_LIMITS.maxFiles || mailComposeAttachmentBytes + file.size > MAIL_ATTACHMENT_LIMITS.maxTotalBytes) {
+      throw new Error("본문 이미지를 포함한 첨부 제한을 초과했습니다.");
+    }
+    const targetToken = token;
+    const requestId = mailComposeInlineImageRequestRef.current;
+    const uploaded = await uploadMailAttachment(targetToken, file, "inline");
+    if (uploaded.disposition !== "inline" || !uploaded.contentId || !uploaded.previewPath) {
+      throw new Error("본문 이미지 업로드 응답이 올바르지 않습니다.");
+    }
+    const blob = await fetchMailInlinePreview(targetToken, uploaded.previewPath);
+    const objectUrl = URL.createObjectURL(blob);
+    const editorObjectUrl = URL.createObjectURL(blob);
+    if (requestId !== mailComposeInlineImageRequestRef.current) {
+      URL.revokeObjectURL(objectUrl);
+      URL.revokeObjectURL(editorObjectUrl);
+      throw new Error("본문 이미지 작성창이 바뀌어 업로드를 취소했습니다.");
+    }
+    const draft: InlineImageDraft = {
+      uploadId: uploaded.uploadId,
+      contentId: uploaded.contentId,
+      fileName: uploaded.fileName,
+      contentType: uploaded.contentType,
+      sizeBytes: uploaded.sizeBytes,
+      previewPath: uploaded.previewPath,
+      objectUrl,
+      alt: uploaded.fileName,
+    };
+    replaceMailComposeInlineImages([...mailComposeInlineImagesRef.current.filter((item) => item.contentId !== draft.contentId), draft]);
+    return { ...draft, objectUrl: editorObjectUrl };
+  }
+
+  async function hydrateComposeInlineImages(attachments: MailDetail["attachments"]) {
+    if (!token) return;
+    const requestId = mailComposeInlineImageRequestRef.current + 1;
+    mailComposeInlineImageRequestRef.current = requestId;
+    replaceMailComposeInlineImages([]);
+    const drafts = await Promise.all(attachments.filter((attachment) => (
+      attachment.disposition === "inline" && attachment.contentId && attachment.previewPath
+    )).map(async (attachment) => {
+      try {
+        const blob = await fetchMailInlinePreview(token, attachment.previewPath!);
+        return {
+          uploadId: attachment.attachmentId,
+          contentId: attachment.contentId!,
+          fileName: attachment.fileName,
+          contentType: attachment.contentType,
+          sizeBytes: attachment.sizeBytes,
+          previewPath: attachment.previewPath!,
+          objectUrl: URL.createObjectURL(blob),
+          alt: attachment.fileName,
+        } satisfies InlineImageDraft;
+      } catch {
+        return null;
+      }
+    }));
+    const resolved = drafts.filter((draft): draft is InlineImageDraft => draft !== null);
+    if (requestId !== mailComposeInlineImageRequestRef.current) {
+      for (const draft of resolved) URL.revokeObjectURL(draft.objectUrl);
+      return;
+    }
+    replaceMailComposeInlineImages(resolved);
+  }
+
+  const resolveComposeInlineImageUrl = useCallback(
+    (contentId: string) => mailComposeInlineImages.find((item) => item.contentId === contentId)?.objectUrl,
+    [mailComposeInlineImages],
+  );
+
+  useEffect(() => () => {
+    for (const url of new Set(mailComposeInlineImagesRef.current.map((item) => item.objectUrl))) URL.revokeObjectURL(url);
+    mailComposeInlineImagesRef.current = [];
+  }, []);
+
   async function uploadComposeAttachments(targetToken: string): Promise<MailAttachment[]> {
     const uploaded: MailAttachment[] = [];
     for (const item of mailComposeFiles) {
@@ -3325,12 +3545,22 @@ export default function App() {
     setMailLoading(true);
     setMailError("");
     try {
-      const attachments = await uploadComposeAttachments(token);
+      const attachments = [
+        ...await uploadComposeAttachments(token),
+        ...mailComposeInlineImages.map((image) => ({
+          uploadId: image.uploadId,
+          fileName: image.fileName,
+          contentType: image.contentType,
+          sizeBytes: image.sizeBytes,
+          disposition: "inline" as const,
+          contentId: image.contentId,
+          previewPath: image.previewPath,
+        })),
+      ];
       const payload = {
-        to, cc, bcc, subject, bodyText,
-        bodyHtml: mailComposeContext === "forward" && mailComposeSourceDetail?.bodyHtml
-          ? buildForwardMailHtml(mailComposeSourceDetail, bodyText)
-          : null,
+        to, cc, bcc, subject,
+        bodyHtml: mailComposeForm.bodyHtml,
+        bodyText: mailComposeForm.bodyText,
         attachments, scheduledAt, confirmed,
         composeAction: mailComposeContext,
         sourceMailId: mailComposeSourceDetail?.mailId,
@@ -3352,6 +3582,7 @@ export default function App() {
       }
       setMailComposeForm(createEmptyMailComposeForm());
       setMailComposeFiles([]);
+      clearMailComposeInlineImages();
       setMailComposeSourceDetail(null);
       setEditingScheduledMailId("");
       setSelectedForwardAttachmentIds([]);
@@ -3382,22 +3613,24 @@ export default function App() {
     const replyRecipients = mode === "forward"
       ? { to: [], cc: [] }
       : buildMailReplyRecipients(selectedMailDetail, me?.userEmail || "", mode);
-    setMailComposeForm({
+    setMailComposeForm(createMailComposeForm({
       to: replyRecipients.to.join(", "),
       cc: replyRecipients.cc.join(", "),
       bcc: "",
       subject: withMailSubjectPrefix(selectedMailDetail.subject, mode),
       bodyText: buildMailQuotedBody(selectedMailDetail),
+      bodyHtml: mode === "forward" ? selectedMailDetail.bodyHtml : null,
       scheduledAt: "",
-    });
+    }));
     setMailComposeContext(mode);
     setMailComposeSourceDetail(selectedMailDetail);
     setSelectedForwardAttachmentIds(
       mode === "forward"
-        ? selectedMailDetail.attachments.map((item) => item.attachmentId).filter(Boolean)
+        ? selectedMailDetail.attachments.filter((item) => item.disposition !== "inline").map((item) => item.attachmentId).filter(Boolean)
         : [],
     );
     setMailComposeFiles([]);
+    void hydrateComposeInlineImages(selectedMailDetail.attachments);
     setMailComposePosition(null);
     setComposeWindow("normal");
     setMailError("");
@@ -3409,6 +3642,7 @@ export default function App() {
     setMailComposeContext("new");
     setMailComposePosition(null);
     setMailComposeFiles([]);
+    clearMailComposeInlineImages();
     setMailComposeSourceDetail(null);
     setSelectedForwardAttachmentIds([]);
     setRecipientPickerTarget(null);
@@ -3422,7 +3656,7 @@ export default function App() {
   }
 
   function closeMailCompose() {
-    const hasDraft = Boolean(mailComposeForm.to || mailComposeForm.cc || mailComposeForm.bcc || mailComposeForm.subject || mailComposeForm.bodyText || mailComposeForm.scheduledAt || mailComposeAttachmentCount);
+    const hasDraft = Boolean(mailComposeForm.to || mailComposeForm.cc || mailComposeForm.bcc || mailComposeForm.subject || mailComposeForm.bodyText || mailComposeInlineImages.length || mailComposeForm.scheduledAt || mailComposeAttachmentCount);
     if (hasDraft) {
       setMailComposeCloseConfirmOpen(true);
       return;
@@ -4709,9 +4943,40 @@ export default function App() {
   const selectedMailReadReceiptSummary = selectedMailDetail ? summarizeMailReadReceipts(selectedMailDetail) : "확인 불가";
   const hasRemoteMailImages = Boolean(selectedMailDetail?.bodyHtml && /<img\b[^>]*\bsrc\s*=\s*["']https?:/i.test(selectedMailDetail.bodyHtml));
   const safeMailHtml = useMemo(
-    () => selectedMailDetail?.bodyHtml ? sanitizeMailHtml(selectedMailDetail.bodyHtml, showRemoteMailImages || mailPreferences?.blockRemoteImages === false) : "",
-    [selectedMailDetail?.bodyHtml, showRemoteMailImages, mailPreferences?.blockRemoteImages],
+    () => selectedMailDetail?.bodyHtml ? sanitizeMailHtml(
+      replaceMailInlineCids(selectedMailDetail.bodyHtml, selectedMailDetail.attachments, mailDetailInlinePreviewUrls),
+      showRemoteMailImages || mailPreferences?.blockRemoteImages === false,
+      new Set(Object.values(mailDetailInlinePreviewUrls)),
+    ) : "",
+    [selectedMailDetail?.attachments, selectedMailDetail?.bodyHtml, showRemoteMailImages, mailDetailInlinePreviewUrls, mailPreferences?.blockRemoteImages],
   );
+  const downloadableMailAttachments = selectedMailDetail?.attachments.filter((attachment) => attachment.disposition !== "inline") ?? [];
+  useEffect(() => {
+    let cancelled = false;
+    const createdUrls: string[] = [];
+    setMailDetailInlinePreviewUrls({});
+    const inlineAttachments = selectedMailDetail?.attachments.filter((attachment) => (
+      attachment.disposition === "inline" && attachment.contentId && attachment.previewPath
+    )) ?? [];
+    if (!token || inlineAttachments.length === 0) return () => undefined;
+    void Promise.all(inlineAttachments.map(async (attachment) => {
+      try {
+        const blob = await fetchMailInlinePreview(token, attachment.previewPath!);
+        const url = URL.createObjectURL(blob);
+        createdUrls.push(url);
+        return [attachment.contentId!, url] as const;
+      } catch {
+        return null;
+      }
+    })).then((entries) => {
+      if (cancelled) return;
+      setMailDetailInlinePreviewUrls(Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => entry !== null)));
+    });
+    return () => {
+      cancelled = true;
+      for (const url of createdUrls) URL.revokeObjectURL(url);
+    };
+  }, [selectedMailDetail?.attachments, selectedMailDetail?.mailId, token]);
   useEffect(() => {
     setShowRemoteMailImages(false);
   }, [selectedMailDetail?.mailId]);
@@ -5419,7 +5684,14 @@ export default function App() {
                   </label>
                   <label className="user-mail-compose-field is-body">
                     <span>본문</span>
-                    <textarea aria-label="mail-compose-body" value={mailComposeForm.bodyText} onChange={(event) => setMailComposeForm((current) => ({ ...current, bodyText: event.target.value }))} placeholder="본문 입력" />
+                    <MailRichTextEditor
+                      value={mailComposeForm.bodyDocument}
+                      onChange={handleMailDocumentChange}
+                      onUploadImage={uploadComposeInlineImage}
+                      onError={setMailError}
+                      resolveInlineImageUrl={resolveComposeInlineImageUrl}
+                      disabled={mailLoading}
+                    />
                   </label>
                   {translationUiVisible ? <section className="user-mail-compose-translation-toolbar" aria-label="발신 메일 번역">
                     <div><strong>발신 메일 번역</strong><small>Provider {translationStatus?.provider}</small></div>
@@ -5559,10 +5831,10 @@ export default function App() {
                       ) : (
                         <div className="user-mail-detail-body">{selectedMailDetail.bodyText || selectedMailDetail.subject}</div>
                       )}
-                      {selectedMailDetail.attachments.length ? (
+                      {downloadableMailAttachments.length ? (
                         <section className="user-mail-detail-attachments" aria-label="첨부 파일">
-                          <h3>첨부 {selectedMailDetail.attachments.length}개</h3>
-                          {selectedMailDetail.attachments.map((attachment) => <button type="button" key={attachment.attachmentId} onClick={() => void handleMailAttachmentDownload(attachment.attachmentId, attachment.fileName)}><strong>{attachment.fileName}</strong><span>{attachment.contentType}</span><small>{formatFileSize(attachment.sizeBytes)}</small><em>다운로드</em></button>)}
+                          <h3>첨부 {downloadableMailAttachments.length}개</h3>
+                          {downloadableMailAttachments.map((attachment) => <button type="button" key={attachment.attachmentId} onClick={() => void handleMailAttachmentDownload(attachment.attachmentId, attachment.fileName)}><strong>{attachment.fileName}</strong><span>{attachment.contentType}</span><small>{formatFileSize(attachment.sizeBytes)}</small><em>다운로드</em></button>)}
                         </section>
                       ) : null}
                     </div>

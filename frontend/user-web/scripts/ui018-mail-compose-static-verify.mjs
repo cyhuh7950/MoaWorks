@@ -13,6 +13,8 @@ const checks = [
   ["최근 수신자 API", api.includes("/mail/recent-recipients")],
   ["수신자 원본 부분 실패 허용", app.includes("Promise.allSettled") && app.includes("failedSourceCount")],
   ["실제 첨부 upload", api.includes('"/mail/attachments"') && app.includes("uploadMailAttachment")],
+  ["서식 editor compose", app.includes("<MailRichTextEditor") && !app.includes('<textarea aria-label="mail-compose-body"')],
+  ["본문 이미지 inline upload", app.includes('uploadMailAttachment(targetToken, file, "inline")') && app.includes("fetchMailInlinePreview")],
   ["첨부 제거와 합계", app.includes("removeMailComposeAttachment") && app.includes("mailComposeAttachmentBytes")],
   ["예약 발송", app.includes("scheduledAt") && app.includes('type="datetime-local"')],
   ["draft/send 검증 분리", app.includes('action === "draft"') && app.includes("hasDraftContent")],
