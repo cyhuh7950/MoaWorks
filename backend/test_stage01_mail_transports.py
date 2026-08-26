@@ -5,9 +5,9 @@ from unittest.mock import patch
 
 import dns.resolver
 
+from app.services.mail_mime_builder import OutboundMessage
 from app.services.mail_transports import (
     OciEmailDeliveryTransport,
-    OutboundMessage,
     MailTransportFailure,
     RelaySmtpConfig,
     SelfHostedSmtpTransport,

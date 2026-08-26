@@ -2,13 +2,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
-from email.headerregistry import Address
+from email.utils import make_msgid
+from hashlib import sha256
 from pathlib import Path
 import re
+from secrets import compare_digest
 import smtplib
 import ssl
 from typing import Protocol
 
+from app.services.mail_mime_builder import OutboundAttachment, OutboundMessage, build_mail_message
 from app.services.mail_transports import MailTransportFailure
 
 @dataclass(frozen=True)
@@ -85,7 +88,7 @@ class MailDeliveryWorker:
         if provider.get("provider_type") == "oci_email_delivery" and _job_value(job, "recipient_suppressed", False):
             return DeliveryResult("blocked", error_message="OCI suppression 목록에 등록된 수신자입니다.")
         attempt = int(_job_value(job, "attempt_count", 0)) + 1
-        envelope = {key: _job_value(job, key) for key in ("queue_id","delivery_kind","sender_email","sender_display_name","reply_to_email","message_encoding","recipient_email","subject","body_text","body_html","attachments")}
+        envelope = {key: _job_value(job, key) for key in ("mail_id","message_id","queue_id","delivery_kind","sender_email","sender_display_name","reply_to_email","message_encoding","recipient_email","subject","body_text","body_html","attachments")}
         if _job_value(job, "delivery_kind") == "auto_forward" or _job_value(job, "delivery_kind") == "out_of_office":
             envelope["sender_email"] = _job_value(job, "sender_email_override") or envelope["sender_email"]
             envelope["sender_display_name"] = _job_value(job, "sender_display_name_override") or envelope["sender_display_name"]
@@ -103,37 +106,58 @@ class MailDeliveryWorker:
 
 class SmtpRelayAdapter:
     def build_message(self, envelope: dict, provider: dict) -> EmailMessage:
-        message = EmailMessage()
         display_name = (envelope.get("sender_display_name") or "").strip()
         sender_email = envelope["sender_email"] if envelope.get("delivery_kind") in {"auto_forward", "out_of_office"} else (provider.get("from_address") or envelope["sender_email"])
-        message["From"] = Address(display_name=display_name, addr_spec=sender_email) if display_name else sender_email
-        message["To"] = envelope["recipient_email"]
-        message["Subject"] = envelope["subject"]
-        if envelope.get("reply_to_email"):
-            message["Reply-To"] = envelope["reply_to_email"]
-        charset = envelope.get("message_encoding") or "utf-8"
-        message.set_content(envelope["body_text"], charset=charset)
-        if envelope.get("body_html"):
-            message.add_alternative(envelope["body_html"], subtype="html", charset=charset)
+        attachments: list[OutboundAttachment] = []
         for attachment in envelope.get("attachments") or []:
             path = Path(str(attachment.get("path") or ""))
             if not path.is_file():
                 raise RelayDeliveryError("첨부 파일을 찾을 수 없습니다.", transient=False)
-            content_type = str(attachment.get("content_type") or "application/octet-stream")
-            maintype, separator, subtype = content_type.partition("/")
-            if not separator or not maintype or not subtype:
-                maintype, subtype = "application", "octet-stream"
+            content = path.read_bytes()
+            expected_size = attachment.get("size_bytes")
+            if expected_size is not None and len(content) != int(expected_size):
+                raise RelayDeliveryError("첨부 파일 저장 상태가 올바르지 않습니다.", transient=False)
+            expected_sha256 = attachment.get("sha256")
+            if expected_sha256 is not None and (
+                not isinstance(expected_sha256, str)
+                or not compare_digest(expected_sha256, sha256(content).hexdigest())
+            ):
+                raise RelayDeliveryError("첨부 파일 저장 상태가 올바르지 않습니다.", transient=False)
             file_name = Path(str(attachment.get("file_name") or "attachment.bin").replace("\\", "/")).name[:255]
-            message.add_attachment(
-                path.read_bytes(),
-                maintype=maintype,
-                subtype=subtype,
-                filename=file_name,
+            attachments.append(
+                OutboundAttachment(
+                    file_name=file_name,
+                    content_type=str(attachment.get("content_type") or "application/octet-stream"),
+                    content=content,
+                    content_disposition=str(attachment.get("content_disposition") or "attachment"),
+                    content_id=attachment.get("content_id"),
+                )
             )
-        return message
+        sender_domain = sender_email.rsplit("@", 1)[-1] if "@" in sender_email else "localhost"
+        message_id = str(envelope.get("message_id") or "").strip()
+        if not message_id:
+            stable_id = str(envelope.get("mail_id") or envelope.get("queue_id") or "").strip()
+            message_id = f"<{stable_id}@{sender_domain}>" if stable_id else make_msgid(domain=sender_domain)
+        return build_mail_message(
+            OutboundMessage(
+                sender_email=sender_email,
+                sender_display_name=display_name,
+                reply_to_email=envelope.get("reply_to_email"),
+                message_encoding=str(envelope.get("message_encoding") or "utf-8"),
+                recipient_email=envelope["recipient_email"],
+                subject=envelope["subject"],
+                body_text=envelope["body_text"],
+                body_html=envelope.get("body_html"),
+                message_id=message_id,
+                attachments=tuple(attachments),
+            )
+        )
 
     def send(self, envelope: dict, provider: dict) -> str:
-        message = self.build_message(envelope, provider)
+        try:
+            message = self.build_message(envelope, provider)
+        except ValueError as exc:
+            raise RelayDeliveryError(str(exc), transient=False) from exc
         host, port = provider["relay_host"], int(provider["relay_port"])
         tls_mode = provider.get("tls_mode", "starttls")
         client_cls = smtplib.SMTP_SSL if tls_mode == "tls" else smtplib.SMTP

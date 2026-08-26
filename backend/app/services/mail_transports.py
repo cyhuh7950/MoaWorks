@@ -4,11 +4,19 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from email.policy import SMTP
 from email.utils import make_msgid
+from hashlib import sha256
 from pathlib import Path
 import re
+from secrets import compare_digest
 import smtplib
 import ssl
 from typing import Callable, Protocol, Sequence
+
+from app.services.mail_mime_builder import (
+    OutboundAttachment,
+    OutboundMessage,
+    build_mail_message,
+)
 
 
 class SmtpClient(Protocol):
@@ -69,25 +77,6 @@ class DkimPySigner:
 
 
 @dataclass(frozen=True, slots=True)
-class OutboundAttachment:
-    file_name: str
-    content_type: str
-    content: bytes
-
-
-@dataclass(frozen=True, slots=True)
-class OutboundMessage:
-    sender_email: str
-    recipient_email: str
-    subject: str
-    body_text: str
-    body_html: str | None
-    message_id: str
-    envelope_from: str | None = None
-    attachments: tuple[OutboundAttachment, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
 class RelaySmtpConfig:
     host: str
     port: int
@@ -145,7 +134,10 @@ class SelfHostedSmtpTransport:
         username: str = "",
         password: str = "",
     ) -> DeliveryReceipt:
-        prepared = _build_message(message)
+        try:
+            prepared = build_mail_message(message)
+        except ValueError as exc:
+            raise MailTransportFailure(str(exc), transient=False) from exc
         if dkim_config is not None:
             self.dkim_signer.sign(prepared, dkim_config)
         normalized_relay_host = relay_host.strip().rstrip(".").lower()
@@ -215,7 +207,10 @@ class OciEmailDeliveryTransport:
     def send(self, message: OutboundMessage, *, config: RelaySmtpConfig) -> DeliveryReceipt:
         if config.port not in {465, 587}:
             raise MailTransportFailure("OCI SMTP 포트는 465 또는 587이어야 합니다.", transient=False)
-        prepared = _build_message(message)
+        try:
+            prepared = build_mail_message(message)
+        except ValueError as exc:
+            raise MailTransportFailure(str(exc), transient=False) from exc
         factory = self.smtp_ssl_factory if config.port == 465 else self.smtp_factory
         try:
             with factory(
@@ -273,7 +268,13 @@ class MailProviderRoutingAdapter:
     def send(self, envelope: dict, provider: dict) -> str:
         raw_provider_type = str(provider.get("provider_type") or "").strip().lower()
         provider_type = "self_hosted" if raw_provider_type == "self_hosted_smtp" else raw_provider_type
-        sender_email = str(provider.get("from_address") or envelope.get("sender_email") or "").strip().lower()
+        delivery_kind = str(envelope.get("delivery_kind") or "direct")
+        automatic = delivery_kind in {"auto_forward", "out_of_office"}
+        sender_email = str(
+            envelope.get("sender_email")
+            if automatic
+            else provider.get("from_address") or envelope.get("sender_email") or ""
+        ).strip().lower()
         recipient_email = str(envelope.get("recipient_email") or "").strip().lower()
         sender_domain = sender_email.rsplit("@", 1)[-1] if "@" in sender_email else "localhost"
         queue_id = str(envelope.get("queue_id") or "").strip()
@@ -286,20 +287,39 @@ class MailProviderRoutingAdapter:
             path = Path(str(item.get("path") or ""))
             if not path.is_file():
                 raise MailTransportFailure("첨부 파일을 찾을 수 없습니다.", transient=False)
+            content = path.read_bytes()
+            expected_size = item.get("size_bytes")
+            if expected_size is not None and len(content) != int(expected_size):
+                raise MailTransportFailure("첨부 파일 저장 상태가 올바르지 않습니다.", transient=False)
+            expected_sha256 = item.get("sha256")
+            if expected_sha256 is not None and (
+                not isinstance(expected_sha256, str)
+                or not compare_digest(expected_sha256, sha256(content).hexdigest())
+            ):
+                raise MailTransportFailure("첨부 파일 저장 상태가 올바르지 않습니다.", transient=False)
             attachments.append(
                 OutboundAttachment(
                     file_name=Path(str(item.get("file_name") or "attachment.bin").replace("\\", "/")).name[:255],
                     content_type=str(item.get("content_type") or "application/octet-stream"),
-                    content=path.read_bytes(),
+                    content=content,
+                    content_disposition=str(item.get("content_disposition") or "attachment"),
+                    content_id=item.get("content_id"),
                 )
             )
+        message_id = str(envelope.get("message_id") or "").strip()
+        if not message_id:
+            stable_id = str(envelope.get("mail_id") or queue_id).strip()
+            message_id = f"<{stable_id}@{sender_domain}>" if stable_id else make_msgid(domain=sender_domain)
         message = OutboundMessage(
             sender_email=sender_email,
             recipient_email=recipient_email,
             subject=str(envelope.get("subject") or ""),
             body_text=str(envelope.get("body_text") or ""),
             body_html=envelope.get("body_html"),
-            message_id=str(envelope.get("message_id") or make_msgid(domain=sender_domain)),
+            message_id=message_id,
+            sender_display_name=str(envelope.get("sender_display_name") or ""),
+            reply_to_email=envelope.get("reply_to_email"),
+            message_encoding=str(envelope.get("message_encoding") or "utf-8"),
             envelope_from=envelope_from,
             attachments=tuple(attachments),
         )
@@ -351,35 +371,4 @@ class MailProviderRoutingAdapter:
         )
 
 
-def _build_message(source: OutboundMessage) -> EmailMessage:
-    for header_value in (
-        source.sender_email,
-        source.recipient_email,
-        source.subject,
-        source.message_id,
-    ):
-        if "\r" in header_value or "\n" in header_value:
-            raise ValueError("메일 헤더에 허용되지 않는 줄바꿈이 있습니다.")
-    if "@" not in source.sender_email or "@" not in source.recipient_email:
-        raise ValueError("발신자와 수신자 이메일 형식이 올바르지 않습니다.")
-
-    message = EmailMessage()
-    message["From"] = source.sender_email
-    message["To"] = source.recipient_email
-    message["Subject"] = source.subject
-    message["Reply-To"] = source.sender_email
-    message["Message-ID"] = source.message_id
-    message.set_content(source.body_text or "")
-    if source.body_html:
-        message.add_alternative(source.body_html, subtype="html")
-    for attachment in source.attachments:
-        maintype, separator, subtype = attachment.content_type.partition("/")
-        if not separator or not maintype or not subtype:
-            maintype, subtype = "application", "octet-stream"
-        message.add_attachment(
-            attachment.content,
-            maintype=maintype,
-            subtype=subtype,
-            filename=attachment.file_name,
-        )
-    return message
+_build_message = build_mail_message
