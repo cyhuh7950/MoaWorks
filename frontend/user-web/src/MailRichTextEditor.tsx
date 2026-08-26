@@ -20,6 +20,7 @@ export type MailRichTextEditorProps = {
   onChange: (value: JSONContent) => void;
   onUploadImage: (file: File) => Promise<InlineImageDraft>;
   onError: (message: string) => void;
+  resolveInlineImageUrl?: (contentId: string) => string | undefined;
   disabled?: boolean;
 };
 
@@ -33,6 +34,21 @@ const FONT_FAMILIES = ["맑은 고딕", "Arial", "Georgia", "Times New Roman", "
 const FONT_SIZES = ["10px", "12px", "14px", "16px", "18px", "24px", "32px"];
 const LINE_HEIGHTS = ["1", "1.15", "1.5", "1.75", "2"];
 const SAFE_LINK_PATTERN = /^(?:https?:\/\/|mailto:)[^\u0000-\u001f\u007f\s]+$/i;
+const SAFE_BLOB_URL_PATTERN = /^blob:[^\u0000-\u0020\u007f]+$/;
+
+function resolveSafeBlobUrl(
+  resolver: MailRichTextEditorProps["resolveInlineImageUrl"],
+  contentId: string,
+): string | undefined {
+  if (!resolver) return undefined;
+  try {
+    const resolved = resolver(contentId);
+    if (!resolved || !SAFE_BLOB_URL_PATTERN.test(resolved)) return undefined;
+    return new URL(resolved).protocol === "blob:" ? resolved : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function documentKey(value: JSONContent): string {
   return JSON.stringify(value);
@@ -154,8 +170,9 @@ class EditorFailureBoundary extends Component<
   }
 }
 
-function MailRichTextEditorRuntime({ value, onChange, onUploadImage, onError, disabled = false, lifecycleKey }: RuntimeProps) {
+function MailRichTextEditorRuntime({ value, onChange, onUploadImage, onError, resolveInlineImageUrl, disabled = false, lifecycleKey }: RuntimeProps) {
   const registryRef = useRef(new InlineImageRegistry());
+  const resolverRef = useRef(resolveInlineImageUrl);
   const uploadedContentIdsRef = useRef(new Set<string>());
   const reservedUploadsRef = useRef(0);
   const aliveRef = useRef(true);
@@ -166,7 +183,9 @@ function MailRichTextEditorRuntime({ value, onChange, onUploadImage, onError, di
   const uploadFilesRef = useRef<(files: readonly File[]) => void>(() => undefined);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [altText, setAltText] = useState("");
-  const [, setEditorRevision] = useState(0);
+  const [editorRevision, setEditorRevision] = useState(0);
+
+  resolverRef.current = resolveInlineImageUrl;
 
   const moaworksImage = useMemo(() => Image.extend({
     addAttributes() {
@@ -190,7 +209,7 @@ function MailRichTextEditorRuntime({ value, onChange, onUploadImage, onError, di
     },
     renderHTML({ node }) {
       const contentId = String(node.attrs.contentId ?? "");
-      const preview = registryRef.current.get(contentId);
+      const preview = registryRef.current.get(contentId) ?? resolveSafeBlobUrl(resolverRef.current, contentId);
       return ["img", {
         src: preview ?? `cid:${contentId}`,
         alt: node.attrs.alt || "본문 이미지",
@@ -381,6 +400,17 @@ function MailRichTextEditorRuntime({ value, onChange, onUploadImage, onError, di
     }
   }, [editor, reportError, value]);
 
+  useEffect(() => {
+    if (!editor) return;
+    editor.view.dom.querySelectorAll<HTMLImageElement>("img[contentid], img[data-content-id]").forEach((image) => {
+      const contentId = image.getAttribute("contentid") ?? image.getAttribute("data-content-id") ?? "";
+      if (!contentId) return;
+      const preview = registryRef.current.get(contentId) ?? resolveSafeBlobUrl(resolverRef.current, contentId);
+      const nextSource = preview ?? `cid:${contentId}`;
+      if (image.getAttribute("src") !== nextSource) image.setAttribute("src", nextSource);
+    });
+  }, [editor, editorRevision, resolveInlineImageUrl, value]);
+
   const commandDisabled = !editor || !editor.isEditable;
   const tableActive = Boolean(editor?.isActive("table"));
   const run = (callback: (chain: ReturnType<Editor["chain"]>) => ReturnType<Editor["chain"]>) =>
@@ -417,7 +447,7 @@ function MailRichTextEditorRuntime({ value, onChange, onUploadImage, onError, di
   };
 
   return (
-    <div className="mail-rich-text-editor" data-disabled={disabled || undefined}>
+    <div className="mail-rich-text-editor" data-disabled={disabled || undefined} style={{ containerType: "inline-size" }}>
       <div className="mail-rich-text-editor__toolbar" role="toolbar" aria-label="메일 본문 서식">
         <SelectControl label="글꼴" value={String(editor?.getAttributes("textStyle").fontFamily ?? "")} options={FONT_FAMILIES} disabled={commandDisabled} onChange={(value) => { if (value) run((chain) => chain.setFontFamily(value)); else run((chain) => chain.unsetFontFamily()); }} />
         <SelectControl label="글자 크기" value={String(editor?.getAttributes("textStyle").fontSize ?? "")} options={FONT_SIZES} disabled={commandDisabled} onChange={(value) => { if (value) run((chain) => chain.setFontSize(value)); else run((chain) => chain.unsetFontSize()); }} />

@@ -10,6 +10,41 @@ import { MailRichTextEditor } from "./MailRichTextEditor";
 import type { InlineImageDraft } from "./mailInlineImages";
 
 const emptyDoc: JSONContent = { type: "doc", content: [{ type: "paragraph" }] };
+const externalImageDoc: JSONContent = {
+  type: "doc",
+  content: [{
+    type: "paragraph",
+    content: [{
+      type: "image",
+      attrs: {
+        src: "cid:mw-existing@example.invalid",
+        contentId: "mw-existing@example.invalid",
+        alt: "기존 이미지",
+        width: null,
+        height: null,
+      },
+    }],
+  }],
+};
+const replacementImageDoc: JSONContent = {
+  type: "doc",
+  content: [{
+    type: "paragraph",
+    content: [{
+      type: "image",
+      attrs: {
+        src: "cid:mw-replacement@example.invalid",
+        contentId: "mw-replacement@example.invalid",
+        alt: "교체 이미지",
+        width: null,
+        height: null,
+      },
+    }],
+  }],
+};
+
+type PreviewEditorProps = React.ComponentProps<typeof MailRichTextEditor>;
+const PreviewEditor = MailRichTextEditor;
 
 beforeAll(() => {
   Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => document.body });
@@ -46,6 +81,17 @@ function renderEditor(overrides: Partial<React.ComponentProps<typeof MailRichTex
     ...overrides,
   };
   return { ...render(<MailRichTextEditor {...props} />), props };
+}
+
+function renderPreviewEditor(overrides: Partial<PreviewEditorProps> = {}) {
+  const props: PreviewEditorProps = {
+    value: emptyDoc,
+    onChange: vi.fn(),
+    onUploadImage: vi.fn(async (file: File) => draftFor(file)),
+    onError: vi.fn(),
+    ...overrides,
+  };
+  return { ...render(<PreviewEditor {...props} />), props };
 }
 
 afterEach(() => {
@@ -129,6 +175,106 @@ describe("MailRichTextEditor 접근성과 서식 계약", () => {
 });
 
 describe("MailRichTextEditor 이미지 경계", () => {
+  it("외부 CID 문서를 resolver의 blob URL로 표시하되 JSON에는 CID만 유지한다", async () => {
+    const onChange = vi.fn();
+    renderPreviewEditor({
+      value: externalImageDoc,
+      resolveInlineImageUrl: () => "blob:https://moaworks.invalid/existing",
+      onChange,
+    });
+
+    const image = await waitFor(() => {
+      const element = document.querySelector('img[contentid="mw-existing@example.invalid"]');
+      expect(element).toBeTruthy();
+      expect(element?.getAttribute("src")).toBe("blob:https://moaworks.invalid/existing");
+      return element as HTMLImageElement;
+    });
+    await userEvent.click(screen.getByRole("button", { name: "가로 구분선" }));
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const emitted = JSON.stringify(onChange.mock.calls[onChange.mock.calls.length - 1][0]);
+    expect(emitted).toContain("cid:mw-existing@example.invalid");
+    expect(emitted).not.toContain("blob:");
+    expect(image.getAttribute("src")).toBe("blob:https://moaworks.invalid/existing");
+  });
+
+  it("resolver 결과가 mount 후 준비되거나 바뀌면 표시만 갱신하고 onChange를 호출하지 않는다", async () => {
+    const onChange = vi.fn();
+    let previewUrl: string | undefined;
+    const { rerender, props } = renderPreviewEditor({
+      value: externalImageDoc,
+      resolveInlineImageUrl: () => previewUrl,
+      onChange,
+    });
+    const image = await waitFor(() => document.querySelector('img[contentid="mw-existing@example.invalid"]') as HTMLImageElement);
+    expect(image.getAttribute("src")).toBe("cid:mw-existing@example.invalid");
+
+    previewUrl = "blob:https://moaworks.invalid/first";
+    rerender(<PreviewEditor {...props} resolveInlineImageUrl={() => previewUrl} />);
+    await waitFor(() => expect(image.getAttribute("src")).toBe("blob:https://moaworks.invalid/first"));
+
+    previewUrl = "blob:https://moaworks.invalid/second";
+    rerender(<PreviewEditor {...props} resolveInlineImageUrl={() => previewUrl} />);
+    await waitFor(() => expect(image.getAttribute("src")).toBe("blob:https://moaworks.invalid/second"));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("외부 value 교체 시 새 CID의 resolver 표시를 갱신하고 feedback을 만들지 않는다", async () => {
+    const onChange = vi.fn();
+    const resolveInlineImageUrl = (contentId: string) => `blob:https://moaworks.invalid/${contentId}`;
+    const { rerender, props } = renderPreviewEditor({
+      value: externalImageDoc,
+      resolveInlineImageUrl,
+      onChange,
+    });
+    await waitFor(() => expect(document.querySelector("img")?.getAttribute("src")).toContain("mw-existing"));
+
+    rerender(<PreviewEditor {...props} value={replacementImageDoc} />);
+
+    await waitFor(() => {
+      const replacement = document.querySelector('img[contentid="mw-replacement@example.invalid"]');
+      expect(replacement?.getAttribute("src")).toBe(
+        "blob:https://moaworks.invalid/mw-replacement@example.invalid",
+      );
+    });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "https://tracker.example/x",
+    "http://tracker.example/x",
+    "data:image/png;base64,AAAA",
+    "file:///secret.png",
+    "//tracker.example/x",
+    "",
+    "blob:https://moaworks.invalid/good\nhttps://tracker.example/x",
+  ])("안전하지 않은 resolver 결과를 표시하거나 저장하지 않는다: %s", async (resolvedUrl) => {
+    const onChange = vi.fn();
+    renderPreviewEditor({
+      value: externalImageDoc,
+      resolveInlineImageUrl: () => resolvedUrl,
+      onChange,
+    });
+
+    const image = await waitFor(() => document.querySelector('img[contentid="mw-existing@example.invalid"]') as HTMLImageElement);
+    expect(image.getAttribute("src")).toBe("cid:mw-existing@example.invalid");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("외부 resolver URL은 문서 교체와 unmount에서 revoke하지 않는다", async () => {
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL");
+    const { rerender, unmount, props } = renderPreviewEditor({
+      value: externalImageDoc,
+      resolveInlineImageUrl: () => "blob:https://moaworks.invalid/parent-owned",
+    });
+    await waitFor(() => expect(document.querySelector("img")?.getAttribute("src")).toContain("parent-owned"));
+
+    rerender(<PreviewEditor {...props} value={emptyDoc} />);
+    unmount();
+
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["image/png", "a.png"],
     ["image/jpeg", "a.jpg"],
@@ -239,6 +385,7 @@ describe("MailRichTextEditor 이미지 경계", () => {
   });
 
   it("unmount 뒤 완료된 upload는 node를 삽입하거나 오류를 내지 않는다", async () => {
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL");
     let resolveUpload!: (draft: InlineImageDraft) => void;
     const onUploadImage = vi.fn(() => new Promise<InlineImageDraft>((resolve) => { resolveUpload = resolve; }));
     const onChange = vi.fn();
@@ -253,9 +400,11 @@ describe("MailRichTextEditor 이미지 경계", () => {
 
     expect(onChange).not.toHaveBeenCalled();
     expect(onError).not.toHaveBeenCalled();
+    expect(revokeObjectURL.mock.calls).toEqual([["blob:late.png"]]);
   });
 
   it("외부 document 교체 뒤 완료된 이전 upload를 무시한다", async () => {
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL");
     let resolveUpload!: (draft: InlineImageDraft) => void;
     const onUploadImage = vi.fn(() => new Promise<InlineImageDraft>((resolve) => { resolveUpload = resolve; }));
     const onChange = vi.fn();
@@ -271,6 +420,34 @@ describe("MailRichTextEditor 이미지 경계", () => {
 
     expect(screen.queryByRole("textbox", { name: "이미지 대체 텍스트" })).toBeNull();
     expect(onError).not.toHaveBeenCalled();
+    expect(revokeObjectURL.mock.calls).toEqual([["blob:stale.png"]]);
+  });
+
+  it("내부 이미지를 undo로 삭제하면 owned object URL을 정확히 한 번 revoke한다", async () => {
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL");
+    const file = new File(["x"], "owned.png", { type: "image/png" });
+    renderEditor({ onUploadImage: vi.fn(async () => draftFor(file)) });
+    fireEvent.change(await screen.findByLabelText("본문 이미지 선택"), { target: { files: [file] } });
+    await userEvent.click(await screen.findByRole("button", { name: "이미지 삽입" }));
+    await waitFor(() => expect(document.querySelector('img[contentid="mw-owned-png@example.invalid"]')).toBeTruthy());
+
+    await userEvent.click(screen.getByRole("button", { name: "실행 취소" }));
+
+    await waitFor(() => expect(document.querySelector('img[contentid="mw-owned-png@example.invalid"]')).toBeNull());
+    expect(revokeObjectURL.mock.calls).toEqual([["blob:owned.png"]]);
+  });
+
+  it("내부 이미지가 남은 component unmount에서 owned URL을 정확히 한 번 revoke한다", async () => {
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL");
+    const file = new File(["x"], "unmount-owned.png", { type: "image/png" });
+    const { unmount } = renderEditor({ onUploadImage: vi.fn(async () => draftFor(file)) });
+    fireEvent.change(await screen.findByLabelText("본문 이미지 선택"), { target: { files: [file] } });
+    await userEvent.click(await screen.findByRole("button", { name: "이미지 삽입" }));
+    await waitFor(() => expect(document.querySelector('img[contentid="mw-unmount-owned-png@example.invalid"]')).toBeTruthy());
+
+    unmount();
+
+    expect(revokeObjectURL.mock.calls).toEqual([["blob:unmount-owned.png"]]);
   });
 
   it("server contentId나 blob URL이 없는 upload 결과를 fail closed한다", async () => {
@@ -329,8 +506,21 @@ describe("MailRichTextEditor 표와 responsive 계약", () => {
     const { container } = renderEditor();
     await screen.findByRole("textbox", { name: "메일 본문" });
 
-    expect(container.querySelector(".mail-rich-text-editor")).toBeTruthy();
+    const editorRoot = container.querySelector(".mail-rich-text-editor") as HTMLElement;
+    expect(editorRoot).toBeTruthy();
+    expect(editorRoot.style.containerType).toBe("inline-size");
     expect(container.querySelector(".mail-rich-text-editor__toolbar")).toBeTruthy();
     expect(container.querySelector(".mail-rich-text-editor__surface")).toBeTruthy();
+  });
+
+  it("숨은 file input의 keyboard focus를 visible label hook으로 전달한다", async () => {
+    const { container } = renderEditor();
+    const input = await screen.findByLabelText("본문 이미지 선택");
+    const label = container.querySelector(".mail-rich-text-editor__file-button") as HTMLLabelElement;
+
+    input.focus();
+
+    expect(document.activeElement).toBe(input);
+    expect(label.matches(":has(input:focus)")).toBe(true);
   });
 });

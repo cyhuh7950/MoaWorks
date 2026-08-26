@@ -46,7 +46,8 @@
 .mail-rich-text-editor__toolbar input:focus-visible,
 .mail-rich-text-editor__surface:focus-visible,
 .mail-rich-text-editor__image-alt input:focus-visible,
-.mail-rich-text-editor__image-alt button:focus-visible {
+.mail-rich-text-editor__image-alt button:focus-visible,
+.mail-rich-text-editor__file-button:has(input:focus-visible) {
   outline: 3px solid var(--focus-ring, #7296ff);
   outline-offset: 2px;
 }
@@ -151,7 +152,7 @@
   color: var(--danger-text, #8f1717);
 }
 
-@media (max-width: 720px) {
+@container (max-width: 420px) {
   .mail-rich-text-editor__toolbar {
     flex-wrap: nowrap;
     scrollbar-width: thin;
