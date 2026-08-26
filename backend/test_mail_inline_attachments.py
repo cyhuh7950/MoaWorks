@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from PIL import Image, PngImagePlugin
+from PIL import Image, ImageOps, PngImagePlugin
 from pydantic import ValidationError
 
 from app.api.dependencies import get_current_user
@@ -435,6 +435,21 @@ class MailInlineImageStorageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.storage.stage_inline_image(self.owner, "large.png", "image/png", oversized)
 
+    def test_stage_inline_rejects_normalized_over_five_mib_before_write(self) -> None:
+        """Allowing an oversized canonical re-encode or leaving sidecar/bin artifacts must fail this test."""
+        source = image_bytes("PNG")
+        oversized_normalized = b"x" * (INLINE_IMAGE_MAX_BYTES + 1)
+
+        with patch.object(
+            self.storage,
+            "_normalize_inline_image",
+            return_value=oversized_normalized,
+        ), self.assertRaises(ValueError):
+            self.storage.stage_inline_image(self.owner, "expanded.png", "image/png", source)
+
+        self.assertEqual(list(self.storage.upload_root.glob("*.bin")), [])
+        self.assertEqual(list(self.storage.upload_root.glob("*.json")), [])
+
     def test_stage_inline_enforces_4096_pixel_boundary(self) -> None:
         """Rejecting 4096 or accepting 4097 pixels in either dimension must fail this test."""
         accepted = self.storage.stage_inline_image(
@@ -452,6 +467,30 @@ class MailInlineImageStorageTests(unittest.TestCase):
                 "image/png",
                 image_bytes("PNG", size=(4097, 1)),
             )
+
+    def test_stage_inline_rejects_header_dimension_before_decode_load(self) -> None:
+        """Calling Pillow load before rejecting a 4097-pixel header must fail this test."""
+        content = image_bytes("PNG", size=(4097, 1))
+        original_load = Image.Image.load
+        load_calls: list[tuple[int, int]] = []
+
+        def recording_load(image, *args, **kwargs):
+            load_calls.append(image.size)
+            return original_load(image, *args, **kwargs)
+
+        with patch.object(Image.Image, "load", new=recording_load), self.assertRaises(ValueError):
+            self.storage.stage_inline_image(self.owner, "too-wide.png", "image/png", content)
+
+        self.assertEqual(load_calls, [])
+
+    def test_stage_inline_rechecks_dimension_after_exif_transpose(self) -> None:
+        """Dropping the final post-transpose dimension guard must fail this test."""
+        content = image_bytes("JPEG", size=(3, 2))
+        oversized_transposed = Image.new("RGB", (4097, 1), (1, 2, 3))
+        self.addCleanup(oversized_transposed.close)
+
+        with patch.object(ImageOps, "exif_transpose", return_value=oversized_transposed), self.assertRaises(ValueError):
+            self.storage.stage_inline_image(self.owner, "rotated.jpg", "image/jpeg", content)
 
     def test_stage_inline_rejects_decompression_bomb_warning_or_error(self) -> None:
         """Ignoring Pillow decompression-bomb signals before pixel validation must fail this test."""
@@ -546,15 +585,28 @@ class MailInlineImageStorageTests(unittest.TestCase):
         self.assertNotIn("path", preview)
         self.assertEqual(database.migration_checks, 1)
         normalized_query = database.cursor.query.lower()
-        for required_sql in (
-            "a.message_id = m.id",
-            "a.id = %s",
-            "a.message_id = %s",
-            "m.company_id = %s",
-            "a.content_disposition = 'inline'",
-            "r.message_id = m.id",
-        ):
-            self.assertIn(required_sql, normalized_query)
+        expected_query = " ".join(
+            """
+            SELECT DISTINCT a.file_name, a.content_type, a.size_bytes, a.storage_key
+            FROM mail_attachments a
+            JOIN mail_messages m ON a.message_id = m.id
+            LEFT JOIN mail_recipients r ON r.message_id = m.id
+            WHERE a.id = %s
+              AND a.message_id = %s
+              AND m.company_id = %s
+              AND a.content_disposition = 'inline'
+              AND a.content_id IS NOT NULL
+              AND (
+                (m.sender_user_id = %s AND m.sender_purged_at IS NULL)
+                OR (
+                  (r.recipient_user_id = %s OR LOWER(r.recipient_email) = %s)
+                  AND r.purged_at IS NULL
+                )
+              )
+            """.lower().split()
+        )
+        self.assertEqual(normalized_query, expected_query)
+        self.assertEqual(normalized_query.count("%s"), 6)
         self.assertEqual(
             database.cursor.params,
             (

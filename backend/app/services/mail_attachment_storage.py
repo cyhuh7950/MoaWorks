@@ -67,7 +67,7 @@ class MailAttachmentStorage:
             safe_name,
             normalized_content_type,
             normalized,
-            max_bytes=None,
+            max_bytes=_INLINE_IMAGE_MAX_BYTES,
             content_disposition="inline",
             content_id=content_id,
         )
@@ -324,27 +324,25 @@ class MailAttachmentStorage:
                 with Image.open(BytesIO(content)) as decoded:
                     if decoded.format != expected_format or getattr(decoded, "is_animated", False):
                         raise ValueError("본문 이미지 decode 형식이 올바르지 않습니다.")
+                    MailAttachmentStorage._validate_inline_image_dimensions(decoded)
                     decoded.load()
                     transposed = ImageOps.exif_transpose(decoded)
-                    width, height = transposed.size
-                    if not (1 <= width <= _INLINE_IMAGE_MAX_DIMENSION):
-                        raise ValueError("본문 이미지 너비 제한을 초과했습니다.")
-                    if not (1 <= height <= _INLINE_IMAGE_MAX_DIMENSION):
-                        raise ValueError("본문 이미지 높이 제한을 초과했습니다.")
-
-                    has_alpha = "A" in transposed.getbands() or "transparency" in transposed.info
-                    if expected_format == "JPEG":
-                        safe_image = transposed.convert("RGB")
-                        save_options = {"quality": 95, "optimize": True}
-                    else:
-                        safe_image = transposed.convert("RGBA" if has_alpha else "RGB")
-                        save_options = {"optimize": True} if expected_format == "PNG" else {"quality": 90, "method": 4}
-                    output = BytesIO()
                     try:
-                        safe_image.save(output, format=expected_format, **save_options)
+                        MailAttachmentStorage._validate_inline_image_dimensions(transposed)
+                        has_alpha = "A" in transposed.getbands() or "transparency" in transposed.info
+                        if expected_format == "JPEG":
+                            safe_image = transposed.convert("RGB")
+                            save_options = {"quality": 95, "optimize": True}
+                        else:
+                            safe_image = transposed.convert("RGBA" if has_alpha else "RGB")
+                            save_options = {"optimize": True} if expected_format == "PNG" else {"quality": 90, "method": 4}
+                        output = BytesIO()
+                        try:
+                            safe_image.save(output, format=expected_format, **save_options)
+                        finally:
+                            safe_image.close()
                     finally:
-                        safe_image.close()
-                    transposed.close()
+                        transposed.close()
             normalized = output.getvalue()
             with Image.open(BytesIO(normalized)) as result:
                 if result.format != expected_format:
@@ -359,6 +357,14 @@ class MailAttachmentStorage:
             SyntaxError,
         ) as exc:
             raise ValueError("본문 이미지 파일을 안전하게 해석할 수 없습니다.") from exc
+
+    @staticmethod
+    def _validate_inline_image_dimensions(image: Image.Image) -> None:
+        width, height = image.size
+        if not (1 <= width <= _INLINE_IMAGE_MAX_DIMENSION):
+            raise ValueError("본문 이미지 너비 제한을 초과했습니다.")
+        if not (1 <= height <= _INLINE_IMAGE_MAX_DIMENSION):
+            raise ValueError("본문 이미지 높이 제한을 초과했습니다.")
 
     def _read_verified_upload(
         self,
