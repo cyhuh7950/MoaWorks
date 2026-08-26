@@ -46,3 +46,32 @@ def test_scheduled_update_requires_an_aware_future_datetime():
         raise AssertionError("scheduledAt must be required")
     request = MailScheduledUpdateRequest(**base, scheduledAt=datetime.now(UTC) + timedelta(minutes=5))
     assert request.scheduledAt.tzinfo is not None
+
+
+def test_scheduled_update_accepts_new_inline_attachment_for_mixed_reopen():
+    """Capping scheduled-update attachments at zero must fail this Task 5 contract."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.schemas.mail_messenger import MailAttachmentMeta, MailScheduledUpdateRequest
+
+    content_id = "mw-scheduled-new@moaworks.invalid"
+    inline = MailAttachmentMeta(
+        uploadId="a" * 32,
+        fileName="inline.png",
+        contentType="image/png",
+        sizeBytes=128,
+        disposition="inline",
+        contentId=content_id,
+    )
+
+    request = MailScheduledUpdateRequest(
+        to=["user@example.test"],
+        subject="예약 수정",
+        bodyText="본문 이미지",
+        bodyHtml=f'<p>본문</p><img src="cid:{content_id}" alt="본문 이미지">',
+        scheduledAt=datetime.now(UTC) + timedelta(minutes=5),
+        confirmed=True,
+        attachments=[inline],
+    )
+
+    assert request.attachments == [inline]
