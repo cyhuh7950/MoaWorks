@@ -357,11 +357,16 @@ export type MailRecipient = {
   readAt: string | null;
 };
 
+export type MailUploadDisposition = "attachment" | "inline";
+
 export type MailAttachment = {
   uploadId: string;
   fileName: string;
   contentType: string;
   sizeBytes: number;
+  disposition?: MailUploadDisposition;
+  contentId?: string | null;
+  previewPath?: string | null;
 };
 
 export type MailAttachmentView = {
@@ -369,6 +374,9 @@ export type MailAttachmentView = {
   attachmentId: string;
   contentType: string;
   sizeBytes: number;
+  disposition?: MailUploadDisposition;
+  contentId?: string | null;
+  previewPath?: string | null;
 };
 
 export type MailSummary = {
@@ -1615,14 +1623,45 @@ export async function bulkDeleteRecentMailRecipients(
   });
 }
 
-export async function uploadMailAttachment(token: string, file: File): Promise<MailAttachment> {
+export async function uploadMailAttachment(
+  token: string,
+  file: File,
+  disposition: MailUploadDisposition = "attachment",
+): Promise<MailAttachment> {
   const form = new FormData();
   form.append("file", file);
+  form.append("disposition", disposition);
   return request<MailAttachment>("/mail/attachments", {
     method: "POST",
     headers: authHeaders(token),
     body: form,
   });
+}
+
+function assertMailPreviewPath(previewPath: string): void {
+  if (!previewPath.startsWith("/mail/") || /[\\%?#\u0000-\u001f\u007f]/.test(previewPath)) {
+    throw new Error("허용되지 않은 메일 이미지 미리보기 경로입니다.");
+  }
+  const segments = previewPath.split("/");
+  if (
+    segments[0] !== "" ||
+    segments[1] !== "mail" ||
+    segments.slice(2).some((segment) => !segment || segment === "." || segment === ".." || !/^[A-Za-z0-9._~!$&'()*+,;=:@-]+$/.test(segment))
+  ) {
+    throw new Error("허용되지 않은 메일 이미지 미리보기 경로입니다.");
+  }
+}
+
+export async function fetchMailInlinePreview(token: string, previewPath: string): Promise<Blob> {
+  assertMailPreviewPath(previewPath);
+  const response = await fetch(`${apiBase}${previewPath}`, {
+    headers: authHeaders(token),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw extractApiError(response, data);
+  }
+  return response.blob();
 }
 
 export async function downloadMailAttachment(
