@@ -1323,6 +1323,7 @@ class MailInlineQueueAndDownloadTests(unittest.TestCase):
                 "queue_id": "queue-1",
                 "attempt_count": 0,
                 "company_id": "company-a",
+                "sender_user_id": "user-a",
                 "provider_config_id": "provider-1",
                 "mail_id": "mail-1",
                 "recipient_id": "recipient-1",
@@ -1381,6 +1382,48 @@ class MailInlineQueueAndDownloadTests(unittest.TestCase):
             self.assertEqual(envelope["sha256"], metadata["sha256"])
             self.assertEqual(Path(envelope["path"]).read_bytes(), storage.stored_path(metadata["storageKey"]).read_bytes())
             self.assertNotIn("storage_key", envelope)
+
+    def test_queue_claim_rejects_canonical_sidecar_owned_by_another_identity(self) -> None:
+        """Canonical uploads must still belong to the queued message sender and company."""
+        cases = (
+            ("inline", "ownerCompanyId", "company-b"),
+            ("inline", "ownerUserId", "user-b"),
+            ("attachment", "ownerCompanyId", "company-b"),
+            ("attachment", "ownerUserId", "user-b"),
+        )
+        for disposition, owner_field, wrong_owner in cases:
+            with self.subTest(
+                disposition=disposition,
+                owner_field=owner_field,
+            ), TemporaryDirectory() as temp_dir:
+                storage = MailAttachmentStorage(Path(temp_dir))
+                if disposition == "inline":
+                    uploaded, metadata, attachment = self.persisted_inline(storage, self.owner)
+                else:
+                    uploaded = storage.stage(self.owner, "queue.txt", "text/plain", b"queue body")
+                    storage.mark_attached(uploaded.uploadId)
+                    metadata = json.loads(
+                        storage._metadata_path(uploaded.uploadId).read_text(encoding="utf-8")
+                    )
+                    attachment = {
+                        "file_name": uploaded.fileName,
+                        "content_type": uploaded.contentType,
+                        "size_bytes": uploaded.sizeBytes,
+                        "storage_key": metadata["storageKey"],
+                        "content_disposition": "attachment",
+                        "content_id": None,
+                    }
+                metadata[owner_field] = wrong_owner
+                storage._metadata_path(uploaded.uploadId).write_text(
+                    json.dumps(metadata, ensure_ascii=False), encoding="utf-8"
+                )
+                database = self.database(attachment)
+                operations = MailDeliveryOperations(db=database, storage=storage)
+
+                with self.assertRaisesRegex(ValueError, "저장 상태"):
+                    operations.claim_next("worker-1")
+
+                self.assertEqual(database.connection.commit_count, 0)
 
     def test_queue_claim_accepts_legacy_ordinary_and_calculates_actual_sha256(self) -> None:
         """A legacy ordinary sidecar without canonical inline fields remains queueable."""

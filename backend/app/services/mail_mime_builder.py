@@ -8,8 +8,11 @@ from typing import Literal
 
 
 _CID_REFERENCE_RE = re.compile(r"\bcid:([^\s\"'<>]+)", re.IGNORECASE)
-_CONTENT_ID_RE = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9._+-]*@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$"
+_CONTENT_ID_LOCAL_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9_+-]*(?:\.[A-Za-z0-9_+-]+)*$"
+)
+_CONTENT_ID_DOMAIN_LABEL_RE = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"
 )
 
 
@@ -116,7 +119,7 @@ def _partition_attachments(
         if "\r" in attachment.file_name or "\n" in attachment.file_name:
             raise ValueError("첨부 파일명에 허용되지 않는 줄바꿈이 있습니다.")
         if attachment.content_disposition == "inline":
-            if not attachment.content_id or not _CONTENT_ID_RE.fullmatch(attachment.content_id):
+            if not attachment.content_id or not _is_valid_content_id(attachment.content_id):
                 raise ValueError("인라인 첨부 Content-ID 형식이 올바르지 않습니다.")
             content_ids.append(attachment.content_id)
             inline.append(attachment)
@@ -133,6 +136,18 @@ def _partition_attachments(
     if referenced_ids != set(content_ids):
         raise ValueError("HTML CID 참조와 인라인 첨부가 일치하지 않습니다.")
     return inline, ordinary
+
+
+def _is_valid_content_id(content_id: str) -> bool:
+    if len(content_id) > 254 or content_id.count("@") != 1:
+        return False
+    local_part, domain = content_id.split("@")
+    if len(local_part) > 64 or not _CONTENT_ID_LOCAL_RE.fullmatch(local_part):
+        return False
+    domain_labels = domain.split(".")
+    return bool(domain) and all(
+        _CONTENT_ID_DOMAIN_LABEL_RE.fullmatch(label) for label in domain_labels
+    )
 
 
 def _content_type_parts(content_type: str) -> tuple[str, str]:

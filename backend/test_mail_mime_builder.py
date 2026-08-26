@@ -9,6 +9,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
+import pytest
+
 
 def _mime_builder():
     module_name = "app.services.mail_mime_builder"
@@ -33,6 +35,34 @@ def _source(**changes):
     }
     values.update(changes)
     return builder.OutboundMessage(**values)
+
+
+def _mime_semantics(message: EmailMessage) -> dict:
+    def tree(part: EmailMessage) -> tuple:
+        return (
+            part.get_content_type(),
+            tuple(tree(child) for child in part.iter_parts()) if part.is_multipart() else (),
+        )
+
+    def parts_with_disposition(disposition: str) -> tuple:
+        return tuple(
+            (
+                part.get_content_type(),
+                part.get_filename(),
+                part.get("Content-ID"),
+                part.get_payload(decode=True),
+            )
+            for part in message.walk()
+            if part.get_content_disposition() == disposition
+        )
+
+    return {
+        "tree": tree(message),
+        "plain": message.get_body(preferencelist=("plain",)).get_content().strip(),
+        "html": message.get_body(preferencelist=("html",)).get_content().strip(),
+        "inline": parts_with_disposition("inline"),
+        "attachments": parts_with_disposition("attachment"),
+    }
 
 
 class _CaptureTransport:
@@ -66,6 +96,9 @@ class _CaptureSmtp:
     def send_message(self, message, *, from_addr, to_addrs):
         self.message = message
         return {}
+
+    def login(self, _username, _password) -> None:
+        return None
 
 
 class _InspectingSigner:
@@ -135,9 +168,24 @@ class MailMimeBuilderTest(unittest.TestCase):
         )
 
         self.assertEqual(message.get_content_type(), "multipart/mixed")
-        self.assertTrue(any(part.get_content_type() == "multipart/related" for part in message.walk()))
-        self.assertTrue(any(part.get("Content-ID") == "<mw-1@moaworks.invalid>" for part in message.walk()))
-        self.assertEqual([part.get_filename() for part in message.iter_attachments()], ["report.txt"])
+        mixed_children = list(message.iter_parts())
+        self.assertEqual([part.get_content_type() for part in mixed_children], [
+            "multipart/alternative",
+            "text/plain",
+        ])
+        alternative_children = list(mixed_children[0].iter_parts())
+        self.assertEqual([part.get_content_type() for part in alternative_children], [
+            "text/plain",
+            "multipart/related",
+        ])
+        related_children = list(alternative_children[1].iter_parts())
+        self.assertEqual([part.get_content_type() for part in related_children], [
+            "text/html",
+            "image/png",
+        ])
+        self.assertEqual(related_children[1]["Content-ID"], "<mw-1@moaworks.invalid>")
+        self.assertEqual(mixed_children[1].get_content_disposition(), "attachment")
+        self.assertEqual(mixed_children[1].get_filename(), "report.txt")
 
     def test_rejects_unknown_unreferenced_duplicate_and_malformed_content_ids(self) -> None:
         builder = _mime_builder()
@@ -351,6 +399,93 @@ class MailMimeBuilderTest(unittest.TestCase):
         self.assertTrue(signer.saw_final_tree)
         self.assertIsNotNone(smtp.message)
 
+    def test_oci_self_hosted_and_legacy_adapters_preserve_equivalent_mime_semantics(self) -> None:
+        from app.services.mail_delivery_service import SmtpRelayAdapter
+        from app.services.mail_transports import (
+            OciEmailDeliveryTransport,
+            RelaySmtpConfig,
+            SelfHostedSmtpTransport,
+        )
+
+        builder = _mime_builder()
+        inline_content = b"inline-body"
+        ordinary_content = b"ordinary-body"
+        source = _source(
+            body_html='<p>본문<img src="cid:mw-1@example.invalid"></p>',
+            attachments=(
+                builder.OutboundAttachment(
+                    "inline.png", "image/png", inline_content, "inline", "mw-1@example.invalid"
+                ),
+                builder.OutboundAttachment("report.txt", "text/plain", ordinary_content),
+            ),
+        )
+        self_hosted_smtp = _CaptureSmtp()
+        SelfHostedSmtpTransport(
+            mx_resolver=lambda _domain: ["mx.example.net"],
+            smtp_factory=lambda **_: self_hosted_smtp,
+        ).send(source, helo_name="mail.moaworks.sinsan.kr", timeout_sec=10)
+        oci_smtp = _CaptureSmtp()
+        OciEmailDeliveryTransport(
+            smtp_ssl_factory=lambda **_: oci_smtp,
+        ).send(
+            source,
+            config=RelaySmtpConfig("smtp.example.net", 465, "user", "password"),
+        )
+
+        with TemporaryDirectory() as directory:
+            inline_path = Path(directory) / "inline.png"
+            ordinary_path = Path(directory) / "report.txt"
+            inline_path.write_bytes(inline_content)
+            ordinary_path.write_bytes(ordinary_content)
+            envelope = {
+                "mail_id": "mail-1",
+                "queue_id": "queue-1",
+                "delivery_kind": "direct",
+                "sender_email": source.sender_email,
+                "sender_display_name": source.sender_display_name,
+                "reply_to_email": source.reply_to_email,
+                "recipient_email": source.recipient_email,
+                "subject": source.subject,
+                "body_text": source.body_text,
+                "body_html": source.body_html,
+                "message_id": source.message_id,
+                "message_encoding": source.message_encoding,
+                "attachments": [
+                    {
+                        "file_name": "inline.png",
+                        "content_type": "image/png",
+                        "path": str(inline_path),
+                        "size_bytes": len(inline_content),
+                        "sha256": sha256(inline_content).hexdigest(),
+                        "content_disposition": "inline",
+                        "content_id": "mw-1@example.invalid",
+                    },
+                    {
+                        "file_name": "report.txt",
+                        "content_type": "text/plain",
+                        "path": str(ordinary_path),
+                        "size_bytes": len(ordinary_content),
+                        "sha256": sha256(ordinary_content).hexdigest(),
+                        "content_disposition": "attachment",
+                        "content_id": None,
+                    },
+                ],
+            }
+            legacy = SmtpRelayAdapter().build_message(
+                envelope,
+                {"from_address": source.sender_email},
+            )
+
+        self.assertIsNotNone(self_hosted_smtp.message)
+        self.assertIsNotNone(oci_smtp.message)
+        semantics = [
+            _mime_semantics(self_hosted_smtp.message),
+            _mime_semantics(oci_smtp.message),
+            _mime_semantics(legacy),
+        ]
+        self.assertEqual(semantics[1], semantics[0])
+        self.assertEqual(semantics[2], semantics[0])
+
     def test_transports_classify_builder_rejection_as_permanent_failure(self) -> None:
         from app.services.mail_transports import (
             MailTransportFailure,
@@ -376,6 +511,42 @@ class MailMimeBuilderTest(unittest.TestCase):
             with self.subTest(send=send), self.assertRaises(MailTransportFailure) as raised:
                 send()
             self.assertFalse(raised.exception.transient)
+
+
+@pytest.mark.parametrize(
+    "content_id",
+    (
+        "x@a..b",
+        ".x@example.invalid",
+        "x.@example.invalid",
+        "x@",
+        "x@.example.invalid",
+        "x@example.invalid.",
+        "x@example..invalid",
+        "x@-example.invalid",
+        "x@example-.invalid",
+        "x@exam ple.invalid",
+        "x@example.invalid\t",
+        "x@example.invalid\x00",
+        "<x@example.invalid>",
+        "x@@example.invalid",
+    ),
+)
+def test_rejects_malformed_near_valid_content_ids(content_id: str) -> None:
+    """Malformed local-parts and domain labels must never become MIME Content-IDs."""
+    builder = _mime_builder()
+    inline = builder.OutboundAttachment(
+        "x.png",
+        "image/png",
+        b"x",
+        "inline",
+        content_id,
+    )
+
+    with pytest.raises(ValueError, match="Content-ID 형식"):
+        builder.build_mail_message(
+            _source(body_html=f'<img src="cid:{content_id}">', attachments=(inline,))
+        )
 
 
 if __name__ == "__main__":

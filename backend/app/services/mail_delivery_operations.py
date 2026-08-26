@@ -200,7 +200,7 @@ class MailDeliveryOperations:
                 self.heartbeat(cursor, worker_id, "working", now)
                 cursor.execute("""SELECT q.id AS queue_id,q.attempt_count,q.company_id,q.provider_config_id,q.mail_id,q.recipient_id,
                 q.delivery_kind,q.sender_email_override,q.sender_display_name_override,q.reply_to_email_override,
-                r.recipient_email,m.sender_email,m.sender_display_name,m.reply_to_email,m.message_encoding,m.subject,m.body_text,m.body_html,
+                r.recipient_email,m.sender_user_id,m.sender_email,m.sender_display_name,m.reply_to_email,m.message_encoding,m.subject,m.body_text,m.body_html,
                 EXISTS(SELECT 1 FROM mail_oci_suppressions s WHERE s.company_id=q.company_id
                     AND LOWER(s.recipient_email)=LOWER(r.recipient_email) AND s.active=TRUE) AS recipient_suppressed
                 FROM mail_delivery_queue q JOIN mail_messages m ON m.id=q.mail_id
@@ -224,14 +224,27 @@ class MailDeliveryOperations:
                     (job["mail_id"],),
                 )
                 job = dict(job)
-                job["attachments"] = [self._queue_attachment(row) for row in cursor.fetchall()]
+                job["attachments"] = [
+                    self._queue_attachment(
+                        row,
+                        expected_company_id=job["company_id"],
+                        expected_user_id=job["sender_user_id"],
+                    )
+                    for row in cursor.fetchall()
+                ]
                 provider = self._provider_by_id(cursor, job["provider_config_id"], job["company_id"])
                 provider["password"] = self.security.decrypt_secret(provider["encrypted_password"]) if provider["username"] else ""
                 provider["dkim_private_key"] = self.security.decrypt_secret(provider["encrypted_dkim_private_key"]) if provider.get("encrypted_dkim_private_key") else ""
             connection.commit()
         return job, provider
 
-    def _queue_attachment(self, row: dict) -> dict:
+    def _queue_attachment(
+        self,
+        row: dict,
+        *,
+        expected_company_id: str,
+        expected_user_id: str,
+    ) -> dict:
         path = self.storage.stored_path(row["storage_key"])
         digest = sha256()
         with path.open("rb") as attachment_file:
@@ -292,6 +305,8 @@ class MailDeliveryOperations:
         )
         if (
             canonical != persisted
+            or metadata.get("ownerCompanyId") != expected_company_id
+            or metadata.get("ownerUserId") != expected_user_id
             or metadata.get("attached") is not True
             or (
                 canonical_disposition == "inline"
