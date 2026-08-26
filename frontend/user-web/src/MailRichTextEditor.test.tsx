@@ -1,0 +1,336 @@
+// @vitest-environment jsdom
+
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { JSONContent } from "@tiptap/core";
+import { Editor } from "@tiptap/core";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+
+import { MailRichTextEditor } from "./MailRichTextEditor";
+import type { InlineImageDraft } from "./mailInlineImages";
+
+const emptyDoc: JSONContent = { type: "doc", content: [{ type: "paragraph" }] };
+
+beforeAll(() => {
+  Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => document.body });
+  const emptyRects = () => ({
+    0: new DOMRect(0, 0, 0, 0),
+    length: 1,
+    item: () => new DOMRect(0, 0, 0, 0),
+    [Symbol.iterator]: function* () { yield this[0]; },
+  });
+  Object.defineProperty(HTMLElement.prototype, "getClientRects", { configurable: true, value: emptyRects });
+  Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: emptyRects });
+  Object.defineProperty(Range.prototype, "getBoundingClientRect", { configurable: true, value: () => new DOMRect(0, 0, 0, 0) });
+});
+
+function draftFor(file: File): InlineImageDraft {
+  return {
+    uploadId: `upload-${file.name}`,
+    contentId: `mw-${file.name.replace(/[^a-z0-9]/gi, "-")}@example.invalid`,
+    fileName: file.name,
+    contentType: file.type,
+    sizeBytes: file.size,
+    previewPath: `/mail/attachments/staged/upload-${file.name}/preview`,
+    objectUrl: `blob:${file.name}`,
+    alt: "",
+  };
+}
+
+function renderEditor(overrides: Partial<React.ComponentProps<typeof MailRichTextEditor>> = {}) {
+  const props = {
+    value: emptyDoc,
+    onChange: vi.fn(),
+    onUploadImage: vi.fn(async (file: File) => draftFor(file)),
+    onError: vi.fn(),
+    ...overrides,
+  };
+  return { ...render(<MailRichTextEditor {...props} />), props };
+}
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+describe("MailRichTextEditor 접근성과 서식 계약", () => {
+  it("한국어 toolbar, pressed state, 전체 명령과 HTML 탭 없는 편집면을 제공한다", async () => {
+    renderEditor();
+
+    const toolbar = await screen.findByRole("toolbar", { name: "메일 본문 서식" });
+    expect(toolbar).toBeTruthy();
+    expect(screen.getByRole("button", { name: "굵게" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.queryByRole("tab", { name: /HTML/i })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "메일 본문" })).toBeTruthy();
+
+    for (const name of [
+      "일반 문단", "제목 1", "제목 2", "제목 3",
+      "기울임", "밑줄", "취소선", "왼쪽 정렬", "가운데 정렬", "오른쪽 정렬", "양쪽 정렬",
+      "글머리표", "번호 목록", "들여쓰기", "내어쓰기", "인용문", "가로 구분선", "링크 설정",
+      "링크 해제", "실행 취소", "다시 실행", "서식 제거", "표 삽입", "행 앞에 추가", "행 뒤에 추가",
+      "행 삭제", "열 앞에 추가", "열 뒤에 추가", "열 삭제", "셀 병합", "셀 분할", "머리글 행 전환", "표 삭제",
+    ]) {
+      expect(screen.getByRole("button", { name })).toBeTruthy();
+    }
+    expect(screen.getByLabelText("글꼴")).toBeTruthy();
+    expect(screen.getByLabelText("글자 크기")).toBeTruthy();
+    expect(screen.getByLabelText("줄 간격")).toBeTruthy();
+    expect(screen.getByLabelText("글자색")).toBeTruthy();
+    expect(screen.getByLabelText("배경색")).toBeTruthy();
+    expect(screen.getByLabelText("본문 이미지 선택")).toBeTruthy();
+  });
+
+  it("사용자 입력만 onChange로 내보내고 외부 value 교체는 feedback loop를 만들지 않는다", async () => {
+    const onChange = vi.fn();
+    const { rerender, props } = renderEditor({ onChange });
+    const textbox = await screen.findByRole("textbox", { name: "메일 본문" });
+
+    expect(onChange).not.toHaveBeenCalled();
+    await userEvent.click(textbox);
+    await userEvent.keyboard("첫 문장");
+    expect(onChange).toHaveBeenCalled();
+
+    onChange.mockClear();
+    const replacement: JSONContent = {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: "외부 교체" }] }],
+    };
+    rerender(<MailRichTextEditor {...props} value={replacement} onChange={onChange} />);
+
+    await waitFor(() => expect(textbox.textContent).toContain("외부 교체"));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("disabled이면 편집, command, paste/drop, upload를 모두 차단한다", async () => {
+    const onUploadImage = vi.fn(async (file: File) => draftFor(file));
+    const { props } = renderEditor({ disabled: true, onUploadImage });
+    const textbox = await screen.findByRole("textbox", { name: "메일 본문" });
+    const png = new File(["png"], "x.png", { type: "image/png" });
+
+    expect(textbox.getAttribute("contenteditable")).toBe("false");
+    expect((screen.getByRole("button", { name: "굵게" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.paste(textbox, { clipboardData: { files: [png], getData: () => "" } });
+    fireEvent.drop(textbox, { dataTransfer: { files: [png] } });
+    fireEvent.change(screen.getByLabelText("본문 이미지 선택"), { target: { files: [png] } });
+
+    expect(onUploadImage).not.toHaveBeenCalled();
+    expect(props.onChange).not.toHaveBeenCalled();
+  });
+
+  it("unmount에서 Tiptap editor를 destroy한다", async () => {
+    const destroy = vi.spyOn(Editor.prototype, "destroy");
+    const { unmount } = renderEditor();
+    await screen.findByRole("textbox", { name: "메일 본문" });
+
+    unmount();
+
+    expect(destroy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("MailRichTextEditor 이미지 경계", () => {
+  it.each([
+    ["image/png", "a.png"],
+    ["image/jpeg", "a.jpg"],
+    ["image/webp", "a.webp"],
+  ])("%s 파일을 paste에서 한 번만 업로드하고 alt 확인 후 CID node를 삽입한다", async (type, name) => {
+    const file = new File(["image"], name, { type });
+    const onUploadImage = vi.fn(async () => draftFor(file));
+    const onChange = vi.fn();
+    renderEditor({ onUploadImage, onChange });
+    const textbox = await screen.findByRole("textbox", { name: "메일 본문" });
+
+    fireEvent.paste(textbox, { clipboardData: { files: [file, file], getData: () => "" } });
+    await waitFor(() => expect(onUploadImage).toHaveBeenCalledTimes(1));
+    const alt = await screen.findByRole("textbox", { name: "이미지 대체 텍스트" });
+    expect((alt as HTMLInputElement).value).toBe(name.replace(/\.[^.]+$/, ""));
+    await userEvent.clear(alt);
+    await userEvent.type(alt, "영수증 이미지");
+    await userEvent.click(screen.getByRole("button", { name: "이미지 삽입" }));
+
+    await waitFor(() => {
+      const last = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] as JSONContent | undefined;
+      const image = last?.content?.flatMap((node) => node.content ?? []).find((node) => node.type === "image");
+      expect(image?.attrs).toEqual({
+        src: `cid:${draftFor(file).contentId}`,
+        contentId: draftFor(file).contentId,
+        alt: "영수증 이미지",
+        width: null,
+        height: null,
+      });
+    });
+  });
+
+  it.each([
+    ["image/gif", "a.gif", "PNG, JPEG, WebP"],
+    ["image/svg+xml", "a.svg", "PNG, JPEG, WebP"],
+    ["text/plain", "a.txt", "PNG, JPEG, WebP"],
+  ])("지원하지 않는 %s 파일은 upload 없이 거부한다", async (type, name, message) => {
+    const onUploadImage = vi.fn();
+    const onError = vi.fn();
+    renderEditor({ onUploadImage, onError });
+    const textbox = await screen.findByRole("textbox", { name: "메일 본문" });
+
+    fireEvent.drop(textbox, { dataTransfer: { files: [new File(["x"], name, { type })] } });
+
+    expect(onUploadImage).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining(message));
+  });
+
+  it("5 MiB 초과 파일을 upload 없이 거부한다", async () => {
+    const onUploadImage = vi.fn();
+    const onError = vi.fn();
+    renderEditor({ onUploadImage, onError });
+    const file = new File([new Uint8Array(5 * 1024 * 1024 + 1)], "large.png", { type: "image/png" });
+
+    fireEvent.change(await screen.findByLabelText("본문 이미지 선택"), { target: { files: [file] } });
+
+    expect(onUploadImage).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining("5 MiB"));
+  });
+
+  it("정확히 5 MiB인 PNG는 허용한다", async () => {
+    const file = new File([new Uint8Array(5 * 1024 * 1024)], "boundary.png", { type: "image/png" });
+    const onUploadImage = vi.fn(async () => draftFor(file));
+    renderEditor({ onUploadImage });
+
+    fireEvent.change(await screen.findByLabelText("본문 이미지 선택"), { target: { files: [file] } });
+
+    await waitFor(() => expect(onUploadImage).toHaveBeenCalledTimes(1));
+  });
+
+  it("문서의 이미지가 이미 5개면 추가 upload를 거부하고 본문을 보존한다", async () => {
+    const value: JSONContent = {
+      type: "doc",
+      content: [{
+        type: "paragraph",
+        content: Array.from({ length: 5 }, (_, index) => ({
+          type: "image",
+          attrs: { contentId: `mw-${index}@example.invalid`, src: `cid:mw-${index}@example.invalid`, alt: `이미지 ${index}` },
+        })),
+      }],
+    };
+    const onUploadImage = vi.fn();
+    const onError = vi.fn();
+    const onChange = vi.fn();
+    renderEditor({ value, onUploadImage, onError, onChange });
+
+    fireEvent.change(await screen.findByLabelText("본문 이미지 선택"), {
+      target: { files: [new File(["x"], "sixth.png", { type: "image/png" })] },
+    });
+
+    expect(onUploadImage).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining("최대 5개"));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("upload 실패는 오류만 알리고 기존 문서를 유지한다", async () => {
+    const onError = vi.fn();
+    const onChange = vi.fn();
+    renderEditor({ onChange, onError, onUploadImage: vi.fn(async () => { throw new Error("network"); }) });
+
+    fireEvent.change(await screen.findByLabelText("본문 이미지 선택"), {
+      target: { files: [new File(["x"], "failed.png", { type: "image/png" })] },
+    });
+
+    await waitFor(() => expect(onError).toHaveBeenCalledWith(expect.stringContaining("업로드")));
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.queryByRole("textbox", { name: "이미지 대체 텍스트" })).toBeNull();
+  });
+
+  it("unmount 뒤 완료된 upload는 node를 삽입하거나 오류를 내지 않는다", async () => {
+    let resolveUpload!: (draft: InlineImageDraft) => void;
+    const onUploadImage = vi.fn(() => new Promise<InlineImageDraft>((resolve) => { resolveUpload = resolve; }));
+    const onChange = vi.fn();
+    const onError = vi.fn();
+    const file = new File(["x"], "late.png", { type: "image/png" });
+    const { unmount } = renderEditor({ onUploadImage, onChange, onError });
+    fireEvent.change(await screen.findByLabelText("본문 이미지 선택"), { target: { files: [file] } });
+    await waitFor(() => expect(onUploadImage).toHaveBeenCalledTimes(1));
+
+    unmount();
+    await act(async () => resolveUpload(draftFor(file)));
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("외부 document 교체 뒤 완료된 이전 upload를 무시한다", async () => {
+    let resolveUpload!: (draft: InlineImageDraft) => void;
+    const onUploadImage = vi.fn(() => new Promise<InlineImageDraft>((resolve) => { resolveUpload = resolve; }));
+    const onChange = vi.fn();
+    const onError = vi.fn();
+    const file = new File(["x"], "stale.png", { type: "image/png" });
+    const { rerender, props } = renderEditor({ onUploadImage, onChange, onError });
+    fireEvent.change(await screen.findByLabelText("본문 이미지 선택"), { target: { files: [file] } });
+    await waitFor(() => expect(onUploadImage).toHaveBeenCalledTimes(1));
+
+    const replacement: JSONContent = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "새 문서" }] }] };
+    rerender(<MailRichTextEditor {...props} value={replacement} />);
+    await act(async () => resolveUpload(draftFor(file)));
+
+    expect(screen.queryByRole("textbox", { name: "이미지 대체 텍스트" })).toBeNull();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("server contentId나 blob URL이 없는 upload 결과를 fail closed한다", async () => {
+    const onError = vi.fn();
+    const invalidDraft = { ...draftFor(new File(["x"], "bad.png", { type: "image/png" })), contentId: "", objectUrl: "https://tracker.example/x" };
+    renderEditor({ onError, onUploadImage: vi.fn(async () => invalidDraft) });
+
+    fireEvent.change(await screen.findByLabelText("본문 이미지 선택"), {
+      target: { files: [new File(["x"], "bad.png", { type: "image/png" })] },
+    });
+
+    await waitFor(() => expect(onError).toHaveBeenCalledWith(expect.stringContaining("올바르지 않습니다")));
+    expect(screen.queryByRole("textbox", { name: "이미지 대체 텍스트" })).toBeNull();
+  });
+
+  it("외부/data 이미지 HTML paste를 제거하고 upload callback을 호출하지 않는다", async () => {
+    const onUploadImage = vi.fn();
+    renderEditor({ onUploadImage });
+    const textbox = await screen.findByRole("textbox", { name: "메일 본문" });
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        getData: (kind: string) => kind === "text/html" ? '<p>안전한 글</p><img src="https://tracker.example/x"><img src="data:image/png;base64,AAAA">' : "",
+      },
+    });
+
+    expect(onUploadImage).not.toHaveBeenCalled();
+    expect(textbox.querySelector("img")).toBeNull();
+  });
+});
+
+describe("MailRichTextEditor 표와 responsive 계약", () => {
+  it("기본 3x3 표를 삽입하고 table action을 활성화한다", async () => {
+    const onChange = vi.fn();
+    renderEditor({ onChange });
+    await screen.findByRole("textbox", { name: "메일 본문" });
+
+    await userEvent.click(screen.getByRole("button", { name: "표 삽입" }));
+
+    await waitFor(() => {
+      const last = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] as JSONContent | undefined;
+      const table = last?.content?.find((node) => node.type === "table");
+      expect(table?.content).toHaveLength(3);
+      expect(table?.content?.[0].content).toHaveLength(3);
+    });
+    expect((screen.getByRole("button", { name: "행 뒤에 추가" }) as HTMLButtonElement).disabled).toBe(false);
+    await userEvent.click(screen.getByRole("button", { name: "행 뒤에 추가" }));
+    await waitFor(() => {
+      const last = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] as JSONContent;
+      expect(last.content?.find((node) => node.type === "table")?.content).toHaveLength(4);
+    });
+  });
+
+  it("scoped responsive class hooks를 노출한다", async () => {
+    const { container } = renderEditor();
+    await screen.findByRole("textbox", { name: "메일 본문" });
+
+    expect(container.querySelector(".mail-rich-text-editor")).toBeTruthy();
+    expect(container.querySelector(".mail-rich-text-editor__toolbar")).toBeTruthy();
+    expect(container.querySelector(".mail-rich-text-editor__surface")).toBeTruthy();
+  });
+});

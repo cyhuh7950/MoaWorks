@@ -1,0 +1,159 @@
+.mail-rich-text-editor {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-primary, #172033);
+}
+
+.mail-rich-text-editor__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  max-width: 100%;
+  padding: 8px;
+  overflow-x: auto;
+  border: 1px solid var(--border-color, #d8dee9);
+  border-radius: 8px;
+  background: var(--surface-muted, #f7f9fc);
+}
+
+.mail-rich-text-editor__toolbar button,
+.mail-rich-text-editor__toolbar select,
+.mail-rich-text-editor__file-button {
+  min-height: 32px;
+  border: 1px solid var(--border-color, #cbd3df);
+  border-radius: 6px;
+  background: var(--surface, #fff);
+  color: inherit;
+  font: inherit;
+}
+
+.mail-rich-text-editor__toolbar button,
+.mail-rich-text-editor__file-button {
+  padding: 5px 8px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mail-rich-text-editor__toolbar button[aria-pressed="true"] {
+  border-color: var(--brand-primary, #315bd6);
+  background: var(--brand-soft, #e9efff);
+}
+
+.mail-rich-text-editor__toolbar button:focus-visible,
+.mail-rich-text-editor__toolbar select:focus-visible,
+.mail-rich-text-editor__toolbar input:focus-visible,
+.mail-rich-text-editor__surface:focus-visible,
+.mail-rich-text-editor__image-alt input:focus-visible,
+.mail-rich-text-editor__image-alt button:focus-visible {
+  outline: 3px solid var(--focus-ring, #7296ff);
+  outline-offset: 2px;
+}
+
+.mail-rich-text-editor__toolbar button:disabled,
+.mail-rich-text-editor__toolbar select:disabled,
+.mail-rich-text-editor__file-button:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.mail-rich-text-editor__select,
+.mail-rich-text-editor__color {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.mail-rich-text-editor__color input {
+  width: 32px;
+  height: 30px;
+  padding: 2px;
+  border: 1px solid var(--border-color, #cbd3df);
+  border-radius: 6px;
+}
+
+.mail-rich-text-editor__file-button input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.mail-rich-text-editor__surface {
+  min-height: 160px;
+  max-width: 100%;
+  padding: 12px;
+  overflow-x: auto;
+  border: 1px solid var(--border-color, #cbd3df);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+  line-height: 1.5;
+}
+
+.mail-rich-text-editor__surface table {
+  width: 100%;
+  max-width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.mail-rich-text-editor__surface th,
+.mail-rich-text-editor__surface td {
+  min-width: 40px;
+  padding: 6px;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border-color, #cbd3df);
+  vertical-align: top;
+}
+
+.mail-rich-text-editor__surface img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 8px 0;
+}
+
+.mail-rich-text-editor__image-alt {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+  padding: 10px;
+  border: 1px solid var(--border-color, #cbd3df);
+  border-radius: 8px;
+  background: var(--surface-muted, #f7f9fc);
+}
+
+.mail-rich-text-editor__image-alt label {
+  display: grid;
+  flex: 1 1 240px;
+  gap: 4px;
+}
+
+.mail-rich-text-editor__image-alt input,
+.mail-rich-text-editor__image-alt button {
+  min-height: 36px;
+  border: 1px solid var(--border-color, #cbd3df);
+  border-radius: 6px;
+}
+
+.mail-rich-text-editor__error {
+  padding: 12px;
+  border: 1px solid var(--danger-border, #d83c3c);
+  border-radius: 8px;
+  background: var(--danger-soft, #fff1f1);
+  color: var(--danger-text, #8f1717);
+}
+
+@media (max-width: 720px) {
+  .mail-rich-text-editor__toolbar {
+    flex-wrap: nowrap;
+    scrollbar-width: thin;
+  }
+}
