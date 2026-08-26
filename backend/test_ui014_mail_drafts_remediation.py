@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 
 from app.api.routes.mail import router
+from app.schemas import mail_messenger
 from app.services.mail_messenger_service import MailMessengerService
 
 
@@ -80,6 +81,28 @@ class MailDraftsRemediationTest(unittest.TestCase):
             service.db.cursor_instance.params,
             ("company-a", "user-a"),
         )
+
+    def test_draft_update_route_and_contract_keep_persisted_attachment_ids_separate_from_staged_upload_ids(self):
+        route_paths = [route.path for route in router.routes]
+        request_type = getattr(mail_messenger, "MailDraftUpdateRequest", None)
+
+        self.assertIn("/{mail_id}/draft", route_paths)
+        self.assertIsNotNone(request_type)
+        request = request_type(
+            subject="updated",
+            bodyText="rich body",
+            bodyHtml='<p>rich body</p>',
+            attachments=[{
+                "uploadId": "a" * 32,
+                "fileName": "new.txt",
+                "contentType": "text/plain",
+                "sizeBytes": 1,
+            }],
+            retainedAttachmentIds=["attachment-persisted"],
+        )
+
+        self.assertEqual(request.retainedAttachmentIds, ["attachment-persisted"])
+        self.assertEqual(request.attachments[0].uploadId, "a" * 32)
 
 
 if __name__ == "__main__":

@@ -364,6 +364,95 @@ class MailMessengerService:
             raise ResourceNotFoundError("예약 메일을 찾을 수 없습니다.")
         return row
 
+    def _fetch_owned_draft_mail(self, cursor, actor: AuthUserSummary, mail_id: str) -> dict:
+        cursor.execute("SELECT * FROM mail_messages WHERE id=%s AND company_id=%s AND sender_user_id=%s AND status='draft' AND sender_deleted_at IS NULL FOR UPDATE", (mail_id, actor.companyId, actor.userId))
+        row = cursor.fetchone()
+        if row is None:
+            raise ResourceNotFoundError("임시보관 메일을 찾을 수 없습니다.")
+        return row
+
+    def update_draft_mail(self, actor: AuthUserSummary, mail_id: str, payload) -> MailDetailResponse:
+        resolved_attachments = [self.attachment_storage.resolve(actor, item) for item in payload.attachments]
+        if len({item["upload_id"] for item in resolved_attachments}) != len(resolved_attachments):
+            raise ValueError("같은 첨부 파일을 중복 사용할 수 없습니다.")
+        referenced_content_ids = extract_cid_references(payload.bodyHtml)
+        preflight_body_html = sanitize_mail_html(payload.bodyHtml, referenced_content_ids)
+        self.db.ensure_migrations_applied()
+        now = self._now()
+        sidecar_snapshots: dict[str, bytes] = {}
+        removed_sidecar_snapshots: dict[str, bytes] = {}
+        retained_ids = set(payload.retainedAttachmentIds)
+        with self.db.connect() as connection:
+            try:
+                with connection.cursor() as cursor:
+                    self._fetch_owned_draft_mail(cursor, actor, mail_id)
+                    cursor.execute(
+                        """
+                        SELECT id, file_name, content_type, size_bytes, storage_key,
+                               content_disposition, content_id
+                        FROM mail_attachments WHERE message_id = %s
+                        ORDER BY created_at ASC FOR UPDATE
+                        """,
+                        (mail_id,),
+                    )
+                    existing_attachments = [dict(row) for row in cursor.fetchall()]
+                    existing_ids = {attachment["id"] for attachment in existing_attachments}
+                    if retained_ids - existing_ids:
+                        raise ValueError("유지할 첨부가 이 임시보관 메일에 없습니다.")
+                    retained_attachments: list[dict] = []
+                    removed_ids: list[str] = []
+                    for attachment in existing_attachments:
+                        attachment = self._canonical_persisted_attachment(actor, attachment)
+                        disposition = attachment.get("content_disposition", "attachment")
+                        content_id = attachment.get("content_id")
+                        if disposition == "attachment" and content_id is not None:
+                            raise ValueError("일반 첨부에는 콘텐츠 ID를 지정할 수 없습니다.")
+                        if disposition == "inline" and (not isinstance(content_id, str) or not content_id):
+                            raise ValueError("인라인 첨부의 콘텐츠 ID가 올바르지 않습니다.")
+                        if attachment["id"] in retained_ids:
+                            retained_attachments.append(attachment)
+                            continue
+                        upload_id = self.attachment_storage._upload_id_from_storage_key(attachment["storage_key"])
+                        snapshot = self.attachment_storage._metadata_path(upload_id).read_bytes()
+                        sidecar_snapshots.setdefault(upload_id, snapshot)
+                        removed_sidecar_snapshots[upload_id] = snapshot
+                        removed_ids.append(attachment["id"])
+                    all_attachments = retained_attachments + resolved_attachments
+                    if len(all_attachments) > settings.mail_attachment_max_files:
+                        raise ValueError("첨부 파일 개수 제한을 초과했습니다.")
+                    if sum(int(item["size_bytes"]) for item in all_attachments) > settings.mail_attachment_max_total_bytes:
+                        raise ValueError("첨부 파일의 전체 용량 제한을 초과했습니다.")
+                    body_html = self._sanitize_resolved_body_html(preflight_body_html, all_attachments)
+                    if removed_ids:
+                        cursor.execute("DELETE FROM mail_attachments WHERE message_id = %s AND id = ANY(%s)", (mail_id, removed_ids))
+                    cursor.execute("DELETE FROM mail_recipients WHERE message_id = %s", (mail_id,))
+                    for kind, email in [("to", item) for item in payload.to] + [("cc", item) for item in payload.cc] + [("bcc", item) for item in payload.bcc]:
+                        cursor.execute(
+                            """INSERT INTO mail_recipients (id,message_id,recipient_user_id,recipient_email,recipient_kind,is_read,is_starred,received_at,is_spam,spam_marked_at,delivery_source)
+                            VALUES (%s,%s,%s,%s,%s,FALSE,FALSE,NULL,FALSE,NULL,'direct')""",
+                            (self._new_id("rcpt"), mail_id, self._resolve_user_id_by_email(cursor, actor.companyId, email), email, kind),
+                        )
+                    for attachment in resolved_attachments:
+                        cursor.execute(
+                            """INSERT INTO mail_attachments (id,message_id,file_name,content_type,size_bytes,storage_key,content_disposition,content_id,created_at)
+                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                            (self._new_id("attach"), mail_id, attachment["file_name"], attachment["content_type"], attachment["size_bytes"], attachment["storage_key"], attachment["content_disposition"], attachment["content_id"], now),
+                        )
+                    cursor.execute(
+                        """UPDATE mail_messages SET subject=%s,body_text=%s,body_html=%s,attachment_count=%s,
+                        source_message_id=%s,source_action=%s,updated_at=%s WHERE id=%s RETURNING *""",
+                        (payload.subject.strip(), payload.bodyText, body_html, len(all_attachments), payload.sourceMailId, None if payload.composeAction == "new" else payload.composeAction, now, mail_id),
+                    )
+                    cursor.fetchone()
+                    self._write_mail_event_audit(cursor, company_id=actor.companyId, actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id, event="mail.draft.updated", status_before="draft", status_after="draft", now=now, reason="draft mail user update")
+                    self._mark_attachment_sidecars(resolved_attachments, sidecar_snapshots)
+                    self._detach_attachment_sidecars(removed_sidecar_snapshots)
+                connection.commit()
+            except Exception as primary_error:
+                self._compensate_attachment_transaction(connection, sidecar_snapshots, primary_error)
+                raise
+        return self.get_mail(actor, mail_id, "draft")
+
     def list_drafts(self, actor: AuthUserSummary, query: MailListQuery | None = None) -> MailListResponse:
         if query is not None:
             return self._list_sender_query(actor, query, mailbox="draft")

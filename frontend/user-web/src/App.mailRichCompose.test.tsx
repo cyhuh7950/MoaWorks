@@ -2,6 +2,7 @@
 import type { JSONContent } from "@tiptap/core";
 import { describe, expect, it, vi } from "vitest";
 import * as app from "./App";
+import { updateMailDraft } from "./api";
 import * as outgoingTranslation from "./mailOutgoingTranslation";
 import { projectMailDocument } from "./mailRichText";
 
@@ -83,6 +84,41 @@ describe("메일 rich compose 재작업 계약", () => {
 
     expect(projectMailDocument(scheduled.bodyDocument)).toEqual(original);
     expect(projectMailDocument(draft.bodyDocument)).toEqual(original);
+  });
+
+  it("재오픈 HTML의 blockquote·목록 항목·표 셀에 직접 놓인 텍스트를 보존한다", () => {
+    const createForm = requireContract(contracts.createMailComposeForm);
+    const reopened = createForm({
+      bodyHtml: "<blockquote>직접 인용<p>중간 인용</p>끝 인용</blockquote><ul><li>직접 목록</li></ul><table><tbody><tr><td>직접 셀</td></tr></tbody></table>",
+      bodyText: "fallback",
+    });
+
+    expect(reopened.bodyText).toContain("직접 인용");
+    expect(reopened.bodyText.indexOf("직접 인용")).toBeLessThan(reopened.bodyText.indexOf("중간 인용"));
+    expect(reopened.bodyText.indexOf("중간 인용")).toBeLessThan(reopened.bodyText.indexOf("끝 인용"));
+    expect(reopened.bodyText).toContain("직접 목록");
+    expect(reopened.bodyText).toContain("직접 셀");
+  });
+
+  it("draft 재저장은 같은 mail ID의 update payload에 retained attachmentId와 staged uploadId를 분리해 보낸다", async () => {
+    const request = vi.fn().mockResolvedValue(new Response(JSON.stringify({ mailId: "draft-1" }), { status: 200 }));
+    vi.stubGlobal("fetch", request);
+    try {
+      await updateMailDraft("token", "draft-1", {
+        to: [], cc: [], bcc: [], subject: "수정", bodyText: "본문", bodyHtml: "<p>본문</p>",
+        attachments: [{ uploadId: "a".repeat(32), fileName: "new.txt", contentType: "text/plain", sizeBytes: 1 }],
+        scheduledAt: undefined, confirmed: false, composeAction: "new", sourceMailId: undefined, copiedAttachmentIds: [],
+        retainedAttachmentIds: ["attachment-persisted"],
+      });
+      const [url, init] = request.mock.calls[0] as [string, RequestInit];
+      const body = JSON.parse(String(init.body));
+      expect(url).toContain("/mail/draft-1/draft");
+      expect(body.retainedAttachmentIds).toEqual(["attachment-persisted"]);
+      expect(body.attachments).toEqual([expect.objectContaining({ uploadId: "a".repeat(32) })]);
+      expect(body.attachments.map((item: { uploadId: string }) => item.uploadId)).not.toContain("attachment-persisted");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("발신 번역은 source snapshot과 다른 문서에는 적용하지 않고 fallback·원문 불일치·빈 번역을 거부한다", () => {

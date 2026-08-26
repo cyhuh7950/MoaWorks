@@ -27,6 +27,7 @@ from app.schemas.mail_messenger import (
     MailSignatureView,
     MailDetailResponse,
     MailDraftRequest,
+    MailDraftUpdateRequest,
     MailFolderCreateRequest,
     MailFolderListResponse,
     MailFolderUpdateRequest,
@@ -1022,6 +1023,15 @@ def send_mail(payload: MailSendRequest, user: AuthUserSummary = Depends(permissi
 def save_draft(payload: MailDraftRequest, user: AuthUserSummary = Depends(permission_required("mail:send"))) -> MailSendResponse:
     try:
         return _service().save_draft(user, payload)
+    except Exception as exc:
+        _handle_error(exc)
+        raise
+
+
+@router.put("/{mail_id}/draft", response_model=MailDetailResponse)
+def update_draft(mail_id: str, payload: MailDraftUpdateRequest, user: AuthUserSummary = Depends(permission_required("mail:send"))) -> MailDetailResponse:
+    try:
+        return _service().update_draft_mail(user, mail_id, payload)
     except Exception as exc:
         _handle_error(exc)
         raise

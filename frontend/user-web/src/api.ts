@@ -615,6 +615,10 @@ export type MailComposePayload = {
   confirmed?: boolean;
 };
 
+export type MailDraftUpdatePayload = MailComposePayload & {
+  retainedAttachmentIds: string[];
+};
+
 export type MailSendResponse = {
   mailId: string;
   status: string;
@@ -1762,6 +1766,14 @@ export async function saveMailDraft(token: string, payload: MailComposePayload):
       ...authHeaders(token),
       "Content-Type": "application/json",
     },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateMailDraft(token: string, mailId: string, payload: MailDraftUpdatePayload): Promise<MailDetail> {
+  return request<MailDetail>(`/mail/${mailId}/draft`, {
+    method: "PUT",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
 }

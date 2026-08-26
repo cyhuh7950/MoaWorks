@@ -94,6 +94,7 @@ import {
   fetchNotificationSummary,
   fetchSentMail,
   fetchScheduledMail,
+  updateMailDraft,
   updateScheduledMail,
   cancelScheduledMail,
   sendScheduledMailNow,
@@ -536,7 +537,14 @@ function parseMailHtmlDocument(bodyHtml: string, fallbackText: string): JSONCont
     if (!(node instanceof Element)) return [];
     const tag = node.tagName.toLowerCase();
     const style = readStyle(node);
-    const children = [...node.children].flatMap(blocks);
+    const elementChildren = [...node.children].flatMap(blocks);
+    const children = ["blockquote", "li", "th", "td"].includes(tag)
+      ? [...node.childNodes].flatMap((child) => {
+        if (child instanceof Element) return blocks(child);
+        const content = inline(child);
+        return content.some((item) => item.type !== "text" || item.text?.trim()) ? [{ type: "paragraph", content }] : [];
+      })
+      : elementChildren;
     const attrs = style["text-align"] ? { textAlign: style["text-align"] } : undefined;
     if (tag === "p") return [{ type: "paragraph", attrs, content: [...node.childNodes].flatMap((child) => inline(child)) }];
     if (/^h[1-3]$/.test(tag)) return [{ type: "heading", attrs: { level: Number(tag.slice(1)), ...(attrs ?? {}) }, content: [...node.childNodes].flatMap((child) => inline(child)) }];
@@ -1717,6 +1725,8 @@ export default function App() {
   const mailComposeInlineImageRequestRef = useRef(0);
   const [mailComposeSourceDetail, setMailComposeSourceDetail] = useState<MailDetail | null>(null);
   const [editingScheduledMailId, setEditingScheduledMailId] = useState("");
+  const [editingDraftMailId, setEditingDraftMailId] = useState("");
+  const [mailComposeRetainedAttachmentIds, setMailComposeRetainedAttachmentIds] = useState<string[]>([]);
   const mailComposeToRef = useRef<HTMLInputElement>(null);
   const [selectedForwardAttachmentIds, setSelectedForwardAttachmentIds] = useState<string[]>([]);
   const [recipientPickerTarget, setRecipientPickerTarget] = useState<RecipientPickerTarget | null>(null);
@@ -2037,6 +2047,8 @@ export default function App() {
     clearMailComposeInlineImages();
     setMailComposeSourceDetail(null);
     setEditingScheduledMailId("");
+    setEditingDraftMailId("");
+    setMailComposeRetainedAttachmentIds([]);
     setSelectedForwardAttachmentIds([]);
     setRecipientPickerTarget(null);
     setComposeWindow("normal");
@@ -2266,7 +2278,12 @@ export default function App() {
     try {
       const sourceSnapshot = preview.sourceSnapshot;
       if (!sourceSnapshot) throw new Error("번역 원문 스냅샷이 없습니다.");
-      setMailComposeForm((current) => applyOutgoingRichTranslationPreview(current, { subject: preview.subject, segments: translatedSegments, sourceSnapshot }, { applySegments: applyTranslatedSegments, projectDocument: projectMailDocument }));
+      const next = applyOutgoingRichTranslationPreview(mailComposeForm, { subject: preview.subject, segments: translatedSegments, sourceSnapshot }, { applySegments: applyTranslatedSegments, projectDocument: projectMailDocument });
+      setMailComposeForm((current) => (
+        JSON.stringify(current.bodyDocument) === sourceSnapshot.documentKey && current.subject === sourceSnapshot.subject
+          ? next
+          : current
+      ));
     } catch (error) {
       setTranslationError(normalizeClientError(error, "번역 결과를 본문에 적용하지 못했습니다."));
       return;
@@ -2297,6 +2314,8 @@ export default function App() {
     if (!selectedMailDetail || activeMailFolder !== "scheduled") return;
     const values = (kind: string) => selectedMailDetail.recipients.filter((item) => item.recipientKind === kind).map((item) => item.recipientEmail).join(", ");
     setEditingScheduledMailId(selectedMailDetail.mailId);
+    setEditingDraftMailId("");
+    setMailComposeRetainedAttachmentIds([]);
     setMailComposeForm(createMailComposeForm({
       to: values("to"), cc: values("cc"), bcc: values("bcc"), subject: selectedMailDetail.subject,
       bodyText: selectedMailDetail.bodyText, bodyHtml: selectedMailDetail.bodyHtml,
@@ -2310,6 +2329,10 @@ export default function App() {
     if (!selectedMailDetail || activeMailFolder !== "draft") return;
     const values = (kind: string) => selectedMailDetail.recipients.filter((item) => item.recipientKind === kind).map((item) => item.recipientEmail).join(", ");
     setEditingScheduledMailId("");
+    setEditingDraftMailId(selectedMailDetail.mailId);
+    setMailComposeRetainedAttachmentIds(selectedMailDetail.attachments
+      .filter((attachment) => attachment.disposition !== "inline" || selectedMailDetail.bodyHtml?.includes(`cid:${attachment.contentId ?? ""}`))
+      .map((attachment) => attachment.attachmentId));
     setMailComposeForm(createMailComposeForm({ to: values("to"), cc: values("cc"), bcc: values("bcc"), subject: selectedMailDetail.subject, bodyText: selectedMailDetail.bodyText, bodyHtml: selectedMailDetail.bodyHtml, scheduledAt: "" }));
     void hydrateComposeInlineImages(selectedMailDetail.attachments.filter((attachment) => selectedMailDetail.bodyHtml?.includes(`cid:${attachment.contentId ?? ""}`)));
     setMailComposeContext("new");
@@ -3618,9 +3641,11 @@ export default function App() {
       };
       const response = editingScheduledMailId && action === "schedule"
         ? await updateScheduledMail(token, editingScheduledMailId, payload)
-        : action === "draft" ? await saveMailDraft(token, payload) : await sendMail(token, payload);
+        : editingDraftMailId && action === "draft"
+          ? await updateMailDraft(token, editingDraftMailId, { ...payload, retainedAttachmentIds: mailComposeRetainedAttachmentIds })
+          : action === "draft" ? await saveMailDraft(token, payload) : await sendMail(token, payload);
       if (action === "draft") {
-        setMessage("메일을 임시저장했습니다.");
+        setMessage(editingDraftMailId ? "임시저장 메일을 수정했습니다." : "메일을 임시저장했습니다.");
       } else if (action === "schedule") {
         setMessage(editingScheduledMailId ? "예약 메일을 수정했습니다." : "메일을 예약했습니다.");
       } else if (action === "send" && "externalCount" in response && response.externalCount) {
@@ -3633,6 +3658,8 @@ export default function App() {
       clearMailComposeInlineImages();
       setMailComposeSourceDetail(null);
       setEditingScheduledMailId("");
+      setEditingDraftMailId("");
+      setMailComposeRetainedAttachmentIds([]);
       setSelectedForwardAttachmentIds([]);
       setOutgoingTranslationOpen(false);
       setMailTranslationPreview(null);
@@ -3692,6 +3719,9 @@ export default function App() {
     setMailComposeFiles([]);
     clearMailComposeInlineImages();
     setMailComposeSourceDetail(null);
+    setEditingScheduledMailId("");
+    setEditingDraftMailId("");
+    setMailComposeRetainedAttachmentIds([]);
     setSelectedForwardAttachmentIds([]);
     setRecipientPickerTarget(null);
     setRecipientPickerQuery("");
@@ -5006,8 +5036,12 @@ export default function App() {
     )) ?? [];
     if (!token || inlineAttachments.length === 0) return () => undefined;
     const loader = loadMailDetailInlinePreviews({ token, attachments: inlineAttachments, fetchPreview: fetchMailInlinePreview, createObjectURL: URL.createObjectURL, revokeObjectURL: URL.revokeObjectURL });
-    void loader.ready.then((urls) => setMailDetailInlinePreviewUrls(urls));
+    let active = true;
+    void loader.ready.then((urls) => {
+      if (active) setMailDetailInlinePreviewUrls(urls);
+    });
     return () => {
+      active = false;
       loader.dispose();
     };
   }, [selectedMailDetail?.attachments, selectedMailDetail?.mailId, token]);

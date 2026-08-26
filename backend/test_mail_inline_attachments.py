@@ -23,6 +23,7 @@ from app.schemas.mail_messenger import (
     MailAttachmentUploadResponse,
     MailAttachmentView,
     MailDraftRequest,
+    MailDraftUpdateRequest,
     MailScheduledUpdateRequest,
     MailSendRequest,
 )
@@ -176,7 +177,8 @@ class PersistenceCursor:
                 "last_test_status": "success",
             }
         elif "select * from mail_messages" in lowered and "for update" in lowered:
-            self._one = self.scheduled_message
+            expected_status = "draft" if "status='draft'" in lowered else "scheduled" if "status='scheduled'" in lowered else None
+            self._one = self.scheduled_message if expected_status is None or (self.scheduled_message or {}).get("status") == expected_status else None
         elif "from mail_attachments" in lowered and lowered.startswith("select"):
             self._many = [dict(row) for row in self.existing_attachments]
         elif lowered.startswith("insert into mail_attachments"):
@@ -987,6 +989,57 @@ class MailInlinePersistenceTests(unittest.TestCase):
             self.assertIn(2, update_statements[0][1])
             self.assertTrue(self.metadata(storage, persisted.uploadId)["attached"])
             self.assertTrue(self.metadata(storage, newly_staged.uploadId)["attached"])
+
+    def test_draft_update_retains_persisted_attachment_by_attachment_id_and_only_inserts_new_staged_upload(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            storage = MailAttachmentStorage(Path(temp_dir))
+            persisted = storage.stage_inline_image(self.owner, "persisted.png", "image/png", image_bytes("PNG"))
+            storage.mark_attached(persisted.uploadId)
+            persisted_metadata = self.metadata(storage, persisted.uploadId)
+            staged = storage.stage_inline_image(self.owner, "new.png", "image/png", image_bytes("PNG"))
+            database = PersistenceDatabase(
+                existing_attachments=[{
+                    "id": "attachment-persisted",
+                    "file_name": persisted.fileName,
+                    "content_type": persisted.contentType,
+                    "size_bytes": persisted.sizeBytes,
+                    "storage_key": persisted_metadata["storageKey"],
+                    "content_disposition": "inline",
+                    "content_id": persisted.contentId,
+                }],
+                scheduled_message={"id": "mail-draft", "status": "draft", "attachment_count": 1},
+            )
+            service = self.service(storage, database)
+            payload = MailDraftUpdateRequest(
+                subject="updated draft",
+                bodyText="rich body",
+                bodyHtml=f'<p>rich body</p><img src="cid:{persisted.contentId}"><img src="cid:{staged.contentId}">',
+                attachments=[self.attachment_meta(staged)],
+                retainedAttachmentIds=["attachment-persisted"],
+            )
+
+            result = service.update_draft_mail(self.owner, "mail-draft", payload)
+
+            self.assertEqual(result.mailId, "mail-draft")
+            self.assertEqual(database.connection.commit_count, 1)
+            self.assertEqual(len(database.cursor.attachment_inserts), 1)
+            self.assertEqual(database.cursor.attachment_inserts[0][1][-3:-1], ("inline", staged.contentId))
+            update_params = next(params for query, params in database.cursor.statements if query.lower().startswith("update mail_messages"))
+            self.assertEqual(update_params[-1], "mail-draft")
+            self.assertTrue(self.metadata(storage, persisted.uploadId)["attached"])
+            self.assertTrue(self.metadata(storage, staged.uploadId)["attached"])
+
+    def test_draft_update_rejects_non_draft_before_attachment_mutation(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            storage = MailAttachmentStorage(Path(temp_dir))
+            database = PersistenceDatabase(scheduled_message={"id": "mail-sent", "status": "sent"})
+            service = self.service(storage, database)
+            payload = MailDraftUpdateRequest(subject="no", bodyText="no", bodyHtml="<p>no</p>")
+
+            with self.assertRaisesRegex(Exception, "임시보관"):
+                service.update_draft_mail(self.owner, "mail-sent", payload)
+
+            self.assertEqual(database.cursor.attachment_inserts, [])
 
     def test_scheduled_update_restores_new_sidecar_on_mark_or_commit_failure(self) -> None:
         """Scheduled attachment staging and DB changes must roll back together on either failure."""

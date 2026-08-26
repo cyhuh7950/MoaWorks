@@ -295,6 +295,22 @@ class MailDraftRequest(MailSendRequest):
         return self
 
 
+class MailDraftUpdateRequest(MailDraftRequest):
+    retainedAttachmentIds: list[str] = Field(default_factory=list, max_length=10)
+
+    @field_validator("retainedAttachmentIds")
+    @classmethod
+    def validate_retained_attachment_ids(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            attachment_id = value.strip()
+            if not attachment_id or len(attachment_id) > 100 or not all(character.isalnum() or character in "_-" for character in attachment_id):
+                raise ValueError("유지할 첨부 식별자가 올바르지 않습니다.")
+            if attachment_id not in normalized:
+                normalized.append(attachment_id)
+        return normalized
+
+
 class MailRecentRecipient(BaseModel):
     recipientId: str | None = None
     email: str
