@@ -254,6 +254,15 @@ describe("projectMailDocument", () => {
     expect(() => projectMailDocument({ type: "doc", content } as JSONContent)).toThrow();
   });
 
+  const emptyContainerCases: Array<[string, JSONContent]> = [
+    ["doc", { type: "doc", content: [] }],
+    ["blockquote", { type: "doc", content: [{ type: "blockquote", content: [] }] }],
+  ];
+
+  it.each(emptyContainerCases)("rejects an empty %s container", (_type, document) => {
+    expect(() => projectMailDocument(document)).toThrow();
+  });
+
   it("keeps empty paragraphs and headings valid", () => {
     expect(projectMailDocument({
       type: "doc",

@@ -50,7 +50,7 @@ const allowedFonts = new Set(["맑은 고딕", "Arial", "Georgia", "Times New Ro
 const allowedFontSizes = new Set(["10px", "12px", "14px", "16px", "18px", "24px", "32px"]);
 const allowedLineHeights = new Set(["1", "1.15", "1.5", "1.75", "2"]);
 const allowedTextAlignments = new Set(["left", "center", "right", "justify"]);
-const nonEmptyContainerTypes = new Set(["bulletList", "orderedList", "listItem", "table", "tableRow", "tableHeader", "tableCell"]);
+const nonEmptyContainerTypes = new Set(["doc", "bulletList", "orderedList", "listItem", "blockquote", "table", "tableRow", "tableHeader", "tableCell"]);
 const defaultHighlightColor = "#ffff00";
 const colorPattern = /^(?:#[0-9a-f]{6}|rgb\(\s*(?:25[0-5]|2[0-4]\d|1?\d?\d)\s*,\s*(?:25[0-5]|2[0-4]\d|1?\d?\d)\s*,\s*(?:25[0-5]|2[0-4]\d|1?\d?\d)\s*\))$/i;
 const contentIdPattern = /^(?!.*\.\.)[A-Za-z0-9!#$%&'*+\-/=?^_`{|}~]+(?:\.[A-Za-z0-9!#$%&'*+\-/=?^_`{|}~]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
