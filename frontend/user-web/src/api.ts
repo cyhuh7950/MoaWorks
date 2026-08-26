@@ -1,14 +1,33 @@
 const defaultApiBase = "/api/v1";
+const browserApiPathSegmentPattern = /^[A-Za-z0-9._~-]+$/;
 
 function normalizeBrowserApiBase(value: string | null | undefined) {
   if (!value) {
+    return defaultApiBase;
+  }
+  if (/[\u0000-\u001f\u007f]/.test(value)) {
     return defaultApiBase;
   }
   const trimmed = value.trim();
   if (!trimmed) {
     return defaultApiBase;
   }
-  return trimmed.startsWith("/") ? trimmed.replace(/\/$/, "") : defaultApiBase;
+  if (
+    !trimmed.startsWith("/") ||
+    trimmed.startsWith("//") ||
+    /[\\%?#\u0000-\u001f\u007f]/.test(trimmed)
+  ) {
+    return defaultApiBase;
+  }
+  const normalized = trimmed.replace(/\/+$/, "");
+  const segments = normalized.slice(1).split("/");
+  if (
+    !normalized ||
+    segments.some((segment) => !segment || segment === "." || segment === ".." || !browserApiPathSegmentPattern.test(segment))
+  ) {
+    return defaultApiBase;
+  }
+  return `/${segments.join("/")}`;
 }
 
 export const apiBase = normalizeBrowserApiBase(
@@ -1652,9 +1671,24 @@ function assertMailPreviewPath(previewPath: string): void {
   }
 }
 
-export async function fetchMailInlinePreview(token: string, previewPath: string): Promise<Blob> {
+function resolveMailPreviewUrl(previewPath: string): string {
   assertMailPreviewPath(previewPath);
-  const response = await fetch(`${apiBase}${previewPath}`, {
+  const expectedPathname = `${apiBase}${previewPath}`;
+  const resolved = new URL(expectedPathname, window.location.origin);
+  if (
+    resolved.origin !== window.location.origin ||
+    resolved.pathname !== expectedPathname ||
+    resolved.search ||
+    resolved.hash
+  ) {
+    throw new Error("허용되지 않은 메일 이미지 미리보기 경로입니다.");
+  }
+  return resolved.href;
+}
+
+export async function fetchMailInlinePreview(token: string, previewPath: string): Promise<Blob> {
+  const previewUrl = resolveMailPreviewUrl(previewPath);
+  const response = await fetch(previewUrl, {
     headers: authHeaders(token),
   });
   if (!response.ok) {

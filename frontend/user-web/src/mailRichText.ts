@@ -50,6 +50,8 @@ const allowedFonts = new Set(["맑은 고딕", "Arial", "Georgia", "Times New Ro
 const allowedFontSizes = new Set(["10px", "12px", "14px", "16px", "18px", "24px", "32px"]);
 const allowedLineHeights = new Set(["1", "1.15", "1.5", "1.75", "2"]);
 const allowedTextAlignments = new Set(["left", "center", "right", "justify"]);
+const nonEmptyContainerTypes = new Set(["bulletList", "orderedList", "listItem", "table", "tableRow", "tableHeader", "tableCell"]);
+const defaultHighlightColor = "#ffff00";
 const colorPattern = /^(?:#[0-9a-f]{6}|rgb\(\s*(?:25[0-5]|2[0-4]\d|1?\d?\d)\s*,\s*(?:25[0-5]|2[0-4]\d|1?\d?\d)\s*,\s*(?:25[0-5]|2[0-4]\d|1?\d?\d)\s*\))$/i;
 const contentIdPattern = /^(?!.*\.\.)[A-Za-z0-9!#$%&'*+\-/=?^_`{|}~]+(?:\.[A-Za-z0-9!#$%&'*+\-/=?^_`{|}~]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 
@@ -173,7 +175,15 @@ function validateNode(node: unknown, path: number[], contentIds: Set<string>, pa
       if (!Array.isArray(node.marks)) {
         throw new Error("텍스트 서식 목록 형식이 올바르지 않습니다.");
       }
-      node.marks.forEach(validateMark);
+      const markTypes = new Set<string>();
+      node.marks.forEach((mark) => {
+        validateMark(mark);
+        const markType = (mark as JsonRecord).type as string;
+        if (markTypes.has(markType)) {
+          throw new Error("같은 종류의 텍스트 서식은 중복될 수 없습니다.");
+        }
+        markTypes.add(markType);
+      });
     }
     return;
   }
@@ -247,7 +257,14 @@ function validateNode(node: unknown, path: number[], contentIds: Set<string>, pa
   if (node.content !== undefined && !Array.isArray(node.content)) {
     throw new Error("문서 하위 내용 형식이 올바르지 않습니다.");
   }
-  (node.content ?? []).forEach((child, index) => validateNode(child, [...path, index], contentIds, node.type as string));
+  const content = node.content ?? [];
+  if (nonEmptyContainerTypes.has(node.type) && content.length === 0) {
+    throw new Error(`${node.type} 노드는 최소 한 개의 하위 내용을 가져야 합니다.`);
+  }
+  if (node.type === "listItem" && (!isRecord(content[0]) || content[0].type !== "paragraph")) {
+    throw new Error("listItem의 첫 하위 노드는 paragraph여야 합니다.");
+  }
+  content.forEach((child, index) => validateNode(child, [...path, index], contentIds, node.type as string));
 }
 
 function validateDocument(doc: JSONContent): string[] {
@@ -285,7 +302,7 @@ function renderMarkedText(text: string, marks: unknown[] | undefined): string {
     else if (mark.type === "underline") html = `<u>${html}</u>`;
     else if (mark.type === "strike") html = `<s>${html}</s>`;
     else if (mark.type === "link") html = `<a href="${escapeHtml(String(attrs.href))}" rel="noopener noreferrer">${html}</a>`;
-    else if (mark.type === "highlight") html = `<span${styleAttribute([["background-color", attrs.color ? String(attrs.color) : undefined]])}>${html}</span>`;
+    else if (mark.type === "highlight") html = `<span${styleAttribute([["background-color", attrs.color ? String(attrs.color) : defaultHighlightColor]])}>${html}</span>`;
     else if (mark.type === "textStyle") {
       html = `<span${styleAttribute([
         ["font-family", attrs.fontFamily ? String(attrs.fontFamily) : undefined],
@@ -344,10 +361,17 @@ function renderPlain(node: JSONContent): string {
   if (node.type === "horizontalRule") return "---";
   if (node.type === "bulletList" || node.type === "orderedList") {
     const start = node.type === "orderedList" ? Number(readAttrs(node).start ?? 1) : 1;
-    return (node.content ?? []).map((item, index) => `${node.type === "bulletList" ? "-" : `${start + index}.`} ${renderPlain(item)}`).join("\n");
+    return (node.content ?? []).map((item, index) => {
+      const marker = node.type === "bulletList" ? "-" : `${start + index}.`;
+      const lines = renderPlain(item).split("\n");
+      return `${marker} ${lines[0]}${lines.slice(1).map((line) => `\n  ${line}`).join("")}`;
+    }).join("\n");
   }
   if (node.type === "table") return (node.content ?? []).map(renderPlain).join("\n");
   if (node.type === "tableRow") return (node.content ?? []).map(renderPlain).join("\t");
+  if (["listItem", "tableHeader", "tableCell", "blockquote"].includes(node.type ?? "")) {
+    return (node.content ?? []).map(renderPlain).join("\n");
+  }
   const children = (node.content ?? []).map(renderPlain).join("");
   if (node.type === "doc") return (node.content ?? []).map(renderPlain).join("\n");
   return children;

@@ -87,6 +87,95 @@ describe("projectMailDocument", () => {
     expect(result.bodyText).toBe("- 첫째\n- 둘째\n품목\t수량\n사과\t2");
   });
 
+  it("preserves nested list paragraphs and nested markers in bodyText", () => {
+    const result = projectMailDocument({
+      type: "doc",
+      content: [
+        {
+          type: "bulletList",
+          content: [
+            {
+              type: "listItem",
+              content: [
+                { type: "paragraph", content: [{ type: "text", text: "첫 문단" }] },
+                { type: "paragraph", content: [{ type: "text", text: "둘째 문단" }] },
+                {
+                  type: "orderedList",
+                  attrs: { start: 3 },
+                  content: [
+                    {
+                      type: "listItem",
+                      content: [{ type: "paragraph", content: [{ type: "text", text: "중첩 항목" }] }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result.bodyText).toBe("- 첫 문단\n  둘째 문단\n  3. 중첩 항목");
+  });
+
+  it("preserves multiple block boundaries inside table cells", () => {
+    const result = projectMailDocument({
+      type: "doc",
+      content: [
+        {
+          type: "table",
+          content: [
+            {
+              type: "tableRow",
+              content: [
+                {
+                  type: "tableCell",
+                  content: [
+                    { type: "paragraph", content: [{ type: "text", text: "품목" }] },
+                    { type: "paragraph", content: [{ type: "text", text: "설명" }] },
+                  ],
+                },
+                {
+                  type: "tableCell",
+                  content: [
+                    { type: "paragraph", content: [{ type: "text", text: "사진" }] },
+                    { type: "image", attrs: { contentId: "mw-table@example.invalid", alt: "표 이미지" } },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result.bodyText).toBe("품목\n설명\t사진\n[이미지: 표 이미지]");
+  });
+
+  it.each([
+    [undefined, "#ffff00"],
+    ["#aabbcc", "#aabbcc"],
+  ] as const)("renders highlight semantics with a safe background color %s", (color, expected) => {
+    const result = projectMailDocument({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "text",
+              text: "강조",
+              marks: [{ type: "highlight", ...(color ? { attrs: { color } } : {}) }],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result.bodyHtml).toBe(`<p><span style="background-color:${expected}">강조</span></p>`);
+  });
+
   it("uses a deterministic fallback when image alt is blank", () => {
     const result = projectMailDocument({
       type: "doc",
@@ -142,6 +231,52 @@ describe("projectMailDocument", () => {
         ],
       }),
     ).toThrow();
+  });
+
+  it.each([
+    { type: "bulletList", content: [] },
+    { type: "orderedList", content: [] },
+    { type: "listItem", content: [] },
+    { type: "listItem", content: [{ type: "heading", attrs: { level: 1 }, content: [] }] },
+    { type: "table", content: [] },
+    { type: "tableRow", content: [] },
+    { type: "tableCell", content: [] },
+    { type: "tableHeader", content: [] },
+  ])("rejects an invalid empty or structurally incomplete editor container %#", (node) => {
+    const content = node.type === "listItem"
+      ? [{ type: "bulletList", content: [node] }]
+      : node.type === "tableRow"
+        ? [{ type: "table", content: [node] }]
+        : node.type === "tableCell" || node.type === "tableHeader"
+          ? [{ type: "table", content: [{ type: "tableRow", content: [node] }] }]
+          : [node];
+
+    expect(() => projectMailDocument({ type: "doc", content } as JSONContent)).toThrow();
+  });
+
+  it("keeps empty paragraphs and headings valid", () => {
+    expect(projectMailDocument({
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [] },
+        { type: "heading", attrs: { level: 2 }, content: [] },
+      ],
+    }).bodyHtml).toBe("<p></p><h2></h2>");
+  });
+
+  const duplicateMarkCases = [
+    [{ type: "bold" }, { type: "bold" }],
+    [
+      { type: "link", attrs: { href: "https://example.com/a" } },
+      { type: "link", attrs: { href: "https://example.com/b" } },
+    ],
+  ];
+
+  it.each(duplicateMarkCases.map((marks) => [marks] as const))("rejects duplicate mark types %#", (marks) => {
+    expect(() => projectMailDocument({
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: "중복", marks }] }],
+    })).toThrow();
   });
 });
 

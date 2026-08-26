@@ -66,6 +66,69 @@ describe("mail inline image API", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    window.localStorage.clear();
+  });
+
+  it.each([
+    "//attacker.example/api/v1",
+    "https://attacker.example/api/v1",
+    "\\\\attacker.example\\api\\v1",
+    "/\\attacker.example/api/v1",
+    "/https://attacker.example/api/v1",
+    "/api/v1\u0000//attacker.example",
+    "\n/gateway/api",
+  ])("falls back from a hostile environment API base without leaking the token: %s", async (base) => {
+    vi.resetModules();
+    vi.stubEnv("VITE_API_BASE_URL", base);
+    const isolatedApi = await import("./api");
+    const blob = new Blob(["png"], { type: "image/png" });
+    fetchMock.mockResolvedValue({ ok: true, blob: vi.fn().mockResolvedValue(blob) });
+
+    await expect(isolatedApi.fetchMailInlinePreview("secret-token", "/mail/attachments/staged/upload-1/preview")).resolves.toBe(blob);
+
+    expect(isolatedApi.apiBase).toBe("/api/v1");
+    const [requestUrl, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(new URL(requestUrl, window.location.origin).origin).toBe(window.location.origin);
+    expect(new URL(requestUrl, window.location.origin).pathname).toBe("/api/v1/mail/attachments/staged/upload-1/preview");
+    expect(init.headers).toEqual({ Authorization: "Bearer secret-token" });
+  });
+
+  it.each([
+    "//storage-attacker.example/api/v1",
+    "https://storage-attacker.example/api/v1",
+    "\\\\storage-attacker.example\\api\\v1",
+    "/api/v1\u001f/escape",
+    "\t/gateway/api",
+  ])("falls back from a hostile localStorage API base without leaking the token: %s", async (base) => {
+    vi.resetModules();
+    vi.stubEnv("VITE_API_BASE_URL", undefined);
+    window.localStorage.setItem("moaworks.apiBase", base);
+    const isolatedApi = await import("./api");
+    const blob = new Blob(["png"], { type: "image/png" });
+    fetchMock.mockResolvedValue({ ok: true, blob: vi.fn().mockResolvedValue(blob) });
+
+    await expect(isolatedApi.fetchMailInlinePreview("secret-token", "/mail/attachments/staged/upload-1/preview")).resolves.toBe(blob);
+
+    expect(isolatedApi.apiBase).toBe("/api/v1");
+    const [requestUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(new URL(requestUrl, window.location.origin).origin).toBe(window.location.origin);
+  });
+
+  it("keeps a normalized valid root-relative browser API base", async () => {
+    vi.resetModules();
+    vi.stubEnv("VITE_API_BASE_URL", "/gateway/api/");
+    const isolatedApi = await import("./api");
+    const blob = new Blob(["png"], { type: "image/png" });
+    fetchMock.mockResolvedValue({ ok: true, blob: vi.fn().mockResolvedValue(blob) });
+
+    await isolatedApi.fetchMailInlinePreview("secret-token", "/mail/attachments/staged/upload-1/preview");
+
+    expect(isolatedApi.apiBase).toBe("/gateway/api");
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${window.location.origin}/gateway/api/mail/attachments/staged/upload-1/preview`,
+      { headers: { Authorization: "Bearer secret-token" } },
+    );
   });
 
   it.each([
@@ -76,6 +139,9 @@ describe("mail inline image API", () => {
     "/mail//tracker.example/x",
     "/mail/../auth/me",
     "/mail/%2e%2e/auth/me",
+    "/mail/%2f%2fattacker.example/x",
+    "/mail/%5c%5cattacker.example/x",
+    "/mail/%252e%252e/auth/me",
     "/mail/x?next=https://tracker.example",
     "/mail/x#fragment",
     "/mail/x\\y",
@@ -90,14 +156,16 @@ describe("mail inline image API", () => {
 
     await expect(fetchMailInlinePreview("secret-token", "/mail/attachments/staged/upload-1/preview")).resolves.toBe(blob);
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/mail/attachments/staged/upload-1/preview", {
+    expect(fetchMock).toHaveBeenCalledWith(`${window.location.origin}/api/v1/mail/attachments/staged/upload-1/preview`, {
       headers: { Authorization: "Bearer secret-token" },
     });
   });
 
   it("fails closed on a preview response error without creating an object URL", async () => {
     const createObjectURL = vi.fn();
-    vi.stubGlobal("URL", { ...URL, createObjectURL });
+    class TestURL extends URL {}
+    Object.defineProperty(TestURL, "createObjectURL", { value: createObjectURL });
+    vi.stubGlobal("URL", TestURL);
     fetchMock.mockResolvedValue({
       ok: false,
       status: 403,
