@@ -48,7 +48,7 @@ try {
   await start(process.execPath, [resolve(root, "node_modules", "vite", "bin", "vite.js"), "--host", "127.0.0.1", "--port", String(webPort)]);
   await waitFor(`http://127.0.0.1:${webPort}/`);
   browser = await chromium.launch({ channel: "chrome", headless: true });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 650 } });
   page.setDefaultTimeout(5_000);
   const network = [];
   const apiResponses = [];
@@ -80,11 +80,33 @@ try {
   await boldButton.click();
   const boldPressed = await boldButton.getAttribute("aria-pressed") === "true";
   if (!boldPressed) throw new Error("phase5 rich editor bold state did not change");
+  const editorSurface = page.locator(".mail-rich-text-editor__surface");
+  await editorSurface.fill(Array.from({ length: 18 }, (_, index) => `rich compose line ${index + 1}`).join("\n"));
+  const draftButton = page.getByRole("button", { name: "임시저장" });
+  await draftButton.scrollIntoViewIfNeeded();
+  const draftButtonBox = await draftButton.boundingBox();
+  if (!draftButtonBox) throw new Error("phase5 draft button has no layout box");
+  const draftHitTest = await page.evaluate(({ x, y }) => {
+    const draft = [...document.querySelectorAll("button")].find((button) => button.textContent?.trim() === "임시저장");
+    const hit = document.elementFromPoint(x, y);
+    const bodyField = document.querySelector(".user-mail-compose-field.is-body");
+    const editor = document.querySelector(".mail-rich-text-editor");
+    const surface = document.querySelector(".mail-rich-text-editor__surface");
+    const actions = document.querySelector(".user-mail-compose-submit-actions");
+    const rect = (element) => element ? Object.fromEntries(["x", "y", "width", "height"].map((key) => [key, element.getBoundingClientRect()[key]])) : null;
+    return {
+      topmost: Boolean(draft && hit && (hit === draft || draft.contains(hit))),
+      hit: hit ? `${hit.tagName}.${hit.className}` : null,
+      bodyField: rect(bodyField), editor: rect(editor), surface: rect(surface), actions: rect(actions),
+    };
+  }, { x: draftButtonBox.x + draftButtonBox.width / 2, y: draftButtonBox.y + draftButtonBox.height / 2 });
+  const draftButtonIsTopmost = draftHitTest.topmost;
+  if (!draftButtonIsTopmost) throw new Error(`phase5 rich editor content covers the draft action: ${JSON.stringify(draftHitTest)}`);
   await page.screenshot({ path: resolve(evidence, "compose.png"), fullPage: false });
   if (network.some((origin) => origin !== `http://127.0.0.1:${webPort}`)) throw new Error("phase5 used a non-local API origin");
   if (pageErrors.length) throw new Error(`phase5 page errors: ${pageErrors.join(" | ")}`);
   if (apiResponses.some(({ status }) => status >= 400)) throw new Error("phase5 received a failing API response");
-  await writeFile(resolve(evidence, "result.json"), JSON.stringify({ localOnly: true, stage: "rich-compose", composeVisible, loginVisible, portalVisible, storedToken, activeMenu, boldPressed, fixtureGuards: { wrongLogin: wrongLogin.status, unknownRoute: unknownResponse.status, wrongMethod: wrongMethod.status }, networkCount: network.length, apiResponses, pageErrors }, null, 2));
+  await writeFile(resolve(evidence, "result.json"), JSON.stringify({ localOnly: true, stage: "rich-compose", composeVisible, loginVisible, portalVisible, storedToken, activeMenu, boldPressed, draftButtonIsTopmost, fixtureGuards: { wrongLogin: wrongLogin.status, unknownRoute: unknownResponse.status, wrongMethod: wrongMethod.status }, networkCount: network.length, apiResponses, pageErrors }, null, 2));
   process.stdout.write("PHASE5_PASS\n");
 } catch (error) {
   process.stderr.write(`PHASE5_FAIL ${error instanceof Error ? error.message : String(error)}\n`);

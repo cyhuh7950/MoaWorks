@@ -1603,8 +1603,8 @@ textarea {
 }
 
 .user-mail-compose-field.is-body {
-  flex: 1 1 240px;
-  min-height: 0;
+  flex: 0 0 auto;
+  min-height: 240px;
   align-items: stretch;
 }
 
