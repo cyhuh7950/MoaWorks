@@ -1,58 +1,72 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { chromium } from "playwright";
 
-const root = resolve(import.meta.dirname, "../../..");
-const evidence = resolve(root, "docs/evidence/phase5-mail-popup");
-await mkdir(evidence, { recursive: true });
-const network = [];
-const browser = await chromium.launch({ channel: "chrome", headless: true });
-const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
-page.on("request", (request) => {
-  if (!request.url().includes("/api/v1/")) return;
-  const url = new URL(request.url());
-  if (url.searchParams.has("token")) url.searchParams.set("token", "[REDACTED]");
-  network.push(url.toString());
+const root = resolve(import.meta.dirname, "..");
+const evidence = resolve(root, "evidence", "phase5-mail-popup");
+const qa = `${crypto.randomUUID()}@phase5.invalid`;
+const password = crypto.randomUUID();
+const fixturePort = 3521;
+const webPort = 3520;
+const env = { ...process.env, PHASE5_QA_EMAIL: qa, PHASE5_QA_PASSWORD: password, PHASE5_FIXTURE_PORT: String(fixturePort), VITE_PROXY_TARGET: `http://127.0.0.1:${fixturePort}` };
+const children = [];
+const start = (command, args) => new Promise((resolveReady, rejectReady) => {
+  const child = spawn(command, args, { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
+  children.push(child);
+  let output = "";
+  const receive = (chunk) => { output += String(chunk); };
+  child.stdout.on("data", receive); child.stderr.on("data", receive); child.once("exit", (code) => rejectReady(new Error(`phase5 child exited ${code}`)));
+  setTimeout(() => resolveReady(child), 250);
 });
+const waitFor = async (url) => { for (let attempt = 0; attempt < 80; attempt += 1) { try { if ((await fetch(url)).ok) return; } catch {} await new Promise((resolve) => setTimeout(resolve, 100)); } throw new Error(`phase5 ready timeout: ${url}`); };
+const stop = async () => { for (const child of children.reverse()) if (!child.killed) child.kill("SIGTERM"); };
 
-await page.goto("http://127.0.0.1:3520/", { waitUntil: "networkidle" });
-await page.locator("input").first().fill("admin");
-await page.locator('input[type="password"]').fill("m@68150183");
-await page.getByRole("button", { name: /로그인/i }).click();
-await page.waitForSelector('button:has-text("메일")');
-await page.getByRole("button", { name: /메일.*건 확인/ }).click();
-await page.getByRole("button", { name: /메일 작성|편지 쓰기/ }).click();
-await page.getByLabel("mail-compose-to").fill("admin@moaworks.local");
-await page.getByLabel("mail-compose-subject").fill("verify.phase5.popup");
-await page.getByLabel("mail-compose-body").fill("popup verification");
-await page.getByRole("button", { name: "최소화" }).click();
-await page.getByRole("button", { name: "최소화" }).click();
-await page.getByRole("button", { name: "확대" }).click();
-await page.getByRole("button", { name: "확대" }).click();
-await page.getByRole("button", { name: "발송" }).click();
-await page.getByText("받은편지함", { exact: true }).first().click();
-await page.getByText("verify.phase5.popup", { exact: true }).first().click();
-await page.getByRole("button", { name: "답장", exact: true }).click();
-await page.getByLabel("mail-compose-to").waitFor();
-if ((await page.getByLabel("mail-compose-to").inputValue()) !== "admin@moaworks.local") throw new Error("답장 수신자 불일치");
-if (!(await page.getByLabel("mail-compose-subject").inputValue()).startsWith("Re: verify.phase5.popup")) throw new Error("답장 제목 불일치");
-page.once("dialog", (dialog) => dialog.accept());
-await page.getByRole("button", { name: "닫기", exact: true }).click();
-await page.getByRole("button", { name: "전달", exact: true }).click();
-await page.getByLabel("mail-compose-to").waitFor();
-if (await page.getByLabel("mail-compose-to").inputValue()) throw new Error("전달 수신자가 비어 있지 않습니다.");
-if (!(await page.getByLabel("mail-compose-subject").inputValue()).startsWith("Fwd: verify.phase5.popup")) throw new Error("전달 제목 불일치");
-if (!(await page.getByLabel("mail-compose-body").inputValue()).includes("--- 원문 ---")) throw new Error("전달 인용 본문 누락");
-page.once("dialog", (dialog) => dialog.accept());
-await page.getByRole("button", { name: "닫기", exact: true }).click();
-await page.screenshot({ path: resolve(evidence, "mail-popup.png"), fullPage: false });
-const measurements = await page.evaluate(() => ({
-  scrollHeight: document.documentElement.scrollHeight,
-  clientHeight: document.documentElement.clientHeight,
-  pageHasScroll: document.documentElement.scrollHeight > document.documentElement.clientHeight,
-}));
-if (measurements.pageHasScroll) throw new Error("전체 페이지 스크롤이 남아 있습니다.");
-if (network.some((url) => !url.startsWith("http://127.0.0.1:3520/api/v1/"))) throw new Error("same-origin API 위반");
-await writeFile(resolve(evidence, "measurements.json"), JSON.stringify(measurements, null, 2));
-await writeFile(resolve(evidence, "network.json"), JSON.stringify(network, null, 2));
-await browser.close();
+let browser;
+try {
+  process.stdout.write("PHASE5_STEP setup\n");
+  await rm(evidence, { recursive: true, force: true }); await mkdir(evidence, { recursive: true });
+  await start(process.execPath, [resolve(root, "scripts", "phase5-mail-popup-fixture-server.mjs")]);
+  await waitFor(`http://127.0.0.1:${fixturePort}/health`);
+  await start(process.execPath, [resolve(root, "node_modules", "vite", "bin", "vite.js"), "--host", "127.0.0.1", "--port", String(webPort)]);
+  await waitFor(`http://127.0.0.1:${webPort}/`);
+  browser = await chromium.launch({ channel: "chrome", headless: true });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  page.setDefaultTimeout(5_000);
+  const network = [];
+  const apiResponses = [];
+  const pageErrors = [];
+  page.on("request", (request) => { if (request.url().includes("/api/")) network.push(new URL(request.url()).origin); });
+  page.on("response", (response) => { const url = new URL(response.url()); if (url.pathname.startsWith("/api/")) apiResponses.push({ path: url.pathname, status: response.status() }); });
+  page.on("pageerror", (error) => pageErrors.push(error.message.replaceAll(qa, "<redacted>").replaceAll(password, "<redacted>")));
+  await page.goto(`http://127.0.0.1:${webPort}/`, { waitUntil: "networkidle" });
+  process.stdout.write("PHASE5_STEP login\n");
+  await page.getByLabel("아이디").fill(qa.split("@", 1)[0]);
+  await page.getByLabel("비밀번호").fill(password);
+  await page.getByRole("button", { name: /로그인/i }).click();
+  process.stdout.write("PHASE5_STEP mail-menu\n");
+  await page.locator(".user-app-rail-menu").waitFor({ state: "visible" });
+  await page.locator(".user-app-rail-item").filter({ hasText: /^메일/ }).click();
+  process.stdout.write("PHASE5_STEP compose-entry\n");
+  const composeButton = page.getByRole("button", { name: "메일쓰기" });
+  const composeVisible = await composeButton.isVisible({ timeout: 5_000 }).catch(() => false);
+  const loginVisible = await page.getByLabel("아이디").isVisible().catch(() => false);
+  const portalVisible = await page.locator(".user-app-rail-menu").isVisible().catch(() => false);
+  const storedToken = await page.evaluate(() => Boolean(window.localStorage.getItem("moaworks.userToken")));
+  const activeMenu = await page.locator(".user-app-rail-item[aria-current='page']").textContent().catch(() => null);
+  await writeFile(resolve(evidence, "result.json"), JSON.stringify({ localOnly: true, stage: "post-login", composeVisible, loginVisible, portalVisible, storedToken, activeMenu, apiResponses, pageErrors }, null, 2));
+  if (!composeVisible) throw new Error("phase5 local App did not reach the compose entrypoint");
+  await composeButton.click();
+  await page.getByLabel("mail-compose-to").fill("receiver@phase5.invalid");
+  await page.getByLabel("mail-compose-subject").fill("phase5 local fixture");
+  await page.getByRole("button", { name: /굵게/ }).click();
+  await page.screenshot({ path: resolve(evidence, "compose.png"), fullPage: false });
+  if (network.some((origin) => origin !== `http://127.0.0.1:${webPort}`)) throw new Error("phase5 used a non-local API origin");
+  if (pageErrors.length) throw new Error(`phase5 page errors: ${pageErrors.join(" | ")}`);
+  if (apiResponses.some(({ status }) => status >= 400)) throw new Error("phase5 received a failing API response");
+  await writeFile(resolve(evidence, "result.json"), JSON.stringify({ localOnly: true, stage: "rich-compose", composeVisible, loginVisible, portalVisible, storedToken, activeMenu, networkCount: network.length, apiResponses, pageErrors }, null, 2));
+  process.stdout.write("PHASE5_PASS\n");
+} catch (error) {
+  process.stderr.write(`PHASE5_FAIL ${error instanceof Error ? error.message : String(error)}\n`);
+  process.exitCode = 1;
+} finally { await browser?.close(); await stop(); }

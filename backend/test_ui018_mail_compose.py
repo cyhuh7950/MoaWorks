@@ -85,6 +85,48 @@ class Ui018MailComposeTests(unittest.TestCase):
         self.assertIn("owner_user_id", migration)
         self.assertIn("status text not null default 'active'", migration)
 
+    def test_operations_manual_uses_actual_inline_migration_registry_constraints_and_index(self):
+        """Break caught: an operator follows a stale migration identifier or cannot verify CID DB invariants."""
+        manual = (Path(__file__).parent.parent / "docs" / "manuals" / "web-mail-rich-text-cid-operations.md").read_text(encoding="utf-8")
+        for required in (
+            "065_mail_inline_attachments.sql",
+            "mail_messages.id",
+            "mail_attachments_content_disposition_check",
+            "mail_attachments_inline_content_id_check",
+            "uq_mail_attachments_message_content_id",
+            '-v mail_id="$QA_MAIL_ID"',
+            'os.environ["QA_EML_PATH"]',
+            "/api/v1/admin/mail-operations/providers/switch",
+            "/api/v1/admin/mail-operations/providers/rollback",
+            "grep -RIlE",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, manual)
+
+    def test_phase5_verifier_uses_local_fixture_environment_and_finally_cleanup(self):
+        """Break caught: phase5 reuses embedded login data or leaves browser/fixture processes behind."""
+        root = Path(__file__).parent.parent / "frontend" / "user-web" / "scripts"
+        verifier = (root / "phase5-mail-popup-verify.mjs").read_text(encoding="utf-8")
+        fixture = root / "phase5-mail-popup-fixture-server.mjs"
+        self.assertTrue(fixture.is_file())
+        fixture_source = fixture.read_text(encoding="utf-8")
+        for required in (
+            "PHASE5_QA_EMAIL",
+            "PHASE5_QA_PASSWORD",
+            "127.0.0.1",
+            "finally",
+            "fixture-server",
+            'locator(".user-app-rail-menu")',
+            'filter({ hasText: /^메일/ })',
+            'stage: "rich-compose"',
+            "pageErrors.length",
+            "apiResponses.some",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, verifier)
+        self.assertIn("randomUUID", fixture_source)
+        self.assertNotIn('accessToken: "', fixture_source)
+
 
 if __name__ == "__main__":
     unittest.main()
