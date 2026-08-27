@@ -198,6 +198,7 @@ import {
 } from "./api";
 import { resolveLocale, supportedLocales, supportedTimezones, type AppLocale } from "./i18n";
 import { MessengerPanel } from "./MessengerPanel";
+import { PersonalAiPanel } from "./PersonalAiPanel";
 import { WorkspacePanels } from "./WorkspacePanels";
 import { SplitView } from "./SplitView";
 import { NotificationCenter } from "./NotificationCenter";
@@ -611,7 +612,7 @@ type ReasonAction = {
 };
 
 type WorkspaceTab = "mail" | "approval" | "messenger";
-type UserPortalMenu = "home" | "mail" | "approval" | "messenger" | "schedule" | "contacts" | "org" | "files" | "alerts" | "notices" | "settings" | "help";
+type UserPortalMenu = "home" | "mail" | "approval" | "messenger" | "ai" | "schedule" | "contacts" | "org" | "files" | "alerts" | "notices" | "settings" | "help";
 type MailboxType = "inbox" | "sent";
 type MailFolderType = MailboxType | "starred" | "unread" | "draft" | "scheduled" | "spam" | "trash" | "localArchive" | string;
 
@@ -5425,6 +5426,7 @@ export default function App() {
       { key: "mail", label: "메일", desc: `${notificationSummary?.unreadCount ?? 0}건 확인` },
       { key: "approval", label: "결재", desc: `${dashboardStats.pendingApprovals}건 대기` },
       { key: "messenger", label: "메신저", desc: "최근 대화" },
+      { key: "ai", label: "AI 채팅", desc: "연결된 LLM과 대화" },
       { key: "schedule", label: "일정", desc: "오늘 일정" },
       { key: "contacts", label: "주소록", desc: "연락처" },
       { key: "org", label: "조직도", desc: "부서/역할" },
@@ -5439,6 +5441,9 @@ export default function App() {
     const renderWorkPanel = () => {
       if (["messenger"].includes(activePortalMenu as string)) {
         return <MessengerPanel token={token} />;
+      }
+      if (activePortalMenu === "ai") {
+        return <PersonalAiPanel token={token} />;
       }
       if (["schedule", "contacts", "org", "files", "settings", "help"].includes(activePortalMenu)) {
         return (

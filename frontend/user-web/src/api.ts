@@ -1,3 +1,10 @@
+import {
+  readPersonalAiChatResponse,
+  readPersonalAiConfig,
+  readPersonalAiConnectionTest,
+  readPersonalAiProviders,
+} from "./personalAi";
+
 const defaultApiBase = "/api/v1";
 const browserApiPathSegmentPattern = /^[A-Za-z0-9._~-]+$/;
 
@@ -107,6 +114,45 @@ export type TranslationResponse = {
   fallbackUsed: boolean;
   items: TranslationItem[];
   executedAt: string;
+};
+
+export type PersonalAiConnectionStatus = "unconfigured" | "untested" | "ready" | "error";
+
+export type PersonalAiProviderOption = {
+  provider: string;
+  label: string;
+  apiKeyRequired: boolean;
+};
+
+export type PersonalAiConfig = {
+  provider: string;
+  model: string;
+  apiKeyConfigured: boolean;
+  connectionStatus: PersonalAiConnectionStatus;
+  lastTestCode: string | null;
+  lastTestedAt: string | null;
+};
+
+export type PersonalAiConnectionTest = {
+  success: boolean;
+  provider: string;
+  model: string;
+  code: string;
+  message: string;
+  connectionStatus: PersonalAiConnectionStatus;
+  testedAt: string;
+};
+
+export type PersonalAiChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+export type PersonalAiChatResponse = {
+  provider: string;
+  model: string;
+  message: PersonalAiChatMessage;
+  generatedAt: string;
 };
 
 export type UiContract = {
@@ -1108,6 +1154,47 @@ export async function fetchTranslationStatus(token: string): Promise<{ available
   return request<{ available: boolean; enabled: boolean; provider: string }>("/translation/status", {
     headers: authHeaders(token),
   });
+}
+
+export async function fetchPersonalAiProviders(token: string): Promise<{ providers: PersonalAiProviderOption[] }> {
+  return readPersonalAiProviders(await request<unknown>("/workspace/personal-ai/providers", {
+    headers: authHeaders(token),
+  }));
+}
+
+export async function fetchPersonalAiConfig(token: string): Promise<PersonalAiConfig> {
+  return readPersonalAiConfig(await request<unknown>("/workspace/personal-ai/config", {
+    headers: authHeaders(token),
+  }));
+}
+
+export async function updatePersonalAiConfig(
+  token: string,
+  payload: { provider: string; model: string; apiKey?: string },
+): Promise<PersonalAiConfig> {
+  return readPersonalAiConfig(await request<unknown>("/workspace/personal-ai/config", {
+    method: "PUT",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }));
+}
+
+export async function testPersonalAiConnection(token: string): Promise<PersonalAiConnectionTest> {
+  return readPersonalAiConnectionTest(await request<unknown>("/workspace/personal-ai/test", {
+    method: "POST",
+    headers: authHeaders(token),
+  }));
+}
+
+export async function sendPersonalAiChat(
+  token: string,
+  payload: { messages: PersonalAiChatMessage[] },
+): Promise<PersonalAiChatResponse> {
+  return readPersonalAiChatResponse(await request<unknown>("/workspace/personal-ai/chat", {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }));
 }
 
 export async function fetchUiContract(): Promise<UiContract> {

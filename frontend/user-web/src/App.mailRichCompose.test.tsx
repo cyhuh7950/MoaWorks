@@ -98,6 +98,8 @@ function installMountedMailFetch() {
     if (url.includes("/mail/delivery/status")) return mountedJson({ provider: { enabled: true, lastTestStatus: "success" } });
     if (url.includes("/mail/preferences/basic")) return mountedJson(mountedBasicPreferences);
     if (url.includes("/mail/signatures")) return mountedJson({ enabled: false, position: "body_bottom", defaultSignatureId: null, version: 1, updatedAt: "2026-08-26T00:00:00Z", signatures: [] });
+    if (url.includes("/workspace/personal-ai/providers")) return mountedJson({ providers: [{ provider: "openai", label: "OpenAI", apiKeyRequired: true }] });
+    if (url.includes("/workspace/personal-ai/config")) return mountedJson({ provider: "openai", model: "gpt-test", apiKeyConfigured: true, connectionStatus: "ready", lastTestCode: "PERSONAL_AI_CONNECTION_READY", lastTestedAt: "2026-08-28T00:00:00Z" });
     if (url.includes("/mail/mail-draft/draft")) return mountedDraftFailure ? mountedJson({ detail: "forced draft failure" }, 500) : mountedJson(mountedDetail);
     if (url.includes("/mail/send")) return mountedSendFailure ? mountedJson({ detail: "forced send failure" }, 500) : mountedJson({ mailId: "mail-outgoing", status: "sent", sentAt: "2026-08-26T00:00:00Z", internalCount: 1, externalCount: 0, queuedCount: 0, blockedCount: 0 });
     return mountedJson({}, 404);
@@ -178,6 +180,22 @@ function requireContract<T>(value: T | undefined): T {
 }
 
 describe("메일 rich compose 재작업 계약", () => {
+  it("mounted App의 메신저 다음 AI 채팅 메뉴가 실제 개인 AI 패널을 연다", async () => {
+    installMountedMailFetch();
+    localStorage.setItem("moaworks.userToken", "test-token");
+    vi.resetModules();
+    const { default: MountedApp } = await import("./App");
+    render(<MountedApp />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /AI 채팅/ }));
+
+    expect(await screen.findByRole("heading", { name: "AI 채팅" })).toBeTruthy();
+    const menuLabels = screen.getAllByRole("button").map((button) => button.textContent?.trim() || "");
+    const messengerIndex = menuLabels.findIndex((label) => label.startsWith("메신저"));
+    const personalAiIndex = menuLabels.findIndex((label) => label.startsWith("AI 채팅"));
+    expect(personalAiIndex).toBe(messengerIndex + 1);
+  });
+
   it("persisted inline attachmentId를 staged uploadId로 payload에 넣지 않고 현재 CID의 새 staged 행만 보낸다", () => {
     const buildAttachments = requireContract(contracts.buildComposeInlineAttachments);
     const attachments = buildAttachments(richDocument, [
