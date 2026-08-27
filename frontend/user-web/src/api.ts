@@ -614,6 +614,7 @@ export type MailComposePayload = {
   composeAction?: "new" | "reply" | "reply_all" | "forward";
   sourceMailId?: string;
   copiedAttachmentIds?: string[];
+  retainedAttachmentIds?: string[];
   confirmed?: boolean;
 };
 

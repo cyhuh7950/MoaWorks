@@ -270,9 +270,24 @@ class MailSendRequest(BaseModel):
 class MailScheduledUpdateRequest(MailSendRequest):
     scheduledAt: datetime
     attachments: list[MailAttachmentMeta] = Field(default_factory=list, max_length=10)
-    sourceMailId: None = None
     copiedAttachmentIds: list[str] = Field(default_factory=list, max_length=0)
+    retainedAttachmentIds: list[str] | None = Field(default=None, max_length=10)
     confirmed: bool = True
+
+    @field_validator("retainedAttachmentIds")
+    @classmethod
+    def validate_retained_attachment_ids(cls, values: list[str] | None) -> list[str] | None:
+        if values is None:
+            return None
+        normalized: list[str] = []
+        for value in values:
+            attachment_id = value.strip()
+            if not attachment_id or len(attachment_id) > 100 or not all(character.isalnum() or character in "_-" for character in attachment_id):
+                raise ValueError("유지할 첨부 식별자가 올바르지 않습니다.")
+            if attachment_id in normalized:
+                raise ValueError("같은 유지 첨부를 중복 지정할 수 없습니다.")
+            normalized.append(attachment_id)
+        return normalized
 
 
 class MailScheduledActionResponse(BaseModel):

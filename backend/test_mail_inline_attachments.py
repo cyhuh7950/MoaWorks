@@ -129,9 +129,13 @@ class PersistenceCursor:
         *,
         existing_attachments: list[dict] | None = None,
         scheduled_message: dict | None = None,
+        owner_company_id: str = "company-a",
+        owner_user_id: str = "user-a",
     ) -> None:
         self.existing_attachments = existing_attachments or []
         self.scheduled_message = scheduled_message
+        self.owner_company_id = owner_company_id
+        self.owner_user_id = owner_user_id
         self.statements: list[tuple[str, tuple[object, ...]]] = []
         self.attachment_inserts: list[tuple[str, tuple[object, ...]]] = []
         self._one: dict | None = None
@@ -178,7 +182,8 @@ class PersistenceCursor:
             }
         elif "select * from mail_messages" in lowered and "for update" in lowered:
             expected_status = "draft" if "status='draft'" in lowered else "scheduled" if "status='scheduled'" in lowered else None
-            self._one = self.scheduled_message if expected_status is None or (self.scheduled_message or {}).get("status") == expected_status else None
+            owner_matches = len(params) < 3 or (params[1], params[2]) == (self.owner_company_id, self.owner_user_id)
+            self._one = self.scheduled_message if owner_matches and (expected_status is None or (self.scheduled_message or {}).get("status") == expected_status) else None
         elif "from mail_attachments" in lowered and lowered.startswith("select"):
             self._many = [dict(row) for row in self.existing_attachments]
         elif lowered.startswith("insert into mail_attachments"):
@@ -239,10 +244,14 @@ class PersistenceDatabase:
         scheduled_message: dict | None = None,
         fail_commit: bool = False,
         fail_rollback: bool = False,
+        owner_company_id: str = "company-a",
+        owner_user_id: str = "user-a",
     ) -> None:
         self.cursor = PersistenceCursor(
             existing_attachments=existing_attachments,
             scheduled_message=scheduled_message,
+            owner_company_id=owner_company_id,
+            owner_user_id=owner_user_id,
         )
         self.connection = PersistenceConnection(
             self.cursor,
@@ -561,6 +570,45 @@ class MailInlinePersistenceTests(unittest.TestCase):
             self.assertEqual(result.mailId, "mail-scheduled")
             self.assertEqual(database.connection.commit_count, 1)
             self.assertTrue(self.metadata(storage, uploaded.uploadId)["attached"])
+
+    def test_scheduled_update_removes_unretained_ordinary_attachment(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            storage = MailAttachmentStorage(Path(temp_dir))
+            kept = storage.stage(self.owner, "kept.txt", "text/plain", b"kept")
+            removed = storage.stage(self.owner, "removed.txt", "text/plain", b"removed")
+            rows = []
+            for attachment_id, uploaded in (("attachment-kept", kept), ("attachment-removed", removed)):
+                storage.mark_attached(uploaded.uploadId)
+                metadata = self.metadata(storage, uploaded.uploadId)
+                rows.append({
+                    "id": attachment_id,
+                    "file_name": uploaded.fileName,
+                    "content_type": uploaded.contentType,
+                    "size_bytes": uploaded.sizeBytes,
+                    "storage_key": metadata["storageKey"],
+                    "content_disposition": "attachment",
+                    "content_id": None,
+                })
+            database = PersistenceDatabase(
+                existing_attachments=rows,
+                scheduled_message={"id": "mail-scheduled", "status": "scheduled"},
+            )
+            service = self.service(storage, database)
+            payload = MailScheduledUpdateRequest(
+                to=["outside@example.net"],
+                subject="remove ordinary",
+                bodyText="body",
+                bodyHtml="<p>body</p>",
+                scheduledAt=self.now + timedelta(hours=2),
+                retainedAttachmentIds=["attachment-kept"],
+            )
+
+            service.update_scheduled_mail(self.owner, "mail-scheduled", payload)
+
+            delete = next((params for query, params in database.cursor.statements if query.lower().startswith("delete from mail_attachments")), None)
+            self.assertEqual(delete, ("mail-scheduled", ["attachment-removed"]))
+            self.assertTrue(self.metadata(storage, kept.uploadId)["attached"])
+            self.assertFalse(self.metadata(storage, removed.uploadId)["attached"])
 
     def test_scheduled_update_rejects_legacy_ordinary_size_or_type_mismatch(self) -> None:
         """Legacy compatibility must still validate the selected sidecar metadata."""
@@ -1284,6 +1332,44 @@ class MailInlinePersistenceTests(unittest.TestCase):
             self.assertTrue(self.metadata(storage, removed.uploadId)["attached"])
             self.assertFalse(self.metadata(storage, staged.uploadId)["attached"])
             self.assertFalse(any(query.lower().startswith("insert into mail_messages") for query, _ in database.cursor.statements))
+
+    def test_draft_update_denies_other_user_and_company_before_mutation(self) -> None:
+        for unauthorized_actor in (
+            actor(user_id="user-b", company_id="company-a"),
+            actor(user_id="user-a", company_id="company-b"),
+        ):
+            with self.subTest(user=unauthorized_actor.userId, company=unauthorized_actor.companyId), TemporaryDirectory() as temp_dir:
+                storage = MailAttachmentStorage(Path(temp_dir))
+                database = PersistenceDatabase(
+                    scheduled_message={"id": "mail-draft", "status": "draft", "attachment_count": 0},
+                    owner_company_id="company-a",
+                    owner_user_id="user-a",
+                )
+                service = self.service(storage, database)
+                payload = MailDraftUpdateRequest(subject="unauthorized", bodyText="body", bodyHtml="<p>body</p>")
+
+                with self.assertRaisesRegex(Exception, "임시보관"):
+                    service.update_draft_mail(unauthorized_actor, "mail-draft", payload)
+
+                self.assertEqual(database.cursor.attachment_inserts, [])
+                self.assertFalse(any(query.lower().startswith("update mail_messages") for query, _ in database.cursor.statements))
+                self.assertEqual(database.connection.commit_count, 0)
+
+    def test_scheduled_update_schema_preserves_derived_source_identity_without_copying(self) -> None:
+        payload = MailScheduledUpdateRequest(
+            to=["recipient@example.test"],
+            subject="derived schedule",
+            bodyText="body",
+            bodyHtml="<p>body</p>",
+            scheduledAt=datetime.now(UTC) + timedelta(days=1),
+            composeAction="forward",
+            sourceMailId="mail-source",
+            copiedAttachmentIds=[],
+        )
+
+        self.assertEqual(payload.composeAction, "forward")
+        self.assertEqual(payload.sourceMailId, "mail-source")
+        self.assertEqual(payload.copiedAttachmentIds, [])
 
     def test_scheduled_update_restores_new_sidecar_on_mark_or_commit_failure(self) -> None:
         """Scheduled attachment staging and DB changes must roll back together on either failure."""

@@ -2330,16 +2330,18 @@ export default function App() {
     const values = (kind: string) => selectedMailDetail.recipients.filter((item) => item.recipientKind === kind).map((item) => item.recipientEmail).join(", ");
     setEditingScheduledMailId(selectedMailDetail.mailId);
     setEditingDraftMailId("");
-    setMailComposePersistedAttachments([]);
+    setMailComposePersistedAttachments(selectedMailDetail.attachments);
     setMailComposeForm(createMailComposeForm({
       to: values("to"), cc: values("cc"), bcc: values("bcc"), subject: selectedMailDetail.subject,
       bodyText: selectedMailDetail.bodyText, bodyHtml: selectedMailDetail.bodyHtml,
       scheduledAt: selectedMailDetail.scheduledAt ? new Date(selectedMailDetail.scheduledAt).toISOString().slice(0, 16) : "",
     }));
-    void hydrateComposeInlineImages(selectedMailDetail.attachments);
+    void hydrateComposeInlineImages(selectedMailDetail.attachments.filter((attachment) => selectedMailDetail.bodyHtml?.includes(`cid:${attachment.contentId ?? ""}`)));
     setMailComposeContext(selectedMailDetail.sourceAction ?? "new");
     setMailComposeSourceMailId(selectedMailDetail.sourceMailId ?? "");
     setMailComposeSourceDetail(null);
+    setSelectedForwardAttachmentIds([]);
+    setMailComposeFiles([]);
     setQuickComposeMode("mail");
   }
 
@@ -3653,11 +3655,11 @@ export default function App() {
         composeAction: mailComposeContext,
         sourceMailId: mailComposeSourceMailId || undefined,
         copiedAttachmentIds: mailComposeContext === "forward"
-          ? selectedForwardAttachmentIds
+          ? [...selectedForwardAttachments, ...selectedForwardInlineAttachments].map((attachment) => attachment.attachmentId)
           : [],
       };
       const response = editingScheduledMailId && action === "schedule"
-        ? await updateScheduledMail(token, editingScheduledMailId, payload)
+        ? await updateScheduledMail(token, editingScheduledMailId, { ...payload, retainedAttachmentIds: mailComposeRetainedAttachments.map((attachment) => attachment.attachmentId) })
         : editingDraftMailId && action === "draft"
           ? await updateMailDraft(token, editingDraftMailId, { ...payload, retainedAttachmentIds: mailComposeRetainedAttachments.map((attachment) => attachment.attachmentId) })
           : action === "draft" ? await saveMailDraft(token, payload) : await sendMail(token, payload);

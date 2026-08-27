@@ -204,6 +204,7 @@ class MailMessengerService:
         now = self._now()
         sidecar_snapshots: dict[str, bytes] = {}
         removed_sidecar_snapshots: dict[str, bytes] = {}
+        requested_retained_ids = None if payload.retainedAttachmentIds is None else set(payload.retainedAttachmentIds)
         with self.db.connect() as connection:
             try:
                 with connection.cursor() as cursor:
@@ -220,29 +221,35 @@ class MailMessengerService:
                         (mail_id,),
                     )
                     existing_attachments = [dict(row) for row in cursor.fetchall()]
+                    existing_attachment_ids = {attachment["id"] for attachment in existing_attachments}
+                    if requested_retained_ids is not None and not requested_retained_ids.issubset(existing_attachment_ids):
+                        raise ValueError("유지할 첨부 파일을 찾을 수 없습니다.")
                     retained_attachments: list[dict] = []
-                    removed_inline_ids: list[str] = []
+                    removed_attachment_ids: list[str] = []
                     for attachment in existing_attachments:
                         attachment = self._canonical_persisted_attachment(actor, attachment)
                         disposition = attachment.get("content_disposition", "attachment")
                         content_id = attachment.get("content_id")
-                        if disposition == "attachment":
+                        explicitly_retained = requested_retained_ids is None or attachment["id"] in requested_retained_ids
+                        if disposition == "attachment" and explicitly_retained:
                             if content_id is not None:
                                 raise ValueError("일반 첨부에는 콘텐츠 ID를 지정할 수 없습니다.")
                             retained_attachments.append(attachment)
                             continue
-                        if disposition != "inline" or not isinstance(content_id, str) or not content_id:
+                        if disposition == "inline" and (not isinstance(content_id, str) or not content_id):
                             raise ValueError("인라인 첨부의 콘텐츠 ID가 올바르지 않습니다.")
-                        if content_id in referenced_content_ids:
+                        if disposition == "inline" and explicitly_retained and content_id in referenced_content_ids:
                             retained_attachments.append(attachment)
-                        else:
-                            upload_id = self.attachment_storage._upload_id_from_storage_key(
-                                attachment["storage_key"]
-                            )
-                            snapshot = self.attachment_storage._metadata_path(upload_id).read_bytes()
-                            sidecar_snapshots.setdefault(upload_id, snapshot)
-                            removed_sidecar_snapshots[upload_id] = snapshot
-                            removed_inline_ids.append(attachment["id"])
+                            continue
+                        if disposition not in {"attachment", "inline"}:
+                            raise ValueError("첨부 파일 표시 방식이 올바르지 않습니다.")
+                        upload_id = self.attachment_storage._upload_id_from_storage_key(
+                            attachment["storage_key"]
+                        )
+                        snapshot = self.attachment_storage._metadata_path(upload_id).read_bytes()
+                        sidecar_snapshots.setdefault(upload_id, snapshot)
+                        removed_sidecar_snapshots[upload_id] = snapshot
+                        removed_attachment_ids.append(attachment["id"])
 
                     all_attachments = retained_attachments + resolved_attachments
                     if len(all_attachments) > settings.mail_attachment_max_files:
@@ -251,10 +258,10 @@ class MailMessengerService:
                         raise ValueError("첨부 파일의 전체 용량 제한을 초과했습니다.")
                     body_html = self._sanitize_resolved_body_html(preflight_body_html, all_attachments)
 
-                    if removed_inline_ids:
+                    if removed_attachment_ids:
                         cursor.execute(
                             "DELETE FROM mail_attachments WHERE message_id = %s AND id = ANY(%s)",
-                            (mail_id, removed_inline_ids),
+                            (mail_id, removed_attachment_ids),
                         )
                     cursor.execute("SELECT LOWER(email) AS email, id FROM users WHERE company_id = %s AND status = 'active'", (actor.companyId,))
                     active_users = {row["email"]: row["id"] for row in cursor.fetchall()}

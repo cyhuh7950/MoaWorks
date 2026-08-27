@@ -26,7 +26,7 @@ vi.mock("./api", async (importOriginal) => {
     fetchInbox: async () => mountedLists.inbox,
     fetchSentMail: async () => emptyList,
     fetchDraftMail: async () => mountedLists.draft,
-    fetchScheduledMail: async () => emptyList,
+    fetchScheduledMail: async () => mountedLists.scheduled,
     fetchMailDetail: async (_token: string, mailId: string) => mountedDetailLoader ? mountedDetailLoader(mailId) : mountedDetail,
     markMailRead: async () => ({ mailId: "mail-read", status: "read", isRead: true }),
     fetchMailDeliveryStatus: async () => ({ provider: { enabled: true, lastTestStatus: "success" } }),
@@ -50,14 +50,18 @@ vi.mock("./api", async (importOriginal) => {
 const mountedSourceMail = {
   mailId: "mail-source", accountId: "account-1", senderUserId: "user-source", senderEmail: "source@example.test", senderDisplayName: "Source",
   subject: "CID 전달 원문", bodyText: "본문 이미지", bodyHtml: '<p>본문 이미지</p><img src="cid:cid-source@moaworks.invalid" alt="원본">', status: "sent", sentAt: "2026-08-26T00:00:00Z", createdAt: "2026-08-26T00:00:00Z", scheduledAt: null, updatedAt: "2026-08-26T00:00:00Z", retentionExpiresAt: null,
-  attachmentCount: 2, canViewReadReceipts: false, effectiveReadPolicy: { blockRemoteImages: false, disableRiskyTags: true }, recipients: [], externalDeliveries: [],
+  attachmentCount: 2, canViewReadReceipts: false, effectiveReadPolicy: { blockRemoteImages: false, disableRiskyTags: true }, recipients: [
+    { recipientEmail: "recipient@example.test", recipientUserId: null, recipientKind: "to", isRead: null, isStarred: null, receivedAt: null, readAt: null },
+  ], externalDeliveries: [],
   attachments: [
     { attachmentId: "attachment-inline", fileName: "source.png", contentType: "image/png", sizeBytes: 4, disposition: "inline", contentId: "cid-source@moaworks.invalid", previewPath: "/mail/preview/source" },
     { attachmentId: "attachment-file", fileName: "source.pdf", contentType: "application/pdf", sizeBytes: 4, disposition: "attachment", contentId: null, previewPath: null },
   ],
 };
 
-type MountedMailDetail = typeof mountedSourceMail & {
+type MountedMailDetail = Omit<typeof mountedSourceMail, "scheduledAt" | "status"> & {
+  scheduledAt: string | null;
+  status: string;
   sourceAction?: "reply" | "reply_all" | "forward" | null;
   sourceMailId?: string | null;
 };
@@ -71,6 +75,7 @@ let mountedDraftFailure = false;
 const mountedLists = {
   inbox: { mails: [{ mailId: "mail-source", accountId: "account-1", senderEmail: "source@example.test", senderDisplayName: "Source", subject: "CID 전달 원문", previewText: "본문 이미지", status: "sent", isRead: true, isStarred: false, sentAt: "2026-08-26T00:00:00Z", receivedAt: "2026-08-26T00:00:00Z", scheduledAt: null, retentionExpiresAt: null, attachmentCount: 2, category: "primary" }], total: 1, limit: 50, offset: 0, hasMore: false },
   draft: { mails: [], total: 0, limit: 50, offset: 0, hasMore: false } as { mails: Array<Record<string, unknown>>; total: number; limit: number; offset: number; hasMore: boolean },
+  scheduled: { mails: [], total: 0, limit: 50, offset: 0, hasMore: false } as { mails: Array<Record<string, unknown>>; total: number; limit: number; offset: number; hasMore: boolean },
 };
 
 const mountedBasicPreferences = { senderDisplayMode: "name", blockRemoteImages: false, disableRiskyTags: true, showRouteCountry: false, includeSpamTrashInSearch: false, showListPreview: true, recipientInputMode: "autocomplete", confirmBeforeSend: false, saveSentCopy: true, readReceiptEnabled: false, editorMode: "html", composeMode: "popup", messageEncoding: "utf-8", draftReminderEnabled: false, senderDisplayName: "Tester", replyToEmail: null, vcardEnabled: false, translationTargetLocale: "en", translationComposeMode: "preview", version: 1, updatedAt: "2026-08-26T00:00:00Z" } as const;
@@ -114,6 +119,7 @@ afterEach(() => {
   mountedDraftFailure = false;
   mountedLists.inbox = { mails: [{ mailId: "mail-source", accountId: "account-1", senderEmail: "source@example.test", senderDisplayName: "Source", subject: "CID 전달 원문", previewText: "본문 이미지", status: "sent", isRead: true, isStarred: false, sentAt: "2026-08-26T00:00:00Z", receivedAt: "2026-08-26T00:00:00Z", scheduledAt: null, retentionExpiresAt: null, attachmentCount: 2, category: "primary" }], total: 1, limit: 50, offset: 0, hasMore: false };
   mountedLists.draft = { mails: [], total: 0, limit: 50, offset: 0, hasMore: false };
+  mountedLists.scheduled = { mails: [], total: 0, limit: 50, offset: 0, hasMore: false };
 });
 
 type ComposeContracts = typeof app & {
@@ -295,6 +301,14 @@ describe("메일 rich compose 재작업 계약", () => {
   });
 
   it("mounted App 전달은 재오픈된 CID마다 outgoing attachment/copy를 포함해야 한다", async () => {
+    mountedDetail = {
+      ...mountedSourceMail,
+      attachmentCount: 3,
+      attachments: [
+        ...mountedSourceMail.attachments,
+        { attachmentId: "attachment-inline-unreferenced", fileName: "unused.png", contentType: "image/png", sizeBytes: 4, disposition: "inline", contentId: "cid-unused@moaworks.invalid", previewPath: "/mail/preview/unused" },
+      ],
+    };
     const requests = installMountedMailFetch();
     localStorage.setItem("moaworks.userToken", "test-token");
 
@@ -313,6 +327,39 @@ describe("메일 rich compose 재작업 계약", () => {
     const payload = JSON.parse(String(send?.init?.body));
     expect(payload.bodyHtml).toContain("cid:cid-source@moaworks.invalid");
     expect(payload.copiedAttachmentIds).toContain("attachment-inline");
+    expect(payload.copiedAttachmentIds).toContain("attachment-file");
+    expect(payload.copiedAttachmentIds).not.toContain("attachment-inline-unreferenced");
+  });
+
+  it("mounted 파생 scheduled 편집은 source identity와 기존 첨부를 보존한다", async () => {
+    mountedDetail = {
+      ...mountedSourceMail,
+      mailId: "mail-scheduled",
+      status: "scheduled",
+      subject: "전달 파생 예약",
+      sourceAction: "forward",
+      sourceMailId: "mail-source",
+      scheduledAt: "2026-08-28T09:00:00Z",
+    };
+    mountedLists.scheduled = { mails: [{ mailId: "mail-scheduled", accountId: "account-1", senderEmail: "tester@example.test", senderDisplayName: "Tester", subject: "전달 파생 예약", previewText: "본문 이미지", status: "scheduled", isRead: true, isStarred: false, sentAt: null, receivedAt: null, scheduledAt: "2026-08-28T09:00:00Z", retentionExpiresAt: null, attachmentCount: 2, category: "primary" }], total: 1, limit: 50, offset: 0, hasMore: false };
+    const requests = installMountedMailFetch();
+    localStorage.setItem("moaworks.userToken", "test-token");
+    vi.resetModules();
+    const { default: MountedApp } = await import("./App");
+    render(<MountedApp />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /예약메일함/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /전달 파생 예약/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "예약 수정" }));
+    expect(screen.getByText("source.pdf")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "예약 발송" }));
+
+    await waitFor(() => expect(requests.some((request) => request.url.includes("/mail/mail-scheduled/scheduled"))).toBe(true));
+    const payload = JSON.parse(String(requests.find((request) => request.url.includes("/mail/mail-scheduled/scheduled"))?.init?.body));
+    expect(payload.composeAction).toBe("forward");
+    expect(payload.sourceMailId).toBe("mail-source");
+    expect(payload.copiedAttachmentIds).toEqual([]);
+    expect(payload.retainedAttachmentIds).toEqual(["attachment-inline", "attachment-file"]);
   });
 
   it("mounted draft 편집은 현재 문서에서 제거한 persisted inline을 retainedAttachmentIds에 남기면 안 된다", async () => {
