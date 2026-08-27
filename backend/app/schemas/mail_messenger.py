@@ -314,8 +314,9 @@ class MailDraftUpdateRequest(MailDraftRequest):
             attachment_id = value.strip()
             if not attachment_id or len(attachment_id) > 100 or not all(character.isalnum() or character in "_-" for character in attachment_id):
                 raise ValueError("유지할 첨부 식별자가 올바르지 않습니다.")
-            if attachment_id not in normalized:
-                normalized.append(attachment_id)
+            if attachment_id in normalized:
+                raise ValueError("같은 유지 첨부를 중복 지정할 수 없습니다.")
+            normalized.append(attachment_id)
         return normalized
 
 
@@ -1156,6 +1157,8 @@ class MailDetailResponse(BaseModel):
     subject: str
     bodyText: str
     bodyHtml: str | None = None
+    sourceMailId: str | None = None
+    sourceAction: Literal["reply", "reply_all", "forward"] | None = None
     status: str
     sentAt: datetime | None = None
     scheduledAt: datetime | None = None

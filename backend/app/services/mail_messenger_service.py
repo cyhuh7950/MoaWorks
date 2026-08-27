@@ -1361,6 +1361,9 @@ class MailMessengerService:
         self,
         actor: AuthUserSummary,
         attachment: dict,
+        *,
+        expected_owner_company_id: str | None = None,
+        expected_owner_user_id: str | None = None,
     ) -> dict:
         storage_key = attachment.get("storage_key")
         disposition = attachment.get("content_disposition") or "attachment"
@@ -1401,9 +1404,11 @@ class MailMessengerService:
             disposition,
             content_id,
         )
+        owner_company_id = expected_owner_company_id or actor.companyId
+        owner_user_id = expected_owner_user_id or actor.userId
         if (
-            metadata.get("ownerCompanyId") != actor.companyId
-            or metadata.get("ownerUserId") != actor.userId
+            metadata.get("ownerCompanyId") != owner_company_id
+            or metadata.get("ownerUserId") != owner_user_id
             or metadata.get("attached") is not True
             or canonical_size != len(content)
             or canonical != persisted
@@ -2814,15 +2819,6 @@ class MailMessengerService:
             raise ValueError("같은 첨부 파일을 중복 사용할 수 없습니다.")
         if sum(item["size_bytes"] for item in resolved_attachments) > settings.mail_attachment_max_total_bytes:
             raise ValueError("첨부 파일의 전체 용량 제한을 초과했습니다.")
-        payload = payload.model_copy(
-            update={
-                "bodyHtml": self._sanitize_resolved_body_html(
-                    payload.bodyHtml,
-                    resolved_attachments,
-                )
-            }
-        )
-
         now = self._now()
         mail_id = self._new_id("mailmsg")
         sent_at = now if status_value == "sent" else None
@@ -2844,6 +2840,14 @@ class MailMessengerService:
                     raise ValueError("첨부 파일 개수 제한을 초과했습니다.")
                 if sum(item["size_bytes"] for item in resolved_attachments) > settings.mail_attachment_max_total_bytes:
                     raise ValueError("첨부 파일의 전체 용량 제한을 초과했습니다.")
+                payload = payload.model_copy(
+                    update={
+                        "bodyHtml": self._sanitize_resolved_body_html(
+                            payload.bodyHtml,
+                            resolved_attachments,
+                        )
+                    }
+                )
 
                 recipient_pairs = [("to", item) for item in payload.to] + [("cc", item) for item in payload.cc] + [("bcc", item) for item in payload.bcc]
                 if status_value != "draft":
@@ -3294,11 +3298,13 @@ class MailMessengerService:
             return []
         cursor.execute(
             """
-            SELECT id, file_name, content_type, size_bytes, storage_key,
-                   content_disposition, content_id
-            FROM mail_attachments
-            WHERE message_id = %s
-              AND id = ANY(%s)
+            SELECT a.id, a.file_name, a.content_type, a.size_bytes, a.storage_key,
+                   a.content_disposition, a.content_id,
+                   m.company_id AS owner_company_id, m.sender_user_id AS owner_user_id
+            FROM mail_attachments a
+            JOIN mail_messages m ON m.id = a.message_id
+            WHERE a.message_id = %s
+              AND a.id = ANY(%s)
             """,
             (source_mail_id, attachment_ids),
         )
@@ -3314,7 +3320,12 @@ class MailMessengerService:
 
     def _clone_source_attachment(self, actor: AuthUserSummary, source_attachment: dict) -> dict:
         """Copy a forward source as a new owned stage without reusing an attachment ID."""
-        source_attachment = self._canonical_persisted_attachment(actor, source_attachment)
+        source_attachment = self._canonical_persisted_attachment(
+            actor,
+            source_attachment,
+            expected_owner_company_id=source_attachment.get("owner_company_id"),
+            expected_owner_user_id=source_attachment.get("owner_user_id"),
+        )
         if source_attachment.get("content_disposition", "attachment") != "inline":
             return self.attachment_storage.clone(
                 actor,
@@ -3547,6 +3558,8 @@ class MailMessengerService:
             subject=message["subject"],
             bodyText=message["body_text"],
             bodyHtml=message["body_html"],
+            sourceMailId=message.get("source_message_id"),
+            sourceAction=message.get("source_action"),
             status=message["status"],
             sentAt=message["sent_at"],
             scheduledAt=message.get("scheduled_at"),

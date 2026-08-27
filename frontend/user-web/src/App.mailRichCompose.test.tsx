@@ -8,7 +8,10 @@ import * as outgoingTranslation from "./mailOutgoingTranslation";
 import { projectMailDocument } from "./mailRichText";
 
 vi.mock("./MailRichTextEditor", () => ({
-  MailRichTextEditor: ({ onChange }: { onChange: (document: JSONContent) => void }) => <button type="button" onClick={() => onChange({ type: "doc", content: [{ type: "paragraph" }] })}>본문 이미지 제거</button>,
+  MailRichTextEditor: ({ onChange }: { onChange: (document: JSONContent) => void }) => <>
+    <button aria-label="본문" type="button" onClick={() => onChange({ type: "doc", content: [{ type: "paragraph" }] })}>본문 이미지 제거</button>
+    <button type="button" onClick={() => onChange({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "테스트 본문" }] }] })}>본문 입력</button>
+  </>,
 }));
 
 vi.mock("./api", async (importOriginal) => {
@@ -24,9 +27,20 @@ vi.mock("./api", async (importOriginal) => {
     fetchSentMail: async () => emptyList,
     fetchDraftMail: async () => mountedLists.draft,
     fetchScheduledMail: async () => emptyList,
-    fetchMailDetail: async () => mountedDetail,
+    fetchMailDetail: async (_token: string, mailId: string) => mountedDetailLoader ? mountedDetailLoader(mailId) : mountedDetail,
+    markMailRead: async () => ({ mailId: "mail-read", status: "read", isRead: true }),
     fetchMailDeliveryStatus: async () => ({ provider: { enabled: true, lastTestStatus: "success" } }),
     fetchMailBasicPreferences: async () => mountedBasicPreferences,
+    fetchMailAttachmentPreview: async () => mountedPreviewLoader ? mountedPreviewLoader() : Promise.reject(new Error("preview unavailable")),
+    fetchTranslationStatus: async () => ({ available: true, enabled: true, provider: "fixture" }),
+    requestTranslation: async (payload: { texts: Array<{ text: string; sourceLocale: string; targetLocale: string }> }) => mountedTranslationLoader
+      ? mountedTranslationLoader(payload)
+      : ({ requestId: "translation-default", provider: "fixture", providerAvailable: true, fallbackUsed: false, items: payload.texts.map((item) => ({ ...item, originalText: item.text, translatedText: `EN:${item.text}`, provider: "fixture", source: "provider" })), executedAt: "2026-08-26T00:00:00Z" }),
+    sendMail: async (...args: Parameters<typeof actual.sendMail>) => {
+      mountedSendCalls += 1;
+      if (mountedSendFailure) throw new Error("forced send failure");
+      return actual.sendMail(...args);
+    },
     fetchMailSignatures: async () => ({ enabled: false, position: "body_bottom", defaultSignatureId: null, version: 1, updatedAt: "2026-08-26T00:00:00Z", signatures: [] }),
     fetchMailFolders: async () => ({ folders: [] }),
     fetchMailTags: async () => ({ tags: [] }),
@@ -43,7 +57,17 @@ const mountedSourceMail = {
   ],
 };
 
-let mountedDetail = mountedSourceMail;
+type MountedMailDetail = typeof mountedSourceMail & {
+  sourceAction?: "reply" | "reply_all" | "forward" | null;
+  sourceMailId?: string | null;
+};
+let mountedDetail: MountedMailDetail = mountedSourceMail;
+let mountedDetailLoader: ((mailId: string) => Promise<MountedMailDetail>) | null = null;
+let mountedPreviewLoader: (() => Promise<Blob>) | null = null;
+let mountedTranslationLoader: ((payload: { texts: Array<{ text: string; sourceLocale: string; targetLocale: string }> }) => Promise<Record<string, unknown>>) | null = null;
+let mountedSendFailure = false;
+let mountedSendCalls = 0;
+let mountedDraftFailure = false;
 const mountedLists = {
   inbox: { mails: [{ mailId: "mail-source", accountId: "account-1", senderEmail: "source@example.test", senderDisplayName: "Source", subject: "CID 전달 원문", previewText: "본문 이미지", status: "sent", isRead: true, isStarred: false, sentAt: "2026-08-26T00:00:00Z", receivedAt: "2026-08-26T00:00:00Z", scheduledAt: null, retentionExpiresAt: null, attachmentCount: 2, category: "primary" }], total: 1, limit: 50, offset: 0, hasMore: false },
   draft: { mails: [], total: 0, limit: 50, offset: 0, hasMore: false } as { mails: Array<Record<string, unknown>>; total: number; limit: number; offset: number; hasMore: boolean },
@@ -69,8 +93,8 @@ function installMountedMailFetch() {
     if (url.includes("/mail/delivery/status")) return mountedJson({ provider: { enabled: true, lastTestStatus: "success" } });
     if (url.includes("/mail/preferences/basic")) return mountedJson(mountedBasicPreferences);
     if (url.includes("/mail/signatures")) return mountedJson({ enabled: false, position: "body_bottom", defaultSignatureId: null, version: 1, updatedAt: "2026-08-26T00:00:00Z", signatures: [] });
-    if (url.includes("/mail/mail-draft/draft")) return mountedJson(mountedDetail);
-    if (url.includes("/mail/send")) return mountedJson({ mailId: "mail-outgoing", status: "sent", sentAt: "2026-08-26T00:00:00Z", internalCount: 1, externalCount: 0, queuedCount: 0, blockedCount: 0 });
+    if (url.includes("/mail/mail-draft/draft")) return mountedDraftFailure ? mountedJson({ detail: "forced draft failure" }, 500) : mountedJson(mountedDetail);
+    if (url.includes("/mail/send")) return mountedSendFailure ? mountedJson({ detail: "forced send failure" }, 500) : mountedJson({ mailId: "mail-outgoing", status: "sent", sentAt: "2026-08-26T00:00:00Z", internalCount: 1, externalCount: 0, queuedCount: 0, blockedCount: 0 });
     return mountedJson({}, 404);
   }));
   return requests;
@@ -82,6 +106,13 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   mountedDetail = mountedSourceMail;
+  mountedDetailLoader = null;
+  mountedPreviewLoader = null;
+  mountedTranslationLoader = null;
+  mountedSendFailure = false;
+  mountedSendCalls = 0;
+  mountedDraftFailure = false;
+  mountedLists.inbox = { mails: [{ mailId: "mail-source", accountId: "account-1", senderEmail: "source@example.test", senderDisplayName: "Source", subject: "CID 전달 원문", previewText: "본문 이미지", status: "sent", isRead: true, isStarred: false, sentAt: "2026-08-26T00:00:00Z", receivedAt: "2026-08-26T00:00:00Z", scheduledAt: null, retentionExpiresAt: null, attachmentCount: 2, category: "primary" }], total: 1, limit: 50, offset: 0, hasMore: false };
   mountedLists.draft = { mails: [], total: 0, limit: 50, offset: 0, hasMore: false };
 });
 
@@ -337,5 +368,165 @@ describe("메일 rich compose 재작업 계약", () => {
 
     await waitFor(() => expect(requests.some((request) => request.url.includes("/mail/mail-draft/draft"))).toBe(true));
     expect(JSON.parse(String(requests.find((request) => request.url.includes("/mail/mail-draft/draft"))?.init?.body)).retainedAttachmentIds).not.toContain("attachment-ordinary");
+  });
+
+  it("mounted reply/forward derived draft는 composeAction과 sourceMailId를 재저장 payload에 보존한다", async () => {
+    mountedDetail = {
+      ...mountedSourceMail,
+      mailId: "mail-draft",
+      status: "draft",
+      subject: "전달 파생 초안",
+      sourceAction: "forward",
+      sourceMailId: "mail-source",
+      attachments: [],
+    };
+    mountedLists.draft = { mails: [{ mailId: "mail-draft", accountId: "account-1", senderEmail: "tester@example.test", senderDisplayName: "Tester", subject: "전달 파생 초안", previewText: "본문", status: "draft", isRead: true, isStarred: false, sentAt: null, receivedAt: null, scheduledAt: null, retentionExpiresAt: null, attachmentCount: 0, category: "primary" }], total: 1, limit: 50, offset: 0, hasMore: false };
+    const requests = installMountedMailFetch();
+    localStorage.setItem("moaworks.userToken", "test-token");
+    vi.resetModules();
+    const { default: MountedApp } = await import("./App");
+    render(<MountedApp />);
+    fireEvent.click(await screen.findByRole("button", { name: /임시보관함/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /전달 파생 초안/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "초안 편집" }));
+    fireEvent.click(screen.getByRole("button", { name: "임시저장" }));
+
+    await waitFor(() => expect(requests.some((request) => request.url.includes("/mail/mail-draft/draft"))).toBe(true));
+    const payload = JSON.parse(String(requests.find((request) => request.url.includes("/mail/mail-draft/draft"))?.init?.body));
+    expect(payload.composeAction).toBe("forward");
+    expect(payload.sourceMailId).toBe("mail-source");
+  });
+
+  it("mounted retained-inline-only draft는 preview 실패 전에도 같은 ID로 저장한다", async () => {
+    mountedDetail = {
+      ...mountedSourceMail,
+      mailId: "mail-draft",
+      status: "draft",
+      subject: "",
+      bodyText: "",
+      bodyHtml: '<img src="cid:cid-source@moaworks.invalid">',
+      attachments: [
+        { attachmentId: "attachment-inline", fileName: "source.png", contentType: "image/png", sizeBytes: 4, disposition: "inline", contentId: "cid-source@moaworks.invalid", previewPath: "/mail/preview/source" },
+      ],
+    };
+    mountedLists.draft = { mails: [{ mailId: "mail-draft", accountId: "account-1", senderEmail: "tester@example.test", senderDisplayName: "Tester", subject: "첨부만 있는 초안", previewText: "", status: "draft", isRead: true, isStarred: false, sentAt: null, receivedAt: null, scheduledAt: null, retentionExpiresAt: null, attachmentCount: 1, category: "primary" }], total: 1, limit: 50, offset: 0, hasMore: false };
+    const requests = installMountedMailFetch();
+    localStorage.setItem("moaworks.userToken", "test-token");
+    vi.resetModules();
+    const { default: MountedApp } = await import("./App");
+    render(<MountedApp />);
+    fireEvent.click(await screen.findByRole("button", { name: /임시보관함/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /첨부만 있는 초안/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "초안 편집" }));
+    fireEvent.click(screen.getByRole("button", { name: "임시저장" }));
+
+    await waitFor(() => expect(requests.some((request) => request.url.includes("/mail/mail-draft/draft"))).toBe(true));
+    const payload = JSON.parse(String(requests.find((request) => request.url.includes("/mail/mail-draft/draft"))?.init?.body));
+    expect(payload.retainedAttachmentIds).toEqual(["attachment-inline"]);
+  });
+
+  it("mounted App은 작성 내용이 바뀐 뒤 도착한 번역 응답을 적용하지 않는다", async () => {
+    let resolveTranslation!: (value: Record<string, unknown>) => void;
+    let requestedTexts: Array<{ text: string; sourceLocale: string; targetLocale: string }> = [];
+    mountedTranslationLoader = (payload) => {
+      requestedTexts = payload.texts;
+      return new Promise((resolve) => { resolveTranslation = resolve; });
+    };
+    const requests = installMountedMailFetch();
+    localStorage.setItem("moaworks.userToken", "test-token");
+    vi.resetModules();
+    const { default: MountedApp } = await import("./App");
+    render(<MountedApp />);
+    fireEvent.click(await screen.findByRole("button", { name: "메일 작성" }));
+    const subject = screen.getByLabelText("mail-compose-subject");
+    fireEvent.change(subject, { target: { value: "번역 원문" } });
+    fireEvent.click(await screen.findByRole("button", { name: "번역 미리보기" }));
+    fireEvent.change(subject, { target: { value: "사용자가 수정한 제목" } });
+    resolveTranslation({ requestId: "translation-stale", provider: "fixture", providerAvailable: true, fallbackUsed: false, items: requestedTexts.map((item) => ({ ...item, originalText: item.text, translatedText: `EN:${item.text}`, provider: "fixture", source: "provider" })), executedAt: "2026-08-26T00:00:00Z" });
+    await screen.findByRole("button", { name: "번역 적용" });
+    fireEvent.click(screen.getByRole("button", { name: "번역 적용" }));
+
+    expect((screen.getByLabelText("mail-compose-subject") as HTMLInputElement).value).toBe("사용자가 수정한 제목");
+    const alerts = await screen.findAllByRole("alert");
+    expect(alerts.some((alert) => alert.textContent?.includes("번역 미리보기 뒤 원문이 변경되었습니다."))).toBe(true);
+  });
+
+  it("mounted App은 늦게 끝난 이전 상세 조회로 현재 선택을 덮어쓰지 않는다", async () => {
+    const oldDetail = { ...mountedSourceMail, mailId: "mail-old", subject: "이전 메일" };
+    const newDetail = { ...mountedSourceMail, mailId: "mail-new", subject: "현재 메일" };
+    let resolveOld!: (value: typeof mountedSourceMail) => void;
+    let resolveNew!: (value: typeof mountedSourceMail) => void;
+    mountedLists.inbox = {
+      mails: [
+        { ...mountedLists.inbox.mails[0], mailId: "mail-old", subject: "이전 메일" },
+        { ...mountedLists.inbox.mails[0], mailId: "mail-new", subject: "현재 메일" },
+      ], total: 2, limit: 50, offset: 0, hasMore: false,
+    };
+    mountedDetailLoader = (mailId) => new Promise((resolve) => {
+      if (mailId === "mail-old") resolveOld = resolve;
+      else resolveNew = resolve;
+    });
+    installMountedMailFetch();
+    localStorage.setItem("moaworks.userToken", "test-token");
+    vi.resetModules();
+    const { default: MountedApp } = await import("./App");
+    render(<MountedApp />);
+    fireEvent.click(await screen.findByRole("button", { name: /이전 메일/ }));
+    await waitFor(() => expect(resolveOld).toBeTypeOf("function"));
+    const currentSubjects = await screen.findAllByText("현재 메일");
+    const currentRowButton = currentSubjects.map((element) => element.closest("button.user-mail-row__main")).find(Boolean);
+    expect(currentRowButton).toBeTruthy();
+    fireEvent.click(currentRowButton as HTMLButtonElement);
+    await waitFor(() => expect(resolveNew).toBeTypeOf("function"));
+    resolveNew(newDetail);
+    await screen.findByRole("heading", { name: "현재 메일" });
+    resolveOld(oldDetail);
+    await Promise.resolve();
+
+    expect(screen.getByRole("heading", { name: "현재 메일" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "이전 메일" })).toBeNull();
+  });
+
+  it("mounted App은 발송 실패 시 작성 폼을 닫거나 초기화하지 않는다", async () => {
+    mountedSendFailure = true;
+    installMountedMailFetch();
+    localStorage.setItem("moaworks.userToken", "test-token");
+    vi.resetModules();
+    const { default: MountedApp } = await import("./App");
+    render(<MountedApp />);
+    fireEvent.click(await screen.findByRole("button", { name: "메일 작성" }));
+    fireEvent.change(screen.getByLabelText("mail-compose-to"), { target: { value: "teammate@example.test" } });
+    fireEvent.change(screen.getByLabelText("mail-compose-subject"), { target: { value: "실패 후 보존" } });
+    fireEvent.click(screen.getByRole("button", { name: "본문 입력" }));
+    fireEvent.click(screen.getByRole("button", { name: "즉시 발송" }));
+
+    await waitFor(() => expect(mountedSendCalls).toBe(1));
+    expect((screen.getByLabelText("mail-compose-to") as HTMLInputElement).value).toBe("teammate@example.test");
+    expect((screen.getByLabelText("mail-compose-subject") as HTMLInputElement).value).toBe("실패 후 보존");
+    expect(screen.getByRole("heading", { name: "새 메일" })).toBeTruthy();
+  });
+
+  it("mounted App은 draft 저장 실패 시 persisted blob과 편집 상태를 유지한다", async () => {
+    mountedDraftFailure = true;
+    mountedPreviewLoader = async () => new Blob(["image"], { type: "image/png" });
+    const revoke = vi.fn();
+    const NativeURL = URL;
+    vi.stubGlobal("URL", Object.assign(class extends NativeURL {}, { createObjectURL: vi.fn(() => "blob:persisted-inline"), revokeObjectURL: revoke }));
+    mountedDetail = { ...mountedSourceMail, mailId: "mail-draft", status: "draft", subject: "저장 실패 보존" };
+    mountedLists.draft = { mails: [{ mailId: "mail-draft", accountId: "account-1", senderEmail: "tester@example.test", senderDisplayName: "Tester", subject: "저장 실패 보존", previewText: "본문", status: "draft", isRead: true, isStarred: false, sentAt: null, receivedAt: null, scheduledAt: null, retentionExpiresAt: null, attachmentCount: 2, category: "primary" }], total: 1, limit: 50, offset: 0, hasMore: false };
+    const requests = installMountedMailFetch();
+    localStorage.setItem("moaworks.userToken", "test-token");
+    vi.resetModules();
+    const { default: MountedApp } = await import("./App");
+    render(<MountedApp />);
+    fireEvent.click(await screen.findByRole("button", { name: /임시보관함/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /저장 실패 보존/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "초안 편집" }));
+    fireEvent.click(screen.getByRole("button", { name: "임시저장" }));
+
+    await waitFor(() => expect(requests.some((request) => request.url.includes("/mail/mail-draft/draft"))).toBe(true));
+    expect((screen.getByLabelText("mail-compose-subject") as HTMLInputElement).value).toBe("저장 실패 보존");
+    expect(screen.getByRole("heading", { name: "새 메일" })).toBeTruthy();
+    expect(revoke).not.toHaveBeenCalled();
   });
 });

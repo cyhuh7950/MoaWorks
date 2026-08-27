@@ -1724,6 +1724,7 @@ export default function App() {
   const mailComposeInlineImagesRef = useRef<MailComposeInlineImage[]>([]);
   const mailComposeInlineImageRequestRef = useRef(0);
   const [mailComposeSourceDetail, setMailComposeSourceDetail] = useState<MailDetail | null>(null);
+  const [mailComposeSourceMailId, setMailComposeSourceMailId] = useState("");
   const [editingScheduledMailId, setEditingScheduledMailId] = useState("");
   const [editingDraftMailId, setEditingDraftMailId] = useState("");
   const [mailComposePersistedAttachments, setMailComposePersistedAttachments] = useState<MailAttachmentView[]>([]);
@@ -1739,6 +1740,12 @@ export default function App() {
     attachment.disposition !== "inline" || Boolean(attachment.contentId && mailComposeReferencedContentIds.has(attachment.contentId))
   ));
   const mailComposeRetainedOrdinaryAttachments = mailComposeRetainedAttachments.filter((attachment) => attachment.disposition !== "inline");
+  const mailComposeStagedInlineImages = mailComposeInlineImages.filter((image) => image.origin === "staged");
+  const selectedForwardInlineAttachments = mailComposeSourceDetail?.attachments.filter((item) => (
+    item.disposition === "inline"
+    && selectedForwardAttachmentIds.includes(item.attachmentId)
+    && Boolean(item.contentId && mailComposeReferencedContentIds.has(item.contentId))
+  )) ?? [];
 
   async function refreshHeaderProfile() {
     if (!token || !me) return;
@@ -1753,11 +1760,12 @@ export default function App() {
     setHeaderProfile(profile); setHeaderProfilePhotoUrl(nextUrl);
   }
   const mailComposeNewAttachmentBytes = mailComposeFiles.reduce((sum, item) => sum + item.file.size, 0);
-  const mailComposeInlineImageBytes = mailComposeInlineImages.reduce((sum, item) => sum + item.sizeBytes, 0);
+  const mailComposeInlineImageBytes = mailComposeStagedInlineImages.reduce((sum, item) => sum + item.sizeBytes, 0);
   const mailComposeSourceAttachmentBytes = selectedForwardAttachments.reduce((sum, item) => sum + item.sizeBytes, 0);
-  const mailComposeRetainedOrdinaryAttachmentBytes = mailComposeRetainedOrdinaryAttachments.reduce((sum, item) => sum + item.sizeBytes, 0);
-  const mailComposeAttachmentBytes = mailComposeNewAttachmentBytes + mailComposeInlineImageBytes + mailComposeSourceAttachmentBytes + mailComposeRetainedOrdinaryAttachmentBytes;
-  const mailComposeAttachmentCount = mailComposeFiles.length + mailComposeInlineImages.length + selectedForwardAttachments.length + mailComposeRetainedOrdinaryAttachments.length;
+  const mailComposeSourceInlineAttachmentBytes = selectedForwardInlineAttachments.reduce((sum, item) => sum + item.sizeBytes, 0);
+  const mailComposeRetainedAttachmentBytes = mailComposeRetainedAttachments.reduce((sum, item) => sum + item.sizeBytes, 0);
+  const mailComposeAttachmentBytes = mailComposeNewAttachmentBytes + mailComposeInlineImageBytes + mailComposeSourceAttachmentBytes + mailComposeSourceInlineAttachmentBytes + mailComposeRetainedAttachmentBytes;
+  const mailComposeAttachmentCount = mailComposeFiles.length + mailComposeStagedInlineImages.length + selectedForwardAttachments.length + selectedForwardInlineAttachments.length + mailComposeRetainedAttachments.length;
   const [recipientPickerLoading, setRecipientPickerLoading] = useState(false);
   const [mailError, setMailError] = useState("");
   const [mailLoading, setMailLoading] = useState(false);
@@ -2052,6 +2060,7 @@ export default function App() {
     setMailComposeFiles([]);
     clearMailComposeInlineImages();
     setMailComposeSourceDetail(null);
+    setMailComposeSourceMailId("");
     setEditingScheduledMailId("");
     setEditingDraftMailId("");
     setMailComposePersistedAttachments([]);
@@ -2328,6 +2337,9 @@ export default function App() {
       scheduledAt: selectedMailDetail.scheduledAt ? new Date(selectedMailDetail.scheduledAt).toISOString().slice(0, 16) : "",
     }));
     void hydrateComposeInlineImages(selectedMailDetail.attachments);
+    setMailComposeContext(selectedMailDetail.sourceAction ?? "new");
+    setMailComposeSourceMailId(selectedMailDetail.sourceMailId ?? "");
+    setMailComposeSourceDetail(null);
     setQuickComposeMode("mail");
   }
 
@@ -2339,7 +2351,8 @@ export default function App() {
     setMailComposePersistedAttachments(selectedMailDetail.attachments);
     setMailComposeForm(createMailComposeForm({ to: values("to"), cc: values("cc"), bcc: values("bcc"), subject: selectedMailDetail.subject, bodyText: selectedMailDetail.bodyText, bodyHtml: selectedMailDetail.bodyHtml, scheduledAt: "" }));
     void hydrateComposeInlineImages(selectedMailDetail.attachments.filter((attachment) => selectedMailDetail.bodyHtml?.includes(`cid:${attachment.contentId ?? ""}`)));
-    setMailComposeContext("new");
+    setMailComposeContext(selectedMailDetail.sourceAction ?? "new");
+    setMailComposeSourceMailId(selectedMailDetail.sourceMailId ?? "");
     setMailComposeSourceDetail(null);
     setMailComposeFiles([]);
     setQuickComposeMode("mail");
@@ -3638,7 +3651,7 @@ export default function App() {
         bodyText: mailComposeForm.bodyText,
         attachments, scheduledAt, confirmed,
         composeAction: mailComposeContext,
-        sourceMailId: mailComposeSourceDetail?.mailId,
+        sourceMailId: mailComposeSourceMailId || undefined,
         copiedAttachmentIds: mailComposeContext === "forward"
           ? selectedForwardAttachmentIds
           : [],
@@ -3661,6 +3674,7 @@ export default function App() {
       setMailComposeFiles([]);
       clearMailComposeInlineImages();
       setMailComposeSourceDetail(null);
+      setMailComposeSourceMailId("");
       setEditingScheduledMailId("");
       setEditingDraftMailId("");
       setMailComposePersistedAttachments([]);
@@ -3703,6 +3717,7 @@ export default function App() {
     }));
     setMailComposeContext(mode);
     setMailComposeSourceDetail(selectedMailDetail);
+    setMailComposeSourceMailId(selectedMailDetail.mailId);
     setSelectedForwardAttachmentIds(
       mode === "forward"
         ? selectedMailDetail.attachments.map((item) => item.attachmentId).filter(Boolean)
@@ -3723,6 +3738,7 @@ export default function App() {
     setMailComposeFiles([]);
     clearMailComposeInlineImages();
     setMailComposeSourceDetail(null);
+    setMailComposeSourceMailId("");
     setEditingScheduledMailId("");
     setEditingDraftMailId("");
     setMailComposePersistedAttachments([]);
@@ -4063,6 +4079,7 @@ export default function App() {
       setSelectedRoomId("");
       setMailComposeFiles([]);
       setMailComposeSourceDetail(null);
+      setMailComposeSourceMailId("");
       setSelectedForwardAttachmentIds([]);
       setRecipientPickerTarget(null);
       setSelectedRoomDetail(null);

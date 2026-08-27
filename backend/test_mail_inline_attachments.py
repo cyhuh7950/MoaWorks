@@ -465,6 +465,67 @@ class MailInlinePersistenceTests(unittest.TestCase):
             self.assertEqual(copied["content_id"], source.contentId)
             self.assertNotEqual(copied["upload_id"], source.uploadId)
 
+    def test_received_mail_forward_validates_source_sidecar_against_original_owner(self) -> None:
+        """A recipient may forward an accessible sender-owned inline attachment."""
+        with TemporaryDirectory() as temp_dir:
+            storage = MailAttachmentStorage(Path(temp_dir))
+            source = storage.stage_inline_image(self.owner, "received.png", "image/png", image_bytes("PNG"))
+            storage.mark_attached(source.uploadId)
+            source_metadata = self.metadata(storage, source.uploadId)
+            recipient = actor(user_id="user-recipient")
+            service = self.service(storage, PersistenceDatabase())
+
+            copied = service._clone_source_attachment(  # type: ignore[attr-defined]
+                recipient,
+                {
+                    "file_name": source.fileName,
+                    "content_type": source.contentType,
+                    "size_bytes": source.sizeBytes,
+                    "storage_key": source_metadata["storageKey"],
+                    "content_disposition": "inline",
+                    "content_id": source.contentId,
+                    "owner_company_id": self.owner.companyId,
+                    "owner_user_id": self.owner.userId,
+                },
+            )
+
+            copied_metadata = self.metadata(storage, copied["upload_id"])
+            self.assertEqual(copied["content_id"], source.contentId)
+            self.assertEqual(copied_metadata["ownerUserId"], recipient.userId)
+
+    def test_forward_sanitizes_cid_after_source_inline_copy_is_resolved(self) -> None:
+        """The final copied attachment set, not only staged uploads, defines allowed body CIDs."""
+        with TemporaryDirectory() as temp_dir:
+            storage = MailAttachmentStorage(Path(temp_dir))
+            source = storage.stage_inline_image(self.owner, "source.png", "image/png", image_bytes("PNG"))
+            storage.mark_attached(source.uploadId)
+            source_metadata = self.metadata(storage, source.uploadId)
+            database = PersistenceDatabase()
+            service = self.service(storage, database)
+            service._fetch_source_attachments = lambda *_args, **_kwargs: [{  # type: ignore[attr-defined]
+                "file_name": source.fileName,
+                "content_type": source.contentType,
+                "size_bytes": source.sizeBytes,
+                "storage_key": source_metadata["storageKey"],
+                "content_disposition": "inline",
+                "content_id": source.contentId,
+                "owner_company_id": self.owner.companyId,
+                "owner_user_id": self.owner.userId,
+            }]
+            payload = MailDraftRequest(
+                subject="forward cid",
+                bodyText="forward cid",
+                bodyHtml=f'<p>forward cid</p><img src="cid:{source.contentId}">',
+                composeAction="forward",
+                sourceMailId="mail-source",
+                copiedAttachmentIds=["attachment-inline"],
+            )
+
+            service.save_draft(self.owner, payload)
+
+            self.assertEqual(len(database.cursor.attachment_inserts), 1)
+            self.assertEqual(database.cursor.attachment_inserts[0][1][-3:-1], ("inline", source.contentId))
+
     def test_scheduled_update_accepts_legacy_ordinary_sidecar_without_inline_fields(self) -> None:
         """Legacy ordinary rows remain reusable without Task 4 canonical inline fields."""
         with TemporaryDirectory() as temp_dir:
@@ -1065,6 +1126,164 @@ class MailInlinePersistenceTests(unittest.TestCase):
                 service.update_draft_mail(self.owner, "mail-sent", payload)
 
             self.assertEqual(database.cursor.attachment_inserts, [])
+
+    def test_draft_update_rejects_unknown_retained_id_without_mutation(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            storage = MailAttachmentStorage(Path(temp_dir))
+            persisted = storage.stage_inline_image(self.owner, "persisted.png", "image/png", image_bytes("PNG"))
+            storage.mark_attached(persisted.uploadId)
+            metadata = self.metadata(storage, persisted.uploadId)
+            database = PersistenceDatabase(
+                existing_attachments=[{
+                    "id": "attachment-persisted", "file_name": persisted.fileName,
+                    "content_type": persisted.contentType, "size_bytes": persisted.sizeBytes,
+                    "storage_key": metadata["storageKey"], "content_disposition": "inline",
+                    "content_id": persisted.contentId,
+                }],
+                scheduled_message={"id": "mail-draft", "status": "draft", "attachment_count": 1},
+            )
+            service = self.service(storage, database)
+            payload = MailDraftUpdateRequest(
+                subject="foreign retain",
+                bodyText="body",
+                bodyHtml=f'<img src="cid:{persisted.contentId}">',
+                retainedAttachmentIds=["attachment-foreign"],
+            )
+
+            with self.assertRaisesRegex(ValueError, "유지할 첨부"):
+                service.update_draft_mail(self.owner, "mail-draft", payload)
+
+            self.assertEqual(database.cursor.attachment_inserts, [])
+            self.assertTrue(self.metadata(storage, persisted.uploadId)["attached"])
+            self.assertFalse(any(query.lower().startswith("update mail_messages") for query, _ in database.cursor.statements))
+
+    def test_draft_update_removes_unretained_and_inserts_new_without_second_message_row(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            storage = MailAttachmentStorage(Path(temp_dir))
+            kept = storage.stage_inline_image(self.owner, "kept.png", "image/png", image_bytes("PNG"))
+            removed = storage.stage_inline_image(self.owner, "removed.png", "image/png", image_bytes("PNG"))
+            for uploaded in (kept, removed):
+                storage.mark_attached(uploaded.uploadId)
+            staged = storage.stage_inline_image(self.owner, "staged.png", "image/png", image_bytes("PNG"))
+            rows = []
+            for attachment_id, uploaded in (("attachment-kept", kept), ("attachment-removed", removed)):
+                metadata = self.metadata(storage, uploaded.uploadId)
+                rows.append({
+                    "id": attachment_id, "file_name": uploaded.fileName,
+                    "content_type": uploaded.contentType, "size_bytes": uploaded.sizeBytes,
+                    "storage_key": metadata["storageKey"], "content_disposition": "inline",
+                    "content_id": uploaded.contentId,
+                })
+            database = PersistenceDatabase(existing_attachments=rows, scheduled_message={"id": "mail-draft", "status": "draft", "attachment_count": 2})
+            service = self.service(storage, database)
+            payload = MailDraftUpdateRequest(
+                subject="replace attachment",
+                bodyText="body",
+                bodyHtml=f'<img src="cid:{kept.contentId}"><img src="cid:{staged.contentId}">',
+                attachments=[self.attachment_meta(staged)],
+                retainedAttachmentIds=["attachment-kept"],
+            )
+
+            service.update_draft_mail(self.owner, "mail-draft", payload)
+
+            delete = next((params for query, params in database.cursor.statements if query.lower().startswith("delete from mail_attachments")), None)
+            self.assertEqual(delete, ("mail-draft", ["attachment-removed"]))
+            self.assertEqual(len(database.cursor.attachment_inserts), 1)
+            self.assertFalse(any(query.lower().startswith("insert into mail_messages") for query, _ in database.cursor.statements))
+            self.assertTrue(self.metadata(storage, kept.uploadId)["attached"])
+            self.assertFalse(self.metadata(storage, removed.uploadId)["attached"])
+            self.assertTrue(self.metadata(storage, staged.uploadId)["attached"])
+
+    def test_draft_update_enforces_combined_retained_count_and_size_before_mutation(self) -> None:
+        for limit_kind in ("count", "size"):
+            with self.subTest(limit_kind=limit_kind), TemporaryDirectory() as temp_dir:
+                storage = MailAttachmentStorage(Path(temp_dir))
+                persisted = storage.stage_inline_image(self.owner, "persisted.png", "image/png", image_bytes("PNG"))
+                storage.mark_attached(persisted.uploadId)
+                metadata = self.metadata(storage, persisted.uploadId)
+                database = PersistenceDatabase(
+                    existing_attachments=[{
+                        "id": "attachment-persisted", "file_name": persisted.fileName,
+                        "content_type": persisted.contentType, "size_bytes": persisted.sizeBytes,
+                        "storage_key": metadata["storageKey"], "content_disposition": "inline",
+                        "content_id": persisted.contentId,
+                    }],
+                    scheduled_message={"id": "mail-draft", "status": "draft", "attachment_count": 1},
+                )
+                service = self.service(storage, database)
+                payload = MailDraftUpdateRequest(
+                    subject="limit",
+                    bodyText="body",
+                    bodyHtml=f'<img src="cid:{persisted.contentId}">',
+                    retainedAttachmentIds=["attachment-persisted"],
+                )
+                max_files = 0 if limit_kind == "count" else 10
+                max_bytes = 1 if limit_kind == "size" else 25 * 1024 * 1024
+                with patch("app.services.mail_messenger_service.settings.mail_attachment_max_files", max_files), patch("app.services.mail_messenger_service.settings.mail_attachment_max_total_bytes", max_bytes):
+                    with self.assertRaisesRegex(ValueError, "제한"):
+                        service.update_draft_mail(self.owner, "mail-draft", payload)
+
+                self.assertEqual(database.cursor.attachment_inserts, [])
+                self.assertTrue(self.metadata(storage, persisted.uploadId)["attached"])
+
+    def test_draft_update_rejects_retained_inline_without_matching_body_cid(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            storage = MailAttachmentStorage(Path(temp_dir))
+            persisted = storage.stage_inline_image(self.owner, "persisted.png", "image/png", image_bytes("PNG"))
+            storage.mark_attached(persisted.uploadId)
+            metadata = self.metadata(storage, persisted.uploadId)
+            database = PersistenceDatabase(
+                existing_attachments=[{
+                    "id": "attachment-persisted", "file_name": persisted.fileName,
+                    "content_type": persisted.contentType, "size_bytes": persisted.sizeBytes,
+                    "storage_key": metadata["storageKey"], "content_disposition": "inline",
+                    "content_id": persisted.contentId,
+                }],
+                scheduled_message={"id": "mail-draft", "status": "draft", "attachment_count": 1},
+            )
+            service = self.service(storage, database)
+            payload = MailDraftUpdateRequest(
+                subject="cid mismatch", bodyText="body", bodyHtml="<p>body</p>",
+                retainedAttachmentIds=["attachment-persisted"],
+            )
+
+            with self.assertRaisesRegex(ValueError, "CID"):
+                service.update_draft_mail(self.owner, "mail-draft", payload)
+
+            self.assertEqual(database.cursor.attachment_inserts, [])
+            self.assertTrue(self.metadata(storage, persisted.uploadId)["attached"])
+
+    def test_draft_update_commit_failure_restores_removed_and_new_sidecars(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            storage = MailAttachmentStorage(Path(temp_dir))
+            removed = storage.stage_inline_image(self.owner, "removed.png", "image/png", image_bytes("PNG"))
+            storage.mark_attached(removed.uploadId)
+            removed_metadata = self.metadata(storage, removed.uploadId)
+            staged = storage.stage_inline_image(self.owner, "new.png", "image/png", image_bytes("PNG"))
+            database = PersistenceDatabase(
+                existing_attachments=[{
+                    "id": "attachment-removed", "file_name": removed.fileName,
+                    "content_type": removed.contentType, "size_bytes": removed.sizeBytes,
+                    "storage_key": removed_metadata["storageKey"], "content_disposition": "inline",
+                    "content_id": removed.contentId,
+                }],
+                scheduled_message={"id": "mail-draft", "status": "draft", "attachment_count": 1},
+                fail_commit=True,
+            )
+            service = self.service(storage, database)
+            payload = MailDraftUpdateRequest(
+                subject="rollback", bodyText="body",
+                bodyHtml=f'<img src="cid:{staged.contentId}">',
+                attachments=[self.attachment_meta(staged)], retainedAttachmentIds=[],
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "commit failed"):
+                service.update_draft_mail(self.owner, "mail-draft", payload)
+
+            self.assertEqual(database.connection.rollback_count, 1)
+            self.assertTrue(self.metadata(storage, removed.uploadId)["attached"])
+            self.assertFalse(self.metadata(storage, staged.uploadId)["attached"])
+            self.assertFalse(any(query.lower().startswith("insert into mail_messages") for query, _ in database.cursor.statements))
 
     def test_scheduled_update_restores_new_sidecar_on_mark_or_commit_failure(self) -> None:
         """Scheduled attachment staging and DB changes must roll back together on either failure."""

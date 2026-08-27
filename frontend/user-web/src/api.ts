@@ -579,6 +579,8 @@ export type MailDetail = {
   subject: string;
   bodyText: string;
   bodyHtml: string | null;
+  sourceMailId?: string | null;
+  sourceAction?: "reply" | "reply_all" | "forward" | null;
   status: string;
   sentAt: string | null;
   createdAt: string;

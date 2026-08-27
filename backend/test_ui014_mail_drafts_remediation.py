@@ -113,6 +113,18 @@ class MailDraftsRemediationTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             request_type()
 
+    def test_draft_update_rejects_duplicate_retained_attachment_ids(self):
+        request_type = getattr(mail_messenger, "MailDraftUpdateRequest", None)
+
+        self.assertIsNotNone(request_type)
+        with self.assertRaisesRegex(ValueError, "중복"):
+            request_type(
+                retainedAttachmentIds=[
+                    "attachment-persisted",
+                    "attachment-persisted",
+                ]
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
