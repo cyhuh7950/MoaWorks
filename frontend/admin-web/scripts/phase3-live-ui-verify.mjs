@@ -3,8 +3,13 @@ import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join, resolve } from "node:path";
 
+import { loadAdminQaCredentials } from "./phase3-live-ui-credentials.mjs";
+
 const appUrl = process.env.MOAWORKS_ADMIN_URL ?? "http://127.0.0.1:3510/";
 const chromePath = process.env.CHROME_PATH ?? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+const { login: qaLogin, password: qaPassword } = loadAdminQaCredentials();
+const qaLoginLiteral = JSON.stringify(qaLogin);
+const qaPasswordLiteral = JSON.stringify(qaPassword);
 const root = resolve(process.cwd(), "../..");
 const runId = `${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}-${process.pid}-${Math.random().toString(36).slice(2, 7)}`;
 const evidenceDir = resolve(root, "docs", "evidence", `trust-recovery-phase3-live-ui-${runId}`);
@@ -252,7 +257,7 @@ async function main() {
     await client.send("Page.navigate", { url: appUrl });
     await waitFor("document.readyState === 'complete'", "admin-web document");
     await waitFor("document.querySelector('input[type=password]') !== null", "admin login form");
-    await evaluate(`(() => { const inputs = [...document.querySelectorAll('input')]; const login = inputs.find((item) => item.type === 'text' || item.type === 'email'); const password = inputs.find((item) => item.type === 'password'); const set = (input, value) => { const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value'); descriptor.set.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); }; set(login, 'admin'); set(password, 'm@68150183'); const form = document.querySelector('.login-card form'); const submit = form?.querySelector('button[type=submit]'); if (!submit) throw new Error('Login submit button not found.'); submit.click(); return true; })()`);
+    await evaluate(`(() => { const inputs = [...document.querySelectorAll('input')]; const login = inputs.find((item) => item.type === 'text' || item.type === 'email'); const password = inputs.find((item) => item.type === 'password'); const set = (input, value) => { const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value'); descriptor.set.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); }; set(login, ${qaLoginLiteral}); set(password, ${qaPasswordLiteral}); const form = document.querySelector('.login-card form'); const submit = form?.querySelector('button[type=submit]'); if (!submit) throw new Error('Login submit button not found.'); submit.click(); return true; })()`);
     await waitFor("document.querySelector('.console-layout') !== null", "admin console");
     sessionToken = await evaluate("localStorage.getItem('moaworks.adminToken') || ''");
     if (!sessionToken) throw new Error("Admin session token was not stored after login.");
