@@ -192,6 +192,23 @@ class Ui019ReplyForwardTests(unittest.TestCase):
                 ["attach_inline"],
             )
 
+    def test_forward_save_boundary_explicitly_allows_inline_source_for_cid_copy(self):
+        """Break caught: forward save silently drops a body-referenced inline source attachment."""
+        service = MailMessengerService.__new__(MailMessengerService)
+        service._fetch_accessible_mail = lambda cursor, actor, mail_id: {"mail_id": mail_id}
+        rows = service._fetch_source_attachments(
+            FakeCursor([{
+                "id": "attach_inline", "file_name": "body.png", "content_type": "image/png", "size_bytes": 8,
+                "storage_key": "mail/uploads/" + "d" * 32 + ".bin", "content_disposition": "inline", "content_id": "body@moaworks.invalid",
+            }]),
+            self.actor(),
+            "mailmsg_source",
+            ["attach_inline"],
+            include_inline=True,
+        )
+        self.assertEqual(rows[0]["content_disposition"], "inline")
+        self.assertEqual(rows[0]["content_id"], "body@moaworks.invalid")
+
     def test_migration_and_service_persist_source_relation_without_storage_reuse(self):
         root = Path(__file__).parent
         migration = (root / "migrations" / "023_mail_reply_forward.sql").read_text(encoding="utf-8").lower()

@@ -1,6 +1,16 @@
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 from app.services.mail_delivery_service import MailDeliveryPolicy, MailDeliveryWorker, RelayDeliveryError, mask_delivery_error
+from app.services.mail_mime_builder import build_mail_message
+from app.services.mail_transports import DeliveryReceipt, MailProviderRoutingAdapter
+
+
+class CaptureTransport:
+ def __init__(self, provider_key): self.provider_key,self.calls=provider_key,[]
+ def send(self,message,**kwargs):
+  self.calls.append((build_mail_message(message),kwargs))
+  return DeliveryReceipt(self.provider_key,"smtp://test.invalid:25",True)
 class Adapter:
  def __init__(self,error=None): self.error,self.calls=error,[]
  def send(self,envelope,provider):
@@ -25,4 +35,20 @@ class Ui021Tests(unittest.TestCase):
   self.assertEqual(MailDeliveryWorker("w",Adapter()).deliver_claimed(job,provider).status,"sent")
   retry=MailDeliveryWorker("w",Adapter(RelayDeliveryError("token=secret",True))).deliver_claimed(job,provider); self.assertEqual(retry.status,"retry_pending"); self.assertNotIn("secret",retry.error_message or "")
   self.assertNotIn("hunter2",mask_delivery_error("password=hunter2 user@example.com"))
+
+ def test_provider_routing_builds_identical_cid_mime_tree_for_self_hosted_and_oci(self):
+  """Break caught: routing bypasses the common MIME builder or loses CID disposition."""
+  with TemporaryDirectory() as directory:
+   inline_path=Path(directory)/"inline.png"; inline_path.write_bytes(b"png")
+   file_path=Path(directory)/"report.txt"; file_path.write_bytes(b"report")
+   self_hosted=CaptureTransport("self_hosted"); oci=CaptureTransport("oci_email_delivery")
+   adapter=MailProviderRoutingAdapter(self_hosted_transport=self_hosted,oci_transport=oci)
+   envelope={"mail_id":"mail-1","queue_id":"queue-1","sender_email":"sender@moaworks.sinsan.kr","recipient_email":"person@example.net","subject":"CID","body_text":"plain","body_html":'<img src="cid:cid-1@moaworks.invalid">',"attachments":[{"path":str(inline_path),"file_name":"inline.png","content_type":"image/png","size_bytes":3,"content_disposition":"inline","content_id":"cid-1@moaworks.invalid"},{"path":str(file_path),"file_name":"report.txt","content_type":"text/plain","size_bytes":6,"content_disposition":"attachment","content_id":None}]}
+   for provider_type in ("self_hosted","oci_email_delivery"):
+    provider={"provider_type":provider_type,"from_address":"sender@moaworks.sinsan.kr","password":"test-only","relay_host":"smtp.test.invalid","relay_port":587}
+    adapter.send(envelope,provider)
+   for message,_kwargs in (self_hosted.calls[0],oci.calls[0]):
+    self.assertEqual(message.get_content_type(),"multipart/mixed")
+    self.assertTrue(any(part.get("Content-ID")=="<cid-1@moaworks.invalid>" and part.get_content_disposition()=="inline" for part in message.walk()))
+    self.assertTrue(any(part.get_filename()=="report.txt" and part.get_content_disposition()=="attachment" for part in message.walk()))
 if __name__=="__main__": unittest.main()

@@ -8,7 +8,7 @@ import unittest
 
 from pydantic import ValidationError
 
-from app.schemas.mail_messenger import MailAttachmentMeta, MailDraftRequest, MailSendRequest
+from app.schemas.mail_messenger import MailAttachmentMeta, MailDraftRequest, MailDraftUpdateRequest, MailSendRequest
 from app.services.mail_attachment_storage import MailAttachmentStorage
 
 
@@ -22,6 +22,13 @@ class Ui018MailComposeTests(unittest.TestCase):
         self.assertEqual(draft.subject, "초안")
         with self.assertRaises(ValidationError):
             MailDraftRequest(subject="", bodyText="", to=[], cc=[], bcc=[], attachments=[])
+
+    def test_draft_update_accepts_retained_only_content_but_rejects_duplicate_retained_id(self):
+        """Break caught: a reopened inline-only draft is rejected or duplicate persisted IDs reach reconciliation."""
+        retained_only = MailDraftUpdateRequest(retainedAttachmentIds=["attachment_inline"])
+        self.assertEqual(retained_only.retainedAttachmentIds, ["attachment_inline"])
+        with self.assertRaises(ValidationError):
+            MailDraftUpdateRequest(retainedAttachmentIds=["attachment_inline", "attachment_inline"])
 
     def test_send_schedule_requires_aware_future_window(self):
         now = datetime.now(UTC)
