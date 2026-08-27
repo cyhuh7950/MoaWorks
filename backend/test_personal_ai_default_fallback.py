@@ -78,11 +78,17 @@ def test_no_valid_admin_returns_empty_safe_view_not_legacy_key_shaped_model():
     assert view.provider == ""
 
 
-@pytest.mark.parametrize("prefix", ["csk-", "sk-", "gsk_", "AIza", "Bearer "])
-def test_key_shaped_model_is_rejected_without_save_or_echo(prefix):
+@pytest.mark.parametrize("value", [
+    "csk-" + "fixture-not-a-real-key",
+    "sk-" + "fixture-not-a-real-key",
+    "gsk_" + "fixture-not-a-real-key",
+    "AIza" + "fixture-not-a-real-key",
+    "Bearer " + "fixture-not-a-real-key",
+    "Q7vN2mK9xR4pL8sT6wY3cD5fH1jB0uE9aC2g",
+])
+def test_key_shaped_model_is_rejected_without_save_or_echo(value):
     service, store, _ = make_service()
     before = deepcopy(store.configs)
-    value = prefix + "fixture-not-a-real-key"
     payload = PersonalAiConfigUpdate(provider="cerebras", model=value)
     with pytest.raises(HTTPException) as error:
         service.update_config(personal_ai_actor(), payload)

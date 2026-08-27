@@ -55,9 +55,18 @@ class PersonalAiService:
     def update_config(
         self, actor: AuthUserSummary, payload: PersonalAiConfigUpdate
     ) -> PersonalAiConfigView:
-        return PersonalAiConfigView(
-            **self.store.save_config(actor, payload), configSource="personal"
-        )
+        if not self._is_model_name(payload.model):
+            # 고정 오류만 반환하여 잘못 입력한 자격증명이 응답에 되비치지 않게 한다.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "PERSONAL_AI_MODEL_INVALID",
+                    "userMessage": "모델 칸에는 API 키가 아닌 모델 이름을 선택해 주세요.",
+                    "adminMessage": "personal AI model name is invalid",
+                },
+            )
+        self.store.save_config(actor, payload)
+        return self.get_config(actor)
 
     def list_models(
         self, actor: AuthUserSummary, payload: PersonalAiModelListRequest
@@ -197,14 +206,13 @@ class PersonalAiService:
         self, actor: AuthUserSummary, *, include_secret: bool = False
     ) -> dict[str, Any]:
         personal = self.store.get_config(actor, include_secret=include_secret)
-        if str(personal.get("provider") or ""):
+        if self._is_configured(personal, include_secret=include_secret):
             return {**personal, "configSource": "personal"}
 
         company_default = self.company_llm_store.get_policy(
             actor.companyId, include_secret=include_secret
         )
         provider = str(company_default.get("provider") or "")
-        profile = PROVIDER_PROFILES.get(provider)
         model = str(company_default.get("model") or "")
         api_key = str(company_default.get("apiKey") or "") if include_secret else ""
         configured = bool(company_default.get("apiKeyConfigured"))
@@ -212,12 +220,13 @@ class PersonalAiService:
             configured = bool(api_key)
         valid = bool(
             company_default.get("enabled")
-            and profile is not None
-            and model
-            and (not profile["apiKeyRequired"] or configured)
+            and self._is_configured(company_default, include_secret=include_secret)
         )
         if not valid:
-            return {**personal, "configSource": "unconfigured"}
+            empty = PersonalAiConfigView().model_dump()
+            if include_secret:
+                empty["apiKey"] = ""
+            return empty
         result: dict[str, Any] = {
             "provider": provider,
             "model": model,
@@ -236,6 +245,36 @@ class PersonalAiService:
                 }
             )
         return result
+
+    @staticmethod
+    def _is_model_name(value: Any) -> bool:
+        if not isinstance(value, str) or not value.strip():
+            return False
+        normalized = value.strip()
+        # 알려진 자격증명 형식은 레거시 model 값에서도 화면과 Provider에 전달하지 않는다.
+        if normalized.lower().startswith(("csk-", "sk-", "gsk_", "aiza", "bearer ")):
+            return False
+        # 접두사를 알 수 없는 긴 혼합 영숫자 토큰도 모델명보다 자격증명일 가능성이 높다.
+        if (
+            len(normalized) >= 32
+            and normalized.isalnum()
+            and any(character.islower() for character in normalized)
+            and any(character.isupper() for character in normalized)
+            and any(character.isdigit() for character in normalized)
+        ):
+            return False
+        return True
+
+    @classmethod
+    def _is_configured(cls, config: dict[str, Any], *, include_secret: bool) -> bool:
+        profile = PROVIDER_PROFILES.get(str(config.get("provider") or ""))
+        if profile is None or not cls._is_model_name(config.get("model")):
+            return False
+        key_present = (
+            bool(str(config.get("apiKey") or "").strip())
+            if include_secret else bool(config.get("apiKeyConfigured"))
+        )
+        return not profile["apiKeyRequired"] or key_present
 
     @staticmethod
     def _require_configured(config: dict[str, Any]) -> None:

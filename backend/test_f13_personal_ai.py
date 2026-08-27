@@ -1030,6 +1030,7 @@ class PersonalAiServiceTest(unittest.TestCase):
 
         service = PersonalAiService(
             store=self._configured_store(status_value="untested", api_key=""),
+            company_llm_store=InMemoryCompanyLlmStore({}),
             provider_client=FixturePersonalAiProviderClient(),
         )
 

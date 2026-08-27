@@ -122,7 +122,7 @@ class MailMessengerService:
                         m.id AS mail_id,
                         m.sender_account_id AS account_id,
                         m.sender_email,
-                        m.sender_display_name,
+                        COALESCE(NULLIF(BTRIM(m.sender_display_name), ''), (SELECT NULLIF(BTRIM(sender.name), '') FROM users sender WHERE sender.company_id = m.company_id AND LOWER(sender.email) = LOWER(m.sender_email) LIMIT 1), '') AS sender_display_name,
                         m.subject,
                         m.status,
                         m.sent_at,
@@ -161,7 +161,7 @@ class MailMessengerService:
                         m.id AS mail_id,
                         m.sender_account_id AS account_id,
                         m.sender_email,
-                        m.sender_display_name,
+                        COALESCE(NULLIF(BTRIM(m.sender_display_name), ''), (SELECT NULLIF(BTRIM(sender.name), '') FROM users sender WHERE sender.company_id = m.company_id AND LOWER(sender.email) = LOWER(m.sender_email) LIMIT 1), '') AS sender_display_name,
                         m.subject,
                         m.status,
                         m.sent_at,
@@ -475,7 +475,7 @@ class MailMessengerService:
                         m.id AS mail_id,
                         m.sender_account_id AS account_id,
                         m.sender_email,
-                        m.sender_display_name,
+                        COALESCE(NULLIF(BTRIM(m.sender_display_name), ''), (SELECT NULLIF(BTRIM(sender.name), '') FROM users sender WHERE sender.company_id = m.company_id AND LOWER(sender.email) = LOWER(m.sender_email) LIMIT 1), '') AS sender_display_name,
                         m.subject,
                         m.status,
                         m.sent_at,
@@ -543,7 +543,7 @@ class MailMessengerService:
                         m.id AS mail_id,
                         m.sender_account_id AS account_id,
                         m.sender_email,
-                        m.sender_display_name,
+                        COALESCE(NULLIF(BTRIM(m.sender_display_name), ''), (SELECT NULLIF(BTRIM(sender.name), '') FROM users sender WHERE sender.company_id = m.company_id AND LOWER(sender.email) = LOWER(m.sender_email) LIMIT 1), '') AS sender_display_name,
                         m.subject,
                         LEFT(COALESCE(m.body_text, ''), 240) AS preview_text,
                         m.status,
@@ -608,7 +608,7 @@ class MailMessengerService:
                         m.id AS mail_id,
                         m.sender_account_id AS account_id,
                         m.sender_email,
-                        m.sender_display_name,
+                        COALESCE(NULLIF(BTRIM(m.sender_display_name), ''), (SELECT NULLIF(BTRIM(sender.name), '') FROM users sender WHERE sender.company_id = m.company_id AND LOWER(sender.email) = LOWER(m.sender_email) LIMIT 1), '') AS sender_display_name,
                         m.subject,
                         LEFT(COALESCE(m.body_text, ''), 240) AS preview_text,
                         m.status,
@@ -1875,7 +1875,7 @@ class MailMessengerService:
             recipient_params.extend([pattern, pattern, pattern])
             sender_params.extend([pattern, pattern, pattern])
         union_sql = f"""
-            SELECT m.id AS mail_id, m.sender_account_id AS account_id, m.sender_email, m.sender_display_name, m.subject,
+            SELECT m.id AS mail_id, m.sender_account_id AS account_id, m.sender_email, COALESCE(NULLIF(BTRIM(m.sender_display_name), ''), (SELECT NULLIF(BTRIM(sender.name), '') FROM users sender WHERE sender.company_id = m.company_id AND LOWER(sender.email) = LOWER(m.sender_email) LIMIT 1), '') AS sender_display_name, m.subject,
               LEFT(COALESCE(m.body_text, ''), 240) AS preview_text, m.status, m.sent_at, m.scheduled_at,
               m.retention_expires_at, m.attachment_count, r.is_read, r.is_starred, r.received_at,
               COALESCE(r.inbox_category, 'primary') AS category, 'inbox' AS source_mailbox,
@@ -1884,7 +1884,7 @@ class MailMessengerService:
             WHERE m.company_id = %s AND (r.recipient_user_id = %s OR LOWER(r.recipient_email) = %s)
               AND r.deleted_at IS NOT NULL AND r.purged_at IS NULL {search_recipient}
             UNION ALL
-            SELECT m.id AS mail_id, m.sender_account_id AS account_id, m.sender_email, m.sender_display_name, m.subject,
+            SELECT m.id AS mail_id, m.sender_account_id AS account_id, m.sender_email, COALESCE(NULLIF(BTRIM(m.sender_display_name), ''), (SELECT NULLIF(BTRIM(sender.name), '') FROM users sender WHERE sender.company_id = m.company_id AND LOWER(sender.email) = LOWER(m.sender_email) LIMIT 1), '') AS sender_display_name, m.subject,
               LEFT(COALESCE(m.body_text, ''), 240) AS preview_text, m.status, m.sent_at, m.scheduled_at,
               m.retention_expires_at, m.attachment_count, TRUE AS is_read, FALSE AS is_starred, NULL AS received_at,
               'primary' AS category, CASE WHEN m.status = 'draft' THEN 'draft' ELSE 'sent' END AS source_mailbox,
@@ -1957,7 +1957,7 @@ class MailMessengerService:
                 total = int(cursor.fetchone()["total"])
                 cursor.execute(
                     f"""
-                    SELECT m.id AS mail_id, m.sender_account_id AS account_id, m.sender_email, m.sender_display_name, m.subject,
+                    SELECT m.id AS mail_id, m.sender_account_id AS account_id, m.sender_email, COALESCE(NULLIF(BTRIM(m.sender_display_name), ''), (SELECT NULLIF(BTRIM(sender.name), '') FROM users sender WHERE sender.company_id = m.company_id AND LOWER(sender.email) = LOWER(m.sender_email) LIMIT 1), '') AS sender_display_name, m.subject,
                       LEFT(COALESCE(m.body_text, ''), 240) AS preview_text, m.status, m.sent_at, m.scheduled_at,
                       m.retention_expires_at, m.attachment_count, r.is_read, r.is_starred, r.received_at,
                       COALESCE(r.inbox_category, 'primary') AS category, 'inbox' AS source_mailbox
@@ -2892,7 +2892,7 @@ class MailMessengerService:
                      payload.subject.strip(), final_body_text, final_body_html, status_value, sent_at, scheduled_at,
                      now, now, now + timedelta(days=30), len(resolved_attachments), payload.sourceMailId,
                      None if payload.composeAction == "new" else payload.composeAction,
-                     preferences["sender_display_name"], preferences["reply_to_email"], preferences["message_encoding"],
+                     (preferences["sender_display_name"] or "").strip() or actor.userName, preferences["reply_to_email"], preferences["message_encoding"],
                      preferences["save_sent_copy"], preferences["read_receipt_enabled"]),
                 )
                 for kind, email in recipient_pairs:
@@ -3241,7 +3241,7 @@ class MailMessengerService:
             f"""
             SELECT DISTINCT
                 m.id AS mail_id, m.company_id, m.sender_user_id, m.sender_account_id AS account_id,
-                m.sender_email, m.sender_display_name, m.subject, m.body_text, m.body_html, m.status, m.sent_at, m.scheduled_at,
+                m.sender_email, COALESCE(NULLIF(BTRIM(m.sender_display_name), ''), (SELECT NULLIF(BTRIM(sender.name), '') FROM users sender WHERE sender.company_id = m.company_id AND LOWER(sender.email) = LOWER(m.sender_email) LIMIT 1), '') AS sender_display_name, m.subject, m.body_text, m.body_html, m.status, m.sent_at, m.scheduled_at,
                 m.created_at, m.updated_at, m.retention_expires_at, m.attachment_count,
                 m.read_receipt_requested,
                 (m.sender_user_id = %s AND {sender_state}) AS is_sender_view

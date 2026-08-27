@@ -164,8 +164,14 @@ class Ui022MailBasicSettingsTests(unittest.TestCase):
         self.assertNotIn("update user_mail_basic_preferences", sql)
     def test_every_summary_query_selects_sender_display_name(self):
         source = (self.root / "app" / "services" / "mail_messenger_service.py").read_text(encoding="utf-8")
-        selected_names = re.findall(r"m\.sender_email\s*,\s*m\.sender_display_name", source)
+        selected_names = re.findall(
+            r"m\.sender_email\s*,\s*COALESCE\(.*?\)\s+AS\s+sender_display_name",
+            source,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
         self.assertGreaterEqual(len(selected_names), 7)
+        self.assertIn("LOWER(sender.email) = LOWER(m.sender_email)", source)
+        self.assertIn("sender.company_id = m.company_id", source)
         summary = MailMessengerService()._to_mail_summary({
             "mail_id": "m", "account_id": "a", "sender_email": "sender@example.test", "sender_display_name": "홍길동",
             "subject": "s", "status": "sent", "is_read": False, "is_starred": False, "sent_at": None,
