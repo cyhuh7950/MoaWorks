@@ -10,6 +10,40 @@ import { TextStyleKit } from "@tiptap/extension-text-style";
 import Underline from "@tiptap/extension-underline";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+import { ArrowClockwiseIcon } from "@phosphor-icons/react/ArrowClockwise";
+import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/ArrowCounterClockwise";
+import { ArrowsInLineHorizontalIcon } from "@phosphor-icons/react/ArrowsInLineHorizontal";
+import { ArrowsOutLineHorizontalIcon } from "@phosphor-icons/react/ArrowsOutLineHorizontal";
+import { ColumnsIcon } from "@phosphor-icons/react/Columns";
+import { ColumnsPlusLeftIcon } from "@phosphor-icons/react/ColumnsPlusLeft";
+import { ColumnsPlusRightIcon } from "@phosphor-icons/react/ColumnsPlusRight";
+import { HighlighterIcon } from "@phosphor-icons/react/Highlighter";
+import { ImageIcon } from "@phosphor-icons/react/Image";
+import { LinkBreakIcon } from "@phosphor-icons/react/LinkBreak";
+import { LinkIcon } from "@phosphor-icons/react/Link";
+import { ListBulletsIcon } from "@phosphor-icons/react/ListBullets";
+import { ListNumbersIcon } from "@phosphor-icons/react/ListNumbers";
+import { MinusIcon } from "@phosphor-icons/react/Minus";
+import { PaletteIcon } from "@phosphor-icons/react/Palette";
+import { QuotesIcon } from "@phosphor-icons/react/Quotes";
+import { RowsIcon } from "@phosphor-icons/react/Rows";
+import { RowsPlusBottomIcon } from "@phosphor-icons/react/RowsPlusBottom";
+import { RowsPlusTopIcon } from "@phosphor-icons/react/RowsPlusTop";
+import { TableIcon } from "@phosphor-icons/react/Table";
+import { TextAlignCenterIcon } from "@phosphor-icons/react/TextAlignCenter";
+import { TextAlignJustifyIcon } from "@phosphor-icons/react/TextAlignJustify";
+import { TextAlignLeftIcon } from "@phosphor-icons/react/TextAlignLeft";
+import { TextAlignRightIcon } from "@phosphor-icons/react/TextAlignRight";
+import { TextBIcon } from "@phosphor-icons/react/TextB";
+import { TextHIcon } from "@phosphor-icons/react/TextH";
+import { TextIndentIcon } from "@phosphor-icons/react/TextIndent";
+import { TextItalicIcon } from "@phosphor-icons/react/TextItalic";
+import { TextOutdentIcon } from "@phosphor-icons/react/TextOutdent";
+import { TextStrikethroughIcon } from "@phosphor-icons/react/TextStrikethrough";
+import { TextTSlashIcon } from "@phosphor-icons/react/TextTSlash";
+import { TextUnderlineIcon } from "@phosphor-icons/react/TextUnderline";
+import { TrashIcon } from "@phosphor-icons/react/Trash";
+import type { Icon } from "@phosphor-icons/react/lib";
 
 import { InlineImageRegistry, type InlineImageDraft } from "./mailInlineImages";
 import { projectMailDocument } from "./mailRichText";
@@ -90,6 +124,7 @@ function sanitizePastedHtml(html: string): string {
 function toolbarButton(
   editor: Editor | null,
   name: string,
+  IconComponent: Icon,
   action: () => boolean,
   options: { active?: boolean; available?: boolean } = {},
 ) {
@@ -98,29 +133,37 @@ function toolbarButton(
     <button
       key={name}
       type="button"
+      className="mail-rich-text-editor__icon-button"
       aria-label={name}
       aria-pressed={options.active}
+      title={name}
       disabled={disabled}
       onMouseDown={(event) => event.preventDefault()}
       onClick={() => {
         if (!disabled) action();
       }}
     >
-      {name}
+      <IconComponent aria-hidden="true" size={18} weight={options.active ? "bold" : "regular"} />
     </button>
   );
+}
+
+function ToolbarGroup({ children, label }: { children: ReactNode; label: string }) {
+  return <div className="mail-rich-text-editor__toolbar-group" role="group" aria-label={label}>{children}</div>;
 }
 
 function SelectControl({
   label,
   value,
   options,
+  defaultLabel = "기본",
   disabled,
   onChange,
 }: {
   label: string;
   value: string;
   options: readonly string[];
+  defaultLabel?: string;
   disabled: boolean;
   onChange: (value: string) => void;
 }) {
@@ -128,8 +171,40 @@ function SelectControl({
     <label className="mail-rich-text-editor__select">
       <span>{label}</span>
       <select aria-label={label} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
-        <option value="">기본</option>
+        <option value="">{defaultLabel}</option>
         {options.map((option) => <option key={option} value={option}>{option}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function ParagraphControl({ editor, disabled, run }: {
+  editor: Editor | null;
+  disabled: boolean;
+  run: (command: (chain: ReturnType<Editor["chain"]>) => ReturnType<Editor["chain"]>) => boolean;
+}) {
+  const value = editor?.isActive("heading", { level: 1 }) ? "1"
+    : editor?.isActive("heading", { level: 2 }) ? "2"
+      : editor?.isActive("heading", { level: 3 }) ? "3"
+        : "paragraph";
+  return (
+    <label className="mail-rich-text-editor__select">
+      <span>문단 형식</span>
+      <select
+        aria-label="문단 형식"
+        title="문단 형식"
+        value={value}
+        disabled={disabled}
+        onChange={(event) => {
+          const level = Number(event.target.value);
+          if (level === 1 || level === 2 || level === 3) run((chain) => chain.setHeading({ level }));
+          else run((chain) => chain.setParagraph());
+        }}
+      >
+        <option value="paragraph">일반 문단</option>
+        <option value="1">제목 1</option>
+        <option value="2">제목 2</option>
+        <option value="3">제목 3</option>
       </select>
     </label>
   );
@@ -449,42 +524,59 @@ function MailRichTextEditorRuntime({ value, onChange, onUploadImage, onError, re
   return (
     <div className="mail-rich-text-editor" data-disabled={disabled || undefined} style={{ containerType: "inline-size" }}>
       <div className="mail-rich-text-editor__toolbar" role="toolbar" aria-label="메일 본문 서식">
-        <SelectControl label="글꼴" value={String(editor?.getAttributes("textStyle").fontFamily ?? "")} options={FONT_FAMILIES} disabled={commandDisabled} onChange={(value) => { if (value) run((chain) => chain.setFontFamily(value)); else run((chain) => chain.unsetFontFamily()); }} />
-        <SelectControl label="글자 크기" value={String(editor?.getAttributes("textStyle").fontSize ?? "")} options={FONT_SIZES} disabled={commandDisabled} onChange={(value) => { if (value) run((chain) => chain.setFontSize(value)); else run((chain) => chain.unsetFontSize()); }} />
-        <SelectControl label="줄 간격" value={String(editor?.getAttributes("textStyle").lineHeight ?? "")} options={LINE_HEIGHTS} disabled={commandDisabled} onChange={(value) => { if (value) run((chain) => chain.setLineHeight(value)); else run((chain) => chain.unsetLineHeight()); }} />
-        <label className="mail-rich-text-editor__color">글자색<input aria-label="글자색" type="color" disabled={commandDisabled} onChange={(event) => run((chain) => chain.setColor(event.target.value))} /></label>
-        <label className="mail-rich-text-editor__color">배경색<input aria-label="배경색" type="color" disabled={commandDisabled} onChange={(event) => run((chain) => chain.toggleHighlight({ color: event.target.value }))} /></label>
-        {toolbarButton(editor, "일반 문단", () => run((chain) => chain.setParagraph()), { active: Boolean(editor?.isActive("paragraph")) })}
-        {([1, 2, 3] as const).map((level) => toolbarButton(editor, `제목 ${level}`, () => run((chain) => chain.toggleHeading({ level })), { active: Boolean(editor?.isActive("heading", { level })) }))}
-        {toolbarButton(editor, "굵게", () => run((chain) => chain.toggleBold()), { active: Boolean(editor?.isActive("bold")) })}
-        {toolbarButton(editor, "기울임", () => run((chain) => chain.toggleItalic()), { active: Boolean(editor?.isActive("italic")) })}
-        {toolbarButton(editor, "밑줄", () => run((chain) => chain.toggleUnderline()), { active: Boolean(editor?.isActive("underline")) })}
-        {toolbarButton(editor, "취소선", () => run((chain) => chain.toggleStrike()), { active: Boolean(editor?.isActive("strike")) })}
-        {(["left", "center", "right", "justify"] as const).map((alignment, index) => toolbarButton(editor, ["왼쪽 정렬", "가운데 정렬", "오른쪽 정렬", "양쪽 정렬"][index], () => run((chain) => chain.setTextAlign(alignment)), { active: Boolean(editor?.isActive({ textAlign: alignment })) }))}
-        {toolbarButton(editor, "글머리표", () => run((chain) => chain.toggleBulletList()), { active: Boolean(editor?.isActive("bulletList")) })}
-        {toolbarButton(editor, "번호 목록", () => run((chain) => chain.toggleOrderedList()), { active: Boolean(editor?.isActive("orderedList")) })}
-        {toolbarButton(editor, "들여쓰기", () => run((chain) => chain.sinkListItem("listItem")), { available: Boolean(editor?.can().sinkListItem("listItem")) })}
-        {toolbarButton(editor, "내어쓰기", () => run((chain) => chain.liftListItem("listItem")), { available: Boolean(editor?.can().liftListItem("listItem")) })}
-        {toolbarButton(editor, "인용문", () => run((chain) => chain.toggleBlockquote()), { active: Boolean(editor?.isActive("blockquote")) })}
-        {toolbarButton(editor, "가로 구분선", () => run((chain) => chain.setHorizontalRule()))}
-        {toolbarButton(editor, "링크 설정", setLink, { active: Boolean(editor?.isActive("link")) })}
-        {toolbarButton(editor, "링크 해제", () => run((chain) => chain.extendMarkRange("link").unsetLink()), { available: Boolean(editor?.isActive("link")) })}
-        {toolbarButton(editor, "실행 취소", () => run((chain) => chain.undo()), { available: Boolean(editor?.can().undo()) })}
-        {toolbarButton(editor, "다시 실행", () => run((chain) => chain.redo()), { available: Boolean(editor?.can().redo()) })}
-        {toolbarButton(editor, "서식 제거", () => run((chain) => chain.unsetAllMarks().clearNodes()))}
-        {toolbarButton(editor, "표 삽입", () => run((chain) => chain.insertTable({ rows: 3, cols: 3, withHeaderRow: true })))}
-        {toolbarButton(editor, "행 앞에 추가", () => run((chain) => chain.addRowBefore()), { available: tableActive })}
-        {toolbarButton(editor, "행 뒤에 추가", () => run((chain) => chain.addRowAfter()), { available: tableActive })}
-        {toolbarButton(editor, "행 삭제", () => run((chain) => chain.deleteRow()), { available: tableActive })}
-        {toolbarButton(editor, "열 앞에 추가", () => run((chain) => chain.addColumnBefore()), { available: tableActive })}
-        {toolbarButton(editor, "열 뒤에 추가", () => run((chain) => chain.addColumnAfter()), { available: tableActive })}
-        {toolbarButton(editor, "열 삭제", () => run((chain) => chain.deleteColumn()), { available: tableActive })}
-        {toolbarButton(editor, "셀 병합", () => run((chain) => chain.mergeCells()), { available: tableActive && Boolean(editor?.can().mergeCells()) })}
-        {toolbarButton(editor, "셀 분할", () => run((chain) => chain.splitCell()), { available: tableActive && Boolean(editor?.can().splitCell()) })}
-        {toolbarButton(editor, "머리글 행 전환", () => run((chain) => chain.toggleHeaderRow()), { available: tableActive })}
-        {toolbarButton(editor, "표 삭제", () => run((chain) => chain.deleteTable()), { available: tableActive })}
-        <label className="mail-rich-text-editor__file-button">
-          본문 이미지
+        <ToolbarGroup label="서식 선택">
+          <ParagraphControl editor={editor} disabled={commandDisabled} run={run} />
+          <SelectControl label="글꼴" defaultLabel="기본 글꼴" value={String(editor?.getAttributes("textStyle").fontFamily ?? "")} options={FONT_FAMILIES} disabled={commandDisabled} onChange={(value) => { if (value) run((chain) => chain.setFontFamily(value)); else run((chain) => chain.unsetFontFamily()); }} />
+          <SelectControl label="글자 크기" defaultLabel="기본 크기" value={String(editor?.getAttributes("textStyle").fontSize ?? "")} options={FONT_SIZES} disabled={commandDisabled} onChange={(value) => { if (value) run((chain) => chain.setFontSize(value)); else run((chain) => chain.unsetFontSize()); }} />
+          <SelectControl label="줄 간격" defaultLabel="기본 줄 간격" value={String(editor?.getAttributes("textStyle").lineHeight ?? "")} options={LINE_HEIGHTS} disabled={commandDisabled} onChange={(value) => { if (value) run((chain) => chain.setLineHeight(value)); else run((chain) => chain.unsetLineHeight()); }} />
+        </ToolbarGroup>
+        <ToolbarGroup label="색상">
+          <label className="mail-rich-text-editor__color" title="글자색"><span>글자색</span><PaletteIcon aria-hidden="true" size={18} /><input aria-label="글자색" type="color" disabled={commandDisabled} onChange={(event) => run((chain) => chain.setColor(event.target.value))} /></label>
+          <label className="mail-rich-text-editor__color" title="배경색"><span>배경색</span><HighlighterIcon aria-hidden="true" size={18} /><input aria-label="배경색" type="color" disabled={commandDisabled} onChange={(event) => run((chain) => chain.toggleHighlight({ color: event.target.value }))} /></label>
+        </ToolbarGroup>
+        <ToolbarGroup label="글자 스타일">
+          {toolbarButton(editor, "굵게", TextBIcon, () => run((chain) => chain.toggleBold()), { active: Boolean(editor?.isActive("bold")) })}
+          {toolbarButton(editor, "기울임", TextItalicIcon, () => run((chain) => chain.toggleItalic()), { active: Boolean(editor?.isActive("italic")) })}
+          {toolbarButton(editor, "밑줄", TextUnderlineIcon, () => run((chain) => chain.toggleUnderline()), { active: Boolean(editor?.isActive("underline")) })}
+          {toolbarButton(editor, "취소선", TextStrikethroughIcon, () => run((chain) => chain.toggleStrike()), { active: Boolean(editor?.isActive("strike")) })}
+        </ToolbarGroup>
+        <ToolbarGroup label="문단 정렬">
+          {toolbarButton(editor, "왼쪽 정렬", TextAlignLeftIcon, () => run((chain) => chain.setTextAlign("left")), { active: Boolean(editor?.isActive({ textAlign: "left" })) })}
+          {toolbarButton(editor, "가운데 정렬", TextAlignCenterIcon, () => run((chain) => chain.setTextAlign("center")), { active: Boolean(editor?.isActive({ textAlign: "center" })) })}
+          {toolbarButton(editor, "오른쪽 정렬", TextAlignRightIcon, () => run((chain) => chain.setTextAlign("right")), { active: Boolean(editor?.isActive({ textAlign: "right" })) })}
+          {toolbarButton(editor, "양쪽 정렬", TextAlignJustifyIcon, () => run((chain) => chain.setTextAlign("justify")), { active: Boolean(editor?.isActive({ textAlign: "justify" })) })}
+        </ToolbarGroup>
+        <ToolbarGroup label="목록과 문단">
+          {toolbarButton(editor, "글머리표", ListBulletsIcon, () => run((chain) => chain.toggleBulletList()), { active: Boolean(editor?.isActive("bulletList")) })}
+          {toolbarButton(editor, "번호 목록", ListNumbersIcon, () => run((chain) => chain.toggleOrderedList()), { active: Boolean(editor?.isActive("orderedList")) })}
+          {toolbarButton(editor, "들여쓰기", TextIndentIcon, () => run((chain) => chain.sinkListItem("listItem")), { available: Boolean(editor?.can().sinkListItem("listItem")) })}
+          {toolbarButton(editor, "내어쓰기", TextOutdentIcon, () => run((chain) => chain.liftListItem("listItem")), { available: Boolean(editor?.can().liftListItem("listItem")) })}
+          {toolbarButton(editor, "인용문", QuotesIcon, () => run((chain) => chain.toggleBlockquote()), { active: Boolean(editor?.isActive("blockquote")) })}
+          {toolbarButton(editor, "가로 구분선", MinusIcon, () => run((chain) => chain.setHorizontalRule()))}
+        </ToolbarGroup>
+        <ToolbarGroup label="링크와 편집">
+          {toolbarButton(editor, "링크 설정", LinkIcon, setLink, { active: Boolean(editor?.isActive("link")) })}
+          {toolbarButton(editor, "링크 해제", LinkBreakIcon, () => run((chain) => chain.extendMarkRange("link").unsetLink()), { available: Boolean(editor?.isActive("link")) })}
+          {toolbarButton(editor, "실행 취소", ArrowCounterClockwiseIcon, () => run((chain) => chain.undo()), { available: Boolean(editor?.can().undo()) })}
+          {toolbarButton(editor, "다시 실행", ArrowClockwiseIcon, () => run((chain) => chain.redo()), { available: Boolean(editor?.can().redo()) })}
+          {toolbarButton(editor, "서식 제거", TextTSlashIcon, () => run((chain) => chain.unsetAllMarks().clearNodes()))}
+        </ToolbarGroup>
+        <ToolbarGroup label="표">
+          {toolbarButton(editor, "표 삽입", TableIcon, () => run((chain) => chain.insertTable({ rows: 3, cols: 3, withHeaderRow: true })))}
+          {toolbarButton(editor, "행 앞에 추가", RowsPlusTopIcon, () => run((chain) => chain.addRowBefore()), { available: tableActive })}
+          {toolbarButton(editor, "행 뒤에 추가", RowsPlusBottomIcon, () => run((chain) => chain.addRowAfter()), { available: tableActive })}
+          {toolbarButton(editor, "행 삭제", RowsIcon, () => run((chain) => chain.deleteRow()), { available: tableActive })}
+          {toolbarButton(editor, "열 앞에 추가", ColumnsPlusLeftIcon, () => run((chain) => chain.addColumnBefore()), { available: tableActive })}
+          {toolbarButton(editor, "열 뒤에 추가", ColumnsPlusRightIcon, () => run((chain) => chain.addColumnAfter()), { available: tableActive })}
+          {toolbarButton(editor, "열 삭제", ColumnsIcon, () => run((chain) => chain.deleteColumn()), { available: tableActive })}
+          {toolbarButton(editor, "셀 병합", ArrowsInLineHorizontalIcon, () => run((chain) => chain.mergeCells()), { available: tableActive && Boolean(editor?.can().mergeCells()) })}
+          {toolbarButton(editor, "셀 분할", ArrowsOutLineHorizontalIcon, () => run((chain) => chain.splitCell()), { available: tableActive && Boolean(editor?.can().splitCell()) })}
+          {toolbarButton(editor, "머리글 행 전환", TextHIcon, () => run((chain) => chain.toggleHeaderRow()), { available: tableActive })}
+          {toolbarButton(editor, "표 삭제", TrashIcon, () => run((chain) => chain.deleteTable()), { available: tableActive })}
+        </ToolbarGroup>
+        <label className="mail-rich-text-editor__file-button" title="본문 이미지">
+          <span>본문 이미지</span>
+          <ImageIcon aria-hidden="true" size={18} />
           <input
             type="file"
             aria-label="본문 이미지 선택"

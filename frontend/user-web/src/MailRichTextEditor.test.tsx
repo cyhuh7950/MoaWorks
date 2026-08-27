@@ -100,7 +100,7 @@ afterEach(() => {
 });
 
 describe("MailRichTextEditor 접근성과 서식 계약", () => {
-  it("한국어 toolbar, pressed state, 전체 명령과 HTML 탭 없는 편집면을 제공한다", async () => {
+  it("아이콘 toolbar, 접근성 이름, 서식 dropdown과 HTML 탭 없는 편집면을 제공한다", async () => {
     renderEditor();
 
     const toolbar = await screen.findByRole("toolbar", { name: "메일 본문 서식" });
@@ -109,18 +109,24 @@ describe("MailRichTextEditor 접근성과 서식 계약", () => {
     expect(screen.queryByRole("tab", { name: /HTML/i })).toBeNull();
     expect(screen.getByRole("textbox", { name: "메일 본문" })).toBeTruthy();
 
-    for (const name of [
-      "일반 문단", "제목 1", "제목 2", "제목 3",
+    const iconCommandNames = [
       "기울임", "밑줄", "취소선", "왼쪽 정렬", "가운데 정렬", "오른쪽 정렬", "양쪽 정렬",
       "글머리표", "번호 목록", "들여쓰기", "내어쓰기", "인용문", "가로 구분선", "링크 설정",
       "링크 해제", "실행 취소", "다시 실행", "서식 제거", "표 삽입", "행 앞에 추가", "행 뒤에 추가",
       "행 삭제", "열 앞에 추가", "열 뒤에 추가", "열 삭제", "셀 병합", "셀 분할", "머리글 행 전환", "표 삭제",
-    ]) {
-      expect(screen.getByRole("button", { name })).toBeTruthy();
+    ];
+    for (const name of ["굵게", ...iconCommandNames]) {
+      const button = screen.getByRole("button", { name });
+      expect(button.getAttribute("title")).toBe(name);
+      expect(button.textContent?.trim()).toBe("");
+      expect(button.querySelector("svg")).toBeTruthy();
     }
     expect(screen.getByLabelText("글꼴")).toBeTruthy();
     expect(screen.getByLabelText("글자 크기")).toBeTruthy();
     expect(screen.getByLabelText("줄 간격")).toBeTruthy();
+    expect(screen.getByLabelText("문단 형식")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "일반 문단" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "제목 1" })).toBeNull();
     expect(screen.getByLabelText("글자색")).toBeTruthy();
     expect(screen.getByLabelText("배경색")).toBeTruthy();
     expect(screen.getByLabelText("본문 이미지 선택")).toBeTruthy();

@@ -12,6 +12,7 @@
     "verify:translation-bootstrap": "node scripts/stage03-translation-bootstrap-verify.mjs"
   },
   "dependencies": {
+    "@phosphor-icons/react": "^2.1.10",
     "@tiptap/extension-file-handler": "^3.30.3",
     "@tiptap/extension-highlight": "^3.30.3",
     "@tiptap/extension-image": "^3.30.3",

@@ -80,6 +80,20 @@ try {
   await boldButton.click();
   const boldPressed = await boldButton.getAttribute("aria-pressed") === "true";
   if (!boldPressed) throw new Error("phase5 rich editor bold state did not change");
+  const toolbar = page.locator(".mail-rich-text-editor__toolbar");
+  const toolbarContract = await toolbar.evaluate((element) => {
+    const iconButtons = [...element.querySelectorAll("button.mail-rich-text-editor__icon-button")];
+    return {
+      iconButtonCount: iconButtons.length,
+      selectCount: element.querySelectorAll("select").length,
+      everyButtonHasIcon: iconButtons.every((button) => Boolean(button.querySelector("svg"))),
+      everyButtonHidesText: iconButtons.every((button) => !button.textContent?.trim()),
+    };
+  });
+  if (toolbarContract.iconButtonCount !== 30 || toolbarContract.selectCount !== 4 || !toolbarContract.everyButtonHasIcon || !toolbarContract.everyButtonHidesText) {
+    throw new Error(`phase5 rich editor icon toolbar contract failed: ${JSON.stringify(toolbarContract)}`);
+  }
+  await toolbar.screenshot({ path: resolve(evidence, "toolbar.png") });
   const editorSurface = page.locator(".mail-rich-text-editor__surface");
   await editorSurface.fill(Array.from({ length: 18 }, (_, index) => `rich compose line ${index + 1}`).join("\n"));
   const draftButton = page.getByRole("button", { name: "임시저장" });
@@ -106,7 +120,7 @@ try {
   if (network.some((origin) => origin !== `http://127.0.0.1:${webPort}`)) throw new Error("phase5 used a non-local API origin");
   if (pageErrors.length) throw new Error(`phase5 page errors: ${pageErrors.join(" | ")}`);
   if (apiResponses.some(({ status }) => status >= 400)) throw new Error("phase5 received a failing API response");
-  await writeFile(resolve(evidence, "result.json"), JSON.stringify({ localOnly: true, stage: "rich-compose", composeVisible, loginVisible, portalVisible, storedToken, activeMenu, boldPressed, draftButtonIsTopmost, fixtureGuards: { wrongLogin: wrongLogin.status, unknownRoute: unknownResponse.status, wrongMethod: wrongMethod.status }, networkCount: network.length, apiResponses, pageErrors }, null, 2));
+  await writeFile(resolve(evidence, "result.json"), JSON.stringify({ localOnly: true, stage: "rich-compose", composeVisible, loginVisible, portalVisible, storedToken, activeMenu, boldPressed, toolbarContract, draftButtonIsTopmost, fixtureGuards: { wrongLogin: wrongLogin.status, unknownRoute: unknownResponse.status, wrongMethod: wrongMethod.status }, networkCount: network.length, apiResponses, pageErrors }, null, 2));
   process.stdout.write("PHASE5_PASS\n");
 } catch (error) {
   process.stderr.write(`PHASE5_FAIL ${error instanceof Error ? error.message : String(error)}\n`);

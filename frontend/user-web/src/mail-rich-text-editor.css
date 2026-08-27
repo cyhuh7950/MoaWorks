@@ -8,10 +8,10 @@
 .mail-rich-text-editor__toolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 6px 0;
   align-items: center;
   max-width: 100%;
-  padding: 8px;
+  padding: 6px;
   overflow-x: auto;
   border: 1px solid var(--border-color, #d8dee9);
   border-radius: 8px;
@@ -21,7 +21,7 @@
 .mail-rich-text-editor__toolbar button,
 .mail-rich-text-editor__toolbar select,
 .mail-rich-text-editor__file-button {
-  min-height: 32px;
+  min-height: 30px;
   border: 1px solid var(--border-color, #cbd3df);
   border-radius: 6px;
   background: var(--surface, #fff);
@@ -31,9 +31,32 @@
 
 .mail-rich-text-editor__toolbar button,
 .mail-rich-text-editor__file-button {
-  padding: 5px 8px;
+  display: inline-grid;
+  width: 30px;
+  padding: 0;
+  place-items: center;
   white-space: nowrap;
   cursor: pointer;
+}
+
+.mail-rich-text-editor__toolbar-group {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  align-items: center;
+  padding: 0 6px;
+  border-left: 1px solid var(--border-color, #d8dee9);
+}
+
+.mail-rich-text-editor__toolbar-group:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.mail-rich-text-editor__icon-button svg,
+.mail-rich-text-editor__file-button svg,
+.mail-rich-text-editor__color svg {
+  pointer-events: none;
 }
 
 .mail-rich-text-editor__toolbar button[aria-pressed="true"] {
@@ -52,9 +75,19 @@
   outline-offset: 2px;
 }
 
+.mail-rich-text-editor__color:has(input:focus-visible) {
+  outline: 3px solid var(--focus-ring, #7296ff);
+  outline-offset: 2px;
+}
+
 .mail-rich-text-editor__toolbar button:disabled,
 .mail-rich-text-editor__toolbar select:disabled,
 .mail-rich-text-editor__file-button:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.mail-rich-text-editor__color:has(input:disabled) {
   cursor: not-allowed;
   opacity: 0.48;
 }
@@ -68,12 +101,41 @@
   white-space: nowrap;
 }
 
-.mail-rich-text-editor__color input {
-  width: 32px;
+.mail-rich-text-editor__select > span,
+.mail-rich-text-editor__color > span,
+.mail-rich-text-editor__file-button > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.mail-rich-text-editor__select select {
+  min-width: 88px;
+  padding: 0 24px 0 8px;
+}
+
+.mail-rich-text-editor__color {
+  display: inline-grid;
+  width: 30px;
   height: 30px;
-  padding: 2px;
+  place-items: center;
   border: 1px solid var(--border-color, #cbd3df);
   border-radius: 6px;
+  background: var(--surface, #fff);
+  cursor: pointer;
+}
+
+.mail-rich-text-editor__color input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
 }
 
 .mail-rich-text-editor__file-button input {
