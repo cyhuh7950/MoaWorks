@@ -440,6 +440,31 @@ class MailInlinePersistenceTests(unittest.TestCase):
         )
         return metadata
 
+    def test_forward_copy_of_persisted_inline_recreates_an_inline_attachment_with_the_same_cid(self) -> None:
+        """A forward body CID must resolve to exactly one newly owned inline attachment."""
+        with TemporaryDirectory() as temp_dir:
+            storage = MailAttachmentStorage(Path(temp_dir))
+            source = storage.stage_inline_image(self.owner, "source.png", "image/png", image_bytes("PNG"))
+            storage.mark_attached(source.uploadId)
+            source_metadata = self.metadata(storage, source.uploadId)
+            service = self.service(storage, PersistenceDatabase())
+
+            copied = service._clone_source_attachment(  # type: ignore[attr-defined]
+                self.owner,
+                {
+                    "file_name": source.fileName,
+                    "content_type": source.contentType,
+                    "size_bytes": source.sizeBytes,
+                    "storage_key": source_metadata["storageKey"],
+                    "content_disposition": "inline",
+                    "content_id": source.contentId,
+                },
+            )
+
+            self.assertEqual(copied["content_disposition"], "inline")
+            self.assertEqual(copied["content_id"], source.contentId)
+            self.assertNotEqual(copied["upload_id"], source.uploadId)
+
     def test_scheduled_update_accepts_legacy_ordinary_sidecar_without_inline_fields(self) -> None:
         """Legacy ordinary rows remain reusable without Task 4 canonical inline fields."""
         with TemporaryDirectory() as temp_dir:

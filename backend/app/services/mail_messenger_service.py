@@ -440,8 +440,10 @@ class MailMessengerService:
                         )
                     cursor.execute(
                         """UPDATE mail_messages SET subject=%s,body_text=%s,body_html=%s,attachment_count=%s,
-                        source_message_id=%s,source_action=%s,updated_at=%s WHERE id=%s RETURNING *""",
-                        (payload.subject.strip(), payload.bodyText, body_html, len(all_attachments), payload.sourceMailId, None if payload.composeAction == "new" else payload.composeAction, now, mail_id),
+                        source_message_id=COALESCE(%s, source_message_id),
+                        source_action=CASE WHEN %s = 'new' AND source_message_id IS NOT NULL THEN source_action ELSE %s END,
+                        updated_at=%s WHERE id=%s RETURNING *""",
+                        (payload.subject.strip(), payload.bodyText, body_html, len(all_attachments), payload.sourceMailId, payload.composeAction, None if payload.composeAction == "new" else payload.composeAction, now, mail_id),
                     )
                     cursor.fetchone()
                     self._write_mail_event_audit(cursor, company_id=actor.companyId, actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id, event="mail.draft.updated", status_before="draft", status_after="draft", now=now, reason="draft mail user update")
@@ -2833,13 +2835,9 @@ class MailMessengerService:
                 account = self._fetch_mail_account(cursor, actor.userId)
                 if payload.sourceMailId:
                     if payload.copiedAttachmentIds:
-                        source_attachments = self._fetch_source_attachments(cursor, actor, payload.sourceMailId, payload.copiedAttachmentIds)
+                        source_attachments = self._fetch_source_attachments(cursor, actor, payload.sourceMailId, payload.copiedAttachmentIds, include_inline=True)
                         for source_attachment in source_attachments:
-                            resolved_attachments.append(self.attachment_storage.clone(
-                                actor, storage_key=source_attachment["storage_key"],
-                                file_name=source_attachment["file_name"], content_type=source_attachment["content_type"],
-                                size_bytes=source_attachment["size_bytes"],
-                            ))
+                            resolved_attachments.append(self._clone_source_attachment(actor, source_attachment))
                     else:
                         self._fetch_accessible_mail(cursor, actor, payload.sourceMailId)
                 if len(resolved_attachments) > settings.mail_attachment_max_files:
@@ -3288,17 +3286,19 @@ class MailMessengerService:
         actor: AuthUserSummary,
         source_mail_id: str,
         attachment_ids: list[str],
+        *,
+        include_inline: bool = False,
     ) -> list[dict]:
         self._fetch_accessible_mail(cursor, actor, source_mail_id)
         if not attachment_ids:
             return []
         cursor.execute(
             """
-            SELECT id, file_name, content_type, size_bytes, storage_key
+            SELECT id, file_name, content_type, size_bytes, storage_key,
+                   content_disposition, content_id
             FROM mail_attachments
             WHERE message_id = %s
               AND id = ANY(%s)
-              AND content_disposition = 'attachment'
             """,
             (source_mail_id, attachment_ids),
         )
@@ -3308,7 +3308,48 @@ class MailMessengerService:
             raise PermissionError("전달할 원문 첨부에 접근할 권한이 없습니다.")
         if any(not row["storage_key"] for row in rows):
             raise ValueError("원문 첨부 파일 저장 상태가 올바르지 않습니다.")
+        if not include_inline and any(row.get("content_disposition") == "inline" for row in rows):
+            raise PermissionError("인라인 원문 첨부는 CID 본문과 함께 전달해야 합니다.")
         return [by_id[attachment_id] for attachment_id in attachment_ids]
+
+    def _clone_source_attachment(self, actor: AuthUserSummary, source_attachment: dict) -> dict:
+        """Copy a forward source as a new owned stage without reusing an attachment ID."""
+        source_attachment = self._canonical_persisted_attachment(actor, source_attachment)
+        if source_attachment.get("content_disposition", "attachment") != "inline":
+            return self.attachment_storage.clone(
+                actor,
+                storage_key=source_attachment["storage_key"],
+                file_name=source_attachment["file_name"],
+                content_type=source_attachment["content_type"],
+                size_bytes=source_attachment["size_bytes"],
+            )
+
+        content_id = source_attachment.get("content_id")
+        if not isinstance(content_id, str) or not content_id:
+            raise ValueError("인라인 첨부의 콘텐츠 ID가 올바르지 않습니다.")
+        source_path = self.attachment_storage.stored_path(source_attachment["storage_key"])
+        uploaded = self.attachment_storage.stage_inline_image(
+            actor,
+            source_attachment["file_name"],
+            source_attachment["content_type"],
+            source_path.read_bytes(),
+        )
+        metadata = self.attachment_storage._load_metadata(uploaded.uploadId)
+        metadata["content_id"] = content_id
+        self.attachment_storage._metadata_path(uploaded.uploadId).write_text(
+            json.dumps(metadata, ensure_ascii=False), encoding="utf-8"
+        )
+        return self.attachment_storage.resolve(
+            actor,
+            MailAttachmentMeta(
+                uploadId=uploaded.uploadId,
+                fileName=uploaded.fileName,
+                contentType=uploaded.contentType,
+                sizeBytes=uploaded.sizeBytes,
+                disposition="inline",
+                contentId=content_id,
+            ),
+        )
 
     def _fetch_external_deliveries(self, cursor, mail_id: str) -> list[MailExternalDeliveryStatus]:
         cursor.execute(

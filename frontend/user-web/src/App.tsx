@@ -1726,7 +1726,7 @@ export default function App() {
   const [mailComposeSourceDetail, setMailComposeSourceDetail] = useState<MailDetail | null>(null);
   const [editingScheduledMailId, setEditingScheduledMailId] = useState("");
   const [editingDraftMailId, setEditingDraftMailId] = useState("");
-  const [mailComposeRetainedAttachmentIds, setMailComposeRetainedAttachmentIds] = useState<string[]>([]);
+  const [mailComposePersistedAttachments, setMailComposePersistedAttachments] = useState<MailAttachmentView[]>([]);
   const mailComposeToRef = useRef<HTMLInputElement>(null);
   const [selectedForwardAttachmentIds, setSelectedForwardAttachmentIds] = useState<string[]>([]);
   const [recipientPickerTarget, setRecipientPickerTarget] = useState<RecipientPickerTarget | null>(null);
@@ -1734,6 +1734,11 @@ export default function App() {
   const [recipientPickerSource, setRecipientPickerSource] = useState<RecipientPickerSource>("contact");
   const [recipientPickerQuery, setRecipientPickerQuery] = useState("");
   const selectedForwardAttachments = mailComposeSourceDetail?.attachments.filter((item) => item.disposition !== "inline" && selectedForwardAttachmentIds.includes(item.attachmentId)) ?? [];
+  const mailComposeReferencedContentIds = new Set(projectMailDocument(mailComposeForm.bodyDocument).contentIds);
+  const mailComposeRetainedAttachments = mailComposePersistedAttachments.filter((attachment) => (
+    attachment.disposition !== "inline" || Boolean(attachment.contentId && mailComposeReferencedContentIds.has(attachment.contentId))
+  ));
+  const mailComposeRetainedOrdinaryAttachments = mailComposeRetainedAttachments.filter((attachment) => attachment.disposition !== "inline");
 
   async function refreshHeaderProfile() {
     if (!token || !me) return;
@@ -1750,8 +1755,9 @@ export default function App() {
   const mailComposeNewAttachmentBytes = mailComposeFiles.reduce((sum, item) => sum + item.file.size, 0);
   const mailComposeInlineImageBytes = mailComposeInlineImages.reduce((sum, item) => sum + item.sizeBytes, 0);
   const mailComposeSourceAttachmentBytes = selectedForwardAttachments.reduce((sum, item) => sum + item.sizeBytes, 0);
-  const mailComposeAttachmentBytes = mailComposeNewAttachmentBytes + mailComposeInlineImageBytes + mailComposeSourceAttachmentBytes;
-  const mailComposeAttachmentCount = mailComposeFiles.length + mailComposeInlineImages.length + selectedForwardAttachments.length;
+  const mailComposeRetainedOrdinaryAttachmentBytes = mailComposeRetainedOrdinaryAttachments.reduce((sum, item) => sum + item.sizeBytes, 0);
+  const mailComposeAttachmentBytes = mailComposeNewAttachmentBytes + mailComposeInlineImageBytes + mailComposeSourceAttachmentBytes + mailComposeRetainedOrdinaryAttachmentBytes;
+  const mailComposeAttachmentCount = mailComposeFiles.length + mailComposeInlineImages.length + selectedForwardAttachments.length + mailComposeRetainedOrdinaryAttachments.length;
   const [recipientPickerLoading, setRecipientPickerLoading] = useState(false);
   const [mailError, setMailError] = useState("");
   const [mailLoading, setMailLoading] = useState(false);
@@ -2048,7 +2054,7 @@ export default function App() {
     setMailComposeSourceDetail(null);
     setEditingScheduledMailId("");
     setEditingDraftMailId("");
-    setMailComposeRetainedAttachmentIds([]);
+    setMailComposePersistedAttachments([]);
     setSelectedForwardAttachmentIds([]);
     setRecipientPickerTarget(null);
     setComposeWindow("normal");
@@ -2315,7 +2321,7 @@ export default function App() {
     const values = (kind: string) => selectedMailDetail.recipients.filter((item) => item.recipientKind === kind).map((item) => item.recipientEmail).join(", ");
     setEditingScheduledMailId(selectedMailDetail.mailId);
     setEditingDraftMailId("");
-    setMailComposeRetainedAttachmentIds([]);
+    setMailComposePersistedAttachments([]);
     setMailComposeForm(createMailComposeForm({
       to: values("to"), cc: values("cc"), bcc: values("bcc"), subject: selectedMailDetail.subject,
       bodyText: selectedMailDetail.bodyText, bodyHtml: selectedMailDetail.bodyHtml,
@@ -2330,9 +2336,7 @@ export default function App() {
     const values = (kind: string) => selectedMailDetail.recipients.filter((item) => item.recipientKind === kind).map((item) => item.recipientEmail).join(", ");
     setEditingScheduledMailId("");
     setEditingDraftMailId(selectedMailDetail.mailId);
-    setMailComposeRetainedAttachmentIds(selectedMailDetail.attachments
-      .filter((attachment) => attachment.disposition !== "inline" || selectedMailDetail.bodyHtml?.includes(`cid:${attachment.contentId ?? ""}`))
-      .map((attachment) => attachment.attachmentId));
+    setMailComposePersistedAttachments(selectedMailDetail.attachments);
     setMailComposeForm(createMailComposeForm({ to: values("to"), cc: values("cc"), bcc: values("bcc"), subject: selectedMailDetail.subject, bodyText: selectedMailDetail.bodyText, bodyHtml: selectedMailDetail.bodyHtml, scheduledAt: "" }));
     void hydrateComposeInlineImages(selectedMailDetail.attachments.filter((attachment) => selectedMailDetail.bodyHtml?.includes(`cid:${attachment.contentId ?? ""}`)));
     setMailComposeContext("new");
@@ -3642,7 +3646,7 @@ export default function App() {
       const response = editingScheduledMailId && action === "schedule"
         ? await updateScheduledMail(token, editingScheduledMailId, payload)
         : editingDraftMailId && action === "draft"
-          ? await updateMailDraft(token, editingDraftMailId, { ...payload, retainedAttachmentIds: mailComposeRetainedAttachmentIds })
+          ? await updateMailDraft(token, editingDraftMailId, { ...payload, retainedAttachmentIds: mailComposeRetainedAttachments.map((attachment) => attachment.attachmentId) })
           : action === "draft" ? await saveMailDraft(token, payload) : await sendMail(token, payload);
       if (action === "draft") {
         setMessage(editingDraftMailId ? "임시저장 메일을 수정했습니다." : "메일을 임시저장했습니다.");
@@ -3659,7 +3663,7 @@ export default function App() {
       setMailComposeSourceDetail(null);
       setEditingScheduledMailId("");
       setEditingDraftMailId("");
-      setMailComposeRetainedAttachmentIds([]);
+      setMailComposePersistedAttachments([]);
       setSelectedForwardAttachmentIds([]);
       setOutgoingTranslationOpen(false);
       setMailTranslationPreview(null);
@@ -3701,7 +3705,7 @@ export default function App() {
     setMailComposeSourceDetail(selectedMailDetail);
     setSelectedForwardAttachmentIds(
       mode === "forward"
-        ? selectedMailDetail.attachments.filter((item) => item.disposition !== "inline").map((item) => item.attachmentId).filter(Boolean)
+        ? selectedMailDetail.attachments.map((item) => item.attachmentId).filter(Boolean)
         : [],
     );
     setMailComposeFiles([]);
@@ -3721,7 +3725,7 @@ export default function App() {
     setMailComposeSourceDetail(null);
     setEditingScheduledMailId("");
     setEditingDraftMailId("");
-    setMailComposeRetainedAttachmentIds([]);
+    setMailComposePersistedAttachments([]);
     setSelectedForwardAttachmentIds([]);
     setRecipientPickerTarget(null);
     setRecipientPickerQuery("");
@@ -5785,8 +5789,8 @@ export default function App() {
                   </section> : null}
                   {mailComposeContext === "forward" && mailComposeSourceDetail?.attachments.length ? (
                     <section className="user-mail-compose-attachments user-mail-compose-source-attachments" aria-label="원문 첨부" title="선택한 원문 첨부는 권한 확인 후 새 파일로 복제됩니다.">
-                      <div><strong>원문 첨부</strong><small>{selectedForwardAttachments.length}/{mailComposeSourceDetail.attachments.length}개 선택</small></div>
-                      {mailComposeSourceDetail.attachments.map((item) => (
+                      <div><strong>원문 첨부</strong><small>{selectedForwardAttachments.length}/{mailComposeSourceDetail.attachments.filter((item) => item.disposition !== "inline").length}개 선택</small></div>
+                      {mailComposeSourceDetail.attachments.filter((item) => item.disposition !== "inline").map((item) => (
                         <label key={item.attachmentId}>
                           <input
                             type="checkbox"
@@ -5804,6 +5808,7 @@ export default function App() {
                       파일 선택
                       <input type="file" multiple onChange={(event) => { addMailComposeFiles(event.target.files); event.target.value = ""; }} />
                     </label>
+                    {mailComposeRetainedOrdinaryAttachments.map((attachment) => <div key={attachment.attachmentId}><span>{attachment.fileName}</span><small>기존 첨부 · {formatFileSize(attachment.sizeBytes)}</small><button type="button" aria-label={`${attachment.fileName} 첨부 제거`} onClick={() => setMailComposePersistedAttachments((current) => current.filter((item) => item.attachmentId !== attachment.attachmentId))}>제거</button></div>)}
                     {mailComposeFiles.map((item) => <div key={item.id}><span>{item.file.name}</span><small>{formatFileSize(item.file.size)}</small><button type="button" aria-label={`${item.file.name} 첨부 제거`} onClick={() => removeMailComposeAttachment(item.id)}>제거</button></div>)}
                   </section>
                   <label className="user-mail-compose-field" title="현재보다 1분 이후, 365일 이내">

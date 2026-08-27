@@ -290,7 +290,15 @@ class MailDraftRequest(MailSendRequest):
 
     @model_validator(mode="after")
     def require_draft_content(self):
-        if not (self.subject.strip() or self.bodyText.strip() or self.to or self.cc or self.bcc or self.attachments):
+        if not (
+            self.subject.strip()
+            or self.bodyText.strip()
+            or self.to
+            or self.cc
+            or self.bcc
+            or self.attachments
+            or getattr(self, "retainedAttachmentIds", [])
+        ):
             raise ValueError("저장할 초안 내용이 없습니다.")
         return self
 

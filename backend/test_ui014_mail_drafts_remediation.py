@@ -104,6 +104,15 @@ class MailDraftsRemediationTest(unittest.TestCase):
         self.assertEqual(request.retainedAttachmentIds, ["attachment-persisted"])
         self.assertEqual(request.attachments[0].uploadId, "a" * 32)
 
+    def test_retained_only_draft_update_is_valid_but_completely_empty_draft_is_rejected(self):
+        request_type = getattr(mail_messenger, "MailDraftUpdateRequest", None)
+
+        self.assertIsNotNone(request_type)
+        retained_only = request_type(retainedAttachmentIds=["attachment-persisted"])
+        self.assertEqual(retained_only.retainedAttachmentIds, ["attachment-persisted"])
+        with self.assertRaises(ValueError):
+            request_type()
+
 
 if __name__ == "__main__":
     unittest.main()
