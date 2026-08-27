@@ -102,7 +102,16 @@ class PersonalAiProviderClient:
                 else None
             )
         )
-        base_url = str(profile["apiBaseUrl"]).rstrip("/")
+        base_url = str(
+            config.get("apiBaseUrl")
+            if config.get("configSource") == "admin_default"
+            else profile["apiBaseUrl"]
+        ).rstrip("/")
+        timeout_seconds = (
+            float(config.get("timeoutSeconds") or self.timeout_seconds)
+            if config.get("configSource") == "admin_default"
+            else self.timeout_seconds
+        )
         protocol = str(profile["protocol"])
         try:
             if protocol == "anthropic":
@@ -119,7 +128,7 @@ class PersonalAiProviderClient:
                         "system": _SYSTEM_BOUNDARY,
                         "messages": normalized_messages,
                     },
-                    timeout_seconds=self.timeout_seconds,
+                    timeout_seconds=timeout_seconds,
                 )
                 content = response.get("content") if isinstance(response, dict) else None
                 if not isinstance(content, list):
@@ -149,7 +158,7 @@ class PersonalAiProviderClient:
                             *normalized_messages,
                         ],
                     },
-                    timeout_seconds=self.timeout_seconds,
+                    timeout_seconds=timeout_seconds,
                 )
                 choices = response.get("choices") if isinstance(response, dict) else None
                 if not isinstance(choices, list) or not choices:

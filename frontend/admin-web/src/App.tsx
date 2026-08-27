@@ -376,7 +376,7 @@ function buildDefaultCompanyLogo(name: string, primary: string, secondary: strin
       </defs>
       <rect width="192" height="192" rx="44" fill="url(#mwLogoBg)" />
       <circle cx="148" cy="48" r="20" fill="rgba(255,255,255,0.14)" />
-      <text x="96" y="108" text-anchor="middle" font-family="Segoe UI, Noto Sans KR, sans-serif" font-size="64" font-weight="800" fill="#ffffff">${initials}</text>
+      <text x="96" y="108" text-anchor="middle" font-family="Pretendard, Noto Sans KR, Apple SD Gothic Neo, Segoe UI, sans-serif" font-size="64" font-weight="800" fill="#ffffff">${initials}</text>
     </svg>
   `;
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
@@ -3695,6 +3695,26 @@ export default function App() {
               </div>
               <div className="topbar-actions">
                 <input aria-label="빠른 이동" placeholder="메뉴 또는 작업 검색" readOnly value={activeMenu.label} />
+                <button
+                  type="button"
+                  className="secondary"
+                  aria-label="관리자 로그아웃"
+                  onClick={() => {
+                    clearToken();
+                    setToken("");
+                    setTranslationPolicy(null);
+                    setTranslationStatus(null);
+                    setTranslationResult([]);
+                    setOverview(null);
+                    setMonitoringOverview(null);
+                    setMonitoringEvents([]);
+                    setApprovalAuditLogs([]);
+                    setAlertPanelOpen(false);
+                    setActiveAdminMenu("dashboard");
+                  }}
+                >
+                  {t(locale, "logout")}
+                </button>
                 <div className="alert-panel-wrap">
                   <button
                     type="button"

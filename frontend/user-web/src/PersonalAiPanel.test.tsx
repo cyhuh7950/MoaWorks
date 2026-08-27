@@ -11,6 +11,7 @@ const configured = {
   connectionStatus: "ready" as const,
   lastTestCode: "PERSONAL_AI_CONNECTION_READY",
   lastTestedAt: "2026-08-28T00:00:00Z",
+  configSource: "personal" as const,
 };
 
 function createClient(overrides: Partial<PersonalAiClient> = {}): PersonalAiClient {
@@ -22,6 +23,14 @@ function createClient(overrides: Partial<PersonalAiClient> = {}): PersonalAiClie
       ],
     }),
     getConfig: vi.fn().mockResolvedValue(configured),
+    listModels: vi.fn().mockResolvedValue({
+      success: true,
+      provider: "openai",
+      models: ["gpt-test", "gpt-next"],
+      code: "PERSONAL_AI_MODELS_OK",
+      message: "사용 가능한 모델 2개를 불러왔습니다.",
+      loadedAt: "2026-08-28T00:00:00Z",
+    }),
     saveConfig: vi.fn().mockResolvedValue(configured),
     testConnection: vi.fn().mockResolvedValue({
       success: true,
@@ -48,6 +57,52 @@ afterEach(() => {
 });
 
 describe("Web 개인 AI 채팅", () => {
+  it("개인 설정이 없으면 관리자 기본 LLM으로 연결 시험 없이 질문할 수 있다", async () => {
+    const client = createClient({
+      getConfig: vi.fn().mockResolvedValue({
+        ...configured,
+        provider: "upstage",
+        model: "solar-pro4",
+        configSource: "admin_default",
+        lastTestCode: null,
+        lastTestedAt: null,
+      }),
+    });
+    render(<PersonalAiPanel token="token" client={client} />);
+
+    await screen.findByText("관리자 기본 LLM 사용 중");
+    fireEvent.change(screen.getByRole("textbox", { name: "AI 질문" }), { target: { value: "기본 질문" } });
+
+    expect((screen.getByRole("button", { name: "AI 질문 보내기" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(client.testConnection).not.toHaveBeenCalled();
+  });
+
+  it("개인 설정에서 Provider 모델을 불러와 선택하고 저장한다", async () => {
+    const listModels = vi.fn().mockResolvedValue({
+      success: true,
+      provider: "openai",
+      models: ["gpt-test", "gpt-next"],
+      code: "PERSONAL_AI_MODELS_OK",
+      message: "사용 가능한 모델 2개를 불러왔습니다.",
+      loadedAt: "2026-08-28T00:00:00Z",
+    });
+    const saveConfig = vi.fn().mockResolvedValue({ ...configured, model: "gpt-next" });
+    const client = createClient({ listModels, saveConfig });
+    render(<PersonalAiPanel token="token" client={client} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "AI 연결 설정" }));
+    fireEvent.click(screen.getByRole("button", { name: "개인 AI 모델 불러오기" }));
+    await screen.findByRole("option", { name: "gpt-next" });
+    fireEvent.change(screen.getByRole("combobox", { name: "개인 AI 모델" }), { target: { value: "gpt-next" } });
+    fireEvent.click(screen.getByRole("button", { name: "개인 AI 설정 저장" }));
+
+    expect(listModels).toHaveBeenCalledWith("token", { provider: "openai" });
+    await waitFor(() => expect(saveConfig).toHaveBeenCalledWith("token", {
+      provider: "openai",
+      model: "gpt-next",
+    }));
+  });
+
   it("현재 세션에서 연결 시험이 성공하기 전에는 질문 전송을 허용하지 않는다", async () => {
     const client = createClient();
     render(<PersonalAiPanel token="token" client={client} />);
@@ -176,7 +231,7 @@ describe("Web 개인 AI 채팅", () => {
     render(<PersonalAiPanel token="token" client={client} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "AI 연결 설정" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "모델" }), { target: { value: "unsaved-model" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "개인 AI 모델" }), { target: { value: "" } });
 
     expect((screen.getByRole("button", { name: "LLM 연결 시험" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText("설정 저장 필요")).toBeTruthy();

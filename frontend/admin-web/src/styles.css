@@ -1,12 +1,20 @@
 :root {
+  --moaworks-font-family: Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", "Segoe UI", sans-serif;
   color: #16222d;
   background:
     radial-gradient(circle at top left, rgba(37, 152, 117, 0.18), transparent 25%),
     linear-gradient(180deg, #eff8f3 0%, #f5f1e8 100%);
-  font-family: "Segoe UI", "Noto Sans KR", sans-serif;
+  font-family: var(--moaworks-font-family);
   font-size: 12px;
   line-height: 1.5;
   font-weight: 400;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
 }
 
 * {

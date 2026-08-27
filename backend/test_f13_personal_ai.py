@@ -203,6 +203,32 @@ class InMemoryPersonalAiStore:
         return count
 
 
+class InMemoryCompanyLlmStore:
+    def __init__(self, policies: dict[str, dict[str, object]]) -> None:
+        self.policies = {key: dict(value) for key, value in policies.items()}
+
+    def get_policy(
+        self, company_id: str, *, include_secret: bool = False
+    ) -> dict[str, object]:
+        policy = dict(
+            self.policies.get(
+                company_id,
+                {
+                    "provider": "disabled",
+                    "enabled": False,
+                    "model": "",
+                    "apiBaseUrl": "",
+                    "apiKeyConfigured": False,
+                    "apiKey": "",
+                    "timeoutSeconds": 15,
+                },
+            )
+        )
+        if not include_secret:
+            policy.pop("apiKey", None)
+        return policy
+
+
 class FixturePersonalAiProviderClient:
     def __init__(
         self,
@@ -278,6 +304,7 @@ class PersonalAiSchemaContractTest(unittest.TestCase):
                 "connectionStatus",
                 "lastTestCode",
                 "lastTestedAt",
+                "configSource",
             },
         )
 
@@ -805,6 +832,22 @@ class PersonalAiServiceTest(unittest.TestCase):
             }
         )
 
+    @staticmethod
+    def _admin_store() -> InMemoryCompanyLlmStore:
+        return InMemoryCompanyLlmStore(
+            {
+                "company-f13": {
+                    "provider": "upstage",
+                    "enabled": True,
+                    "model": "solar-pro4",
+                    "apiBaseUrl": "https://api.upstage.ai/v1",
+                    "apiKeyConfigured": True,
+                    "apiKey": "fixture-admin-credential",
+                    "timeoutSeconds": 18,
+                }
+            }
+        )
+
     def test_catalog_and_config_hide_endpoint_and_secret_for_actor_scope(self) -> None:
         from app.services.personal_ai_service import PersonalAiService
 
@@ -826,6 +869,94 @@ class PersonalAiServiceTest(unittest.TestCase):
         self.assertNotIn("fixture-personal-credential", rendered)
         self.assertNotIn("other-user-credential", rendered)
         self.assertNotIn("apiBaseUrl", rendered)
+
+    def test_missing_personal_config_uses_same_company_admin_default_without_exposing_secret(self) -> None:
+        from app.schemas.personal_ai import PersonalAiChatRequest
+        from app.services.personal_ai_service import PersonalAiService
+
+        client = FixturePersonalAiProviderClient(output="관리자 기본 답변")
+        service = PersonalAiService(
+            store=InMemoryPersonalAiStore({}),
+            company_llm_store=self._admin_store(),
+            provider_client=client,
+        )
+
+        config = service.get_config(personal_ai_actor()).model_dump(mode="json")
+        response = service.chat(
+            personal_ai_actor(),
+            PersonalAiChatRequest(messages=[{"role": "user", "content": "질문"}]),
+        )
+
+        self.assertEqual(config["configSource"], "admin_default")
+        self.assertEqual(config["provider"], "upstage")
+        self.assertEqual(config["model"], "solar-pro4")
+        self.assertEqual(config["connectionStatus"], "ready")
+        self.assertNotIn("fixture-admin-credential", json.dumps(config))
+        self.assertEqual(response.message.content, "관리자 기본 답변")
+        self.assertEqual(client.chat_configs[0]["apiKey"], "fixture-admin-credential")
+        self.assertEqual(client.chat_configs[0]["apiBaseUrl"], "https://api.upstage.ai/v1")
+
+    def test_personal_config_wins_and_admin_default_is_tenant_scoped(self) -> None:
+        from app.services.personal_ai_service import PersonalAiService
+
+        personal_service = PersonalAiService(
+            store=self._configured_store(),
+            company_llm_store=self._admin_store(),
+            provider_client=FixturePersonalAiProviderClient(),
+        )
+        self.assertEqual(
+            personal_service.get_config(personal_ai_actor()).configSource,
+            "personal",
+        )
+        self.assertEqual(personal_service.get_config(personal_ai_actor()).provider, "groq")
+
+        other_company = personal_ai_actor().model_copy(
+            update={"companyId": "company-other", "userId": "user-other"}
+        )
+        empty_service = PersonalAiService(
+            store=InMemoryPersonalAiStore({}),
+            company_llm_store=self._admin_store(),
+            provider_client=FixturePersonalAiProviderClient(),
+        )
+        config = empty_service.get_config(other_company)
+        self.assertEqual(config.configSource, "unconfigured")
+        self.assertEqual(config.provider, "")
+
+    def test_model_list_uses_personal_key_then_admin_default_without_returning_credentials(self) -> None:
+        from app.schemas.personal_ai import PersonalAiModelListRequest
+        from app.services.personal_ai_service import PersonalAiService
+
+        service = PersonalAiService(
+            store=self._configured_store(),
+            company_llm_store=self._admin_store(),
+            provider_client=FixturePersonalAiProviderClient(),
+        )
+        with patch(
+            "app.services.personal_ai_service.fetch_translation_models",
+            return_value=["model-a", "model-b"],
+        ) as fetch_models:
+            result = service.list_models(
+                personal_ai_actor(), PersonalAiModelListRequest(provider="groq")
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.models, ["model-a", "model-b"])
+        self.assertNotIn("credential", result.model_dump_json())
+        self.assertEqual(fetch_models.call_args.kwargs["api_key"], "fixture-personal-credential")
+
+        with patch(
+            "app.services.personal_ai_service.fetch_translation_models",
+            return_value=["solar-pro4"],
+        ) as fetch_models:
+            result = service.list_models(
+                personal_ai_actor(), PersonalAiModelListRequest(provider="upstage")
+            )
+        self.assertEqual(result.models, ["solar-pro4"])
+        self.assertEqual(fetch_models.call_args.kwargs["api_key"], "fixture-admin-credential")
+        self.assertEqual(
+            fetch_models.call_args.kwargs["api_base_url"],
+            "https://api.upstage.ai/v1",
+        )
 
     def test_connection_transitions_to_ready_and_enforces_five_per_minute(self) -> None:
         from app.services.personal_ai_service import PersonalAiService
@@ -988,6 +1119,7 @@ class PersonalAiRouteContractTest(unittest.TestCase):
             ("/workspace/personal-ai/providers", "GET"): "PersonalAiProviderListView",
             ("/workspace/personal-ai/config", "GET"): "PersonalAiConfigView",
             ("/workspace/personal-ai/config", "PUT"): "PersonalAiConfigView",
+            ("/workspace/personal-ai/models", "POST"): "PersonalAiModelListView",
             ("/workspace/personal-ai/test", "POST"): "PersonalAiConnectionTestView",
             ("/workspace/personal-ai/chat", "POST"): "PersonalAiChatResponse",
         }

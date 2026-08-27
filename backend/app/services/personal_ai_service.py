@@ -12,6 +12,8 @@ from app.schemas.personal_ai import (
     PersonalAiConfigUpdate,
     PersonalAiConfigView,
     PersonalAiConnectionTestView,
+    PersonalAiModelListRequest,
+    PersonalAiModelListView,
     PersonalAiProviderListView,
 )
 from app.services.personal_ai_provider import (
@@ -19,7 +21,8 @@ from app.services.personal_ai_provider import (
     PersonalAiProviderError,
 )
 from app.services.personal_ai_store import PersonalAiStore
-from app.services.translation_provider import PROVIDER_PROFILES
+from app.services.translation_operations_store import TranslationOperationsStore
+from app.services.translation_provider import PROVIDER_PROFILES, fetch_translation_models
 
 
 class PersonalAiService:
@@ -27,9 +30,11 @@ class PersonalAiService:
         self,
         *,
         store: PersonalAiStore | None = None,
+        company_llm_store: TranslationOperationsStore | None = None,
         provider_client: PersonalAiProviderClient | None = None,
     ) -> None:
         self.store = store or PersonalAiStore()
+        self.company_llm_store = company_llm_store or TranslationOperationsStore()
         self.provider_client = provider_client or PersonalAiProviderClient()
 
     def list_providers(self) -> PersonalAiProviderListView:
@@ -45,18 +50,67 @@ class PersonalAiService:
         )
 
     def get_config(self, actor: AuthUserSummary) -> PersonalAiConfigView:
-        return PersonalAiConfigView(**self.store.get_config(actor))
+        return PersonalAiConfigView(**self._effective_config(actor))
 
     def update_config(
         self, actor: AuthUserSummary, payload: PersonalAiConfigUpdate
     ) -> PersonalAiConfigView:
-        return PersonalAiConfigView(**self.store.save_config(actor, payload))
+        return PersonalAiConfigView(
+            **self.store.save_config(actor, payload), configSource="personal"
+        )
+
+    def list_models(
+        self, actor: AuthUserSummary, payload: PersonalAiModelListRequest
+    ) -> PersonalAiModelListView:
+        self.store.acquire_rate_limit(actor, "test", limit=5)
+        draft_key = payload.apiKey.get_secret_value() if payload.apiKey else ""
+        personal = self.store.get_config(actor, include_secret=True)
+        company_default = self.company_llm_store.get_policy(
+            actor.companyId, include_secret=True
+        )
+        api_key = draft_key
+        api_base_url = str(PROVIDER_PROFILES[payload.provider]["apiBaseUrl"])
+        timeout_seconds = 15
+        if not api_key and personal.get("provider") == payload.provider:
+            api_key = str(personal.get("apiKey") or "")
+        if (
+            not api_key
+            and company_default.get("enabled")
+            and company_default.get("provider") == payload.provider
+        ):
+            api_key = str(company_default.get("apiKey") or "")
+            api_base_url = str(company_default.get("apiBaseUrl") or api_base_url)
+            timeout_seconds = int(company_default.get("timeoutSeconds") or 15)
+        try:
+            models = fetch_translation_models(
+                payload.provider,
+                api_key=api_key,
+                api_base_url=api_base_url,
+                timeout_seconds=timeout_seconds,
+            )
+            return PersonalAiModelListView(
+                success=True,
+                provider=payload.provider,
+                models=models,
+                code="PERSONAL_AI_MODELS_OK",
+                message=f"사용 가능한 모델 {len(models)}개를 불러왔습니다.",
+                loadedAt=datetime.now(UTC),
+            )
+        except Exception:
+            return PersonalAiModelListView(
+                success=False,
+                provider=payload.provider,
+                models=[],
+                code="PERSONAL_AI_MODELS_FAILED",
+                message="모델 목록을 불러오지 못했습니다.",
+                loadedAt=datetime.now(UTC),
+            )
 
     def test_connection(
         self, actor: AuthUserSummary
     ) -> PersonalAiConnectionTestView:
         self.store.acquire_rate_limit(actor, "test", limit=5)
-        config = self.store.get_config(actor, include_secret=True)
+        config = self._effective_config(actor, include_secret=True)
         self._require_configured(config)
         tested_at = datetime.now(UTC)
         try:
@@ -67,7 +121,8 @@ class PersonalAiService:
                 if exc.code == "PERSONAL_AI_RESPONSE_INVALID"
                 else "PERSONAL_AI_CONNECTION_FAILED"
             )
-            self.store.record_test(actor, False, code)
+            if config.get("configSource") == "personal":
+                self.store.record_test(actor, False, code)
             return PersonalAiConnectionTestView(
                 success=False,
                 provider=str(config["provider"]),
@@ -79,7 +134,8 @@ class PersonalAiService:
             )
         except Exception:
             code = "PERSONAL_AI_CONNECTION_FAILED"
-            self.store.record_test(actor, False, code)
+            if config.get("configSource") == "personal":
+                self.store.record_test(actor, False, code)
             return PersonalAiConnectionTestView(
                 success=False,
                 provider=str(config["provider"]),
@@ -91,7 +147,8 @@ class PersonalAiService:
             )
 
         code = "PERSONAL_AI_CONNECTION_READY"
-        self.store.record_test(actor, True, code)
+        if config.get("configSource") == "personal":
+            self.store.record_test(actor, True, code)
         return PersonalAiConnectionTestView(
             success=True,
             provider=str(config["provider"]),
@@ -106,7 +163,7 @@ class PersonalAiService:
         self, actor: AuthUserSummary, payload: PersonalAiChatRequest
     ) -> PersonalAiChatResponse:
         self.store.acquire_rate_limit(actor, "chat", limit=20)
-        config = self.store.get_config(actor, include_secret=True)
+        config = self._effective_config(actor, include_secret=True)
         self._require_configured(config)
         if config.get("connectionStatus") != "ready":
             raise HTTPException(
@@ -135,6 +192,50 @@ class PersonalAiService:
             message={"role": "assistant", "content": output},
             generatedAt=datetime.now(UTC),
         )
+
+    def _effective_config(
+        self, actor: AuthUserSummary, *, include_secret: bool = False
+    ) -> dict[str, Any]:
+        personal = self.store.get_config(actor, include_secret=include_secret)
+        if str(personal.get("provider") or ""):
+            return {**personal, "configSource": "personal"}
+
+        company_default = self.company_llm_store.get_policy(
+            actor.companyId, include_secret=include_secret
+        )
+        provider = str(company_default.get("provider") or "")
+        profile = PROVIDER_PROFILES.get(provider)
+        model = str(company_default.get("model") or "")
+        api_key = str(company_default.get("apiKey") or "") if include_secret else ""
+        configured = bool(company_default.get("apiKeyConfigured"))
+        if include_secret:
+            configured = bool(api_key)
+        valid = bool(
+            company_default.get("enabled")
+            and profile is not None
+            and model
+            and (not profile["apiKeyRequired"] or configured)
+        )
+        if not valid:
+            return {**personal, "configSource": "unconfigured"}
+        result: dict[str, Any] = {
+            "provider": provider,
+            "model": model,
+            "apiKeyConfigured": configured,
+            "connectionStatus": "ready",
+            "lastTestCode": None,
+            "lastTestedAt": None,
+            "configSource": "admin_default",
+        }
+        if include_secret:
+            result.update(
+                {
+                    "apiKey": api_key,
+                    "apiBaseUrl": str(company_default.get("apiBaseUrl") or ""),
+                    "timeoutSeconds": int(company_default.get("timeoutSeconds") or 15),
+                }
+            )
+        return result
 
     @staticmethod
     def _require_configured(config: dict[str, Any]) -> None:

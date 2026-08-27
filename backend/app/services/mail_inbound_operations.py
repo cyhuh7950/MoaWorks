@@ -153,11 +153,11 @@ class MailInboundOperations:
                             id,company_id,sender_user_id,sender_account_id,sender_email,subject,body_text,body_html,
                             status,sent_at,created_at,updated_at,retention_expires_at,attachment_count,
                             sender_display_name,reply_to_email,message_encoding,sender_copy_saved,read_receipt_requested
-                        ) VALUES (%s,%s,NULL,NULL,%s,%s,%s,%s,'sent',%s,%s,%s,%s,%s,'',NULL,'utf-8',FALSE,FALSE)""",
+                        ) VALUES (%s,%s,NULL,NULL,%s,%s,%s,%s,'sent',%s,%s,%s,%s,%s,%s,NULL,'utf-8',FALSE,FALSE)""",
                         (
                             message_id, recipient["company_id"], parsed.sender_email, parsed.subject,
                             parsed.body_text, parsed.body_html, now, now, now, now + timedelta(days=30),
-                            len(parsed.attachments),
+                            len(parsed.attachments), parsed.sender_display_name,
                         ),
                     )
                     for index, attachment in enumerate(parsed.attachments):

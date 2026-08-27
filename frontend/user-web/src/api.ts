@@ -2,6 +2,7 @@ import {
   readPersonalAiChatResponse,
   readPersonalAiConfig,
   readPersonalAiConnectionTest,
+  readPersonalAiModelList,
   readPersonalAiProviders,
 } from "./personalAi";
 
@@ -117,6 +118,7 @@ export type TranslationResponse = {
 };
 
 export type PersonalAiConnectionStatus = "unconfigured" | "untested" | "ready" | "error";
+export type PersonalAiConfigSource = "personal" | "admin_default" | "unconfigured";
 
 export type PersonalAiProviderOption = {
   provider: string;
@@ -131,6 +133,16 @@ export type PersonalAiConfig = {
   connectionStatus: PersonalAiConnectionStatus;
   lastTestCode: string | null;
   lastTestedAt: string | null;
+  configSource: PersonalAiConfigSource;
+};
+
+export type PersonalAiModelList = {
+  success: boolean;
+  provider: string;
+  models: string[];
+  code: string;
+  message: string;
+  loadedAt: string;
 };
 
 export type PersonalAiConnectionTest = {
@@ -1174,6 +1186,17 @@ export async function updatePersonalAiConfig(
 ): Promise<PersonalAiConfig> {
   return readPersonalAiConfig(await request<unknown>("/workspace/personal-ai/config", {
     method: "PUT",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }));
+}
+
+export async function fetchPersonalAiModels(
+  token: string,
+  payload: { provider: string; apiKey?: string },
+): Promise<PersonalAiModelList> {
+  return readPersonalAiModelList(await request<unknown>("/workspace/personal-ai/models", {
+    method: "POST",
     headers: { ...authHeaders(token), "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   }));

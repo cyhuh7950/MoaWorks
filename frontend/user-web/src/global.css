@@ -1,9 +1,21 @@
+:root {
+  --moaworks-font-family: Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", "Segoe UI", sans-serif;
+  font-family: var(--moaworks-font-family);
+}
+
 html,
 body,
 #root {
   height: 100%;
   min-height: 100%;
   margin: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
 }
 
 /* UI-041 address book */

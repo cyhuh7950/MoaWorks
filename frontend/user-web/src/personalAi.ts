@@ -2,8 +2,10 @@ import type {
   PersonalAiChatMessage,
   PersonalAiChatResponse,
   PersonalAiConfig,
+  PersonalAiConfigSource,
   PersonalAiConnectionStatus,
   PersonalAiConnectionTest,
+  PersonalAiModelList,
   PersonalAiProviderOption,
 } from "./api";
 
@@ -11,6 +13,7 @@ const maxMessages = 20;
 const maxMessageCharacters = 8000;
 const maxTotalCharacters = 32000;
 const connectionStatuses = new Set<PersonalAiConnectionStatus>(["unconfigured", "untested", "ready", "error"]);
+const configSources = new Set<PersonalAiConfigSource>(["personal", "admin_default", "unconfigured"]);
 
 function malformedResponse(): Error {
   return new Error("개인 AI 응답을 확인할 수 없습니다.");
@@ -83,6 +86,7 @@ export function readPersonalAiConfig(body: unknown): PersonalAiConfig {
     || typeof body.model !== "string"
     || typeof body.apiKeyConfigured !== "boolean"
     || !connectionStatuses.has(body.connectionStatus as PersonalAiConnectionStatus)
+    || !configSources.has(body.configSource as PersonalAiConfigSource)
     || !isNullableString(body.lastTestCode ?? null)
     || !isNullableString(body.lastTestedAt ?? null)
   ) {
@@ -95,6 +99,35 @@ export function readPersonalAiConfig(body: unknown): PersonalAiConfig {
     connectionStatus: body.connectionStatus as PersonalAiConnectionStatus,
     lastTestCode: typeof body.lastTestCode === "string" ? body.lastTestCode : null,
     lastTestedAt: typeof body.lastTestedAt === "string" ? body.lastTestedAt : null,
+    configSource: body.configSource as PersonalAiConfigSource,
+  };
+}
+
+export function readPersonalAiModelList(body: unknown): PersonalAiModelList {
+  if (
+    !isRecord(body)
+    || typeof body.success !== "boolean"
+    || !isLowercaseProvider(body.provider)
+    || !Array.isArray(body.models)
+    || body.models.some((model) => typeof model !== "string" || !model.trim() || model !== model.trim())
+    || typeof body.code !== "string"
+    || !body.code
+    || typeof body.message !== "string"
+    || !body.message
+    || typeof body.loadedAt !== "string"
+    || !body.loadedAt
+    || (body.success && body.models.length === 0)
+    || (!body.success && body.models.length > 0)
+  ) {
+    throw malformedResponse();
+  }
+  return {
+    success: body.success,
+    provider: body.provider,
+    models: [...new Set(body.models as string[])],
+    code: body.code,
+    message: body.message,
+    loadedAt: body.loadedAt,
   };
 }
 

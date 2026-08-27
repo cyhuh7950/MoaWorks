@@ -34,6 +34,7 @@ class MailInboundContractTest(unittest.TestCase):
 
         self.assertEqual(parsed.message_id, "<external-1@example.net>")
         self.assertEqual(parsed.sender_email, "sender@example.net")
+        self.assertEqual(parsed.sender_display_name, "외부 발신자")
         self.assertEqual(parsed.subject, "외부 수신 테스트")
         self.assertEqual(parsed.body_text.strip(), "일반 텍스트 본문")
         self.assertIn("HTML 본문", parsed.body_html or "")

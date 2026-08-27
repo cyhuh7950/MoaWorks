@@ -213,6 +213,8 @@ function createClearedMobileSessionState(message = "") {
     personalAiProviders: [],
     llmProvider: "openai",
     llmModel: "",
+    llmModels: [],
+    llmConfigSource: "unconfigured",
     llmApiKey: "",
     llmApiKeyConfigured: false,
     llmConnectionStatus: "unconfigured",

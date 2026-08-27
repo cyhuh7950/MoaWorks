@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 3520",
     "build": "tsc -b && vite build",
-    "test": "vitest run --exclude scripts/cr037-outgoing-translation-popup.test.mjs && node --test scripts/cr037-outgoing-translation-popup.test.mjs",
+    "test": "vitest run --exclude scripts/cr037-outgoing-translation-popup.test.mjs && node --test scripts/cr037-outgoing-translation-popup.test.mjs scripts/unified-experience-contract.mjs",
     "verify:mail-rich-editor": "node scripts/web-mail-rich-editor-static-verify.mjs",
     "verify:translation-visibility": "node scripts/stage03-translation-visibility-verify.mjs",
     "verify:translation-bootstrap": "node scripts/stage03-translation-bootstrap-verify.mjs"

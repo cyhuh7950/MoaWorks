@@ -14,7 +14,7 @@ from app.services.mail_inbound_operations import MailInboundOperations, MailInbo
 
 def inbound_raw(*, infected: bool = False) -> bytes:
     message = EmailMessage()
-    message["From"] = "sender@example.net"
+    message["From"] = "외부 발신자 <sender@example.net>"
     message["To"] = "admin@moaworks.sinsan.kr"
     message["Subject"] = "수신"
     message["Message-ID"] = "<inbound@example.net>"
@@ -107,6 +107,10 @@ class MailInboundIngestTest(unittest.TestCase):
         self.assertIn("INSERT INTO mail_recipients", statements)
         self.assertIn("INSERT INTO mail_attachments", statements)
         self.assertIn("INSERT INTO audit_logs", statements)
+        message_insert = next(
+            params for query, params in cursor.statements if query.startswith("INSERT INTO mail_messages")
+        )
+        self.assertIn("외부 발신자", message_insert)
         self.assertTrue(db.migrations_checked)
         self.assertEqual(db.connection.commits, 1)
 

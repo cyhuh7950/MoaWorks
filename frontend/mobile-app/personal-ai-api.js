@@ -1,4 +1,5 @@
 const PERSONAL_AI_CONNECTION_STATUSES = new Set(["unconfigured", "untested", "ready", "error"]);
+const PERSONAL_AI_CONFIG_SOURCES = new Set(["personal", "admin_default", "unconfigured"]);
 const MAX_CHAT_MESSAGES = 20;
 const MAX_CHAT_MESSAGE_CHARACTERS = 8000;
 const MAX_CHAT_TOTAL_CHARACTERS = 32000;
@@ -40,6 +41,7 @@ function readPersonalAiConfig(body) {
     || typeof body.model !== "string"
     || typeof body.apiKeyConfigured !== "boolean"
     || !PERSONAL_AI_CONNECTION_STATUSES.has(body.connectionStatus)
+    || !PERSONAL_AI_CONFIG_SOURCES.has(body.configSource)
     || !isNullableString(body.lastTestCode ?? null)
     || !isNullableString(body.lastTestedAt ?? null)
   ) {
@@ -52,7 +54,28 @@ function readPersonalAiConfig(body) {
     connectionStatus: body.connectionStatus,
     lastTestCode: body.lastTestCode ?? null,
     lastTestedAt: body.lastTestedAt ?? null,
+    configSource: body.configSource,
   };
+}
+
+function readPersonalAiModelList(body) {
+  if (!body
+    || typeof body.success !== "boolean"
+    || !isLowercaseProvider(body.provider)
+    || !Array.isArray(body.models)
+    || body.models.some((model) => typeof model !== "string" || !model.trim() || model !== model.trim())
+    || typeof body.code !== "string" || !body.code
+    || typeof body.message !== "string" || !body.message
+    || typeof body.loadedAt !== "string" || !body.loadedAt
+    || (body.success && body.models.length === 0)
+    || (!body.success && body.models.length > 0)) {
+    throw malformedResponse();
+  }
+  return { ...body, models: [...new Set(body.models)] };
+}
+
+function isPersonalAiConfigReady(config) {
+  return Boolean(config && config.configSource === "admin_default" && config.connectionStatus === "ready");
 }
 
 function buildPersonalAiConfigPayload({ provider, model, apiKeyDraft }) {
@@ -179,5 +202,7 @@ module.exports = {
   readPersonalAiChatResponse,
   readPersonalAiConfig,
   readPersonalAiConnectionTest,
+  readPersonalAiModelList,
   readPersonalAiProviders,
+  isPersonalAiConfigReady,
 };

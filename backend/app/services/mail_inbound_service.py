@@ -22,6 +22,7 @@ class ParsedInboundMessage:
     message_id: str
     content_sha256: str
     sender_email: str
+    sender_display_name: str
     subject: str
     body_text: str
     body_html: str | None
@@ -54,12 +55,15 @@ def parse_inbound_message(raw_message: bytes) -> ParsedInboundMessage:
                 content=content,
             )
         )
-    sender_email = parseaddr(str(message.get("From") or ""))[1].strip().lower()
+    sender_display_name, sender_email = parseaddr(str(message.get("From") or ""))
+    sender_display_name = " ".join(sender_display_name.split())[:100]
+    sender_email = sender_email.strip().lower()
     digest = sha256(raw_message).hexdigest()
     return ParsedInboundMessage(
         message_id=str(message.get("Message-ID") or f"<{digest}@inbound.local>"),
         content_sha256=digest,
         sender_email=sender_email,
+        sender_display_name=sender_display_name,
         subject=str(message.get("Subject") or ""),
         body_text=body_text,
         body_html=body_html,

@@ -99,7 +99,7 @@ function installMountedMailFetch() {
     if (url.includes("/mail/preferences/basic")) return mountedJson(mountedBasicPreferences);
     if (url.includes("/mail/signatures")) return mountedJson({ enabled: false, position: "body_bottom", defaultSignatureId: null, version: 1, updatedAt: "2026-08-26T00:00:00Z", signatures: [] });
     if (url.includes("/workspace/personal-ai/providers")) return mountedJson({ providers: [{ provider: "openai", label: "OpenAI", apiKeyRequired: true }] });
-    if (url.includes("/workspace/personal-ai/config")) return mountedJson({ provider: "openai", model: "gpt-test", apiKeyConfigured: true, connectionStatus: "ready", lastTestCode: "PERSONAL_AI_CONNECTION_READY", lastTestedAt: "2026-08-28T00:00:00Z" });
+    if (url.includes("/workspace/personal-ai/config")) return mountedJson({ provider: "openai", model: "gpt-test", apiKeyConfigured: true, connectionStatus: "ready", lastTestCode: "PERSONAL_AI_CONNECTION_READY", lastTestedAt: "2026-08-28T00:00:00Z", configSource: "personal" });
     if (url.includes("/mail/mail-draft/draft")) return mountedDraftFailure ? mountedJson({ detail: "forced draft failure" }, 500) : mountedJson(mountedDetail);
     if (url.includes("/mail/send")) return mountedSendFailure ? mountedJson({ detail: "forced send failure" }, 500) : mountedJson({ mailId: "mail-outgoing", status: "sent", sentAt: "2026-08-26T00:00:00Z", internalCount: 1, externalCount: 0, queuedCount: 0, blockedCount: 0 });
     return mountedJson({}, 404);

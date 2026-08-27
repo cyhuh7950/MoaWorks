@@ -18,6 +18,7 @@ PersonalAiProvider = Literal[
     "ollama",
 ]
 PersonalAiConnectionStatus = Literal["unconfigured", "untested", "ready", "error"]
+PersonalAiConfigSource = Literal["personal", "admin_default", "unconfigured"]
 
 
 class PersonalAiConfigUpdate(BaseModel):
@@ -53,6 +54,7 @@ class PersonalAiConfigView(BaseModel):
     connectionStatus: PersonalAiConnectionStatus = "unconfigured"
     lastTestCode: str | None = None
     lastTestedAt: datetime | None = None
+    configSource: PersonalAiConfigSource = "unconfigured"
 
 
 class PersonalAiProviderOption(BaseModel):
@@ -63,6 +65,25 @@ class PersonalAiProviderOption(BaseModel):
 
 class PersonalAiProviderListView(BaseModel):
     providers: list[PersonalAiProviderOption]
+
+
+class PersonalAiModelListRequest(BaseModel):
+    provider: PersonalAiProvider
+    apiKey: SecretStr | None = Field(default=None, min_length=1, max_length=1000)
+
+    @field_validator("provider", mode="before")
+    @classmethod
+    def normalize_provider(cls, value: object) -> object:
+        return value.strip().lower() if isinstance(value, str) else value
+
+
+class PersonalAiModelListView(BaseModel):
+    success: bool
+    provider: str
+    models: list[str]
+    code: str
+    message: str
+    loadedAt: datetime
 
 
 class PersonalAiConnectionTestView(BaseModel):

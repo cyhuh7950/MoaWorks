@@ -7,6 +7,7 @@ import {
   readPersonalAiChatResponse,
   readPersonalAiConfig,
   readPersonalAiConnectionTest,
+  readPersonalAiModelList,
   readPersonalAiProviders,
 } from "./personalAi";
 
@@ -56,8 +57,11 @@ describe("Web 개인 AI payload 계약", () => {
       providers: [{ provider: "openai", label: "OpenAI", apiKeyRequired: true }],
     });
     expect(readPersonalAiConfig({
-      provider: "openai", model: "gpt-test", apiKeyConfigured: true, connectionStatus: "ready",
-    })).toMatchObject({ lastTestCode: null, lastTestedAt: null });
+      provider: "openai", model: "gpt-test", apiKeyConfigured: true, connectionStatus: "ready", configSource: "personal",
+    })).toMatchObject({ lastTestCode: null, lastTestedAt: null, configSource: "personal" });
+    expect(readPersonalAiModelList({
+      success: true, provider: "openai", models: ["gpt-5", "gpt-4.1"], code: "OK", message: "완료", loadedAt: "now",
+    }).models).toEqual(["gpt-5", "gpt-4.1"]);
     expect(readPersonalAiConnectionTest({
       success: true, provider: "openai", model: "gpt-test", code: "READY", message: "준비됨",
       connectionStatus: "ready", testedAt: "2026-08-28T00:00:00Z",
@@ -69,6 +73,7 @@ describe("Web 개인 AI payload 계약", () => {
 
     expect(() => readPersonalAiProviders({ providers: [{ provider: "OpenAI", label: "OpenAI", apiKeyRequired: true }] })).toThrow(/응답/);
     expect(() => readPersonalAiConfig({ provider: "openai", model: "gpt", apiKeyConfigured: true, connectionStatus: "unknown" })).toThrow(/응답/);
+    expect(() => readPersonalAiModelList({ success: true, provider: "openai", models: ["", "gpt"], code: "OK", message: "완료", loadedAt: "now" })).toThrow(/응답/);
     expect(() => readPersonalAiConnectionTest({
       success: false, provider: "openai", model: "gpt", code: "READY", message: "모순",
       connectionStatus: "ready", testedAt: "now",

@@ -214,6 +214,7 @@ import {
 } from "./mailOutgoingTranslation";
 import { MailRichTextEditor } from "./MailRichTextEditor";
 import type { InlineImageDraft } from "./mailInlineImages";
+import { formatMailSender } from "./mailSenderDisplay";
 import {
   applyTranslatedSegments,
   extractTranslationSegments,
@@ -5130,7 +5131,7 @@ export default function App() {
     mailId: item.mailId,
     sourceMailbox: item.sourceMailbox ?? "inbox",
     selectionKey: mailSelectionKey(item, activeMailFolder),
-    sender: mailPreferences?.senderDisplayMode === "name" && item.senderDisplayName ? item.senderDisplayName : item.senderDisplayName ? `${item.senderDisplayName} <${item.senderEmail}>` : item.senderEmail,
+    sender: formatMailSender(item.senderDisplayName, item.senderEmail, mailPreferences?.senderDisplayMode ?? "name"),
     subject: item.subject,
     time: formatDateLabel(item.receivedAt || item.sentAt),
     unread: !item.isRead,

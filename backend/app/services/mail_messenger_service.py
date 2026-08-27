@@ -204,7 +204,8 @@ class MailMessengerService:
         now = self._now()
         sidecar_snapshots: dict[str, bytes] = {}
         removed_sidecar_snapshots: dict[str, bytes] = {}
-        requested_retained_ids = None if payload.retainedAttachmentIds is None else set(payload.retainedAttachmentIds)
+        retained_attachment_ids = getattr(payload, "retainedAttachmentIds", None)
+        requested_retained_ids = None if retained_attachment_ids is None else set(retained_attachment_ids)
         with self.db.connect() as connection:
             try:
                 with connection.cursor() as cursor:
@@ -2826,6 +2827,13 @@ class MailMessengerService:
             raise ValueError("같은 첨부 파일을 중복 사용할 수 없습니다.")
         if sum(item["size_bytes"] for item in resolved_attachments) > settings.mail_attachment_max_total_bytes:
             raise ValueError("첨부 파일의 전체 용량 제한을 초과했습니다.")
+        referenced_content_ids = extract_cid_references(payload.bodyHtml)
+        preflight_body_html = sanitize_mail_html(payload.bodyHtml, referenced_content_ids)
+        if not payload.copiedAttachmentIds:
+            preflight_body_html = self._sanitize_resolved_body_html(
+                preflight_body_html,
+                resolved_attachments,
+            )
         now = self._now()
         mail_id = self._new_id("mailmsg")
         sent_at = now if status_value == "sent" else None
@@ -2850,7 +2858,7 @@ class MailMessengerService:
                 payload = payload.model_copy(
                     update={
                         "bodyHtml": self._sanitize_resolved_body_html(
-                            payload.bodyHtml,
+                            preflight_body_html,
                             resolved_attachments,
                         )
                     }

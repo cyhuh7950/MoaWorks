@@ -24,6 +24,7 @@ test("서버 provider/config 응답만 안전한 모바일 상태로 읽는다",
     model: "llama-3.3-70b-versatile",
     apiKeyConfigured: true,
     connectionStatus: "ready",
+    configSource: "admin_default",
     lastTestCode: "PERSONAL_AI_CONNECTION_READY",
     lastTestedAt: "2026-08-24T04:00:00Z",
     apiKey: "must-not-cross-client-boundary",
@@ -34,6 +35,7 @@ test("서버 provider/config 응답만 안전한 모바일 상태로 읽는다",
     connectionStatus: "ready",
     lastTestCode: "PERSONAL_AI_CONNECTION_READY",
     lastTestedAt: "2026-08-24T04:00:00Z",
+    configSource: "admin_default",
   });
   assert.throws(() => readPersonalAiProviders({ providers: [{ provider: "GROQ", label: "Groq", apiKeyRequired: true }] }), /개인 AI 응답을 확인할 수 없습니다/);
   assert.throws(() => readPersonalAiConfig({ provider: "groq", model: "m", apiKeyConfigured: "yes", connectionStatus: "ready" }), /개인 AI 응답을 확인할 수 없습니다/);
@@ -52,6 +54,20 @@ test("설정 payload는 server lowercase provider와 model 및 새 key draft만 
     apiKey: "sk-new",
   });
   assert.throws(() => buildPersonalAiConfigPayload({ provider: "OpenAI", model: "", apiKeyDraft: "secret" }), /Provider와 모델/);
+});
+
+test("모델 목록 응답을 검증하고 관리자 기본 설정은 즉시 채팅 준비 상태다", () => {
+  const { isPersonalAiConfigReady, readPersonalAiModelList } = loadPersonalAiApi();
+  assert.deepEqual(readPersonalAiModelList({
+    success: true,
+    provider: "upstage",
+    models: ["solar-pro4", "solar-mini"],
+    code: "PERSONAL_AI_MODELS_OK",
+    message: "완료",
+    loadedAt: "2026-08-28T00:00:00Z",
+  }).models, ["solar-pro4", "solar-mini"]);
+  assert.equal(isPersonalAiConfigReady({ connectionStatus: "ready", configSource: "admin_default" }), true);
+  assert.equal(isPersonalAiConfigReady({ connectionStatus: "ready", configSource: "personal" }), false);
 });
 
 test("chat payload는 현재 질문을 포함해 최근 20개와 32000자 제한을 지킨다", () => {
@@ -117,6 +133,7 @@ test("App은 서버 catalog/config/test/chat만 사용하고 모든 응답을 cu
   for (const contract of [
     '"/workspace/personal-ai/providers"',
     '"/workspace/personal-ai/config"',
+    '"/workspace/personal-ai/models"',
     '"/workspace/personal-ai/test"',
     '"/workspace/personal-ai/chat"',
   ]) {
@@ -147,16 +164,17 @@ test("설정 저장은 성공과 실패 전에 key draft를 폐기하고 현재 
   assert.match(appSource, /if \(!token \|\| personalAiConfigDirty/);
   assert.match(loadBody, /if \(!activeToken \|\| personalAiConfigDirty/);
   assert.doesNotMatch(loadBody, /setPersonalAiConfigDirty\(false\)/);
-  assert.match(appSource, /disabled=\{Boolean\(personalAiPendingAction\) \|\| personalAiConfigDirty/);
+  assert.match(appSource, /disabled=\{Boolean\(personalAiPendingAction\) \|\| llmConfigSource === "admin_default" \|\| personalAiConfigDirty/);
   for (const functionName of ["loadPersonalAi", "savePersonalAiConfig"]) {
     const start = appSource.indexOf(`async function ${functionName}`);
     const next = appSource.indexOf("\n  async function ", start + 1);
     assert.match(appSource.slice(start, next), /setPersonalAiTestReady\(false\)/, `${functionName} invalidates current-session readiness`);
   }
-  assert.match(appSource, /onChangeText=\{\(value\) => \{ setLlmModel\(value\); setLlmConnectionStatus\("untested"\); setPersonalAiTestReady\(false\); setPersonalAiConfigDirty\(true\); \}\}/);
+  assert.match(appSource, /accessibilityLabel=\{`\$\{item\} 모델 선택`\}/);
+  assert.match(appSource, /setLlmModel\(item\); setLlmConnectionStatus\("untested"\); setPersonalAiTestReady\(false\); setPersonalAiConfigDirty\(true\)/);
   assert.match(appSource, /onChangeText=\{\(value\) => \{ setLlmApiKey\(value\); setLlmConnectionStatus\("untested"\); setPersonalAiTestReady\(false\); setPersonalAiConfigDirty\(true\); \}\}/);
   assert.match(appSource, /setPersonalAiConfigDirty\(true\)/);
-  assert.match(appSource, /if \(option\.provider !== llmProvider\) \{ setLlmProvider\(option\.provider\); setLlmModel\(""\); setLlmApiKey\(""\);/);
+  assert.match(appSource, /if \(option\.provider !== llmProvider\) \{ setLlmProvider\(option\.provider\); setLlmModel\(""\); setLlmModels\(\[\]\); setLlmConfigSource\("personal"\); setLlmApiKey\(""\);/);
   assert.match(saveBody, /setPersonalAiConfigDirty\(false\)/);
   assert.match(appSource, /personalAiActionGateRef\.current\.reset\(\)/);
   assert.match(appSource, /setPersonalAiPendingAction\(""\)/);
@@ -168,4 +186,6 @@ test("AI와 설정 진입은 server state를 갱신하고 입력 및 동작 접�
   for (const label of ["개인 AI 질문", "개인 AI 질문 보내기", "개인 AI 모델", "개인 AI API 키", "개인 AI 연결 시험", "개인 AI 설정 저장"]) {
     assert.match(appSource, new RegExp(`accessibilityLabel="${label}"`));
   }
+  assert.match(appSource, /accessibilityLabel="개인 AI 모델 불러오기"/);
+  assert.match(appSource, /관리자 기본 LLM 사용 중/);
 });

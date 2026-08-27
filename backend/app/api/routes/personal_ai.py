@@ -10,6 +10,8 @@ from app.schemas.personal_ai import (
     PersonalAiConfigUpdate,
     PersonalAiConfigView,
     PersonalAiConnectionTestView,
+    PersonalAiModelListRequest,
+    PersonalAiModelListView,
     PersonalAiProviderListView,
 )
 from app.services.personal_ai_service import PersonalAiService
@@ -42,6 +44,14 @@ def update_personal_ai_config(
     user: AuthUserSummary = Depends(permission_required("profile:read")),
 ) -> PersonalAiConfigView:
     return _service().update_config(user, payload)
+
+
+@router.post("/models", response_model=PersonalAiModelListView)
+def list_personal_ai_models(
+    payload: PersonalAiModelListRequest,
+    user: AuthUserSummary = Depends(permission_required("profile:read")),
+) -> PersonalAiModelListView:
+    return _service().list_models(user, payload)
 
 
 @router.post("/test", response_model=PersonalAiConnectionTestView)

@@ -3,6 +3,7 @@ import { PaperPlaneRight, Plus, Robot, SlidersHorizontal, User } from "@phosphor
 
 import {
   fetchPersonalAiConfig,
+  fetchPersonalAiModels,
   fetchPersonalAiProviders,
   sendPersonalAiChat,
   testPersonalAiConnection,
@@ -11,6 +12,7 @@ import {
   type PersonalAiChatResponse,
   type PersonalAiConfig,
   type PersonalAiConnectionTest,
+  type PersonalAiModelList,
   type PersonalAiProviderOption,
 } from "./api";
 import { buildPersonalAiChatPayload, limitPersonalAiMessages, personalAiErrorMessage } from "./personalAi";
@@ -18,6 +20,7 @@ import { buildPersonalAiChatPayload, limitPersonalAiMessages, personalAiErrorMes
 export type PersonalAiClient = {
   listProviders(token: string): Promise<{ providers: PersonalAiProviderOption[] }>;
   getConfig(token: string): Promise<PersonalAiConfig>;
+  listModels(token: string, payload: { provider: string; apiKey?: string }): Promise<PersonalAiModelList>;
   saveConfig(token: string, payload: { provider: string; model: string; apiKey?: string }): Promise<PersonalAiConfig>;
   testConnection(token: string): Promise<PersonalAiConnectionTest>;
   chat(token: string, payload: { messages: PersonalAiChatMessage[] }): Promise<PersonalAiChatResponse>;
@@ -26,6 +29,7 @@ export type PersonalAiClient = {
 const defaultClient: PersonalAiClient = {
   listProviders: fetchPersonalAiProviders,
   getConfig: fetchPersonalAiConfig,
+  listModels: fetchPersonalAiModels,
   saveConfig: updatePersonalAiConfig,
   testConnection: testPersonalAiConnection,
   chat: sendPersonalAiChat,
@@ -38,6 +42,7 @@ const emptyConfig: PersonalAiConfig = {
   connectionStatus: "unconfigured",
   lastTestCode: null,
   lastTestedAt: null,
+  configSource: "unconfigured",
 };
 
 export function PersonalAiPanel({ token, client = defaultClient }: { token: string; client?: PersonalAiClient }) {
@@ -46,12 +51,14 @@ export function PersonalAiPanel({ token, client = defaultClient }: { token: stri
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [models, setModels] = useState<string[]>([]);
+  const [modelNotice, setModelNotice] = useState("");
   const [messages, setMessages] = useState<PersonalAiChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [configDirty, setConfigDirty] = useState(false);
   const [sessionReady, setSessionReady] = useState(false);
-  const [pending, setPending] = useState<"load" | "save" | "test" | "chat" | "">("load");
+  const [pending, setPending] = useState<"load" | "models" | "save" | "test" | "chat" | "">("load");
   const [error, setError] = useState("");
   const requestGeneration = useRef(0);
 
@@ -63,6 +70,8 @@ export function PersonalAiPanel({ token, client = defaultClient }: { token: stri
     setDraft("");
     setConfigDirty(false);
     setSessionReady(false);
+    setModels([]);
+    setModelNotice("");
     Promise.all([client.listProviders(token), client.getConfig(token)])
       .then(([providerResult, configResult]) => {
         if (generation !== requestGeneration.current) return;
@@ -70,8 +79,9 @@ export function PersonalAiPanel({ token, client = defaultClient }: { token: stri
         setConfig(configResult);
         setProvider(configResult.provider || providerResult.providers[0]?.provider || "");
         setModel(configResult.model);
+        setModels(configResult.model ? [configResult.model] : []);
         setConfigDirty(false);
-        setSessionReady(false);
+        setSessionReady(configResult.configSource === "admin_default" && configResult.connectionStatus === "ready");
       })
       .catch((loadError) => {
         if (generation === requestGeneration.current) setError(personalAiErrorMessage(loadError));
@@ -86,6 +96,32 @@ export function PersonalAiPanel({ token, client = defaultClient }: { token: stri
     () => providers.find((item) => item.provider === config.provider)?.label || config.provider.toUpperCase() || "Provider 미설정",
     [config.provider, providers],
   );
+
+  async function loadModels() {
+    if (pending || !provider) return;
+    const generation = requestGeneration.current;
+    const selectedProvider = provider;
+    const payload = { provider: selectedProvider, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) };
+    setPending("models");
+    setError("");
+    setModelNotice("");
+    try {
+      const result = await client.listModels(token, payload);
+      if (generation !== requestGeneration.current || selectedProvider !== provider) return;
+      if (!result.success) {
+        setModels([]);
+        setModelNotice(result.message);
+        return;
+      }
+      setModels(result.models);
+      if (!result.models.includes(model)) setModel("");
+      setModelNotice(result.message);
+    } catch (modelError) {
+      if (generation === requestGeneration.current) setError(personalAiErrorMessage(modelError));
+    } finally {
+      if (generation === requestGeneration.current) setPending("");
+    }
+  }
 
   async function saveSettings() {
     if (pending || !provider || !model.trim()) return;
@@ -176,14 +212,14 @@ export function PersonalAiPanel({ token, client = defaultClient }: { token: stri
           <h2>AI 채팅</h2>
           <div className="personal-ai-panel__connection" aria-live="polite">
             <span>{providerLabel}{config.model ? ` · ${config.model}` : ""}</span>
-            <strong className={sessionReady ? "is-ready" : ""}>{configDirty ? "설정 저장 필요" : sessionReady ? "연결됨" : "연결 시험 필요"}</strong>
+            <strong className={sessionReady ? "is-ready" : ""}>{configDirty ? "설정 저장 필요" : config.configSource === "admin_default" ? "관리자 기본 LLM 사용 중" : sessionReady ? "연결됨" : "연결 시험 필요"}</strong>
           </div>
         </div>
         <div className="personal-ai-panel__header-actions">
           <button type="button" onClick={() => setSettingsOpen((current) => !current)} aria-expanded={settingsOpen} aria-label="AI 연결 설정">
             <SlidersHorizontal size={18} aria-hidden="true" /> 연결 설정
           </button>
-          <button type="button" onClick={() => void runConnectionTest()} disabled={Boolean(pending) || configDirty || !config.provider || !config.model} aria-label="LLM 연결 시험">
+          <button type="button" onClick={() => void runConnectionTest()} disabled={Boolean(pending) || configDirty || config.configSource === "admin_default" || !config.provider || !config.model} aria-label="LLM 연결 시험">
             {pending === "test" ? "시험 중" : "연결 시험"}
           </button>
         </div>
@@ -191,11 +227,13 @@ export function PersonalAiPanel({ token, client = defaultClient }: { token: stri
 
       {settingsOpen ? (
         <section className="personal-ai-settings" aria-label="AI 연결 설정 양식">
-          <label><span>Provider</span><select value={provider} disabled={Boolean(pending)} onChange={(event) => { setProvider(event.target.value); setConfigDirty(true); setSessionReady(false); }}>
+          <label><span>Provider</span><select value={provider} disabled={Boolean(pending)} onChange={(event) => { setProvider(event.target.value); setModel(""); setModels([]); setModelNotice(""); setConfigDirty(true); setSessionReady(false); }}>
             {providers.map((item) => <option key={item.provider} value={item.provider}>{item.label}</option>)}
           </select></label>
-          <label><span>모델</span><input value={model} disabled={Boolean(pending)} maxLength={200} onChange={(event) => { setModel(event.target.value); setConfigDirty(true); setSessionReady(false); }} /></label>
+          <label><span>모델</span><select aria-label="개인 AI 모델" value={model} disabled={Boolean(pending) || models.length === 0} onChange={(event) => { setModel(event.target.value); setConfigDirty(true); setSessionReady(false); }}><option value="">모델 불러오기 후 선택</option>{models.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
           <label><span>API 키</span><input aria-label="개인 AI API 키" type="password" value={apiKey} disabled={Boolean(pending)} maxLength={1000} placeholder={config.apiKeyConfigured ? "새 키를 입력할 때만 변경" : "API 키 입력"} onChange={(event) => { setApiKey(event.target.value); setConfigDirty(true); setSessionReady(false); }} /></label>
+          <button type="button" disabled={Boolean(pending) || !provider} onClick={() => void loadModels()} aria-label="개인 AI 모델 불러오기">{pending === "models" ? "불러오는 중" : "모델 불러오기"}</button>
+          {modelNotice ? <p aria-live="polite">{modelNotice}</p> : null}
           <div className="personal-ai-settings__footer">
             <span>{config.apiKeyConfigured ? "API 키 설정됨" : "API 키 미설정"}</span>
             <button type="button" disabled={Boolean(pending) || !provider || !model.trim()} onClick={() => void saveSettings()} aria-label="개인 AI 설정 저장">
