@@ -20,7 +20,18 @@ const start = (command, args) => new Promise((resolveReady, rejectReady) => {
   setTimeout(() => resolveReady(child), 250);
 });
 const waitFor = async (url) => { for (let attempt = 0; attempt < 80; attempt += 1) { try { if ((await fetch(url)).ok) return; } catch {} await new Promise((resolve) => setTimeout(resolve, 100)); } throw new Error(`phase5 ready timeout: ${url}`); };
-const stop = async () => { for (const child of children.reverse()) if (!child.killed) child.kill("SIGTERM"); };
+const stop = async () => {
+  const exits = [];
+  for (const child of children.reverse()) {
+    if (child.exitCode !== null) continue;
+    exits.push(new Promise((resolveExit) => {
+      const timeout = setTimeout(() => { if (child.exitCode === null) child.kill("SIGKILL"); }, 2_000);
+      child.once("exit", () => { clearTimeout(timeout); resolveExit(); });
+      child.kill("SIGTERM");
+    }));
+  }
+  await Promise.allSettled(exits);
+};
 
 let browser;
 try {
@@ -28,6 +39,12 @@ try {
   await rm(evidence, { recursive: true, force: true }); await mkdir(evidence, { recursive: true });
   await start(process.execPath, [resolve(root, "scripts", "phase5-mail-popup-fixture-server.mjs")]);
   await waitFor(`http://127.0.0.1:${fixturePort}/health`);
+  const wrongLogin = await fetch(`http://127.0.0.1:${fixturePort}/api/v1/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: qa, password: `${password}-wrong` }) });
+  if (wrongLogin.status !== 401) throw new Error("phase5 fixture accepted invalid credentials");
+  const unknownResponse = await fetch(`http://127.0.0.1:${fixturePort}/api/v1/phase5-unknown`);
+  if (unknownResponse.status !== 404) throw new Error("phase5 fixture accepted an unknown route");
+  const wrongMethod = await fetch(`http://127.0.0.1:${fixturePort}/api/v1/mail/inbox`, { method: "POST" });
+  if (wrongMethod.status !== 405) throw new Error("phase5 fixture accepted a wrong method");
   await start(process.execPath, [resolve(root, "node_modules", "vite", "bin", "vite.js"), "--host", "127.0.0.1", "--port", String(webPort)]);
   await waitFor(`http://127.0.0.1:${webPort}/`);
   browser = await chromium.launch({ channel: "chrome", headless: true });
@@ -59,12 +76,15 @@ try {
   await composeButton.click();
   await page.getByLabel("mail-compose-to").fill("receiver@phase5.invalid");
   await page.getByLabel("mail-compose-subject").fill("phase5 local fixture");
-  await page.getByRole("button", { name: /굵게/ }).click();
+  const boldButton = page.getByRole("button", { name: /굵게/ });
+  await boldButton.click();
+  const boldPressed = await boldButton.getAttribute("aria-pressed") === "true";
+  if (!boldPressed) throw new Error("phase5 rich editor bold state did not change");
   await page.screenshot({ path: resolve(evidence, "compose.png"), fullPage: false });
   if (network.some((origin) => origin !== `http://127.0.0.1:${webPort}`)) throw new Error("phase5 used a non-local API origin");
   if (pageErrors.length) throw new Error(`phase5 page errors: ${pageErrors.join(" | ")}`);
   if (apiResponses.some(({ status }) => status >= 400)) throw new Error("phase5 received a failing API response");
-  await writeFile(resolve(evidence, "result.json"), JSON.stringify({ localOnly: true, stage: "rich-compose", composeVisible, loginVisible, portalVisible, storedToken, activeMenu, networkCount: network.length, apiResponses, pageErrors }, null, 2));
+  await writeFile(resolve(evidence, "result.json"), JSON.stringify({ localOnly: true, stage: "rich-compose", composeVisible, loginVisible, portalVisible, storedToken, activeMenu, boldPressed, fixtureGuards: { wrongLogin: wrongLogin.status, unknownRoute: unknownResponse.status, wrongMethod: wrongMethod.status }, networkCount: network.length, apiResponses, pageErrors }, null, 2));
   process.stdout.write("PHASE5_PASS\n");
 } catch (error) {
   process.stderr.write(`PHASE5_FAIL ${error instanceof Error ? error.message : String(error)}\n`);

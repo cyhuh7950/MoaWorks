@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+import re
 from types import SimpleNamespace
 from tempfile import TemporaryDirectory
 import unittest
@@ -99,6 +100,11 @@ class Ui018MailComposeTests(unittest.TestCase):
             "/api/v1/admin/mail-operations/providers/switch",
             "/api/v1/admin/mail-operations/providers/rollback",
             "grep -RIlE",
+            ".activeProvider",
+            ".provider.deliveryEnabled",
+            "content-type: image/",
+            'os.environ["MOAWORKS_STORAGE_PATH"]',
+            'metadata.get("attached")',
         ):
             with self.subTest(required=required):
                 self.assertIn(required, manual)
@@ -121,11 +127,30 @@ class Ui018MailComposeTests(unittest.TestCase):
             'stage: "rich-compose"',
             "pageErrors.length",
             "apiResponses.some",
+            "wrongLogin.status !== 401",
+            "unknownResponse.status !== 404",
+            'getAttribute("aria-pressed")',
+            "Promise.allSettled",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, verifier)
         self.assertIn("randomUUID", fixture_source)
         self.assertNotIn('accessToken: "', fixture_source)
+        self.assertIn("qaPassword", fixture_source)
+        self.assertIn("request.method", fixture_source)
+        self.assertIn("status = 404", fixture_source)
+
+    def test_operations_manual_matrix_references_existing_test_methods(self):
+        """Break caught: an evidence row names a test that does not exist or silently drops required boundaries."""
+        repository = Path(__file__).parent.parent
+        manual = (repository / "docs" / "manuals" / "web-mail-rich-text-cid-operations.md").read_text(encoding="utf-8")
+        mappings = re.findall(r"([A-Za-z0-9_]+\.py)::([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)", manual)
+        self.assertGreaterEqual(len(mappings), 20)
+        for file_name, class_name, method_name in mappings:
+            with self.subTest(mapping=f"{file_name}::{class_name}.{method_name}"):
+                source = (repository / "backend" / file_name).read_text(encoding="utf-8")
+                self.assertIn(f"class {class_name}", source)
+                self.assertIn(f"def {method_name}", source)
 
 
 if __name__ == "__main__":

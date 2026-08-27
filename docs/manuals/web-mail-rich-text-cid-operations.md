@@ -6,7 +6,12 @@ Task 11 승인 전 배포, provider 전환, 외부 발송을 실행하지 않는
 
 | lifecycle | content | valid/invalid | provider | success/failure invariant | test file::class.method | evidence type |
 | --- | --- | --- | --- | --- | --- | --- |
-| new | plain | valid | self_hosted/oci_email_delivery | queued job이 worker·router를 지나 MIME를 구성 | `test_ui021_mail_integration.py::Ui021Tests.test_queued_cid_job_reaches_worker_routing_and_mime_for_self_hosted_and_oci` | isolated queue-job→worker→routing→MIME |
+| new | plain | valid | self_hosted/oci_email_delivery | 메모리 job이 worker·router를 지나 MIME를 구성 | `test_ui021_mail_integration.py::Ui021Tests.test_queued_cid_job_reaches_worker_routing_and_mime_for_self_hosted_and_oci` | isolated worker→routing→MIME; DB queue 증거 아님 |
+| draft/send/schedule | html+inline | valid | n/a | mail/attachment DB statement와 canonical sidecar attached | `test_mail_inline_attachments.py::MailInlinePersistenceTests.test_draft_send_and_schedule_persist_canonical_inline_metadata` | service/DB statement/sidecar fixture |
+| draft | html+inline | unknown/unreferenced/foreign/reused/duplicate CID | n/a | 첫 DB statement 전 거부 | `test_mail_inline_attachments.py::MailInlinePersistenceTests.test_save_rejects_invalid_inline_lifecycle_before_database_mutation` | sanitizer/storage/service fixture |
+| queued delivery | html+inline | valid persisted row/sidecar | n/a | DB claim 결과가 verified inline metadata·SHA256 envelope를 구성 | `test_mail_inline_attachments.py::MailInlineQueueAndDownloadTests.test_queue_claim_carries_verified_inline_metadata_and_sha256` | DB cursor/storage claim fixture |
+| provider switch/rollback | plain/html | valid queued rows | self_hosted/oci_email_delivery | 기존 queue provider pin 유지, 새 provider만 전환 | `test_stage01_mail_operations_persistence.py::MailOperationsPersistenceTest.test_provider_switch_pins_existing_queue_without_updating_queue_rows`; `test_stage01_mail_operations_persistence.py::MailOperationsPersistenceTest.test_provider_rollback_restores_previous_provider_without_rewriting_queue` | DB cursor policy fixture |
+| delivery failure | plain/html | transient/permanent | self_hosted/oci_email_delivery | retry_pending 또는 failed, cross-provider fallback 없음 | `test_stage01_mail_delivery_failures.py::MailDeliveryFailureTest.test_transient_transport_failure_is_scheduled_for_retry`; `test_stage01_mail_delivery_failures.py::MailDeliveryFailureTest.test_permanent_transport_failure_is_not_cross_provider_retried` | worker/provider failure fixture |
 | draft | html+inline | retained valid | n/a | 같은 mail row, persisted/new attachment 원자 연결 | `test_mail_inline_attachments.py::MailInlinePersistenceTests.test_draft_update_retains_persisted_attachment_by_attachment_id_and_only_inserts_new_staged_upload` | service/DB fixture |
 | draft | html+inline+ordinary | unknown retained ID | n/a | attachment/message mutation 없음 | `test_mail_inline_attachments.py::MailInlinePersistenceTests.test_draft_update_rejects_unknown_retained_id_without_mutation` | service/DB fixture |
 | draft | html+inline+ordinary | other user/company | n/a | attachment insert/update/commit 전 거부 | `test_mail_inline_attachments.py::MailInlinePersistenceTests.test_draft_update_denies_other_user_and_company_before_mutation` | owner-filtered service/DB fixture |
@@ -18,6 +23,8 @@ Task 11 승인 전 배포, provider 전환, 외부 발송을 실행하지 않는
 | scheduled | html+inline+ordinary | mark/commit failure | n/a | 신규 sidecar와 transaction rollback | `test_mail_inline_attachments.py::MailInlinePersistenceTests.test_scheduled_update_restores_new_sidecar_on_mark_or_commit_failure` | service/DB/sidecar fixture |
 | reply/reply_all | html | valid source | n/a | source action requires source mail, copy disallowed | `test_ui019_reply_forward.py::Ui019ReplyForwardTests.test_compose_action_requires_valid_source_combination` | schema boundary |
 | forward | html+inline+ordinary | CID source valid; foreign rejected | self_hosted/oci_email_delivery | inline CID/ordinary disposition survives MIME | `test_ui019_reply_forward.py::Ui019ReplyForwardTests.test_forward_save_boundary_explicitly_allows_inline_source_for_cid_copy`; `test_ui021_mail_integration.py::Ui021Tests.test_queued_cid_job_reaches_worker_routing_and_mime_for_self_hosted_and_oci` | source + queue/MIME boundary |
+
+위 표는 각 자동화 경계의 조합 증거다. 단일 테스트가 live PostgreSQL save→queue→worker→SMTP를 끝까지 실행한다고 주장하지 않는다. 그 실제 연결은 Task 11의 별도 승인된 staging 검증 항목이다.
 
 ## 공통 사전 조건
 
@@ -56,7 +63,10 @@ SQL
 사전 조건: agent-created QA owner/other-user/other-company fixture와 bearer가 환경으로 주입됐다.
 
 ```bash
-curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer ${QA_OWNER_BEARER}" "${API_BASE}/api/v1/mail/attachments/staged/${QA_UPLOAD_ID}/preview"
+QA_PREVIEW_HEADERS="$(mktemp)"
+trap 'rm -f "$QA_PREVIEW_HEADERS"' EXIT
+curl -sS -D "$QA_PREVIEW_HEADERS" -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer ${QA_OWNER_BEARER}" "${API_BASE}/api/v1/mail/attachments/staged/${QA_UPLOAD_ID}/preview"
+grep -Eiq '^content-type: image/(png|jpeg|webp)' "$QA_PREVIEW_HEADERS"
 curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer ${QA_OTHER_USER_BEARER}" "${API_BASE}/api/v1/mail/attachments/staged/${QA_UPLOAD_ID}/preview"
 curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer ${QA_OTHER_COMPANY_BEARER}" "${API_BASE}/api/v1/mail/attachments/staged/${QA_UPLOAD_ID}/preview"
 ```
@@ -89,18 +99,21 @@ psql "$MOAWORKS_READONLY_DATABASE_URL" -v ON_ERROR_STOP=1 -v mail_id="$QA_MAIL_I
 사전 조건: admin QA bearer, 승인된 provider revision, queue drain owner가 있다.
 
 ```bash
-curl -sS -H "Authorization: Bearer ${QA_ADMIN_BEARER}" "${API_BASE}/api/v1/admin/mail-delivery/status"
-curl -sS -H "Authorization: Bearer ${QA_ADMIN_BEARER}" "${API_BASE}/api/v1/admin/mail-delivery/queue?status=running"
+curl -sS -H "Authorization: Bearer ${QA_ADMIN_BEARER}" "${API_BASE}/api/v1/admin/mail-delivery/status" \
+  | jq -e '.provider.deliveryEnabled == true and .provider.lastTestStatus == "success" and ((.summary.processing // 0) == 0)'
+curl -sS -H "Authorization: Bearer ${QA_ADMIN_BEARER}" "${API_BASE}/api/v1/admin/mail-delivery/queue?status=processing" \
+  | jq -e '.total == 0'
 ```
 
-성공은 `providerLocked=false`, 최근 연결 시험 성공, running queue 0건이다. 승인된 변경 창에서만 아래 전환을 실행한다. `${TARGET_PROVIDER}`는 `oci_email_delivery` 또는 `self_hosted` 중 승인값이며 응답의 `activeOutboundProvider`와 revision을 기록한다.
+성공은 provider enabled/최근 연결 시험 성공, processing queue 0건이다. 승인된 변경 창에서만 아래 전환을 실행한다. `${TARGET_PROVIDER}`는 `oci_email_delivery` 또는 `self_hosted` 중 승인값이며 실제 응답의 `activeProvider`와 revision을 기록한다.
 
 ```bash
 curl --silent --show-error --fail -X POST \
   -H "Authorization: Bearer ${QA_ADMIN_BEARER}" \
   -H 'Content-Type: application/json' \
   --data "{\"targetProvider\":\"${TARGET_PROVIDER}\"}" \
-  "${API_BASE}/api/v1/admin/mail-operations/providers/switch"
+  "${API_BASE}/api/v1/admin/mail-operations/providers/switch" \
+  | jq -e --arg expected "$TARGET_PROVIDER" '.activeProvider == $expected'
 ```
 
 전환 후 provider 연결 시험·queue drain·격리 QA 발송 중 하나라도 실패하면 새 발송을 중지하고 아래 API 원복을 한 번 실행한다. 원복 응답의 provider/revision을 확인한 뒤 queue 상태를 다시 조회한다. SQL 직접 update와 credential 포함 curl은 금지한다.
@@ -108,10 +121,12 @@ curl --silent --show-error --fail -X POST \
 ```bash
 curl --silent --show-error --fail -X POST \
   -H "Authorization: Bearer ${QA_ADMIN_BEARER}" \
-  "${API_BASE}/api/v1/admin/mail-operations/providers/rollback"
+  "${API_BASE}/api/v1/admin/mail-operations/providers/rollback" \
+  | jq -e --arg expected "$ROLLBACK_PROVIDER" '.activeProvider == $expected'
 curl --silent --show-error --fail \
   -H "Authorization: Bearer ${QA_ADMIN_BEARER}" \
-  "${API_BASE}/api/v1/admin/mail-delivery/queue?status=running"
+  "${API_BASE}/api/v1/admin/mail-delivery/queue?status=processing" \
+  | jq -e '.total == 0'
 ```
 
 ## Frontend/server rollback·orphan·redaction
@@ -127,13 +142,29 @@ test "$(git -C "$FRONTEND_CHECKOUT" rev-parse HEAD)" = "$ROLLBACK_REVISION"
 
 위 명령은 승인된 격리 checkout을 exact revision에 고정하는 단계다. 서비스 재시작·artifact 교체는 해당 환경의 승인된 배포 명령으로만 수행하며, health와 plain/general attachment smoke 실패 시 새 revision을 다시 배포하지 않고 기존 프로세스/artifact를 유지한다.
 
-```sql
-SELECT a.id,a.message_id,a.storage_key FROM mail_attachments a
-LEFT JOIN mail_messages m ON m.id=a.message_id
-WHERE a.content_disposition='inline' AND m.id IS NULL;
+FK `ON DELETE CASCADE` 때문에 DB row끼리의 orphan 조회만으로 storage sidecar orphan을 찾을 수 없다. 아래 dry-run은 DB가 참조하는 `storage_key`와 `${MOAWORKS_STORAGE_PATH}/mail/uploads/*.json`의 `attached=true` metadata를 대조하고, DB 참조가 없는 sidecar 파일명만 출력한다.
+
+```bash
+SIDECAR_DB_KEYS="$(mktemp)"
+export SIDECAR_DB_KEYS
+trap 'rm -f "$SIDECAR_DB_KEYS"' EXIT
+psql "$MOAWORKS_READONLY_DATABASE_URL" -At -v ON_ERROR_STOP=1 \
+  -c "SELECT storage_key FROM mail_attachments WHERE storage_key IS NOT NULL" > "$SIDECAR_DB_KEYS"
+python - <<'PY'
+import json
+import os
+from pathlib import Path
+
+root = Path(os.environ["MOAWORKS_STORAGE_PATH"]).resolve() / "mail" / "uploads"
+referenced = set(Path(os.environ["SIDECAR_DB_KEYS"]).read_text(encoding="utf-8").splitlines())
+for metadata_path in sorted(root.glob("*.json")):
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if metadata.get("attached") and metadata.get("storageKey") not in referenced:
+        print(metadata_path.name)
+PY
 ```
 
-이는 orphan dry-run이다. retention 만료·양측 비참조·backup·별도 승인 전 cleanup하지 않으며 불일치 시 sidecar/DB metadata를 복구 담당자에게 넘긴다.
+출력이 없어야 통과다. 출력이 있으면 retention 만료·binary/metadata 양측 비참조·backup·별도 승인 전 삭제하지 않으며, DB row 복원 또는 sidecar 격리 중 승인된 복구 방식을 적용한다.
 
 ```bash
 grep -RIlE '(authorization|token|password|secret|bearer)' "${SAFE_LOG_DIR}" || true
