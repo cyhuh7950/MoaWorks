@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from app.api.dependencies import get_current_user
+from app.api.errors import register_error_handlers
 from app.api.routes import personal_ai
 from app.schemas.personal_ai import PersonalAiChatRequest, PersonalAiConfigUpdate
 from app.services.personal_ai_service import PersonalAiService
@@ -118,3 +119,119 @@ def test_existing_bad_personal_config_http_response_uses_default_and_never_echoe
     assert response.json()["configSource"] == "admin_default"
     assert response.json()["model"] == "solar-pro4"
     assert bad_model not in response.text
+
+
+# 실제 자격증명이 아닌 격리 시험값. pytest ID에는 값 대신 형태만 표시한다.
+OPAQUE_MODEL_CASES = [
+    pytest.param("fixture" + "a1" * 24, id="lowercase-digits"),
+    pytest.param("fixture_not_real_" + "a1-" * 12, id="underscore-hyphen"),
+    pytest.param("abc123" * 6, id="hex-like"),
+    pytest.param("prefix_" + "Q7vN2mK9xR4pL8sT6wY3cD5fH1jB0uE9", id="prefixed-mixed"),
+    pytest.param("org/" + "abc123" * 6, id="namespaced-token"),
+]
+
+VALID_MODEL_CASES = [
+    "solar-pro4",
+    "gpt-4o-mini",
+    "claude-3-5-sonnet-20241022",
+    "Meta-Llama-3-1-405B-Instruct-Turbo",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
+    "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4",
+    "organization/custom_business_assistant_model_v12",
+    "qwen2.5:32b-instruct-q4_K_M",
+]
+
+
+@pytest.fixture
+def config_client():
+    """실제 route/오류 handler와 메모리 저장소만 연결한다."""
+    service, store, provider = make_service()
+    app = FastAPI()
+    register_error_handlers(app)
+    app.include_router(personal_ai.router, prefix="/api/v1/workspace/personal-ai")
+    app.dependency_overrides[get_current_user] = personal_ai_actor
+    with patch.object(personal_ai, "_service", return_value=service):
+        with TestClient(app) as client:
+            yield client, service, store, provider
+
+
+@pytest.mark.parametrize("model", OPAQUE_MODEL_CASES)
+def test_opaque_model_http_update_rejected_without_echo_or_write(config_client, model):
+    client, _, store, _ = config_client
+    before = deepcopy(store.configs)
+    response = client.put(
+        "/api/v1/workspace/personal-ai/config",
+        json={"provider": "cerebras", "model": model},
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == "PERSONAL_AI_MODEL_INVALID"
+    assert model not in response.text
+    assert store.configs == before
+
+
+@pytest.mark.parametrize("model", OPAQUE_MODEL_CASES)
+@pytest.mark.parametrize("source", ["personal", "admin_default"])
+def test_legacy_opaque_model_never_reaches_public_routes_or_provider(config_client, model, source):
+    client, service, store, provider = config_client
+    personal = store.configs[("company-f13", "user-f13")]
+    if source == "personal":
+        personal["model"] = model
+        expected_source = "admin_default"
+    else:
+        personal.update(apiKeyConfigured=False, apiKey="")
+        service.company_llm_store.policies["company-f13"]["model"] = model
+        expected_source = "unconfigured"
+    before = deepcopy(store.configs)
+    for method, path, kwargs in [
+        ("get", "config", {}),
+        ("post", "test", {}),
+        ("post", "chat", {"json": {"messages": [{"role": "user", "content": "시험"}]}}),
+    ]:
+        response = getattr(client, method)(f"/api/v1/workspace/personal-ai/{path}", **kwargs)
+        assert model not in response.text
+        if path == "config":
+            assert response.json()["configSource"] == expected_source
+        else:
+            assert response.status_code == (200 if source == "personal" else 400)
+    requests = provider.connection_configs + provider.chat_configs
+    assert all(config["model"] != model for config in requests)
+    if source == "admin_default":
+        assert requests == []
+    assert store.configs == before
+
+
+@pytest.mark.parametrize("model", VALID_MODEL_CASES)
+def test_normal_model_ids_keep_save_read_and_chat_behavior(config_client, model):
+    client, service, _, provider = config_client
+    response = client.put(
+        "/api/v1/workspace/personal-ai/config",
+        json={"provider": "cerebras", "model": model},
+    )
+    assert response.status_code == 200
+    assert response.json()["model"] == model
+    assert response.json()["configSource"] == "personal"
+    service.test_connection(personal_ai_actor())
+    result = service.chat(personal_ai_actor(), PersonalAiChatRequest(
+        messages=[{"role": "user", "content": "시험"}],
+    ))
+    assert result.model == model
+    assert provider.chat_configs[-1]["model"] == model
+
+
+@pytest.mark.parametrize("model", VALID_MODEL_CASES)
+def test_normal_admin_model_preserves_fallback_without_personal_test(config_client, model):
+    client, service, store, provider = config_client
+    store.configs[("company-f13", "user-f13")].update(apiKeyConfigured=False, apiKey="")
+    service.company_llm_store.policies["company-f13"]["model"] = model
+    view = client.get("/api/v1/workspace/personal-ai/config")
+    assert view.json()["configSource"] == "admin_default"
+    assert view.json()["model"] == model
+    response = client.post(
+        "/api/v1/workspace/personal-ai/chat",
+        json={"messages": [{"role": "user", "content": "시험"}]},
+    )
+    assert response.status_code == 200
+    assert response.json()["model"] == model
+    assert provider.connection_configs == []
+    assert provider.chat_configs[-1]["model"] == model

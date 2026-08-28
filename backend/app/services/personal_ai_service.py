@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import re
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -254,15 +255,30 @@ class PersonalAiService:
         # 알려진 자격증명 형식은 레거시 model 값에서도 화면과 Provider에 전달하지 않는다.
         if normalized.lower().startswith(("csk-", "sk-", "gsk_", "aiza", "bearer ")):
             return False
-        # 접두사를 알 수 없는 긴 혼합 영숫자 토큰도 모델명보다 자격증명일 가능성이 높다.
-        if (
-            len(normalized) >= 32
-            and normalized.isalnum()
-            and any(character.islower() for character in normalized)
-            and any(character.isupper() for character in normalized)
-            and any(character.isdigit() for character in normalized)
-        ):
-            return False
+        # 대소문자/구분자로 토큰 검사를 우회하지 못하게 namespace·버전별로 검사한다.
+        # 이는 오입력 방지 규칙이며, 임의 문자열의 비밀 여부를 판별하는 규칙은 아니다.
+        for component in re.findall(r"[A-Za-z0-9_-]+", normalized):
+            compact = component.replace("_", "").replace("-", "")
+            if not (
+                len(compact) >= 32
+                and any(character.isalpha() for character in compact)
+                and any(character.isdigit() for character in compact)
+            ):
+                continue
+            # 긴 정상 모델의 단어·버전·크기·양자화 표기는 유지한다.
+            # 예: custom_business_assistant_model_v12, Nemotron-120B-A12B-NVFP4.
+            parts = re.split(r"[-_]", component)
+            structured_model = len(parts) > 1 and all(
+                part.isalpha()
+                or re.fullmatch(
+                    r"[vVrR]?\d{1,8}(?:[bBkKmMeE]|[xX]\d{1,4}[bBkK]?)?"
+                    r"|[aA]\d{1,4}[bB]|[A-Z]{2,8}\d{1,4}",
+                    part,
+                )
+                for part in parts
+            )
+            if not structured_model:
+                return False
         return True
 
     @classmethod
