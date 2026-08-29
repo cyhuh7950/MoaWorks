@@ -78,7 +78,11 @@ const mountedLists = {
   scheduled: { mails: [], total: 0, limit: 50, offset: 0, hasMore: false } as { mails: Array<Record<string, unknown>>; total: number; limit: number; offset: number; hasMore: boolean },
 };
 
-const mountedBasicPreferences = { senderDisplayMode: "name", blockRemoteImages: false, disableRiskyTags: true, showRouteCountry: false, includeSpamTrashInSearch: false, showListPreview: true, recipientInputMode: "autocomplete", confirmBeforeSend: false, saveSentCopy: true, readReceiptEnabled: false, editorMode: "html", composeMode: "popup", messageEncoding: "utf-8", draftReminderEnabled: false, senderDisplayName: "Tester", replyToEmail: null, vcardEnabled: false, translationTargetLocale: "en", translationComposeMode: "preview", version: 1, updatedAt: "2026-08-26T00:00:00Z" } as const;
+function createMountedBasicPreferences(senderDisplayMode: "name" | "name_email" | "id" = "name") {
+  return { senderDisplayMode, blockRemoteImages: false, disableRiskyTags: true, showRouteCountry: false, includeSpamTrashInSearch: false, showListPreview: true, recipientInputMode: "autocomplete", confirmBeforeSend: false, saveSentCopy: true, readReceiptEnabled: false, editorMode: "html", composeMode: "popup", messageEncoding: "utf-8", draftReminderEnabled: false, senderDisplayName: "Tester", replyToEmail: null, vcardEnabled: false, translationTargetLocale: "en", translationComposeMode: "preview", version: 1, updatedAt: "2026-08-26T00:00:00Z" } as const;
+}
+
+let mountedBasicPreferences = createMountedBasicPreferences();
 
 function mountedJson(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
@@ -119,6 +123,7 @@ afterEach(() => {
   mountedSendFailure = false;
   mountedSendCalls = 0;
   mountedDraftFailure = false;
+  mountedBasicPreferences = createMountedBasicPreferences();
   mountedLists.inbox = { mails: [{ mailId: "mail-source", accountId: "account-1", senderEmail: "source@example.test", senderDisplayName: "Source", subject: "CID 전달 원문", previewText: "본문 이미지", status: "sent", isRead: true, isStarred: false, sentAt: "2026-08-26T00:00:00Z", receivedAt: "2026-08-26T00:00:00Z", scheduledAt: null, retentionExpiresAt: null, attachmentCount: 2, category: "primary" }], total: 1, limit: 50, offset: 0, hasMore: false };
   mountedLists.draft = { mails: [], total: 0, limit: 50, offset: 0, hasMore: false };
   mountedLists.scheduled = { mails: [], total: 0, limit: 50, offset: 0, hasMore: false };
@@ -180,6 +185,48 @@ function requireContract<T>(value: T | undefined): T {
 }
 
 describe("메일 rich compose 재작업 계약", () => {
+  it("mounted App은 ID preference를 설정 option과 메일 목록·상세에 동일하게 렌더한다", async () => {
+    mountedBasicPreferences = createMountedBasicPreferences("id");
+    mountedLists.inbox = {
+      mails: [{ mailId: "mail-id-mode", accountId: "account-1", senderEmail: "hong.gildong@example.test", senderDisplayName: "홍길동", subject: "ID 표시 메일", previewText: "ID preference 본문", status: "sent", isRead: true, isStarred: false, sentAt: "2026-08-26T00:00:00Z", receivedAt: "2026-08-26T00:00:00Z", scheduledAt: null, retentionExpiresAt: null, attachmentCount: 0, category: "primary" }],
+      total: 1,
+      limit: 50,
+      offset: 0,
+      hasMore: false,
+    };
+    mountedDetail = {
+      ...mountedSourceMail,
+      mailId: "mail-id-mode",
+      senderEmail: "hong.gildong@example.test",
+      senderDisplayName: "홍길동",
+      subject: "ID 표시 메일",
+      bodyText: "ID preference 본문",
+      bodyHtml: "<p>ID preference 본문</p>",
+      attachmentCount: 0,
+      attachments: [],
+    };
+    installMountedMailFetch();
+    localStorage.setItem("moaworks.userToken", "test-token");
+    vi.resetModules();
+    const { default: MountedApp } = await import("./App");
+    render(<MountedApp />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "환경설정" }));
+    expect((await screen.findByLabelText("보낸 사람 표시") as HTMLSelectElement).value).toBe("id");
+    expect(screen.getByRole("option", { name: "ID(이메일 @ 앞)" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "닫기" }));
+
+    const mailRow = await screen.findByRole("button", { name: /ID 표시 메일/ });
+    expect(mailRow.textContent).toContain("hong.gildong");
+    expect(mailRow.textContent).not.toContain("홍길동");
+    expect(mailRow.textContent).not.toContain("hong.gildong@example.test");
+    fireEvent.click(mailRow);
+
+    expect(await screen.findByRole("heading", { name: "ID 표시 메일" })).toBeTruthy();
+    const senderTerm = screen.getByText("보낸 사람");
+    expect(senderTerm.parentElement?.querySelector("dd")?.textContent).toBe("hong.gildong");
+  });
+
   it("mounted App의 메신저 다음 AI 채팅 메뉴가 실제 개인 AI 패널을 연다", async () => {
     installMountedMailFetch();
     localStorage.setItem("moaworks.userToken", "test-token");
