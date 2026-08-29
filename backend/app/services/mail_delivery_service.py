@@ -102,9 +102,18 @@ class MailDeliveryWorker:
         try:
             if hasattr(self.adapter, "prepare") and hasattr(self.adapter, "send_prepared"):
                 prepared = self.adapter.prepare(envelope, provider)
-                if self.quota is not None:
-                    self.quota.reserve_attempt()
-                response = self.adapter.send_prepared(prepared, provider)
+                if self.quota is not None and getattr(
+                    self.adapter, "supports_attempt_reservation", False
+                ):
+                    response = self.adapter.send_prepared(
+                        prepared,
+                        provider,
+                        before_network_attempt=self.quota.reserve_attempt,
+                    )
+                else:
+                    if self.quota is not None:
+                        self.quota.reserve_attempt()
+                    response = self.adapter.send_prepared(prepared, provider)
             else:  # compatibility for legacy in-process callers without quota
                 if self.quota is not None:
                     raise MailDailyQuotaUnavailable(

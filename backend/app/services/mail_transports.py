@@ -126,6 +126,8 @@ def resolve_mx_hosts(domain: str) -> list[str]:
 
 
 class SelfHostedSmtpTransport:
+    supports_attempt_reservation = True
+
     def __init__(self, *, mx_resolver: MxResolver, smtp_factory: SmtpFactory = smtplib.SMTP, dkim_signer: DkimSigner | None = None) -> None:
         self.mx_resolver = mx_resolver
         self.smtp_factory = smtp_factory
@@ -176,6 +178,7 @@ class SelfHostedSmtpTransport:
         tls_mode: str = "opportunistic",
         username: str = "",
         password: str = "",
+        before_network_attempt: Callable[[], object] | None = None,
     ) -> DeliveryReceipt:
         normalized_relay_host = relay_host.strip().rstrip(".").lower()
         normalized_username = username.strip()
@@ -195,6 +198,8 @@ class SelfHostedSmtpTransport:
 
         last_error: Exception | None = None
         for host, port in candidates:
+            if before_network_attempt is not None:
+                before_network_attempt()
             try:
                 with self.smtp_factory(host=host, port=port, timeout=max(3, min(timeout_sec, 60))) as smtp:
                     smtp.ehlo(helo_name)
@@ -308,6 +313,8 @@ class OciEmailDeliveryTransport:
 
 
 class MailProviderRoutingAdapter:
+    supports_attempt_reservation = True
+
     def __init__(
         self,
         *,
@@ -423,7 +430,13 @@ class MailProviderRoutingAdapter:
             outbound_message=message,
         )
 
-    def send_prepared(self, prepared: PreparedMailDelivery, provider: dict) -> str:
+    def send_prepared(
+        self,
+        prepared: PreparedMailDelivery,
+        provider: dict,
+        *,
+        before_network_attempt: Callable[[], object] | None = None,
+    ) -> str:
         if prepared.provider_type == "self_hosted":
             sender_domain = (
                 prepared.envelope_from.rsplit("@", 1)[-1]
@@ -440,13 +453,28 @@ class MailProviderRoutingAdapter:
                 "password": str(provider.get("password") or ""),
             }
             if hasattr(self.self_hosted_transport, "send_prepared"):
-                receipt = self.self_hosted_transport.send_prepared(
-                    prepared.message,
-                    envelope_from=prepared.envelope_from,
-                    recipient_email=prepared.recipient_email,
-                    **transport_options,
-                )
+                if before_network_attempt is not None and getattr(
+                    self.self_hosted_transport, "supports_attempt_reservation", False
+                ):
+                    receipt = self.self_hosted_transport.send_prepared(
+                        prepared.message,
+                        envelope_from=prepared.envelope_from,
+                        recipient_email=prepared.recipient_email,
+                        before_network_attempt=before_network_attempt,
+                        **transport_options,
+                    )
+                else:
+                    if before_network_attempt is not None:
+                        before_network_attempt()
+                    receipt = self.self_hosted_transport.send_prepared(
+                        prepared.message,
+                        envelope_from=prepared.envelope_from,
+                        recipient_email=prepared.recipient_email,
+                        **transport_options,
+                    )
             else:  # compatibility for existing non-network test doubles
+                if before_network_attempt is not None:
+                    before_network_attempt()
                 receipt = self.self_hosted_transport.send(
                     prepared.outbound_message,
                     **transport_options,
@@ -461,6 +489,8 @@ class MailProviderRoutingAdapter:
                     timeout_sec=int(provider.get("timeout_sec") or 20),
                 )
             if hasattr(self.oci_transport, "send_prepared"):
+                if before_network_attempt is not None:
+                    before_network_attempt()
                 receipt = self.oci_transport.send_prepared(
                     prepared.message,
                     envelope_from=prepared.envelope_from,
@@ -468,8 +498,12 @@ class MailProviderRoutingAdapter:
                     config=config,
                 )
             else:  # compatibility for existing non-network test doubles
+                if before_network_attempt is not None:
+                    before_network_attempt()
                 receipt = self.oci_transport.send(prepared.outbound_message, config=config)
         elif prepared.provider_type in {"smtp", "aws_ses"} and self.legacy_relay_adapter is not None:
+            if before_network_attempt is not None:
+                before_network_attempt()
             return self.legacy_relay_adapter.send(prepared.legacy_envelope or {}, provider)
         else:
             raise MailTransportFailure(

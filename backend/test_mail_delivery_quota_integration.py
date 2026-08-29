@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from email.message import EmailMessage
 
 import pytest
 
@@ -9,7 +10,7 @@ from app.services.mail_daily_send_quota import (
 )
 from app.services.mail_delivery_service import MailDeliveryWorker
 from app.services.mail_delivery_operations import MailDeliveryOperations
-from app.services.mail_transports import MailTransportFailure
+from app.services.mail_transports import MailTransportFailure, SelfHostedSmtpTransport
 
 
 def job(**overrides) -> dict:
@@ -200,6 +201,44 @@ def test_quota_rejection_is_distinct_and_never_calls_provider(
     assert adapter.prepare_calls == 1
     assert quota.calls == 1
     assert adapter.network_calls == 0
+
+
+def test_self_hosted_mx_failover_reserves_before_each_network_attempt() -> None:
+    reset_at = datetime(2026, 8, 29, 15, 0, tzinfo=UTC)
+    quota = RecordingQuota(
+        [None, MailDailySendLimitExceeded(limit=1, reset_at=reset_at)]
+    )
+    smtp_hosts: list[str] = []
+
+    class FailingSmtp:
+        def __enter__(self):
+            raise OSError("first MX unavailable")
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+    def smtp_factory(*, host: str, port: int, timeout: int):
+        assert quota.calls == len(smtp_hosts) + 1
+        smtp_hosts.append(host)
+        return FailingSmtp()
+
+    transport = SelfHostedSmtpTransport(
+        mx_resolver=lambda _domain: ["mx1.example.net", "mx2.example.net"],
+        smtp_factory=smtp_factory,
+    )
+
+    with pytest.raises(MailDailySendLimitExceeded):
+        transport.send_prepared(
+            EmailMessage(),
+            envelope_from="sender@moaworks.sinsan.kr",
+            recipient_email="person@example.net",
+            helo_name="mail.moaworks.sinsan.kr",
+            timeout_sec=20,
+            before_network_attempt=quota.reserve_attempt,
+        )
+
+    assert quota.calls == 2
+    assert smtp_hosts == ["mx1.example.net"]
 
 
 class QueueDeferCursor:

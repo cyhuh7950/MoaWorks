@@ -11,7 +11,11 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from app.core.config import settings
 from app.schemas.mail_operations import MailDailySendUsage
-from app.services.mail_daily_send_quota import MailDailySendQuota
+from app.services.mail_daily_send_quota import (
+    MailDailyQuotaUnavailable,
+    MailDailySendLimitExceeded,
+    MailDailySendQuota,
+)
 from app.services.mail_operations_policy import build_mail_domain_contract
 from app.services.mail_operations_service import MailOperationsService
 from app.services.mail_delivery_operations import MailDeliveryOperations
@@ -318,9 +322,24 @@ class MailAdminOperations:
                             "body_text": "관리자 화면에서 실행한 실제 외부 SMTP 연결 테스트입니다.",
                     }
                     prepared = self.delivery_adapter.prepare(envelope, provider)
-                    self.quota.reserve_attempt()
-                    response = self.delivery_adapter.send_prepared(prepared, provider)
+                    if getattr(self.delivery_adapter, "supports_attempt_reservation", False):
+                        response = self.delivery_adapter.send_prepared(
+                            prepared,
+                            provider,
+                            before_network_attempt=self.quota.reserve_attempt,
+                        )
+                    else:
+                        self.quota.reserve_attempt()
+                        response = self.delivery_adapter.send_prepared(prepared, provider)
                     test_status = "success"
+                except MailDailySendLimitExceeded:
+                    result = self._provider_view(provider)
+                    result["quotaErrorCode"] = "MAIL_DAILY_SEND_LIMIT_EXCEEDED"
+                    return result
+                except MailDailyQuotaUnavailable:
+                    result = self._provider_view(provider)
+                    result["quotaErrorCode"] = "MAIL_DAILY_QUOTA_UNAVAILABLE"
+                    return result
                 except Exception as exc:
                     test_status, response, error = "failed", "", mask_delivery_error(str(exc))
                 cursor.execute(

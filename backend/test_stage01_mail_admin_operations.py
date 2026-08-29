@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -11,6 +11,7 @@ from app.api.dependencies import require_admin
 from app.main import app
 from app.schemas.mail_operations import MailOperationsDomainUpdateRequest, MailOperationsProviderUpdateRequest
 from app.services.mail_admin_operations import MailAdminOperations, generate_dkim_keypair
+from app.services.mail_daily_send_quota import MailDailyQuotaUnavailable, MailDailySendLimitExceeded
 from app.services.mail_operations_policy import ProviderSwitchPlan, build_mail_domain_contract
 from app.services.oci_email_operations import OciEmailGateway, OciEmailOperations
 
@@ -73,6 +74,14 @@ class RecordingQuota:
 
     def reserve_attempt(self):
         self.calls += 1
+
+
+class RejectingQuota:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def reserve_attempt(self):
+        raise self.error
 
 
 def actor():
@@ -527,6 +536,54 @@ class MailAdminOperationsContractTest(unittest.TestCase):
         self.assertEqual(adapter.calls[0][1]["password"], "smtp-password")
         self.assertEqual(quota.calls, 1)
         self.assertNotIn("smtp-password", str(result))
+
+    def test_provider_quota_rejection_keeps_delivery_health_unchanged(self) -> None:
+        provider = {
+            "id": "provider-oci", "provider_type": "oci_email_delivery",
+            "relay_host": "smtp.oci.example", "relay_port": 587,
+            "tls_mode": "starttls", "from_address": "postmaster@moaworks.sinsan.kr",
+            "username": "smtp-user", "encrypted_password": "cipher", "active": True,
+            "delivery_enabled": True, "last_test_status": "success",
+            "encrypted_dkim_private_key": None,
+        }
+
+        for quota_error, expected_code in (
+            (
+                MailDailySendLimitExceeded(
+                    limit=1,
+                    reset_at=datetime(2026, 8, 29, 15, 0, tzinfo=UTC),
+                ),
+                "MAIL_DAILY_SEND_LIMIT_EXCEEDED",
+            ),
+            (MailDailyQuotaUnavailable("quota unavailable"), "MAIL_DAILY_QUOTA_UNAVAILABLE"),
+        ):
+            with self.subTest(expected_code=expected_code):
+                cursor = RecordingCursor(
+                    one_rows=[
+                        dict(provider),
+                        {"mail_domain": "moaworks.sinsan.kr", "mail_host": "mail.moaworks.sinsan.kr"},
+                    ]
+                )
+                operation = MailAdminOperations(
+                    db=FakeDb(cursor),
+                    delivery_adapter=SimpleNamespace(
+                        prepare=lambda envelope, config: (envelope, config),
+                        send_prepared=lambda *_args: self.fail("transport must not be called"),
+                    ),
+                    quota=RejectingQuota(quota_error),
+                )
+
+                with patch.object(operation.security, "decrypt_secret", return_value="smtp-password"):
+                    result = operation.test_provider(
+                        actor(), "oci_email_delivery", "external@example.net"
+                    )
+
+                self.assertEqual(result["quotaErrorCode"], expected_code)
+                self.assertTrue(result["deliveryEnabled"])
+                self.assertEqual(result["lastTestStatus"], "success")
+                self.assertFalse(
+                    any(statement.startswith("UPDATE mail_provider_configs") for statement, _ in cursor.statements)
+                )
 
     def test_self_hosted_test_persists_canonical_provider_type_for_queue_worker(self) -> None:
         provider = {
