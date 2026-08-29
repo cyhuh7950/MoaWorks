@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   confirmAdminMfaTotp: vi.fn(),
   requestAdminMfaRecovery: vi.fn(),
   verifyAdminMfaRecovery: vi.fn(),
+  fetchMailOperations: vi.fn(),
 }));
 
 vi.mock("./api", async () => {
@@ -39,9 +40,9 @@ vi.mock("./api", async () => {
       departments: [],
       roles: [],
     }),
-    fetchMailDeliveryStatus: vi.fn().mockResolvedValue({}),
-    fetchMailDeliveryQueue: vi.fn().mockResolvedValue({}),
-    fetchMailOperations: vi.fn().mockResolvedValue({ domain: null, providers: [] }),
+    fetchMailDeliveryStatus: vi.fn().mockResolvedValue({ provider: { providerKey: "self_hosted" } }),
+    fetchMailDeliveryQueue: vi.fn().mockResolvedValue({ queue: [] }),
+    fetchMailOperations: mocks.fetchMailOperations,
     fetchAdminMessengerRooms: vi.fn().mockResolvedValue({ rooms: [] }),
     fetchTranslationPolicy: vi.fn().mockResolvedValue({
       provider: "disabled",
@@ -92,6 +93,15 @@ describe("admin MFA login", () => {
     mocks.confirmAdminMfaTotp.mockReset();
     mocks.requestAdminMfaRecovery.mockReset();
     mocks.verifyAdminMfaRecovery.mockReset();
+    mocks.fetchMailOperations.mockReset();
+    mocks.fetchMailOperations.mockResolvedValue({
+      domain: null,
+      providers: [],
+      queue: {},
+      feedbackCount: 0,
+      ociSuppression: { activeCount: 0, lastSeenAt: null },
+      dailySendUsage: { used: 0, limit: 0, unlimited: true, remaining: null, resetAt: "2026-08-30T00:00:00+09:00" },
+    });
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
       value: vi.fn(() => "blob:task9-mfa-qr"),
@@ -154,6 +164,36 @@ describe("admin MFA login", () => {
       code: "123456",
     }));
     await waitFor(() => expect(mocks.storeToken).toHaveBeenCalledWith("verified-admin-token"));
+  });
+
+  it("메일 발송량 제목은 API 로드가 끝난 뒤에만 나타나며 0 한도를 무제한으로 표시한다", async () => {
+    let resolveOperations!: (value: Record<string, unknown>) => void;
+    mocks.fetchMailOperations.mockImplementation(() => new Promise((resolve) => { resolveOperations = resolve; }));
+    mocks.login.mockResolvedValue({ nextAction: "mfa_required", challengeId: "opaque-login-challenge", expiresAt: "2026-08-29T12:00:00+09:00" });
+    mocks.verifyAdminMfa.mockResolvedValue({ nextAction: "authenticated", accessToken: "verified-admin-token", tokenType: "bearer", expiresIn: 3600, user: {} });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByLabelText(/관리자 아이디/), "admin");
+    await user.type(screen.getByLabelText("비밀번호"), "fixture-password");
+    await user.click(screen.getByRole("button", { name: "로그인" }));
+    await user.type(await screen.findByLabelText("인증 앱 코드"), "123456");
+    await user.click(screen.getByRole("button", { name: "코드 확인" }));
+    await user.click(await screen.findByRole("button", { name: "메일 설정" }));
+
+    expect(screen.queryByText("오늘 발송", { exact: true })).toBeNull();
+    await act(async () => resolveOperations({
+      domain: null,
+      providers: [],
+      queue: {},
+      feedbackCount: 0,
+      ociSuppression: { activeCount: 0, lastSeenAt: null },
+      dailySendUsage: { used: 0, limit: 0, unlimited: true, remaining: null, resetAt: "2026-08-30T00:00:00+09:00" },
+    }));
+
+    expect(await screen.findByText("오늘 발송", { exact: true })).toBeTruthy();
+    expect(document.body.textContent).toContain("0 / 무제한");
+    expect(document.body.textContent).toContain("남은 한도: 무제한");
   });
 
   it("enrolls a pending admin and shows recovery codes before storing the token", async () => {

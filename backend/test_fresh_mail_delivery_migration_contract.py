@@ -53,3 +53,16 @@ def test_modern_queue_migration_rejects_partial_or_mixed_catalog_states() -> Non
     assert "fresh_state" in modern_sql
     assert "legacy_state" in modern_sql
     assert "modern_state" in modern_sql
+
+
+def test_modern_queue_migration_validates_constraint_semantics() -> None:
+    modern_sql = (MIGRATIONS / "025_mail_delivery_queue.sql").read_text(encoding="utf-8")
+
+    for catalog_field in (
+        "pg_constraint",
+        "conkey",
+        "confrelid",
+        "confkey",
+        "confdeltype",
+    ):
+        assert catalog_field in modern_sql

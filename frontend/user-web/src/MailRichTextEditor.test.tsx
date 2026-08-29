@@ -215,6 +215,18 @@ afterEach(() => {
 });
 
 describe("MailRichTextEditor 접근성과 서식 계약", () => {
+  it("초기 비활성 상태가 해제되면 실제 편집면을 다시 활성화하고 focus를 유지한다", async () => {
+    const { rerender, props } = renderEditor({ disabled: true });
+    const surface = await screen.findByRole("textbox", { name: "메일 본문" });
+    expect(surface.getAttribute("contenteditable")).toBe("false");
+
+    rerender(<MailRichTextEditor {...props} disabled={false} />);
+
+    await waitFor(() => expect(surface.getAttribute("contenteditable")).toBe("true"));
+    fireEvent.mouseDown(surface);
+    expect(document.activeElement).toBe(surface);
+  });
+
   it("아이콘 toolbar, 접근성 이름, 서식 dropdown과 HTML 탭 없는 편집면을 제공한다", async () => {
     renderEditor();
 

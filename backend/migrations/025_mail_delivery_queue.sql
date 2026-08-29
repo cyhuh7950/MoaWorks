@@ -36,6 +36,8 @@ DECLARE
     fresh_state BOOLEAN;
     legacy_state BOOLEAN;
     modern_state BOOLEAN;
+    legacy_constraints BOOLEAN;
+    modern_constraints BOOLEAN;
 BEGIN
     SELECT COALESCE(array_agg(column_name::TEXT ORDER BY column_name), ARRAY[]::TEXT[])
       INTO queue_columns
@@ -54,6 +56,96 @@ BEGIN
       FROM information_schema.columns
      WHERE table_schema = 'public' AND table_name = 'mail_delivery_worker_heartbeats';
 
+    SELECT NOT EXISTS (
+        SELECT 1
+          FROM (VALUES
+            ('mail_delivery_queue', 'mail_delivery_queue_pkey', 'p', 'id', NULL, NULL, NULL),
+            ('mail_delivery_queue', 'mail_delivery_queue_company_id_fkey', 'f', 'company_id', 'companies', 'id', 'c'),
+            ('mail_delivery_queue', 'mail_delivery_queue_provider_id_fkey', 'f', 'provider_id', 'mail_delivery_providers', 'id', 'c'),
+            ('mail_delivery_queue', 'mail_delivery_queue_mail_id_fkey', 'f', 'mail_id', 'mail_messages', 'id', 'c'),
+            ('mail_delivery_attempts', 'mail_delivery_attempts_pkey', 'p', 'id', NULL, NULL, NULL),
+            ('mail_delivery_attempts', 'mail_delivery_attempts_queue_id_fkey', 'f', 'queue_id', 'mail_delivery_queue', 'id', 'c'),
+            ('mail_delivery_events', 'mail_delivery_events_pkey', 'p', 'id', NULL, NULL, NULL),
+            ('mail_delivery_events', 'mail_delivery_events_queue_id_fkey', 'f', 'queue_id', 'mail_delivery_queue', 'id', 'c')
+          ) AS expected(child_table, constraint_name, constraint_type, child_column, parent_table, parent_column, delete_action)
+         WHERE NOT EXISTS (
+            SELECT 1
+              FROM pg_catalog.pg_constraint constraint_row
+              JOIN pg_catalog.pg_class child_table ON child_table.oid = constraint_row.conrelid
+              JOIN pg_catalog.pg_namespace child_schema ON child_schema.oid = child_table.relnamespace
+             WHERE child_schema.nspname = current_schema()
+               AND child_table.relname = expected.child_table
+               AND constraint_row.conname = expected.constraint_name
+               AND constraint_row.contype = expected.constraint_type::"char"
+               AND constraint_row.conkey = ARRAY[(
+                    SELECT attribute.attnum
+                      FROM pg_catalog.pg_attribute attribute
+                     WHERE attribute.attrelid = child_table.oid
+                       AND attribute.attname = expected.child_column
+                       AND NOT attribute.attisdropped
+               )]::SMALLINT[]
+               AND (
+                    expected.parent_table IS NULL
+                    OR (
+                        constraint_row.confrelid = to_regclass(format('%I.%I', current_schema(), expected.parent_table))
+                        AND constraint_row.confkey = ARRAY[(
+                            SELECT attribute.attnum
+                              FROM pg_catalog.pg_attribute attribute
+                             WHERE attribute.attrelid = constraint_row.confrelid
+                               AND attribute.attname = expected.parent_column
+                               AND NOT attribute.attisdropped
+                        )]::SMALLINT[]
+                        AND constraint_row.confdeltype = expected.delete_action::"char"
+                    )
+               )
+         )
+    ) INTO legacy_constraints;
+
+    SELECT NOT EXISTS (
+        SELECT 1
+          FROM (VALUES
+            ('mail_delivery_queue', 'mail_delivery_queue_pkey', 'p', 'id', NULL, NULL, NULL),
+            ('mail_delivery_queue', 'mail_delivery_queue_company_id_fkey', 'f', 'company_id', 'companies', 'id', 'c'),
+            ('mail_delivery_queue', 'mail_delivery_queue_provider_config_id_fkey', 'f', 'provider_config_id', 'mail_provider_configs', 'id', 'c'),
+            ('mail_delivery_queue', 'mail_delivery_queue_mail_id_fkey', 'f', 'mail_id', 'mail_messages', 'id', 'c'),
+            ('mail_delivery_queue', 'mail_delivery_queue_recipient_id_fkey', 'f', 'recipient_id', 'mail_recipients', 'id', 'c'),
+            ('mail_delivery_attempts', 'mail_delivery_attempts_pkey', 'p', 'id', NULL, NULL, NULL),
+            ('mail_delivery_attempts', 'mail_delivery_attempts_queue_id_fkey', 'f', 'queue_id', 'mail_delivery_queue', 'id', 'c'),
+            ('mail_delivery_worker_heartbeats', 'mail_delivery_worker_heartbeats_pkey', 'p', 'worker_id', NULL, NULL, NULL)
+          ) AS expected(child_table, constraint_name, constraint_type, child_column, parent_table, parent_column, delete_action)
+         WHERE NOT EXISTS (
+            SELECT 1
+              FROM pg_catalog.pg_constraint constraint_row
+              JOIN pg_catalog.pg_class child_table ON child_table.oid = constraint_row.conrelid
+              JOIN pg_catalog.pg_namespace child_schema ON child_schema.oid = child_table.relnamespace
+             WHERE child_schema.nspname = current_schema()
+               AND child_table.relname = expected.child_table
+               AND constraint_row.conname = expected.constraint_name
+               AND constraint_row.contype = expected.constraint_type::"char"
+               AND constraint_row.conkey = ARRAY[(
+                    SELECT attribute.attnum
+                      FROM pg_catalog.pg_attribute attribute
+                     WHERE attribute.attrelid = child_table.oid
+                       AND attribute.attname = expected.child_column
+                       AND NOT attribute.attisdropped
+               )]::SMALLINT[]
+               AND (
+                    expected.parent_table IS NULL
+                    OR (
+                        constraint_row.confrelid = to_regclass(format('%I.%I', current_schema(), expected.parent_table))
+                        AND constraint_row.confkey = ARRAY[(
+                            SELECT attribute.attnum
+                              FROM pg_catalog.pg_attribute attribute
+                             WHERE attribute.attrelid = constraint_row.confrelid
+                               AND attribute.attname = expected.parent_column
+                               AND NOT attribute.attisdropped
+                        )]::SMALLINT[]
+                        AND constraint_row.confdeltype = expected.delete_action::"char"
+                    )
+               )
+         )
+    ) INTO modern_constraints;
+
     fresh_state := queue_columns = ARRAY[]::TEXT[]
         AND attempt_columns = ARRAY[]::TEXT[]
         AND event_columns = ARRAY[]::TEXT[]
@@ -69,14 +161,7 @@ BEGIN
         AND to_regclass('public.mail_delivery_queue_v007') IS NULL
         AND to_regclass('public.mail_delivery_attempts_v007') IS NULL
         AND to_regclass('public.mail_delivery_events_v007') IS NULL
-        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_queue' AND constraint_name='mail_delivery_queue_pkey' AND constraint_type='PRIMARY KEY')
-        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_queue' AND constraint_name='mail_delivery_queue_company_id_fkey' AND constraint_type='FOREIGN KEY')
-        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_queue' AND constraint_name='mail_delivery_queue_provider_id_fkey' AND constraint_type='FOREIGN KEY')
-        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_queue' AND constraint_name='mail_delivery_queue_mail_id_fkey' AND constraint_type='FOREIGN KEY')
-        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_attempts' AND constraint_name='mail_delivery_attempts_pkey' AND constraint_type='PRIMARY KEY')
-        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_attempts' AND constraint_name='mail_delivery_attempts_queue_id_fkey' AND constraint_type='FOREIGN KEY')
-        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_events' AND constraint_name='mail_delivery_events_pkey' AND constraint_type='PRIMARY KEY')
-        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_events' AND constraint_name='mail_delivery_events_queue_id_fkey' AND constraint_type='FOREIGN KEY');
+        AND legacy_constraints;
 
     modern_state := queue_columns = modern_queue_columns
         AND attempt_columns = modern_attempt_columns
@@ -85,13 +170,7 @@ BEGIN
         AND to_regclass('public.mail_delivery_queue_v007') IS NULL
         AND to_regclass('public.mail_delivery_attempts_v007') IS NULL
         AND to_regclass('public.mail_delivery_events_v007') IS NULL
-        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_queue' AND constraint_name='mail_delivery_queue_pkey' AND constraint_type='PRIMARY KEY')
-        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_queue' AND constraint_name='mail_delivery_queue_company_id_fkey' AND constraint_type='FOREIGN KEY')
-        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_queue' AND constraint_name='mail_delivery_queue_provider_config_id_fkey' AND constraint_type='FOREIGN KEY')
-        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_queue' AND constraint_name='mail_delivery_queue_mail_id_fkey' AND constraint_type='FOREIGN KEY')
-        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_queue' AND constraint_name='mail_delivery_queue_recipient_id_fkey' AND constraint_type='FOREIGN KEY')
-        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_attempts' AND constraint_name='mail_delivery_attempts_pkey' AND constraint_type='PRIMARY KEY')
-        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_attempts' AND constraint_name='mail_delivery_attempts_queue_id_fkey' AND constraint_type='FOREIGN KEY');
+        AND modern_constraints;
 
     IF NOT fresh_state AND NOT legacy_state AND NOT modern_state THEN
         RAISE EXCEPTION 'MAIL_DELIVERY_025_UNSUPPORTED_CATALOG_STATE';

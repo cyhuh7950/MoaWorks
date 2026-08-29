@@ -254,6 +254,20 @@ describe("메일 rich compose 재작업 계약", () => {
     expect((await screen.findByRole("button", { name: /CID 전달 원문/ })).textContent).toContain("source");
   });
 
+  it("inbox 목록은 자동 상세 응답이 지연되어도 즉시 렌더되고 loading을 해제한다", async () => {
+    let resolveDetail!: (value: MountedMailDetail) => void;
+    mountedDetailLoader = () => new Promise((resolve) => { resolveDetail = resolve; });
+    installMountedMailFetch();
+    localStorage.setItem("moaworks.userToken", "test-token");
+    vi.resetModules();
+    const { default: MountedApp } = await import("./App");
+    render(<MountedApp />);
+
+    expect(await screen.findByText("CID 전달 원문")).toBeTruthy();
+    await waitFor(() => expect((screen.getByRole("button", { name: "검색" }) as HTMLButtonElement).disabled).toBe(false));
+    resolveDetail(mountedDetail);
+  });
+
   it("mounted App의 메신저 다음 AI 채팅 메뉴가 실제 개인 AI 패널을 연다", async () => {
     installMountedMailFetch();
     localStorage.setItem("moaworks.userToken", "test-token");

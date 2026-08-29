@@ -185,6 +185,16 @@ def run() -> None:
             cursor.execute("CREATE TABLE mail_delivery_queue_v007 (id TEXT PRIMARY KEY)")
             expect_catalog_rejection(cursor, schema_sql(source, destination))
 
+            malformed_fk = f"{prefix}_malformed_fk"
+            create_base(cursor, malformed_fk)
+            create_legacy(cursor)
+            cursor.execute("ALTER TABLE mail_delivery_queue DROP CONSTRAINT mail_delivery_queue_company_id_fkey")
+            cursor.execute(
+                "ALTER TABLE mail_delivery_queue ADD CONSTRAINT mail_delivery_queue_company_id_fkey "
+                "FOREIGN KEY (company_id) REFERENCES mail_messages(id) ON DELETE SET NULL"
+            )
+            expect_catalog_rejection(cursor, schema_sql(source, malformed_fk))
+
         connection.rollback()
     print("MAIL_DELIVERY_025_CATALOG_PASS")
 

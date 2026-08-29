@@ -2597,7 +2597,7 @@ export default function App() {
       const targetMail = resolvedMailId ? activeList.find((item) => item.mailId === resolvedMailId) ?? null : activeList[0] ?? null;
       setActiveMailbox(resolvedMailbox);
       if (targetMail) {
-        await loadMailDetail(targetToken, targetMail.mailId, resolvedMailbox, { folder: preferredFolder });
+        void loadMailDetail(targetToken, targetMail.mailId, resolvedMailbox, { folder: preferredFolder });
       } else {
         setSelectedMailId("");
         setMailReadReceiptOpen(false);
@@ -5779,7 +5779,7 @@ export default function App() {
                     <span>제목</span>
                     <input aria-label="mail-compose-subject" value={mailComposeForm.subject} onChange={(event) => setMailComposeForm((current) => ({ ...current, subject: event.target.value }))} placeholder="제목 입력" />
                   </label>
-                  <label className="user-mail-compose-field is-body">
+                  <div className="user-mail-compose-field is-body">
                     <span>본문</span>
                     <MailRichTextEditor
                       value={mailComposeForm.bodyDocument}
@@ -5789,7 +5789,7 @@ export default function App() {
                       resolveInlineImageUrl={resolveComposeInlineImageUrl}
                       disabled={mailLoading}
                     />
-                  </label>
+                  </div>
                   {translationUiVisible ? <section className="user-mail-compose-translation-toolbar" aria-label="발신 메일 번역">
                     <div><strong>발신 메일 번역</strong><small>Provider {translationStatus?.provider}</small></div>
                     <label><span>번역 언어</span><select aria-label="발신 메일 번역 언어" value={outgoingTranslationTargetLocale} onChange={(event) => { setOutgoingTranslationTargetLocale(event.target.value); setMailTranslationPreview(null); setTranslationError(""); }}>{OUTGOING_TRANSLATION_LOCALES.map((locale) => <option key={locale.value} value={locale.value}>{locale.label}</option>)}</select></label>

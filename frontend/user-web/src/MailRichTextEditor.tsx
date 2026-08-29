@@ -248,6 +248,7 @@ class EditorFailureBoundary extends Component<
 function MailRichTextEditorRuntime({ value, onChange, onUploadImage, onError, resolveInlineImageUrl, disabled = false, lifecycleKey }: RuntimeProps) {
   const registryRef = useRef(new InlineImageRegistry());
   const resolverRef = useRef(resolveInlineImageUrl);
+  const disabledRef = useRef(disabled);
   const uploadedContentIdsRef = useRef(new Set<string>());
   const reservedUploadsRef = useRef(0);
   const aliveRef = useRef(true);
@@ -261,6 +262,7 @@ function MailRichTextEditorRuntime({ value, onChange, onUploadImage, onError, re
   const [editorRevision, setEditorRevision] = useState(0);
 
   resolverRef.current = resolveInlineImageUrl;
+  disabledRef.current = disabled;
 
   const moaworksImage = useMemo(() => Image.extend({
     addAttributes() {
@@ -345,6 +347,12 @@ function MailRichTextEditorRuntime({ value, onChange, onUploadImage, onError, re
         }
         return false;
       },
+      handleDOMEvents: {
+        mousedown: (view) => {
+          if (!disabledRef.current) view.focus();
+          return false;
+        },
+      },
     },
     onUpdate: ({ editor: currentEditor }) => {
       if (applyingExternalRef.current) return;
@@ -377,6 +385,11 @@ function MailRichTextEditorRuntime({ value, onChange, onUploadImage, onError, re
     onTransaction: () => setEditorRevision((value) => value + 1),
     onSelectionUpdate: () => setEditorRevision((value) => value + 1),
   }, [lifecycleKey]);
+
+  useEffect(() => {
+    if (!editor || editor.isDestroyed || editor.isEditable === !disabled) return;
+    editor.setEditable(!disabled);
+  }, [disabled, editor]);
 
   const reportError = useCallback((message: string) => {
     if (aliveRef.current) onError(message);
