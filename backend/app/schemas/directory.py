@@ -7,6 +7,9 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
+DirectoryUserStatus = Literal["active", "inactive", "deleted", "pending_mfa"]
+
+
 class CompanyRecord(BaseModel):
     id: str
     name: str
@@ -44,7 +47,7 @@ class UserRecord(BaseModel):
     passwordHash: str
     departmentId: str
     roleId: str
-    status: str
+    status: DirectoryUserStatus
     userType: str
     isDepartmentHead: bool = False
     createdAt: datetime
@@ -109,7 +112,7 @@ class AuthUserSummary(BaseModel):
     roleId: str
     roleName: str
     userType: str
-    status: str
+    status: DirectoryUserStatus
     permissions: list[str]
     departmentId: str | None = None
     departmentName: str | None = None
@@ -426,7 +429,7 @@ class UserCreateRequest(BaseModel):
     password: str = Field(min_length=8)
     departmentId: str = Field(min_length=1)
     roleId: str = Field(min_length=1)
-    status: str = Field(default="active")
+    status: DirectoryUserStatus = Field(default="active")
     userType: str = Field(default="user")
     isDepartmentHead: bool = False
 
@@ -463,7 +466,7 @@ class UserUpdateRequest(BaseModel):
     password: str | None = Field(default=None, min_length=8)
     departmentId: str | None = None
     roleId: str | None = None
-    status: str | None = None
+    status: DirectoryUserStatus | None = None
     userType: str | None = None
     isDepartmentHead: bool | None = None
 
@@ -488,7 +491,7 @@ class UserView(BaseModel):
     departmentName: str
     roleId: str
     roleName: str
-    status: str
+    status: DirectoryUserStatus
     userType: str
     isDepartmentHead: bool
     mailAccountEmail: str
