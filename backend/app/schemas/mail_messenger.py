@@ -8,8 +8,11 @@ import unicodedata
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
+SenderDisplayMode = Literal["name", "id", "name_email"]
+
+
 class MailBasicPreferencesBase(BaseModel):
-    senderDisplayMode: Literal["name", "name_email"] = "name"
+    senderDisplayMode: SenderDisplayMode = "name"
     blockRemoteImages: bool = True
     disableRiskyTags: bool = True
     showRouteCountry: bool = False

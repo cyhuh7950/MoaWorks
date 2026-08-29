@@ -49,6 +49,10 @@ class PreferenceCursor:
                 self.next_one = None
                 return
             if self.row:
+                if "SET SENDER_DISPLAY_MODE = %S" in upper:
+                    self.row["sender_display_mode"] = params[0]
+                elif "SET SENDER_DISPLAY_MODE = 'NAME'" in upper:
+                    self.row["sender_display_mode"] = "name"
                 self.row["version"] += 1
                 self.row["updated_at"] = datetime.now(UTC)
                 self.next_one = dict(self.row)
@@ -156,6 +160,18 @@ class Ui022MailBasicSettingsTests(unittest.TestCase):
         self.assertGreater(reset.version, 1)
         with self.assertRaises(MailPreferenceConflictError):
             service.update_basic_preferences(actor, MailBasicPreferencesUpdateRequest(expectedVersion=1))
+
+    def test_service_round_trips_id_sender_display_mode(self):
+        service = MailMessengerService()
+        service.db = PreferenceDb(version=1)
+        actor = SimpleNamespace(companyId="company-a", userId="user-a", userName="사용자", userEmail="user@example.test")
+
+        updated = service.update_basic_preferences(
+            actor,
+            MailBasicPreferencesUpdateRequest(senderDisplayMode="id", expectedVersion=1),
+        )
+
+        self.assertEqual(updated.senderDisplayMode, "id")
 
     def test_latest_migration_changes_only_new_preference_defaults(self):
         sql = (self.root / "migrations" / "057_mail_list_display_defaults.sql").read_text(encoding="utf-8").lower()
