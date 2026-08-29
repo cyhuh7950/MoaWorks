@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,6 +25,7 @@ class Settings(BaseSettings):
     mail_layer_imap_port: int = 993
     mail_ingest_token: str = ""
     mail_inbound_max_message_bytes: int = 25 * 1024 * 1024
+    mail_engine_daily_send_limit: int = Field(default=0, ge=0)
     admin_access_check_token: str = ""
     admin_access_bootstrap_mode: str = "restricted"
     admin_access_bootstrap_cidrs: list[str] = [
