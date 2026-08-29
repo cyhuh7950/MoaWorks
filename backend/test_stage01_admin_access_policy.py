@@ -1,12 +1,16 @@
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.api.routes.admin import create_role, update_role
+from app.schemas.directory import AuthUserSummary, RoleCreateRequest, RoleUpdateRequest
 from app.services.admin_access_policy import AdminAccessDecision, AdminAccessOperations
 from app.services.admin_access_policy import evaluate_admin_access
+from app.services.directory_store import DirectoryAdminActiveLimitError, DirectoryStore
 
 
 class FakeCursor:
@@ -50,6 +54,34 @@ class FakeDb:
 
 
 class AdminAccessPolicyTest(unittest.TestCase):
+    def test_role_create_and_update_map_active_limit_to_stable_409(self) -> None:
+        actor = MagicMock(spec=AuthUserSummary)
+        with patch.object(
+            DirectoryStore,
+            "create_role",
+            side_effect=DirectoryAdminActiveLimitError("관리자 활성 계정은 최대 3개입니다."),
+        ):
+            with self.assertRaises(HTTPException) as create_context:
+                create_role(
+                    payload=RoleCreateRequest(name="QA 권한", permissions=["admin:*"]),
+                    _=actor,
+                )
+        with patch.object(
+            DirectoryStore,
+            "update_role",
+            side_effect=DirectoryAdminActiveLimitError("관리자 활성 계정은 최대 3개입니다."),
+        ):
+            with self.assertRaises(HTTPException) as update_context:
+                update_role(
+                    role_id="role-1",
+                    payload=RoleUpdateRequest(permissions=["admin:*"]),
+                    _=actor,
+                )
+
+        for context in (create_context, update_context):
+            self.assertEqual(context.exception.status_code, 409)
+            self.assertEqual(context.exception.detail["code"], "ADMIN_ACTIVE_LIMIT_REACHED")
+
     def test_public_mode_allows_public_client(self) -> None:
         decision = evaluate_admin_access("public", [], "203.0.113.10")
         self.assertTrue(decision.allowed)

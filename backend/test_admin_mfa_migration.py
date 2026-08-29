@@ -10,7 +10,7 @@ import uuid
 import pytest
 from pydantic import ValidationError
 from psycopg import sql
-from psycopg.errors import CheckViolation, DivisionByZero, RaiseException
+from psycopg.errors import CheckViolation, DivisionByZero
 
 from app.core.config import settings
 from app.schemas.setup import DbConfigPayload
@@ -920,7 +920,7 @@ def test_existing_over_limit_state_is_preserved_but_new_transition_is_blocked(
         assert cursor.fetchone()["status"] == "active"
 
     blocked_user_id = f"{migrated_postgres.prefix}_blocked_admin"
-    with pytest.raises(RaiseException, match="ADMIN_ACTIVE_LIMIT_REACHED"):
+    with pytest.raises(CheckViolation, match="ADMIN_ACTIVE_LIMIT_REACHED"):
         with migrated_postgres.connection.transaction():
             with migrated_postgres.connection.cursor() as cursor:
                 cursor.execute(
@@ -983,7 +983,7 @@ def test_pending_admin_is_not_counted_or_granted_active_status(
 def test_role_admin_permission_expansion_uses_the_same_active_limit_guard(
     migrated_postgres: MigratedPostgres,
 ) -> None:
-    with pytest.raises(RaiseException, match="ADMIN_ACTIVE_LIMIT_REACHED"):
+    with pytest.raises(CheckViolation, match="ADMIN_ACTIVE_LIMIT_REACHED"):
         with migrated_postgres.connection.transaction():
             with migrated_postgres.connection.cursor() as cursor:
                 cursor.execute(

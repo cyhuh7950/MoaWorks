@@ -312,7 +312,9 @@ BEGIN
           );
 
         IF active_admin_count >= 3 THEN
-            RAISE EXCEPTION 'ADMIN_ACTIVE_LIMIT_REACHED';
+            RAISE EXCEPTION USING
+                ERRCODE = '23514',
+                MESSAGE = 'ADMIN_ACTIVE_LIMIT_REACHED';
         END IF;
     END IF;
 
@@ -352,7 +354,9 @@ BEGIN
 
         IF newly_privileged_user_count > 0
            AND current_active_admin_count + newly_privileged_user_count > 3 THEN
-            RAISE EXCEPTION 'ADMIN_ACTIVE_LIMIT_REACHED';
+            RAISE EXCEPTION USING
+                ERRCODE = '23514',
+                MESSAGE = 'ADMIN_ACTIVE_LIMIT_REACHED';
         END IF;
     END IF;
 

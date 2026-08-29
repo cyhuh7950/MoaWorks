@@ -8,13 +8,50 @@ from openpyxl import Workbook
 from pydantic import ValidationError
 
 from app.api.router import api_router
-from app.api.routes.admin import validate_org_import
+from app.api.routes.admin import create_user, update_user, validate_org_import
 from app.schemas.content_operations import ContentBulkStatus
-from app.schemas.directory import AuthUserSummary, DepartmentUpdateRequest, OrgImportApplyRequest, UserCreateRequest
+from app.schemas.directory import (
+    AuthUserSummary,
+    DepartmentUpdateRequest,
+    OrgImportApplyRequest,
+    UserCreateRequest,
+    UserUpdateRequest,
+)
+from app.services.directory_store import DirectoryAdminActiveLimitError, DirectoryStore
 from app.services.org_import_service import OrgImportService
 
 
 class AdminInterfaceIntegrationContractTest(unittest.TestCase):
+    def test_user_create_and_update_map_active_limit_to_stable_409(self) -> None:
+        actor = MagicMock(spec=AuthUserSummary)
+        create_payload = UserCreateRequest(
+            name="QA 관리자",
+            loginId="qa.admin",
+            password="safe-pass-123",
+            departmentId="department-1",
+            roleId="role-1",
+            userType="admin",
+        )
+        with patch.object(
+            DirectoryStore,
+            "create_user",
+            side_effect=DirectoryAdminActiveLimitError("관리자 활성 계정은 최대 3개입니다."),
+        ):
+            with self.assertRaises(HTTPException) as create_context:
+                create_user(payload=create_payload, _=actor)
+
+        with patch.object(
+            DirectoryStore,
+            "update_user",
+            side_effect=DirectoryAdminActiveLimitError("관리자 활성 계정은 최대 3개입니다."),
+        ):
+            with self.assertRaises(HTTPException) as update_context:
+                update_user(user_id="user-4", payload=UserUpdateRequest(userType="admin"), _=actor)
+
+        for context in (create_context, update_context):
+            self.assertEqual(context.exception.status_code, 409)
+            self.assertEqual(context.exception.detail["code"], "ADMIN_ACTIVE_LIMIT_REACHED")
+
     def test_required_admin_routes_are_registered(self) -> None:
         registered = {(route.path, method) for route in api_router.routes for method in getattr(route, "methods", set())}
         expected = {

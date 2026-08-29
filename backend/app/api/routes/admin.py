@@ -1,3 +1,5 @@
+from typing import NoReturn
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 
@@ -23,7 +25,11 @@ from app.schemas.directory import (
     UserPasswordResetResponse,
     UserView,
 )
-from app.services.directory_store import DirectoryStore, DirectoryUserEmailConflictError
+from app.services.directory_store import (
+    DirectoryAdminActiveLimitError,
+    DirectoryStore,
+    DirectoryUserEmailConflictError,
+)
 from app.services.mail_admin_operations import MailAdminOperations
 from app.services.domain_service import DomainService
 from app.services.org_import_service import OrgImportService
@@ -40,6 +46,17 @@ from app.schemas.mail_messenger import (
 
 
 router = APIRouter()
+
+
+def _raise_admin_active_limit(exc: DirectoryAdminActiveLimitError) -> NoReturn:
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "ADMIN_ACTIVE_LIMIT_REACHED",
+            "userMessage": str(exc),
+            "adminMessage": str(exc),
+        },
+    ) from exc
 
 
 @router.get("/directory", response_model=DirectoryOverviewResponse)
@@ -77,7 +94,10 @@ def create_role(
     payload: RoleCreateRequest,
     _: AuthUserSummary = Depends(require_admin),
 ) -> RoleRecord:
-    return DirectoryStore().create_role(payload.name, payload.permissions)
+    try:
+        return DirectoryStore().create_role(payload.name, payload.permissions)
+    except DirectoryAdminActiveLimitError as exc:
+        _raise_admin_active_limit(exc)
 
 
 @router.patch("/roles/{role_id}", response_model=RoleRecord)
@@ -86,7 +106,10 @@ def update_role(
     payload: RoleUpdateRequest,
     _: AuthUserSummary = Depends(require_admin),
 ) -> RoleRecord:
-    return DirectoryStore().update_role(role_id, payload)
+    try:
+        return DirectoryStore().update_role(role_id, payload)
+    except DirectoryAdminActiveLimitError as exc:
+        _raise_admin_active_limit(exc)
 
 
 @router.delete("/roles/{role_id}", response_model=RoleRecord)
@@ -104,6 +127,8 @@ def create_user(
 ) -> UserView:
     try:
         return DirectoryStore().create_user(payload)
+    except DirectoryAdminActiveLimitError as exc:
+        _raise_admin_active_limit(exc)
     except DirectoryUserEmailConflictError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -117,7 +142,10 @@ def update_user(
     payload: UserUpdateRequest,
     _: AuthUserSummary = Depends(require_admin),
 ) -> UserView:
-    return DirectoryStore().update_user(user_id, payload)
+    try:
+        return DirectoryStore().update_user(user_id, payload)
+    except DirectoryAdminActiveLimitError as exc:
+        _raise_admin_active_limit(exc)
 
 
 @router.post("/users/{user_id}/password-reset", response_model=UserPasswordResetResponse)

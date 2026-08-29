@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from functools import wraps
 import json
 import secrets
 import string
+from typing import Any, Callable, TypeVar, cast
 from uuid import uuid4
 from zoneinfo import ZoneInfo
+
+from psycopg.errors import CheckViolation
 
 from app.schemas.directory import (
     ApprovalActionReason,
@@ -79,6 +83,28 @@ class ApprovalDelegationNotFoundError(Exception):
 
 class DirectoryUserEmailConflictError(RuntimeError):
     pass
+
+
+class DirectoryAdminActiveLimitError(RuntimeError):
+    pass
+
+
+_DirectoryMethod = TypeVar("_DirectoryMethod", bound=Callable[..., Any])
+
+
+def _map_admin_active_limit(method: _DirectoryMethod) -> _DirectoryMethod:
+    @wraps(method)
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return method(*args, **kwargs)
+        except CheckViolation as exc:
+            if "ADMIN_ACTIVE_LIMIT_REACHED" not in str(exc):
+                raise
+            raise DirectoryAdminActiveLimitError(
+                "활성 관리자 계정은 최대 3개까지 사용할 수 있습니다."
+            ) from exc
+
+    return cast(_DirectoryMethod, wrapped)
 
 
 class DirectoryStore:
@@ -528,6 +554,7 @@ class DirectoryStore:
             connection.commit()
         return self._to_department_record(row)
 
+    @_map_admin_active_limit
     def create_role(self, name: str, permissions: list[str]) -> RoleRecord:
         self.db.ensure_migrations_applied()
         company = self._require_company()
@@ -549,6 +576,7 @@ class DirectoryStore:
             connection.commit()
         return self._to_role_record(row)
 
+    @_map_admin_active_limit
     def update_role(self, role_id: str, payload: RoleUpdateRequest) -> RoleRecord:
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection:
@@ -627,6 +655,7 @@ class DirectoryStore:
             connection.commit()
         return self._to_role_record(row)
 
+    @_map_admin_active_limit
     def create_user(self, payload: UserCreateRequest) -> UserView:
         self.db.ensure_migrations_applied()
         company = self._require_company()
@@ -723,6 +752,7 @@ class DirectoryStore:
             connection.commit()
         return self._row_to_user_view(row)
 
+    @_map_admin_active_limit
     def update_user(self, user_id: str, payload: UserUpdateRequest) -> UserView:
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection:
