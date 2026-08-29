@@ -8,7 +8,7 @@ from openpyxl import Workbook
 from pydantic import ValidationError
 
 from app.api.router import api_router
-from app.api.routes.admin import create_user, update_user, validate_org_import
+from app.api.routes.admin import apply_org_import, create_user, update_user, validate_org_import
 from app.schemas.content_operations import ContentBulkStatus
 from app.schemas.directory import (
     AuthUserSummary,
@@ -51,6 +51,20 @@ class AdminInterfaceIntegrationContractTest(unittest.TestCase):
         for context in (create_context, update_context):
             self.assertEqual(context.exception.status_code, 409)
             self.assertEqual(context.exception.detail["code"], "ADMIN_ACTIVE_LIMIT_REACHED")
+
+    def test_org_import_apply_maps_active_limit_to_stable_409(self) -> None:
+        actor = MagicMock(spec=AuthUserSummary)
+        payload = OrgImportApplyRequest(batchId="batch-admin-limit")
+        with patch.object(
+            OrgImportService,
+            "apply_batch",
+            side_effect=DirectoryAdminActiveLimitError("활성 관리자 계정은 최대 3개까지 사용할 수 있습니다."),
+        ):
+            with self.assertRaises(HTTPException) as context:
+                apply_org_import(payload=payload, actor=actor)
+
+        self.assertEqual(context.exception.status_code, 409)
+        self.assertEqual(context.exception.detail["code"], "ADMIN_ACTIVE_LIMIT_REACHED")
 
     def test_required_admin_routes_are_registered(self) -> None:
         registered = {(route.path, method) for route in api_router.routes for method in getattr(route, "methods", set())}

@@ -247,6 +247,8 @@ def apply_org_import(
 ) -> OrgImportBatchResponse:
     try:
         return OrgImportService().apply_batch(actor, payload)
+    except DirectoryAdminActiveLimitError as exc:
+        _raise_admin_active_limit(exc)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

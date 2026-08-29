@@ -98,7 +98,10 @@ def _map_admin_active_limit(method: _DirectoryMethod) -> _DirectoryMethod:
         try:
             return method(*args, **kwargs)
         except CheckViolation as exc:
-            if "ADMIN_ACTIVE_LIMIT_REACHED" not in str(exc):
+            if (
+                exc.sqlstate != "23514"
+                or exc.diag.message_primary != "ADMIN_ACTIVE_LIMIT_REACHED"
+            ):
                 raise
             raise DirectoryAdminActiveLimitError(
                 "활성 관리자 계정은 최대 3개까지 사용할 수 있습니다."

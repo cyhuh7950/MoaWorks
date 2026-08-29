@@ -5,12 +5,14 @@ import os
 from pathlib import Path
 import tempfile
 import threading
+import time
 from typing import Any
 import uuid
 
 import pytest
 from psycopg import sql
 from psycopg.errors import CheckViolation
+from psycopg.pq import DiagnosticField
 
 from app.core.config import settings
 from app.schemas.setup import DbConfigPayload
@@ -261,13 +263,24 @@ def test_migration_limit_uses_check_violation_sqlstate() -> None:
 
 
 def test_service_boundary_maps_only_the_active_limit_check_violation() -> None:
+    marker_info = {
+        DiagnosticField.MESSAGE_PRIMARY: LIMIT_MARKER.encode(),
+    }
+    unrelated_info = {
+        DiagnosticField.MESSAGE_PRIMARY: b"UNRELATED_CHECK",
+        DiagnosticField.MESSAGE_DETAIL: LIMIT_MARKER.encode(),
+    }
+
     @_map_admin_active_limit
     def active_limit_failure() -> None:
-        raise CheckViolation(LIMIT_MARKER)
+        raise CheckViolation(LIMIT_MARKER, info=marker_info)
 
     @_map_admin_active_limit
     def unrelated_check_failure() -> None:
-        raise CheckViolation("UNRELATED_CHECK")
+        raise CheckViolation(
+            f"UNRELATED_CHECK\nDETAIL: {LIMIT_MARKER}",
+            info=unrelated_info,
+        )
 
     with pytest.raises(DirectoryAdminActiveLimitError, match="최대 3개"):
         active_limit_failure()
@@ -359,13 +372,23 @@ def test_two_connection_promotion_race_allows_only_one_winner(
         )
     fixture.connection.commit()
 
-    barrier = threading.Barrier(2)
+    blocker = PostgresService().connect(_db_config())
+    with blocker.cursor() as cursor:
+        cursor.execute("SELECT pg_advisory_xact_lock(%s, %s)", (1297043287, 3))
+
+    barrier = threading.Barrier(3)
     outcomes: list[tuple[str, str]] = []
+    backend_pids: list[int] = []
     outcome_lock = threading.Lock()
 
     def promote(candidate_id: str) -> None:
         connection = PostgresService().connect(_db_config())
         try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT pg_backend_pid() AS pid")
+                backend_pid = int(cursor.fetchone()["pid"])
+            with outcome_lock:
+                backend_pids.append(backend_pid)
             barrier.wait(timeout=5)
             try:
                 with connection.cursor() as cursor:
@@ -387,6 +410,37 @@ def test_two_connection_promotion_race_allows_only_one_winner(
     threads = [threading.Thread(target=promote, args=(candidate,)) for candidate in candidates]
     for thread in threads:
         thread.start()
+    try:
+        barrier.wait(timeout=5)
+
+        observer = PostgresService().connect(_db_config())
+        try:
+            deadline = time.monotonic() + 5
+            waiting_count = 0
+            while time.monotonic() < deadline:
+                with observer.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT count(*) AS count
+                        FROM pg_catalog.pg_stat_activity
+                        WHERE pid = ANY(%s)
+                          AND wait_event_type = 'Lock'
+                          AND wait_event = 'advisory'
+                        """,
+                        (backend_pids,),
+                    )
+                    waiting_count = int(cursor.fetchone()["count"])
+                observer.rollback()
+                if waiting_count == 2:
+                    break
+                time.sleep(0.05)
+            assert waiting_count == 2, "both promotion transactions must wait on the fixed advisory lock"
+        finally:
+            observer.close()
+    finally:
+        blocker.commit()
+        blocker.close()
+
     for thread in threads:
         thread.join(timeout=10)
         assert not thread.is_alive()

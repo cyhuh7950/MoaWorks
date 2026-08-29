@@ -22,6 +22,7 @@ from app.schemas.directory import (
 )
 from app.services.postgres_service import PostgresService
 from app.services.security_service import SecurityService
+from app.services.directory_store import _map_admin_active_limit
 
 
 class OrgImportService:
@@ -133,6 +134,7 @@ class OrgImportService:
             connection.commit()
         return self._row_to_batch_response(row)
 
+    @_map_admin_active_limit
     def apply_batch(self, actor: AuthUserSummary, payload: OrgImportApplyRequest) -> OrgImportBatchResponse:
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection:
