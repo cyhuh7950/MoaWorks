@@ -54,3 +54,12 @@ MoaWorks는 100인 이하 소기업을 위한 다국어 오픈소스 그룹웨�
 - [기여 가이드](docs/CONTRIBUTING.md) · [보안 정책](docs/SECURITY.md) · [릴리스 절차](docs/release.md) · [롤백 절차](docs/rollback.md)
 
 과거 phase 문서는 당시 단계 증적으로 보존한다. 신규 설치는 위 v2.1 매뉴얼을 우선한다.
+
+## 메일 표시·총량 한도·관리자 MFA
+
+- 메일 보낸 사람 표시는 `이름`, `ID(이메일 @ 앞)`, `이름 + 이메일`을 지원합니다.
+- `MAIL_ENGINE_DAILY_SEND_LIMIT=0`은 메일 엔진 전체 일일 한도가 비활성인 상태입니다. 양수 값은 인수검증 결과와 승인값을 확인한 뒤 적용합니다.
+- 관리자 MFA는 `optional` 상태에서 등록을 마친 뒤 원자적 session 무효화 절차와 함께 `required`로 전환합니다.
+- MFA Secret, QR, 수동 키, OTP, 복구 코드, 개인키는 저장소·로그·화면 캡처에 남기지 않습니다.
+- 실행 명령과 판정·되돌리기 절차는 [메일 총량 한도·관리자 MFA 관리 절차](docs/manuals/mail-quota-admin-mfa-operations.md)를 따릅니다.
+- 구현·검증 결과는 [메일 표시·총량 한도·관리자 MFA 인수검증 보고서](docs/work-progress/moaworks-completion-v2.1/mail-sender-compose-quota-admin-mfa-report.md)에 기록합니다.

@@ -45,6 +45,8 @@ try {
   if (unknownResponse.status !== 404) throw new Error("phase5 fixture accepted an unknown route");
   const wrongMethod = await fetch(`http://127.0.0.1:${fixturePort}/api/v1/mail/inbox`, { method: "POST" });
   if (wrongMethod.status !== 405) throw new Error("phase5 fixture accepted a wrong method");
+  const invalidSenderMode = await fetch(`http://127.0.0.1:${fixturePort}/__test/sender-mode`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "email" }) });
+  if (invalidSenderMode.status !== 422) throw new Error("phase5 fixture accepted an invalid sender test mode");
   await start(process.execPath, [resolve(root, "node_modules", "vite", "bin", "vite.js"), "--host", "127.0.0.1", "--port", String(webPort)]);
   await waitFor(`http://127.0.0.1:${webPort}/`);
   browser = await chromium.launch({ channel: "chrome", headless: true });
@@ -64,6 +66,24 @@ try {
   process.stdout.write("PHASE5_STEP mail-menu\n");
   await page.locator(".user-app-rail-menu").waitFor({ state: "visible" });
   await page.locator(".user-app-rail-item").filter({ hasText: /^메일/ }).click();
+  const senderModeEvidence = [];
+  const senderCell = page.locator(".user-mail-row__sender").first();
+  const assertSenderMode = async (mode, expected) => {
+    await senderCell.waitFor();
+    const actual = (await senderCell.textContent())?.trim();
+    if (actual !== expected) throw new Error(`phase5 sender mode ${mode} expected ${expected} but received ${actual ?? "<missing>"}`);
+    senderModeEvidence.push({ mode, actual });
+  };
+  await assertSenderMode("name", "홍길동");
+  for (const [mode, expected] of [["id", "hong.gildong"], ["name_email", "홍길동 <hong.gildong@example.test>"]]) {
+    await page.getByRole("button", { name: "환경설정" }).click();
+    await page.getByLabel("보낸 사람 표시").selectOption(mode);
+    const saveResponsePromise = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/v1/mail/preferences/basic" && response.request().method() === "PUT");
+    await page.getByRole("button", { name: "저장", exact: true }).click();
+    if ((await saveResponsePromise).status() !== 200) throw new Error(`phase5 sender mode ${mode} save failed`);
+    await page.getByRole("button", { name: "닫기", exact: true }).click();
+    await assertSenderMode(mode, expected);
+  }
   process.stdout.write("PHASE5_STEP compose-entry\n");
   const composeButton = page.getByRole("button", { name: "메일쓰기" });
   const composeVisible = await composeButton.isVisible({ timeout: 5_000 }).catch(() => false);
@@ -130,7 +150,7 @@ try {
   if (network.some((origin) => origin !== `http://127.0.0.1:${webPort}`)) throw new Error("phase5 used a non-local API origin");
   if (pageErrors.length) throw new Error(`phase5 page errors: ${pageErrors.join(" | ")}`);
   if (apiResponses.some(({ status }) => status >= 400)) throw new Error("phase5 received a failing API response");
-  await writeFile(resolve(evidence, "result.json"), JSON.stringify({ localOnly: true, stage: "rich-compose", composeVisible, loginVisible, portalVisible, storedToken, activeMenu, editorFocused, clickToTypeApplied, boldPressed, toolbarContract, draftButtonIsTopmost, fixtureGuards: { wrongLogin: wrongLogin.status, unknownRoute: unknownResponse.status, wrongMethod: wrongMethod.status }, networkCount: network.length, apiResponses, pageErrors }, null, 2));
+  await writeFile(resolve(evidence, "result.json"), JSON.stringify({ localOnly: true, stage: "rich-compose", composeVisible, loginVisible, portalVisible, storedToken, activeMenu, senderModeEvidence, editorFocused, clickToTypeApplied, boldPressed, toolbarContract, draftButtonIsTopmost, fixtureGuards: { wrongLogin: wrongLogin.status, unknownRoute: unknownResponse.status, wrongMethod: wrongMethod.status, invalidSenderMode: invalidSenderMode.status }, networkCount: network.length, apiResponses, pageErrors }, null, 2));
   process.stdout.write("PHASE5_PASS\n");
 } catch (error) {
   process.stderr.write(`PHASE5_FAIL ${error instanceof Error ? error.message : String(error)}\n`);
