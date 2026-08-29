@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const modulePath = path.resolve(__dirname, "..", "mail-compose.js");
+const appModulePath = path.resolve(__dirname, "..", "App.tsx");
 
 function loadMailCompose() {
   assert.equal(fs.existsSync(modulePath), true, "mail compose model exists");
@@ -66,4 +67,23 @@ test("메일함 탭은 서버의 기존 조회 경로에만 연결된다", () =>
   assert.equal(mailboxRequestPath("sent"), "/mail/sent");
   assert.equal(mailboxRequestPath("drafts"), "/mail/drafts");
   assert.throws(() => mailboxRequestPath("trash"), /지원하지 않는 메일함/);
+});
+
+test("모바일 메일은 세션 보호된 preference를 조회하고 실패 시 name을 유지한다", () => {
+  const source = fs.readFileSync(appModulePath, "utf8");
+
+  assert.match(source, /type MailBasicPreferences = \{ senderDisplayMode: "name" \| "id" \| "name_email" \};/);
+  assert.match(source, /useState<SenderDisplayMode>\("name"\)/);
+  assert.match(source, /request<MailBasicPreferences>\("\/mail\/preferences\/basic"/);
+  assert.match(source, /setMailSenderDisplayMode\("name"\)/);
+});
+
+test("모바일 메일 목록·상세·접근성 label은 같은 formatter 결과를 사용한다", () => {
+  const source = fs.readFileSync(appModulePath, "utf8");
+
+  assert.match(source, /senderDisplayName: string;/);
+  assert.match(source, /const sender = formatMailSender\(item\.senderDisplayName, item\.senderEmail, mailSenderDisplayMode\);/);
+  assert.match(source, /accessibilityLabel=\{`\$\{sender\} \$\{item\.subject\} 메일 열기`\}/);
+  assert.match(source, />\{sender\}<\/Text>/);
+  assert.match(source, /formatMailSender\(selectedMailDetail\.senderDisplayName, selectedMailDetail\.senderEmail, mailSenderDisplayMode\)/);
 });

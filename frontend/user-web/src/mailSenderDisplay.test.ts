@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatMailSender } from "./mailSenderDisplay";
+import { formatMailSender, senderEmailId } from "./mailSenderDisplay";
 
 describe("formatMailSender", () => {
   it("이름 모드에서는 수신 헤더의 표시명을 우선한다", () => {
@@ -18,5 +18,24 @@ describe("formatMailSender", () => {
 
   it("이름과 이메일 모드는 두 값을 함께 표시한다", () => {
     expect(formatMailSender("외부 발신자", "sender@example.net", "name_email")).toBe("외부 발신자 <sender@example.net>");
+  });
+
+  it("ID 모드는 trim한 이메일의 첫 @ 앞 원문을 표시한다", () => {
+    expect(senderEmailId(" Hong@Example.com ")).toBe("Hong");
+    expect(senderEmailId("first@alias@example.com")).toBe("first");
+    expect(formatMailSender("홍길동", " Hong@Example.com ", "id")).toBe("Hong");
+  });
+
+  it("ID를 추출할 수 없으면 ID 정보 없음으로 표시한다", () => {
+    expect(senderEmailId("")).toBeNull();
+    expect(senderEmailId("invalid")).toBeNull();
+    expect(senderEmailId("@example.com")).toBeNull();
+    expect(formatMailSender("", "invalid", "id")).toBe("ID 정보 없음");
+  });
+
+  it("누락된 이름과 이메일은 모드별 fallback을 유지한다", () => {
+    expect(formatMailSender("", "hong@example.com", "name")).toBe("이름 정보 없음");
+    expect(formatMailSender("", "hong@example.com", "name_email")).toBe("이름 정보 없음 <hong@example.com>");
+    expect(formatMailSender("", "", "name_email")).toBe("이름 정보 없음");
   });
 });
