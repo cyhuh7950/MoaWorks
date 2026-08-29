@@ -7,7 +7,9 @@ import smtplib
 import ssl
 from uuid import uuid4
 
+from app.core.config import settings
 from app.services.mail_attachment_storage import MailAttachmentStorage
+from app.services.mail_daily_send_quota import MailDailySendQuota
 from app.services.mail_delivery_service import MailDeliveryWorker, SmtpRelayAdapter, mask_delivery_error
 from app.services.mail_transports import (
     MailProviderRoutingAdapter,
@@ -23,6 +25,11 @@ _CONNECTION_FIELDS = {
     "providerType": "provider_type", "relayHost": "relay_host", "relayPort": "relay_port",
     "tlsMode": "tls_mode", "fromAddress": "from_address", "username": "username",
 }
+
+
+def deterministic_quota_jitter(queue_id: str, maximum_seconds: int = 300) -> int:
+    digest = sha256(queue_id.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big") % (maximum_seconds + 1)
 
 def prepare_provider_update(current: dict, values: dict, encrypt_secret) -> dict:
     connection_changed = False
@@ -52,7 +59,7 @@ def prepare_provider_update(current: dict, values: dict, encrypt_secret) -> dict
     return updates
 
 class MailDeliveryOperations:
-    def __init__(self, db=None, adapter=None, storage=None):
+    def __init__(self, db=None, adapter=None, storage=None, quota=None):
         self.db = db or PostgresService()
         self.adapter = adapter or MailProviderRoutingAdapter(
             self_hosted_transport=SelfHostedSmtpTransport(mx_resolver=resolve_mx_hosts),
@@ -61,6 +68,10 @@ class MailDeliveryOperations:
         )
         self.storage = storage or MailAttachmentStorage()
         self.security = SecurityService()
+        self.quota = quota or MailDailySendQuota(
+            self.db,
+            limit=settings.mail_engine_daily_send_limit,
+        )
 
     @staticmethod
     def _id(prefix): return f"{prefix}_{uuid4().hex}"
@@ -367,15 +378,64 @@ class MailDeliveryOperations:
             connection.commit()
         return True
 
+    def defer_claim_for_quota(self, worker_id, job, code, reset_at):
+        now = datetime.now(UTC)
+        next_attempt_at = reset_at + timedelta(
+            seconds=deterministic_quota_jitter(str(job["queue_id"]))
+        )
+        event = (
+            "mail.delivery.daily_limit_deferred"
+            if code == "MAIL_DAILY_SEND_LIMIT_EXCEEDED"
+            else "mail.delivery.daily_quota_unavailable"
+        )
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """UPDATE mail_delivery_queue
+                    SET status='retry_pending',next_attempt_at=%s,lease_expires_at=NULL,
+                        worker_id=NULL,last_error=%s,updated_at=%s
+                    WHERE id=%s AND worker_id=%s AND status='processing'
+                    RETURNING id""",
+                    (next_attempt_at, code, now, job["queue_id"], worker_id),
+                )
+                if cursor.fetchone() is None:
+                    return False
+                self._audit(
+                    cursor,
+                    job["company_id"],
+                    None,
+                    "mail-worker",
+                    "mail_delivery_queue",
+                    job["queue_id"],
+                    event,
+                    "processing",
+                    "retry_pending",
+                    now,
+                )
+                self.heartbeat(cursor, worker_id, "idle", datetime.now(UTC), error=code)
+            connection.commit()
+        return True
+
     def run_once(self, worker_id):
         claimed = self.claim_next(worker_id)
         if claimed is None: return False
         job, provider = claimed
         try:
-            result = MailDeliveryWorker(worker_id, self.adapter).deliver_claimed(job, provider)
+            result = MailDeliveryWorker(
+                worker_id,
+                self.adapter,
+                quota=getattr(self, "quota", None),
+            ).deliver_claimed(job, provider)
         except Exception as exc:
             self.record_degraded(worker_id, exc)
             return False
+        if result.status == "quota_deferred":
+            return self.defer_claim_for_quota(
+                worker_id,
+                job,
+                result.error_message,
+                result.next_attempt_at,
+            )
         return self.finalize_claim(worker_id, job, result)
 
     def record_degraded(self, worker_id, error):

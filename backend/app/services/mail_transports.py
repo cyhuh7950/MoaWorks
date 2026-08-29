@@ -92,6 +92,16 @@ class DeliveryReceipt:
     remote_smtp_accepted: bool
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedMailDelivery:
+    provider_type: str
+    message: EmailMessage
+    envelope_from: str
+    recipient_email: str
+    legacy_envelope: dict | None = None
+    outbound_message: OutboundMessage | None = None
+
+
 def resolve_mx_hosts(domain: str) -> list[str]:
     import dns.exception
     import dns.resolver
@@ -140,6 +150,33 @@ class SelfHostedSmtpTransport:
             raise MailTransportFailure(str(exc), transient=False) from exc
         if dkim_config is not None:
             self.dkim_signer.sign(prepared, dkim_config)
+        return self.send_prepared(
+            prepared,
+            envelope_from=message.envelope_from or message.sender_email,
+            recipient_email=message.recipient_email,
+            helo_name=helo_name,
+            timeout_sec=timeout_sec,
+            relay_host=relay_host,
+            relay_port=relay_port,
+            tls_mode=tls_mode,
+            username=username,
+            password=password,
+        )
+
+    def send_prepared(
+        self,
+        prepared: EmailMessage,
+        *,
+        envelope_from: str,
+        recipient_email: str,
+        helo_name: str,
+        timeout_sec: int,
+        relay_host: str = "",
+        relay_port: int = 25,
+        tls_mode: str = "opportunistic",
+        username: str = "",
+        password: str = "",
+    ) -> DeliveryReceipt:
         normalized_relay_host = relay_host.strip().rstrip(".").lower()
         normalized_username = username.strip()
         if normalized_relay_host and bool(normalized_username) != bool(password):
@@ -147,7 +184,7 @@ class SelfHostedSmtpTransport:
         if normalized_relay_host:
             candidates = [(normalized_relay_host, relay_port)]
         else:
-            recipient_domain = message.recipient_email.rsplit("@", 1)[1].lower()
+            recipient_domain = recipient_email.rsplit("@", 1)[1].lower()
             candidates = [
                 (host.strip().rstrip(".").lower(), 25)
                 for host in self.mx_resolver(recipient_domain)
@@ -171,8 +208,8 @@ class SelfHostedSmtpTransport:
                         smtp.login(normalized_username, password)
                     refused = smtp.send_message(
                         prepared,
-                        from_addr=message.envelope_from or message.sender_email,
-                        to_addrs=[message.recipient_email],
+                        from_addr=envelope_from,
+                        to_addrs=[recipient_email],
                     )
                     if refused:
                         raise ValueError("상대 SMTP 서버가 수신자를 거부했습니다.")
@@ -211,6 +248,23 @@ class OciEmailDeliveryTransport:
             prepared = build_mail_message(message)
         except ValueError as exc:
             raise MailTransportFailure(str(exc), transient=False) from exc
+        return self.send_prepared(
+            prepared,
+            envelope_from=message.envelope_from or message.sender_email,
+            recipient_email=message.recipient_email,
+            config=config,
+        )
+
+    def send_prepared(
+        self,
+        prepared: EmailMessage,
+        *,
+        envelope_from: str,
+        recipient_email: str,
+        config: RelaySmtpConfig,
+    ) -> DeliveryReceipt:
+        if config.port not in {465, 587}:
+            raise MailTransportFailure("OCI SMTP 포트는 465 또는 587이어야 합니다.", transient=False)
         factory = self.smtp_ssl_factory if config.port == 465 else self.smtp_factory
         try:
             with factory(
@@ -227,8 +281,8 @@ class OciEmailDeliveryTransport:
                 smtp.login(config.username, config.password)
                 refused = smtp.send_message(
                     prepared,
-                    from_addr=message.envelope_from or message.sender_email,
-                    to_addrs=[message.recipient_email],
+                    from_addr=envelope_from,
+                    to_addrs=[recipient_email],
                 )
                 if refused:
                     raise ValueError("OCI SMTP 서버가 수신자를 거부했습니다.")
@@ -265,7 +319,7 @@ class MailProviderRoutingAdapter:
         self.oci_transport = oci_transport
         self.legacy_relay_adapter = legacy_relay_adapter
 
-    def send(self, envelope: dict, provider: dict) -> str:
+    def prepare(self, envelope: dict, provider: dict) -> PreparedMailDelivery:
         raw_provider_type = str(provider.get("provider_type") or "").strip().lower()
         provider_type = "self_hosted" if raw_provider_type == "self_hosted_smtp" else raw_provider_type
         delivery_kind = str(envelope.get("delivery_kind") or "direct")
@@ -324,51 +378,111 @@ class MailProviderRoutingAdapter:
             attachments=tuple(attachments),
         )
 
+        try:
+            prepared_message = build_mail_message(message)
+        except ValueError as exc:
+            raise MailTransportFailure(str(exc), transient=False) from exc
+
         if provider_type == "self_hosted":
             private_key = provider.get("dkim_private_key")
-            dkim_config = None
             if private_key:
-                dkim_config = DkimSigningConfig(
-                    domain=str(provider.get("dkim_domain") or sender_domain),
-                    selector=str(provider.get("dkim_selector") or "selector1"),
-                    private_key=str(private_key).encode("utf-8"),
+                self.self_hosted_transport.dkim_signer.sign(
+                    prepared_message,
+                    DkimSigningConfig(
+                        domain=str(provider.get("dkim_domain") or sender_domain),
+                        selector=str(provider.get("dkim_selector") or "selector1"),
+                        private_key=str(private_key).encode("utf-8"),
+                    ),
                 )
-            receipt = self.self_hosted_transport.send(
-                message,
-                helo_name=str(provider.get("helo_name") or f"mail.{sender_domain}"),
-                timeout_sec=int(provider.get("timeout_sec") or (60 if provider.get("relay_host") else 20)),
-                dkim_config=dkim_config,
-                relay_host=str(provider.get("relay_host") or ""),
-                relay_port=int(provider.get("relay_port") or 25),
-                tls_mode=str(provider.get("tls_mode") or "opportunistic"),
-                username=str(provider.get("username") or ""),
-                password=str(provider.get("password") or ""),
-            )
-        elif provider_type == "oci_email_delivery":
+            normalized_relay_host = str(provider.get("relay_host") or "").strip()
+            normalized_username = str(provider.get("username") or "").strip()
             password = str(provider.get("password") or "")
-            if not password:
+            if (
+                hasattr(self.self_hosted_transport, "send_prepared")
+                and normalized_relay_host
+                and bool(normalized_username) != bool(password)
+            ):
+                raise MailTransportFailure("자체 SMTP 릴레이 자격증명이 완전하지 않습니다.", transient=False)
+        elif provider_type == "oci_email_delivery":
+            port = int(provider.get("relay_port") or 587)
+            if port not in {465, 587}:
+                raise MailTransportFailure("OCI SMTP 포트는 465 또는 587이어야 합니다.", transient=False)
+            if not str(provider.get("password") or ""):
                 raise MailTransportFailure("OCI SMTP 자격증명이 설정되지 않았습니다.", transient=False)
-            receipt = self.oci_transport.send(
-                message,
-                config=RelaySmtpConfig(
+        elif provider_type not in {"smtp", "aws_ses"} or self.legacy_relay_adapter is None:
+            raise MailTransportFailure(
+                f"지원하지 않는 발신 Provider입니다: {raw_provider_type}", transient=False
+            )
+
+        return PreparedMailDelivery(
+            provider_type=provider_type,
+            message=prepared_message,
+            envelope_from=envelope_from,
+            recipient_email=recipient_email,
+            legacy_envelope=dict(envelope),
+            outbound_message=message,
+        )
+
+    def send_prepared(self, prepared: PreparedMailDelivery, provider: dict) -> str:
+        if prepared.provider_type == "self_hosted":
+            sender_domain = (
+                prepared.envelope_from.rsplit("@", 1)[-1]
+                if "@" in prepared.envelope_from
+                else "localhost"
+            )
+            transport_options = {
+                "helo_name": str(provider.get("helo_name") or f"mail.{sender_domain}"),
+                "timeout_sec": int(provider.get("timeout_sec") or (60 if provider.get("relay_host") else 20)),
+                "relay_host": str(provider.get("relay_host") or ""),
+                "relay_port": int(provider.get("relay_port") or 25),
+                "tls_mode": str(provider.get("tls_mode") or "opportunistic"),
+                "username": str(provider.get("username") or ""),
+                "password": str(provider.get("password") or ""),
+            }
+            if hasattr(self.self_hosted_transport, "send_prepared"):
+                receipt = self.self_hosted_transport.send_prepared(
+                    prepared.message,
+                    envelope_from=prepared.envelope_from,
+                    recipient_email=prepared.recipient_email,
+                    **transport_options,
+                )
+            else:  # compatibility for existing non-network test doubles
+                receipt = self.self_hosted_transport.send(
+                    prepared.outbound_message,
+                    **transport_options,
+                )
+        elif prepared.provider_type == "oci_email_delivery":
+            password = str(provider.get("password") or "")
+            config = RelaySmtpConfig(
                     host=str(provider.get("relay_host") or ""),
                     port=int(provider.get("relay_port") or 587),
                     username=str(provider.get("username") or ""),
                     password=password,
                     timeout_sec=int(provider.get("timeout_sec") or 20),
-                ),
-            )
-        elif provider_type in {"smtp", "aws_ses"} and self.legacy_relay_adapter is not None:
-            return self.legacy_relay_adapter.send(envelope, provider)
+                )
+            if hasattr(self.oci_transport, "send_prepared"):
+                receipt = self.oci_transport.send_prepared(
+                    prepared.message,
+                    envelope_from=prepared.envelope_from,
+                    recipient_email=prepared.recipient_email,
+                    config=config,
+                )
+            else:  # compatibility for existing non-network test doubles
+                receipt = self.oci_transport.send(prepared.outbound_message, config=config)
+        elif prepared.provider_type in {"smtp", "aws_ses"} and self.legacy_relay_adapter is not None:
+            return self.legacy_relay_adapter.send(prepared.legacy_envelope or {}, provider)
         else:
             raise MailTransportFailure(
-                f"지원하지 않는 발신 Provider입니다: {raw_provider_type}", transient=False
+                f"지원하지 않는 발신 Provider입니다: {prepared.provider_type}", transient=False
             )
 
         return (
             f"provider={receipt.provider_key};endpoint={receipt.endpoint};"
             f"remote_smtp_accepted={str(receipt.remote_smtp_accepted).lower()}"
         )
+
+    def send(self, envelope: dict, provider: dict) -> str:
+        return self.send_prepared(self.prepare(envelope, provider), provider)
 
 
 _build_message = build_mail_message

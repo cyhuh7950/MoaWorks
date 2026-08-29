@@ -12,6 +12,10 @@ import ssl
 from typing import Protocol
 
 from app.services.mail_mime_builder import OutboundAttachment, OutboundMessage, build_mail_message
+from app.services.mail_daily_send_quota import (
+    MailDailyQuotaUnavailable,
+    MailDailySendLimitExceeded,
+)
 from app.services.mail_transports import MailTransportFailure
 
 @dataclass(frozen=True)
@@ -48,7 +52,9 @@ class RelayDeliveryError(RuntimeError):
         self.transient = transient
 
 class RelayAdapter(Protocol):
-    def send(self, envelope: dict, provider: dict) -> str: ...
+    def prepare(self, envelope: dict, provider: dict): ...
+
+    def send_prepared(self, prepared, provider: dict) -> str: ...
 
 _SECRET_RE = re.compile(r"(?i)(password|token|authorization|secret)\s*[:=]\s*(?:bearer\s+)?[^\s,;]+")
 _EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
@@ -80,8 +86,8 @@ class MailDeliveryService:
         return cursor.fetchall()
 
 class MailDeliveryWorker:
-    def __init__(self, worker_id: str, adapter: RelayAdapter):
-        self.worker_id, self.adapter = worker_id, adapter
+    def __init__(self, worker_id: str, adapter: RelayAdapter, *, quota=None):
+        self.worker_id, self.adapter, self.quota = worker_id, adapter, quota
     def deliver_claimed(self, job, provider: dict) -> DeliveryResult:
         if not provider.get("delivery_enabled") or provider.get("last_test_status") != "success":
             return DeliveryResult("blocked", error_message="외부 발송 잠금 또는 연결 검증이 필요합니다.")
@@ -94,8 +100,30 @@ class MailDeliveryWorker:
             envelope["sender_display_name"] = _job_value(job, "sender_display_name_override") or envelope["sender_display_name"]
             envelope["reply_to_email"] = _job_value(job, "reply_to_email_override") or envelope["reply_to_email"]
         try:
-            response = self.adapter.send(envelope, provider)
+            if hasattr(self.adapter, "prepare") and hasattr(self.adapter, "send_prepared"):
+                prepared = self.adapter.prepare(envelope, provider)
+                if self.quota is not None:
+                    self.quota.reserve_attempt()
+                response = self.adapter.send_prepared(prepared, provider)
+            else:  # compatibility for legacy in-process callers without quota
+                if self.quota is not None:
+                    raise MailDailyQuotaUnavailable(
+                        "quota-aware delivery requires prepare/send_prepared adapter"
+                    )
+                response = self.adapter.send(envelope, provider)
             return DeliveryResult("sent", relay_response=mask_delivery_error(response))
+        except MailDailySendLimitExceeded as exc:
+            return DeliveryResult(
+                "quota_deferred",
+                error_message="MAIL_DAILY_SEND_LIMIT_EXCEEDED",
+                next_attempt_at=exc.reset_at,
+            )
+        except MailDailyQuotaUnavailable:
+            return DeliveryResult(
+                "quota_deferred",
+                error_message="MAIL_DAILY_QUOTA_UNAVAILABLE",
+                next_attempt_at=datetime.now(UTC) + timedelta(seconds=60),
+            )
         except (RelayDeliveryError, MailTransportFailure) as exc:
             maximum = int(provider.get("max_retry_count", 3))
             error = mask_delivery_error(str(exc))

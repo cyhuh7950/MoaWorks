@@ -1,8 +1,27 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, SecretStr, field_validator, model_validator
+
+
+class MailDailySendUsage(BaseModel):
+    used: int = Field(ge=0)
+    limit: int = Field(ge=0)
+    unlimited: bool
+    remaining: int | None = Field(default=None, ge=0)
+    resetAt: datetime
+
+    @model_validator(mode="after")
+    def validate_limit_semantics(self):
+        if self.unlimited != (self.limit == 0):
+            raise ValueError("daily send unlimited flag does not match limit")
+        if self.unlimited and self.remaining is not None:
+            raise ValueError("unlimited daily send usage must not expose remaining")
+        if not self.unlimited and self.remaining is None:
+            raise ValueError("limited daily send usage requires remaining")
+        return self
 
 
 class MailOperationsDomainUpdateRequest(BaseModel):

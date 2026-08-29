@@ -2984,9 +2984,23 @@ export default function App() {
               <div className="overview-grid">
                 <article className="status-card"><strong>활성 Provider</strong><span className="mini-stat">{mailOperations?.domain?.activeOutboundProvider ?? mailDeliveryStatus?.provider.providerKey ?? "미설정"}</span></article>
                 <article className="status-card"><strong>관리자 접근</strong><span className="mini-stat">{mailOperations?.domain?.adminAccessMode ?? "미설정"}</span></article>
-                <article className="status-card"><strong>외부 메일 도메인</strong><span className="mini-stat">{mailOperations?.domain?.mailDomain ?? "미설정"}</span></article>
-                <article className="status-card"><strong>반송 / OCI suppression</strong><span className="mini-stat">{mailOperations?.feedbackCount ?? 0} / {mailOperations?.ociSuppression.activeCount ?? 0}</span><small className="muted">마지막 동기화: {contentDate(mailOperations?.ociSuppression.lastSeenAt)}</small></article>
-              </div>
+                 <article className="status-card"><strong>외부 메일 도메인</strong><span className="mini-stat">{mailOperations?.domain?.mailDomain ?? "미설정"}</span></article>
+                 <article className="status-card"><strong>반송 / OCI suppression</strong><span className="mini-stat">{mailOperations?.feedbackCount ?? 0} / {mailOperations?.ociSuppression.activeCount ?? 0}</span><small className="muted">마지막 동기화: {contentDate(mailOperations?.ociSuppression.lastSeenAt)}</small></article>
+                 <article className="status-card">
+                   <strong>오늘 발송</strong>
+                   <span className="mini-stat">
+                     {mailOperations?.dailySendUsage
+                       ? `${mailOperations.dailySendUsage.used} / ${mailOperations.dailySendUsage.unlimited ? "무제한" : mailOperations.dailySendUsage.limit}`
+                       : "미확인"}
+                   </span>
+                   <small className="muted">
+                     {mailOperations?.dailySendUsage?.remaining === null
+                       ? "남은 한도: 무제한"
+                       : `남은 한도: ${mailOperations?.dailySendUsage?.remaining ?? "미확인"}`}
+                     {` · 초기화 시각: ${contentDate(mailOperations?.dailySendUsage?.resetAt)}`}
+                   </small>
+                 </article>
+               </div>
               <div className="actions compact-actions">
                 <button type="button" disabled={loading || mailOperations?.domain?.activeOutboundProvider === "self_hosted"} onClick={() => void handleMailProviderSwitch("self_hosted")}>자체 엔진으로 전환</button>
                 <button type="button" disabled={loading || mailOperations?.domain?.activeOutboundProvider === "oci_email_delivery"} onClick={() => void handleMailProviderSwitch("oci_email_delivery")}>OCI로 전환</button>

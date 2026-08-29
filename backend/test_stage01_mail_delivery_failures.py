@@ -30,7 +30,10 @@ class FailingAdapter:
     def __init__(self, *, transient: bool) -> None:
         self.transient = transient
 
-    def send(self, _envelope, _provider) -> str:
+    def prepare(self, envelope, _provider):
+        return envelope
+
+    def send_prepared(self, _prepared, _provider) -> str:
         raise MailTransportFailure("smtp failure", transient=self.transient)
 
 

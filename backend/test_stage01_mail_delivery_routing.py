@@ -3,17 +3,19 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from app.services.mail_delivery_operations import MailDeliveryOperations
-from app.services.mail_transports import DeliveryReceipt, MailProviderRoutingAdapter, _build_message
+from app.services.mail_transports import DeliveryReceipt, MailProviderRoutingAdapter
 
 
 class FakeSelfHostedTransport:
     def __init__(self) -> None:
         self.calls = []
 
-    def send(
+    def send_prepared(
         self,
         message,
         *,
+        envelope_from: str,
+        recipient_email: str,
         helo_name: str,
         timeout_sec: int,
         dkim_config=None,
@@ -24,7 +26,7 @@ class FakeSelfHostedTransport:
         password: str = "",
     ) -> DeliveryReceipt:
         self.calls.append(
-            (message, helo_name, timeout_sec, dkim_config, relay_host, relay_port, tls_mode, username, password)
+            (message, envelope_from, recipient_email, helo_name, timeout_sec, relay_host, relay_port, tls_mode, username, password)
         )
         return DeliveryReceipt("self_hosted", f"smtp://{relay_host}:{relay_port}", True)
 
@@ -33,8 +35,8 @@ class FakeOciTransport:
     def __init__(self) -> None:
         self.calls = []
 
-    def send(self, message, *, config) -> DeliveryReceipt:
-        self.calls.append((message, config))
+    def send_prepared(self, message, *, envelope_from: str, recipient_email: str, config) -> DeliveryReceipt:
+        self.calls.append((message, envelope_from, recipient_email, config))
         return DeliveryReceipt("oci_email_delivery", "smtps://oci.example:587", True)
 
 
@@ -89,8 +91,10 @@ class MailDeliveryRoutingTest(unittest.TestCase):
 
         self.assertEqual(len(self.self_transport.calls), 1)
         self.assertEqual(len(self.oci_transport.calls), 0)
-        message, _, _, _, relay_host, relay_port, _, username, password = self.self_transport.calls[0]
-        self.assertEqual(message.envelope_from, "bounce+queue-1@moaworks.sinsan.kr")
+        message, envelope_from, recipient_email, _, _, relay_host, relay_port, _, username, password = self.self_transport.calls[0]
+        self.assertEqual(envelope_from, "bounce+queue-1@moaworks.sinsan.kr")
+        self.assertEqual(recipient_email, "person@example.net")
+        self.assertEqual(message["Message-ID"], "<mail-1@moaworks.sinsan.kr>")
         self.assertEqual(relay_host, "smtp.email.ap-seoul-1.oci.oraclecloud.com")
         self.assertEqual(relay_port, 587)
         self.assertEqual(username, "oci-user")
@@ -104,7 +108,7 @@ class MailDeliveryRoutingTest(unittest.TestCase):
 
         self.adapter.send(envelope(), relay_provider)
 
-        _, _, timeout_sec, *_ = self.self_transport.calls[0]
+        _, _, _, _, timeout_sec, *_ = self.self_transport.calls[0]
         self.assertEqual(timeout_sec, 60)
 
     def test_legacy_self_hosted_key_remains_compatible(self) -> None:
@@ -117,8 +121,9 @@ class MailDeliveryRoutingTest(unittest.TestCase):
         detail = self.adapter.send(envelope(), provider("oci_email_delivery"))
 
         self.assertEqual(len(self.oci_transport.calls), 1)
-        message, config = self.oci_transport.calls[0]
-        self.assertEqual(message.envelope_from, "admin@moaworks.sinsan.kr")
+        message, envelope_from, recipient_email, config = self.oci_transport.calls[0]
+        self.assertEqual(envelope_from, "admin@moaworks.sinsan.kr")
+        self.assertEqual(recipient_email, "person@example.net")
         self.assertEqual(config.password, "plain-secret")
         self.assertNotIn("plain-secret", detail)
 
@@ -138,14 +143,9 @@ class MailDeliveryRoutingTest(unittest.TestCase):
 
             self.adapter.send(rich_envelope, provider("oci_email_delivery"))
 
-        message, _ = self.oci_transport.calls[0]
-        self.assertEqual(message.body_html, "<p><strong>HTML body</strong></p>")
-        self.assertEqual(len(message.attachments), 1)
-        self.assertEqual(message.attachments[0].file_name, "report.txt")
-        self.assertEqual(message.attachments[0].content, b"attachment-body")
-        mime_message = _build_message(message)
-        self.assertEqual(mime_message.get_body(preferencelist=("html",)).get_content().strip(), "<p><strong>HTML body</strong></p>")
-        self.assertEqual([part.get_filename() for part in mime_message.iter_attachments()], ["report.txt"])
+        message, _, _, _ = self.oci_transport.calls[0]
+        self.assertEqual(message.get_body(preferencelist=("html",)).get_content().strip(), "<p><strong>HTML body</strong></p>")
+        self.assertEqual([part.get_filename() for part in message.iter_attachments()], ["report.txt"])
     def test_unknown_provider_is_rejected_without_fallback(self) -> None:
         with self.assertRaisesRegex(ValueError, "지원하지 않는 발신 Provider"):
             self.adapter.send(envelope(), provider("unknown"))

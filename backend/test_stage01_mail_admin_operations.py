@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -64,6 +65,14 @@ class FakeDb:
 
     def connect(self) -> FakeConnection:
         return self.connections.pop(0)
+
+
+class RecordingQuota:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def reserve_attempt(self):
+        self.calls += 1
 
 
 def actor():
@@ -184,6 +193,7 @@ class MailAdminOperationsContractTest(unittest.TestCase):
                 },
                 {"count": 2, "last_seen_at": None},
                 {"count": 3},
+                {"used": 0, "reset_at": datetime.fromisoformat("2026-08-30T00:00:00+09:00")},
             ],
             all_rows=[
                 [{"id": "provider-1", "provider_type": "self_hosted", "active": True, "last_test_status": "success"}],
@@ -197,9 +207,58 @@ class MailAdminOperationsContractTest(unittest.TestCase):
         self.assertEqual(result["queue"]["queued"], 4)
         self.assertEqual(result["ociSuppression"]["activeCount"], 2)
         self.assertEqual(result["feedbackCount"], 3)
+        self.assertEqual(result["dailySendUsage"]["used"], 0)
         suppression_query, suppression_params = cursor.statements[3]
         self.assertIn("mail.oci_suppression.synced", suppression_query)
         self.assertEqual(suppression_params, ("company-1", "company-1"))
+
+    def test_overview_reports_unlimited_daily_send_usage(self) -> None:
+        reset_at = datetime.fromisoformat("2026-08-30T00:00:00+09:00")
+        cursor = RecordingCursor(
+            one_rows=[
+                None,
+                {"count": 0, "last_seen_at": None},
+                {"count": 0},
+                {"used": 37, "reset_at": reset_at},
+            ],
+            all_rows=[[], []],
+        )
+
+        with patch("app.services.mail_admin_operations.settings.mail_engine_daily_send_limit", 0):
+            result = MailAdminOperations(db=FakeDb(cursor)).get_overview(actor())
+
+        self.assertEqual(
+            result["dailySendUsage"],
+            {
+                "used": 37,
+                "limit": 0,
+                "unlimited": True,
+                "remaining": None,
+                "resetAt": "2026-08-30T00:00:00+09:00",
+            },
+        )
+
+    def test_overview_reports_positive_limit_remaining_without_mutation(self) -> None:
+        reset_at = datetime.fromisoformat("2026-08-30T00:00:00+09:00")
+        cursor = RecordingCursor(
+            one_rows=[
+                None,
+                {"count": 0, "last_seen_at": None},
+                {"count": 0},
+                {"used": 37, "reset_at": reset_at},
+            ],
+            all_rows=[[], []],
+        )
+
+        with patch("app.services.mail_admin_operations.settings.mail_engine_daily_send_limit", 100):
+            result = MailAdminOperations(db=FakeDb(cursor)).get_overview(actor())
+
+        self.assertEqual(result["dailySendUsage"]["remaining"], 63)
+        self.assertFalse(result["dailySendUsage"]["unlimited"])
+        usage_query = cursor.statements[-1][0]
+        self.assertTrue(usage_query.startswith("WITH quota_clock AS"))
+        self.assertNotIn("UPDATE", usage_query)
+        self.assertNotIn("INSERT", usage_query)
 
     def test_update_provider_encrypts_secrets_and_locks_changed_connection(self) -> None:
         current = {
@@ -441,21 +500,32 @@ class MailAdminOperationsContractTest(unittest.TestCase):
         cursor = RecordingCursor(one_rows=[provider, {"mail_domain": "moaworks.sinsan.kr", "mail_host": "mail.moaworks.sinsan.kr"}, updated])
 
         class Adapter:
-            def __init__(self) -> None:
+            def __init__(self, quota) -> None:
                 self.calls = []
+                self.quota = quota
 
-            def send(self, envelope, config):
-                self.calls.append((envelope, config))
+            def prepare(self, envelope, config):
+                return (envelope, config)
+
+            def send_prepared(self, prepared, config):
+                self.assert_reserved()
+                self.calls.append((prepared[0], config))
                 return "provider=oci_email_delivery;endpoint=smtps://smtp.oci.example:587;accepted=true"
 
-        adapter = Adapter()
-        operation = MailAdminOperations(db=FakeDb(cursor), delivery_adapter=adapter)
+            def assert_reserved(self):
+                if self.quota.calls != len(self.calls) + 1:
+                    raise AssertionError("quota must be reserved immediately before provider test")
+
+        quota = RecordingQuota()
+        adapter = Adapter(quota)
+        operation = MailAdminOperations(db=FakeDb(cursor), delivery_adapter=adapter, quota=quota)
         with patch.object(operation.security, "decrypt_secret", return_value="smtp-password"):
             result = operation.test_provider(actor(), "oci_email_delivery", "external@example.net")
         self.assertEqual(result["lastTestStatus"], "success")
         self.assertTrue(result["deliveryEnabled"])
         self.assertEqual(adapter.calls[0][0]["recipient_email"], "external@example.net")
         self.assertEqual(adapter.calls[0][1]["password"], "smtp-password")
+        self.assertEqual(quota.calls, 1)
         self.assertNotIn("smtp-password", str(result))
 
     def test_self_hosted_test_persists_canonical_provider_type_for_queue_worker(self) -> None:
@@ -475,11 +545,18 @@ class MailAdminOperationsContractTest(unittest.TestCase):
         cursor = RecordingCursor(one_rows=[provider, {"mail_domain": "dev.example.net", "mail_host": "mx.dev.example.net"}, updated])
 
         class Adapter:
-            def send(self, envelope, config):
+            def prepare(self, envelope, config):
                 assert config["provider_type"] == "self_hosted"
+                return envelope
+
+            def send_prepared(self, envelope, config):
                 return "provider=self_hosted;endpoint=smtp://mx.example.net:25;remote_smtp_accepted=true"
 
-        result = MailAdminOperations(db=FakeDb(cursor), delivery_adapter=Adapter()).test_provider(
+        result = MailAdminOperations(
+            db=FakeDb(cursor),
+            delivery_adapter=Adapter(),
+            quota=RecordingQuota(),
+        ).test_provider(
             actor(), "self_hosted", "external@example.net"
         )
 
@@ -528,6 +605,11 @@ class MailAdminOperationsContractTest(unittest.TestCase):
         self.assertIn("DKIM 키 자동 생성", app_source)
         self.assertIn("mailOperations?.ociSuppression.lastSeenAt", app_source)
         self.assertIn("마지막 동기화", app_source)
+        self.assertIn("dailySendUsage", api_source)
+        self.assertIn("mailOperations?.dailySendUsage", app_source)
+        self.assertIn("오늘 발송", app_source)
+        self.assertIn("무제한", app_source)
+        self.assertIn("초기화 시각", app_source)
 
 
 

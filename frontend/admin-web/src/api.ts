@@ -452,6 +452,13 @@ export type MailOperationsOverview = {
   queue: Record<string, number>;
   feedbackCount: number;
   ociSuppression: { activeCount: number; lastSeenAt: string | null };
+  dailySendUsage: {
+    used: number;
+    limit: number;
+    unlimited: boolean;
+    remaining: number | null;
+    resetAt: string;
+  };
 };
 
 export type MailDeliveryQueueItem = {

@@ -9,6 +9,9 @@ from uuid import uuid4
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+from app.core.config import settings
+from app.schemas.mail_operations import MailDailySendUsage
+from app.services.mail_daily_send_quota import MailDailySendQuota
 from app.services.mail_operations_policy import build_mail_domain_contract
 from app.services.mail_operations_service import MailOperationsService
 from app.services.mail_delivery_operations import MailDeliveryOperations
@@ -40,12 +43,16 @@ def generate_dkim_keypair() -> tuple[str, str]:
 
 
 class MailAdminOperations:
-    def __init__(self, db=None, oci_operations: OciEmailOperations | None = None, delivery_adapter=None) -> None:
+    def __init__(self, db=None, oci_operations: OciEmailOperations | None = None, delivery_adapter=None, quota=None) -> None:
         self.db = db or PostgresService()
         self.policy = MailOperationsService()
         self.security = SecurityService()
         self.oci_operations = oci_operations or OciEmailOperations()
         self.delivery_adapter = delivery_adapter or MailDeliveryOperations().adapter
+        self.quota = quota or MailDailySendQuota(
+            self.db,
+            limit=settings.mail_engine_daily_send_limit,
+        )
 
     @staticmethod
     def _provider_key(provider_type: str) -> str:
@@ -96,6 +103,26 @@ class MailAdminOperations:
                 suppression = cursor.fetchone() or {"count": 0, "last_seen_at": None}
                 cursor.execute("SELECT COUNT(*) AS count FROM mail_delivery_feedback f JOIN mail_delivery_queue q ON q.id=f.queue_id WHERE q.company_id=%s", (actor.companyId,))
                 feedback = cursor.fetchone() or {"count": 0}
+                cursor.execute(
+                    """WITH quota_clock AS (
+                        SELECT
+                            timezone('Asia/Seoul', statement_timestamp())::date AS usage_date,
+                            (
+                                (
+                                    timezone('Asia/Seoul', statement_timestamp())::date + 1
+                                )::timestamp AT TIME ZONE 'Asia/Seoul'
+                            ) AS reset_at
+                    )
+                    SELECT
+                        COALESCE(usage.attempt_count, 0) AS used,
+                        quota_clock.reset_at
+                    FROM quota_clock
+                    LEFT JOIN mail_engine_daily_send_usage usage
+                        ON usage.usage_date = quota_clock.usage_date"""
+                )
+                usage = cursor.fetchone()
+                if usage is None:
+                    raise ValueError("메일 일일 발송 사용량을 조회할 수 없습니다.")
         domain_view = None
         if domain:
             domain_view = {
@@ -111,12 +138,22 @@ class MailAdminOperations:
                 "previousOutboundProvider": domain.get("previous_outbound_provider_key"),
                 "providerSwitchedAt": domain.get("provider_switched_at"),
             }
+        limit = settings.mail_engine_daily_send_limit
+        used = int(usage["used"])
+        daily_send_usage = MailDailySendUsage(
+            used=used,
+            limit=limit,
+            unlimited=limit == 0,
+            remaining=None if limit == 0 else max(0, limit - used),
+            resetAt=usage["reset_at"],
+        ).model_dump(mode="json")
         return {
             "domain": domain_view,
             "providers": [self._provider_view(dict(row)) for row in providers],
             "queue": queue,
             "feedbackCount": int(feedback["count"]),
             "ociSuppression": {"activeCount": int(suppression["count"]), "lastSeenAt": suppression["last_seen_at"]},
+            "dailySendUsage": daily_send_usage,
         }
 
     def update_domain(self, actor, payload) -> dict:
@@ -275,14 +312,14 @@ class MailAdminOperations:
                 provider["helo_name"] = domain["mail_host"]
                 sender = str(provider.get("from_address") or f"postmaster@{domain['mail_domain']}")
                 try:
-                    response = self.delivery_adapter.send(
-                        {
+                    envelope = {
                             "queue_id": f"connection-test-{uuid4().hex}", "sender_email": sender,
                             "recipient_email": recipient, "subject": "MoaWorks Provider 연결 테스트",
                             "body_text": "관리자 화면에서 실행한 실제 외부 SMTP 연결 테스트입니다.",
-                        },
-                        provider,
-                    )
+                    }
+                    prepared = self.delivery_adapter.prepare(envelope, provider)
+                    self.quota.reserve_attempt()
+                    response = self.delivery_adapter.send_prepared(prepared, provider)
                     test_status = "success"
                 except Exception as exc:
                     test_status, response, error = "failed", "", mask_delivery_error(str(exc))
