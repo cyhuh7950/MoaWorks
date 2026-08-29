@@ -3,14 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import tempfile
 from typing import Any, Literal, get_args, get_origin
 import uuid
 
 import pytest
 from pydantic import ValidationError
 from psycopg import sql
-from psycopg.errors import CheckViolation, RaiseException
+from psycopg.errors import CheckViolation, DivisionByZero, RaiseException
 
+from app.core.config import settings
+from app.schemas.setup import DbConfigPayload
 from app.services.postgres_service import PostgresService
 
 
@@ -25,6 +28,15 @@ MFA_TABLES = {
     "admin_mfa_break_glass_requests",
     "admin_mfa_break_glass_approvals",
 }
+MFA_TABLE_DROP_ORDER = (
+    "admin_mfa_break_glass_approvals",
+    "admin_mfa_break_glass_requests",
+    "admin_mfa_recovery_codes",
+    "admin_mfa_invitations",
+    "admin_mfa_challenges",
+    "admin_mfa_profiles",
+    "admin_mfa_policy",
+)
 
 
 @dataclass(frozen=True)
@@ -51,6 +63,99 @@ def _literal_values(annotation: Any) -> set[str]:
     for argument in get_args(annotation):
         values.update(_literal_values(argument))
     return values
+
+
+def _runtime_db_config() -> DbConfigPayload:
+    return DbConfigPayload(
+        host=settings.postgres_host,
+        port=settings.postgres_port,
+        database=settings.postgres_db,
+        user=settings.postgres_user,
+        password=settings.postgres_password,
+    )
+
+
+def _require_postgres_opt_in() -> None:
+    if os.getenv(POSTGRES_OPT_IN) != "1":
+        pytest.skip(f"set {POSTGRES_OPT_IN}=1 to use the existing PostgreSQL runtime")
+
+
+def _assert_check_violation(connection: Any, statement: str, parameters: tuple[Any, ...]) -> None:
+    savepoint = sql.Identifier(f"task6_expected_check_{uuid.uuid4().hex}")
+    with connection.cursor() as cursor:
+        cursor.execute(sql.SQL("SAVEPOINT {}").format(savepoint))
+        try:
+            with pytest.raises(CheckViolation):
+                cursor.execute(statement, parameters)
+        finally:
+            cursor.execute(sql.SQL("ROLLBACK TO SAVEPOINT {}").format(savepoint))
+            cursor.execute(sql.SQL("RELEASE SAVEPOINT {}").format(savepoint))
+
+
+def _task6_catalog_counts(connection: Any) -> dict[str, int]:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                (SELECT count(*)
+                   FROM pg_class
+                  WHERE relnamespace = 'public'::regnamespace
+                    AND relname = ANY(%s)) AS tables,
+                (SELECT count(*)
+                   FROM pg_proc
+                  WHERE pronamespace = 'public'::regnamespace
+                    AND proname = ANY(%s)) AS functions,
+                (SELECT count(*)
+                   FROM pg_trigger
+                  WHERE NOT tgisinternal
+                    AND tgname = ANY(%s)) AS triggers,
+                (SELECT count(*)
+                   FROM pg_constraint
+                  WHERE conrelid = 'public.users'::regclass
+                    AND conname = 'users_status_mfa_check') AS status_constraints,
+                (SELECT count(*)
+                   FROM public.schema_migrations
+                  WHERE version = %s) AS migration_rows
+            """,
+            (
+                sorted(MFA_TABLES),
+                ["enforce_admin_active_user_limit", "enforce_admin_active_role_limit"],
+                ["users_admin_active_limit_guard", "roles_admin_active_limit_guard"],
+                MIGRATION.name,
+            ),
+        )
+        return dict(cursor.fetchone())
+
+
+def _cleanup_runner_applied_migration(
+    connection: Any,
+    prior_status_constraints: list[tuple[str, str]],
+) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute("DROP TRIGGER IF EXISTS users_admin_active_limit_guard ON public.users")
+        cursor.execute("DROP TRIGGER IF EXISTS roles_admin_active_limit_guard ON public.roles")
+        cursor.execute("DROP FUNCTION IF EXISTS public.enforce_admin_active_user_limit()")
+        cursor.execute("DROP FUNCTION IF EXISTS public.enforce_admin_active_role_limit()")
+        for table_name in MFA_TABLE_DROP_ORDER:
+            cursor.execute(
+                sql.SQL("DROP TABLE public.{}").format(sql.Identifier(table_name))
+            )
+        cursor.execute(
+            "ALTER TABLE public.users DROP CONSTRAINT IF EXISTS users_status_mfa_check"
+        )
+        for constraint_name, definition in prior_status_constraints:
+            cursor.execute(
+                sql.SQL("ALTER TABLE public.users ADD CONSTRAINT {} {}").format(
+                    sql.Identifier(constraint_name),
+                    sql.SQL(definition),
+                )
+            )
+        cursor.execute(
+            "DELETE FROM public.schema_migrations WHERE version = %s RETURNING version",
+            (MIGRATION.name,),
+        )
+        assert [row["version"] for row in cursor.fetchall()] == [MIGRATION.name]
+    connection.commit()
 
 
 @pytest.fixture(scope="module")
@@ -218,6 +323,149 @@ def test_directory_user_status_is_closed_and_includes_pending_mfa() -> None:
         )
 
 
+def test_postgres_service_applies_068_once_records_exact_version_and_then_noops() -> None:
+    _require_postgres_opt_in()
+    db_config = _runtime_db_config()
+    connection = PostgresService().connect(db_config)
+    applied_by_test = False
+    prior_status_constraints: list[tuple[str, str]] = []
+    temporary_path: Path | None = None
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT conname, pg_get_constraintdef(oid) AS definition
+                FROM pg_constraint
+                WHERE conrelid = 'public.users'::regclass
+                  AND contype = 'c'
+                  AND pg_get_constraintdef(oid) ILIKE '%%status%%'
+                ORDER BY conname
+                """
+            )
+            prior_status_constraints = [
+                (row["conname"], row["definition"]) for row in cursor.fetchall()
+            ]
+
+        assert _task6_catalog_counts(connection) == {
+            "tables": 0,
+            "functions": 0,
+            "triggers": 0,
+            "status_constraints": 0,
+            "migration_rows": 0,
+        }
+
+        with tempfile.TemporaryDirectory(prefix="moaworks-task6-fix1-runner-") as temp_dir:
+            temporary_path = Path(temp_dir)
+            (temporary_path / MIGRATION.name).write_text(
+                _migration_sql(), encoding="utf-8"
+            )
+            service = PostgresService(migration_dir=temporary_path)
+            service.ensure_migrations_applied(db_config=db_config)
+            applied_by_test = True
+
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT count(*) AS count FROM public.schema_migrations WHERE version = %s",
+                    (MIGRATION.name,),
+                )
+                assert cursor.fetchone()["count"] == 1
+                cursor.execute(
+                    "SELECT oid FROM pg_class WHERE oid = 'public.admin_mfa_profiles'::regclass"
+                )
+                first_table_oid = cursor.fetchone()["oid"]
+
+            PostgresService(migration_dir=temporary_path).ensure_migrations_applied(
+                db_config=db_config
+            )
+
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT count(*) AS count FROM public.schema_migrations WHERE version = %s",
+                    (MIGRATION.name,),
+                )
+                assert cursor.fetchone()["count"] == 1
+                cursor.execute(
+                    "SELECT oid FROM pg_class WHERE oid = 'public.admin_mfa_profiles'::regclass"
+                )
+                assert cursor.fetchone()["oid"] == first_table_oid
+    finally:
+        if applied_by_test:
+            _cleanup_runner_applied_migration(connection, prior_status_constraints)
+            assert _task6_catalog_counts(connection) == {
+                "tables": 0,
+                "functions": 0,
+                "triggers": 0,
+                "status_constraints": 0,
+                "migration_rows": 0,
+            }
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT conname, pg_get_constraintdef(oid) AS definition
+                    FROM pg_constraint
+                    WHERE conrelid = 'public.users'::regclass
+                      AND contype = 'c'
+                      AND pg_get_constraintdef(oid) ILIKE '%%status%%'
+                    ORDER BY conname
+                    """
+                )
+                restored_status_constraints = [
+                    (row["conname"], row["definition"]) for row in cursor.fetchall()
+                ]
+            assert restored_status_constraints == prior_status_constraints
+        connection.close()
+
+    assert temporary_path is not None
+    assert not temporary_path.exists()
+
+
+def test_postgres_service_rolls_back_failed_migration_atomically() -> None:
+    _require_postgres_opt_in()
+    db_config = _runtime_db_config()
+    suffix = uuid.uuid4().hex
+    version = f"998_task6_atomic_rollback_{suffix}.sql"
+    table_name = f"task6_atomic_rollback_{suffix}"
+    temporary_path: Path | None = None
+
+    with tempfile.TemporaryDirectory(prefix="moaworks-task6-fix1-rollback-") as temp_dir:
+        temporary_path = Path(temp_dir)
+        (temporary_path / version).write_text(
+            f"CREATE TABLE public.{table_name} (id integer PRIMARY KEY); SELECT 1 / 0;",
+            encoding="utf-8",
+        )
+        try:
+            with pytest.raises(DivisionByZero):
+                PostgresService(migration_dir=temporary_path).ensure_migrations_applied(
+                    db_config=db_config
+                )
+
+            with PostgresService().connect(db_config) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT count(*) AS count FROM public.schema_migrations WHERE version = %s",
+                        (version,),
+                    )
+                    assert cursor.fetchone()["count"] == 0
+                    cursor.execute("SELECT to_regclass(%s) AS table_name", (f"public.{table_name}",))
+                    assert cursor.fetchone()["table_name"] is None
+        finally:
+            with PostgresService().connect(db_config) as cleanup_connection:
+                with cleanup_connection.cursor() as cursor:
+                    cursor.execute(
+                        sql.SQL("DROP TABLE IF EXISTS public.{}").format(
+                            sql.Identifier(table_name)
+                        )
+                    )
+                    cursor.execute(
+                        "DELETE FROM public.schema_migrations WHERE version = %s",
+                        (version,),
+                    )
+                cleanup_connection.commit()
+
+    assert temporary_path is not None
+    assert not temporary_path.exists()
+
+
 def test_migration_068_applies_and_exposes_required_tables(
     migrated_postgres: MigratedPostgres,
 ) -> None:
@@ -294,6 +542,243 @@ def test_challenge_and_encrypted_seed_columns_enforce_security_boundaries(
     assert "expires_at" in security_constraints
 
 
+@pytest.mark.parametrize(
+    ("case_name", "key_version", "nonce", "ciphertext", "tag"),
+    [
+        ("missing-key-version", None, b"n" * 12, b"ciphertext", b"t" * 16),
+        ("missing-nonce", 1, None, b"ciphertext", b"t" * 16),
+        ("missing-ciphertext", 1, b"n" * 12, None, b"t" * 16),
+        ("missing-tag", 1, b"n" * 12, b"ciphertext", None),
+        ("nonce-11-bytes", 1, b"n" * 11, b"ciphertext", b"t" * 16),
+        ("nonce-13-bytes", 1, b"n" * 13, b"ciphertext", b"t" * 16),
+        ("tag-15-bytes", 1, b"n" * 12, b"ciphertext", b"t" * 15),
+        ("tag-17-bytes", 1, b"n" * 12, b"ciphertext", b"t" * 17),
+    ],
+    ids=lambda value: value if isinstance(value, str) else None,
+)
+def test_profile_totp_seed_rejects_partial_or_invalid_material(
+    migrated_postgres: MigratedPostgres,
+    case_name: str,
+    key_version: int | None,
+    nonce: bytes | None,
+    ciphertext: bytes | None,
+    tag: bytes | None,
+) -> None:
+    _assert_check_violation(
+        migrated_postgres.connection,
+        """
+        INSERT INTO public.admin_mfa_profiles (
+            id, user_id, totp_key_version, totp_nonce, totp_ciphertext, totp_tag
+        ) VALUES (%s, %s, %s, %s, %s, %s)
+        """,
+        (
+            f"{migrated_postgres.prefix}_profile_shape_{case_name}",
+            migrated_postgres.regular_user_id,
+            key_version,
+            nonce,
+            ciphertext,
+            tag,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("case_name", "key_version", "nonce", "ciphertext", "tag"),
+    [
+        ("missing-key-version", None, b"n" * 12, b"ciphertext", b"t" * 16),
+        ("missing-nonce", 1, None, b"ciphertext", b"t" * 16),
+        ("missing-ciphertext", 1, b"n" * 12, None, b"t" * 16),
+        ("missing-tag", 1, b"n" * 12, b"ciphertext", None),
+        ("nonce-11-bytes", 1, b"n" * 11, b"ciphertext", b"t" * 16),
+        ("nonce-13-bytes", 1, b"n" * 13, b"ciphertext", b"t" * 16),
+        ("tag-15-bytes", 1, b"n" * 12, b"ciphertext", b"t" * 15),
+        ("tag-17-bytes", 1, b"n" * 12, b"ciphertext", b"t" * 17),
+    ],
+    ids=lambda value: value if isinstance(value, str) else None,
+)
+def test_challenge_pending_totp_seed_rejects_partial_or_invalid_material(
+    migrated_postgres: MigratedPostgres,
+    case_name: str,
+    key_version: int | None,
+    nonce: bytes | None,
+    ciphertext: bytes | None,
+    tag: bytes | None,
+) -> None:
+    _assert_check_violation(
+        migrated_postgres.connection,
+        """
+        INSERT INTO public.admin_mfa_challenges (
+            id, challenge_hash, purpose, user_id,
+            pending_totp_key_version, pending_totp_nonce,
+            pending_totp_ciphertext, pending_totp_tag, expires_at
+        ) VALUES (
+            %s, %s, 'login', %s, %s, %s, %s, %s,
+            statement_timestamp() + interval '5 minutes'
+        )
+        """,
+        (
+            f"{migrated_postgres.prefix}_pending_shape_{case_name}",
+            uuid.uuid4().bytes,
+            migrated_postgres.regular_user_id,
+            key_version,
+            nonce,
+            ciphertext,
+            tag,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("case_name", "key_version", "code_mac"),
+    [
+        ("missing-key-version", None, b"mac"),
+        ("missing-mac", 1, None),
+        ("non-positive-key-version", 0, b"mac"),
+        ("empty-mac", 1, b""),
+    ],
+)
+def test_challenge_mac_rejects_partial_or_invalid_material(
+    migrated_postgres: MigratedPostgres,
+    case_name: str,
+    key_version: int | None,
+    code_mac: bytes | None,
+) -> None:
+    _assert_check_violation(
+        migrated_postgres.connection,
+        """
+        INSERT INTO public.admin_mfa_challenges (
+            id, challenge_hash, purpose, user_id,
+            code_key_version, code_mac, expires_at
+        ) VALUES (
+            %s, %s, 'login', %s, %s, %s,
+            statement_timestamp() + interval '5 minutes'
+        )
+        """,
+        (
+            f"{migrated_postgres.prefix}_mac_shape_{case_name}",
+            uuid.uuid4().bytes,
+            migrated_postgres.regular_user_id,
+            key_version,
+            code_mac,
+        ),
+    )
+
+
+def test_seed_and_mac_material_accepts_only_complete_or_all_null_shapes(
+    migrated_postgres: MigratedPostgres,
+) -> None:
+    with migrated_postgres.connection.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO public.admin_mfa_profiles (
+                id, user_id, totp_key_version, totp_nonce, totp_ciphertext, totp_tag
+            ) VALUES (%s, %s, 1, %s, %s, %s)
+            """,
+            (
+                f"{migrated_postgres.prefix}_complete_profile",
+                migrated_postgres.regular_user_id,
+                b"n" * 12,
+                b"ciphertext",
+                b"t" * 16,
+            ),
+        )
+        for suffix, key_version, code_mac, pending_values in (
+            ("all_null", None, None, (None, None, None, None)),
+            (
+                "complete",
+                1,
+                b"mac",
+                (1, b"n" * 12, b"ciphertext", b"t" * 16),
+            ),
+        ):
+            cursor.execute(
+                """
+                INSERT INTO public.admin_mfa_challenges (
+                    id, challenge_hash, purpose, user_id, code_key_version, code_mac,
+                    pending_totp_key_version, pending_totp_nonce,
+                    pending_totp_ciphertext, pending_totp_tag, expires_at
+                ) VALUES (
+                    %s, %s, 'login', %s, %s, %s, %s, %s, %s, %s,
+                    statement_timestamp() + interval '5 minutes'
+                )
+                """,
+                (
+                    f"{migrated_postgres.prefix}_valid_shape_{suffix}",
+                    uuid.uuid4().bytes,
+                    migrated_postgres.regular_user_id,
+                    key_version,
+                    code_mac,
+                    *pending_values,
+                ),
+            )
+
+
+@pytest.mark.parametrize(
+    ("status", "has_completed_at", "has_cancelled_at"),
+    [
+        ("pending", True, False),
+        ("pending", False, True),
+        ("completed", False, False),
+        ("completed", True, True),
+        ("cancelled", False, False),
+        ("cancelled", True, True),
+        ("expired", True, False),
+        ("expired", False, True),
+    ],
+)
+def test_invitation_terminal_status_requires_matching_timestamp(
+    migrated_postgres: MigratedPostgres,
+    status: str,
+    has_completed_at: bool,
+    has_cancelled_at: bool,
+) -> None:
+    _assert_check_violation(
+        migrated_postgres.connection,
+        """
+        INSERT INTO public.admin_mfa_invitations (
+            id, target_user_id, invitation_kind, status, expires_at,
+            completed_at, cancelled_at
+        ) VALUES (
+            %s, %s, 'promotion', %s,
+            statement_timestamp() + interval '5 minutes',
+            CASE WHEN %s THEN statement_timestamp() ELSE NULL END,
+            CASE WHEN %s THEN statement_timestamp() ELSE NULL END
+        )
+        """,
+        (
+            f"{migrated_postgres.prefix}_invitation_{status}_{has_completed_at}_{has_cancelled_at}",
+            migrated_postgres.regular_user_id,
+            status,
+            has_completed_at,
+            has_cancelled_at,
+        ),
+    )
+
+
+def test_expired_break_glass_request_cannot_have_cancelled_timestamp(
+    migrated_postgres: MigratedPostgres,
+) -> None:
+    _assert_check_violation(
+        migrated_postgres.connection,
+        """
+        INSERT INTO public.admin_mfa_break_glass_requests (
+            request_id, target_user_id, reason, correlation_id, nonce,
+            status, expires_at, cancelled_at
+        ) VALUES (
+            %s, %s, 'Task 6 expiry contract', %s, %s,
+            'expired', statement_timestamp() + interval '5 minutes',
+            statement_timestamp()
+        )
+        """,
+        (
+            f"{migrated_postgres.prefix}_expired_cancelled_request",
+            migrated_postgres.regular_user_id,
+            f"{migrated_postgres.prefix}_correlation",
+            b"n" * 16,
+        ),
+    )
+
+
 def test_break_glass_approval_is_unique_per_request_and_approver(
     migrated_postgres: MigratedPostgres,
 ) -> None:
@@ -315,6 +800,46 @@ def test_break_glass_approval_is_unique_per_request_and_approver(
         unique_constraints = {tuple(row["columns"]) for row in cursor.fetchall()}
 
     assert ("request_id", "approver_id") in unique_constraints
+
+
+def test_active_limit_guards_use_fixed_lock_safe_search_path_and_narrow_triggers(
+    migrated_postgres: MigratedPostgres,
+) -> None:
+    with migrated_postgres.connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT proname, prosecdef, proconfig, pg_get_functiondef(oid) AS definition
+            FROM pg_proc
+            WHERE pronamespace = 'public'::regnamespace
+              AND proname = ANY(%s)
+            ORDER BY proname
+            """,
+            (["enforce_admin_active_user_limit", "enforce_admin_active_role_limit"],),
+        )
+        functions = cursor.fetchall()
+        cursor.execute(
+            """
+            SELECT tgname, pg_get_triggerdef(oid) AS definition
+            FROM pg_trigger
+            WHERE NOT tgisinternal
+              AND tgname = ANY(%s)
+            ORDER BY tgname
+            """,
+            (["users_admin_active_limit_guard", "roles_admin_active_limit_guard"],),
+        )
+        triggers = {row["tgname"]: row["definition"] for row in cursor.fetchall()}
+
+    assert len(functions) == 2
+    for function in functions:
+        assert function["prosecdef"] is False
+        assert function["proconfig"] == ["search_path=pg_catalog"]
+        assert "pg_catalog.pg_advisory_xact_lock(1297043287, 3)" in function["definition"]
+        assert "public.users" in function["definition"]
+        assert "public.roles" in function["definition"]
+    assert "UPDATE OF permissions" in triggers["roles_admin_active_limit_guard"]
+    assert "INSERT OR UPDATE OF status, user_type, role_id" in triggers[
+        "users_admin_active_limit_guard"
+    ]
 
 
 def test_users_status_constraint_is_extended_without_rewriting_existing_admins(

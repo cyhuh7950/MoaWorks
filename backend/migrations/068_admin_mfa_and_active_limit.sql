@@ -75,13 +75,13 @@ CREATE TABLE admin_mfa_profiles (
     created_at TIMESTAMPTZ NOT NULL DEFAULT statement_timestamp(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT statement_timestamp(),
     CONSTRAINT admin_mfa_profiles_seed_shape_check CHECK (
-        (
-            totp_key_version IS NULL
-            AND totp_nonce IS NULL
-            AND totp_ciphertext IS NULL
-            AND totp_tag IS NULL
-        ) OR (
-            totp_key_version > 0
+        pg_catalog.num_nonnulls(
+            totp_key_version, totp_nonce, totp_ciphertext, totp_tag
+        ) = 0 OR (
+            pg_catalog.num_nonnulls(
+                totp_key_version, totp_nonce, totp_ciphertext, totp_tag
+            ) = 4
+            AND totp_key_version > 0
             AND octet_length(totp_nonce) = 12
             AND octet_length(totp_ciphertext) > 0
             AND octet_length(totp_tag) = 16
@@ -126,17 +126,23 @@ CREATE TABLE admin_mfa_challenges (
     created_at TIMESTAMPTZ NOT NULL DEFAULT statement_timestamp(),
     CONSTRAINT admin_mfa_challenges_expiry_check CHECK (expires_at > created_at),
     CONSTRAINT admin_mfa_challenges_code_shape_check CHECK (
-        (code_key_version IS NULL AND code_mac IS NULL)
-        OR (code_key_version > 0 AND octet_length(code_mac) > 0)
+        pg_catalog.num_nonnulls(code_key_version, code_mac) = 0
+        OR (
+            pg_catalog.num_nonnulls(code_key_version, code_mac) = 2
+            AND code_key_version > 0
+            AND octet_length(code_mac) > 0
+        )
     ),
     CONSTRAINT admin_mfa_challenges_pending_seed_shape_check CHECK (
-        (
-            pending_totp_key_version IS NULL
-            AND pending_totp_nonce IS NULL
-            AND pending_totp_ciphertext IS NULL
-            AND pending_totp_tag IS NULL
-        ) OR (
-            pending_totp_key_version > 0
+        pg_catalog.num_nonnulls(
+            pending_totp_key_version, pending_totp_nonce,
+            pending_totp_ciphertext, pending_totp_tag
+        ) = 0 OR (
+            pg_catalog.num_nonnulls(
+                pending_totp_key_version, pending_totp_nonce,
+                pending_totp_ciphertext, pending_totp_tag
+            ) = 4
+            AND pending_totp_key_version > 0
             AND octet_length(pending_totp_nonce) = 12
             AND octet_length(pending_totp_ciphertext) > 0
             AND octet_length(pending_totp_tag) = 16
@@ -169,7 +175,23 @@ CREATE TABLE admin_mfa_invitations (
     completed_at TIMESTAMPTZ,
     cancelled_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT statement_timestamp(),
-    CONSTRAINT admin_mfa_invitations_expiry_check CHECK (expires_at > created_at)
+    CONSTRAINT admin_mfa_invitations_expiry_check CHECK (expires_at > created_at),
+    CONSTRAINT admin_mfa_invitations_terminal_check CHECK (
+        (status = 'pending' AND completed_at IS NULL AND cancelled_at IS NULL)
+        OR (
+            status = 'completed'
+            AND completed_at IS NOT NULL
+            AND completed_at >= created_at
+            AND cancelled_at IS NULL
+        )
+        OR (
+            status = 'cancelled'
+            AND cancelled_at IS NOT NULL
+            AND cancelled_at >= created_at
+            AND completed_at IS NULL
+        )
+        OR (status = 'expired' AND completed_at IS NULL AND cancelled_at IS NULL)
+    )
 );
 
 CREATE TABLE admin_mfa_recovery_codes (
@@ -212,7 +234,7 @@ CREATE TABLE admin_mfa_break_glass_requests (
         (status = 'pending' AND consumed_at IS NULL AND cancelled_at IS NULL)
         OR (status = 'consumed' AND consumed_at IS NOT NULL AND cancelled_at IS NULL)
         OR (status = 'cancelled' AND cancelled_at IS NOT NULL AND consumed_at IS NULL)
-        OR (status = 'expired' AND consumed_at IS NULL)
+        OR (status = 'expired' AND consumed_at IS NULL AND cancelled_at IS NULL)
     )
 );
 
