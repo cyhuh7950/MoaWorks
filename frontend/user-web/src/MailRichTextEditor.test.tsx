@@ -42,6 +42,39 @@ const replacementImageDoc: JSONContent = {
     }],
   }],
 };
+const interactiveContentDoc: JSONContent = {
+  type: "doc",
+  content: [
+    {
+      type: "paragraph",
+      content: [
+        { type: "text", text: "일반 텍스트 " },
+        { type: "text", text: "링크", marks: [{ type: "link", attrs: { href: "https://example.invalid" } }] },
+        {
+          type: "image",
+          attrs: {
+            src: "cid:mw-interaction@example.invalid",
+            contentId: "mw-interaction@example.invalid",
+            alt: "상호작용 이미지",
+            width: null,
+            height: null,
+          },
+        },
+      ],
+    },
+    {
+      type: "table",
+      content: [{
+        type: "tableRow",
+        content: [{
+          type: "tableCell",
+          attrs: { colspan: 1, rowspan: 1, colwidth: null },
+          content: [{ type: "paragraph", content: [{ type: "text", text: "표 셀" }] }],
+        }],
+      }],
+    },
+  ],
+};
 
 type PreviewEditorProps = React.ComponentProps<typeof MailRichTextEditor>;
 const PreviewEditor = MailRichTextEditor;
@@ -92,6 +125,25 @@ function renderPreviewEditor(overrides: Partial<PreviewEditorProps> = {}) {
     ...overrides,
   };
   return { ...render(<PreviewEditor {...props} />), props };
+}
+
+function observeEditorFocusCommands() {
+  const commandsGetter = Object.getOwnPropertyDescriptor(Editor.prototype, "commands")?.get as
+    | ((this: Editor) => Editor["commands"])
+    | undefined;
+  if (!commandsGetter) throw new Error("Tiptap Editor.commands getter is unavailable");
+  const focusCommand = vi.fn();
+  vi.spyOn(Editor.prototype, "commands", "get").mockImplementation(function (this: Editor) {
+    const commands = commandsGetter.call(this);
+    return {
+      ...commands,
+      focus: (...args: Parameters<Editor["commands"]["focus"]>) => {
+        focusCommand(...args);
+        return commands.focus(...args);
+      },
+    };
+  });
+  return focusCommand;
 }
 
 afterEach(() => {
@@ -150,6 +202,69 @@ describe("MailRichTextEditor 접근성과 서식 계약", () => {
     rerender(<MailRichTextEditor {...props} value={replacement} onChange={onChange} />);
 
     await waitFor(() => expect(textbox.textContent).toContain("외부 교체"));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("문단 형식 select 뒤 빈 editor surface pointer 입력을 본문 focus와 문서 입력으로 연결한다", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const focusCommand = observeEditorFocusCommands();
+    renderEditor({ onChange });
+    const paragraphSelect = await screen.findByRole("combobox", { name: "문단 형식" });
+    const textbox = screen.getByRole("textbox", { name: "메일 본문" });
+
+    await user.click(paragraphSelect);
+    expect(document.activeElement).toBe(paragraphSelect);
+    focusCommand.mockClear();
+    fireEvent.pointerDown(textbox);
+
+    expect(focusCommand).toHaveBeenCalledWith("start");
+    await waitFor(() => expect(document.activeElement).toBe(textbox));
+    await user.keyboard("작성 가능");
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ type: "doc" }));
+    expect(textbox.textContent).toContain("작성 가능");
+  });
+
+  it("텍스트·링크·이미지·resize handle·표 셀 pointer target은 selection과 문서를 강제로 바꾸지 않는다", async () => {
+    const onChange = vi.fn();
+    const focusCommand = observeEditorFocusCommands();
+    const { container } = renderEditor({ value: interactiveContentDoc, onChange });
+    const textbox = await screen.findByRole("textbox", { name: "메일 본문" });
+    const content = container.querySelector(".mail-rich-text-editor__content") as HTMLElement;
+    const resizeHandle = document.createElement("span");
+    resizeHandle.dataset.resizeHandle = "right";
+    content.append(resizeHandle);
+    const targets = [
+      textbox.querySelector("p"),
+      textbox.querySelector("a"),
+      textbox.querySelector("img"),
+      resizeHandle,
+      textbox.querySelector("td"),
+    ];
+    expect(targets.every(Boolean)).toBe(true);
+
+    focusCommand.mockClear();
+    onChange.mockClear();
+    for (const target of targets) fireEvent.pointerDown(target as Element);
+
+    expect(focusCommand).not.toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("disabled editor의 root와 surface pointer target은 focus나 문서 변경을 만들지 않는다", async () => {
+    const onChange = vi.fn();
+    const focusCommand = observeEditorFocusCommands();
+    const { container } = renderEditor({ disabled: true, onChange });
+    const textbox = await screen.findByRole("textbox", { name: "메일 본문" });
+    const content = container.querySelector(".mail-rich-text-editor__content") as HTMLElement;
+
+    focusCommand.mockClear();
+    onChange.mockClear();
+    fireEvent.pointerDown(content);
+    fireEvent.pointerDown(textbox);
+
+    expect(document.activeElement).not.toBe(textbox);
+    expect(focusCommand).not.toHaveBeenCalled();
     expect(onChange).not.toHaveBeenCalled();
   });
 

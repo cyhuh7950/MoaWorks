@@ -76,6 +76,17 @@ try {
   await composeButton.click();
   await page.getByLabel("mail-compose-to").fill("receiver@phase5.invalid");
   await page.getByLabel("mail-compose-subject").fill("phase5 local fixture");
+  const editorSurface = page.locator(".mail-rich-text-editor__surface");
+  const paragraphFormat = page.getByRole("combobox", { name: "문단 형식" });
+  await paragraphFormat.click();
+  const editorSurfaceBox = await editorSurface.boundingBox();
+  if (!editorSurfaceBox) throw new Error("phase5 rich editor surface has no layout box");
+  await editorSurface.click({ position: { x: 12, y: editorSurfaceBox.height - 12 } });
+  const editorFocused = await editorSurface.evaluate((element) => document.activeElement === element && element.classList.contains("ProseMirror-focused"));
+  if (!editorFocused) throw new Error("phase5 empty rich editor surface did not receive focus");
+  await page.keyboard.type("작성 가능");
+  const clickToTypeApplied = (await editorSurface.textContent())?.includes("작성 가능") === true;
+  if (!clickToTypeApplied) throw new Error("phase5 empty rich editor surface did not accept immediate typing");
   const boldButton = page.getByRole("button", { name: /굵게/ });
   await boldButton.click();
   const boldPressed = await boldButton.getAttribute("aria-pressed") === "true";
@@ -94,7 +105,6 @@ try {
     throw new Error(`phase5 rich editor icon toolbar contract failed: ${JSON.stringify(toolbarContract)}`);
   }
   await toolbar.screenshot({ path: resolve(evidence, "toolbar.png") });
-  const editorSurface = page.locator(".mail-rich-text-editor__surface");
   await editorSurface.fill(Array.from({ length: 18 }, (_, index) => `rich compose line ${index + 1}`).join("\n"));
   const draftButton = page.getByRole("button", { name: "임시저장" });
   await draftButton.scrollIntoViewIfNeeded();
@@ -120,7 +130,7 @@ try {
   if (network.some((origin) => origin !== `http://127.0.0.1:${webPort}`)) throw new Error("phase5 used a non-local API origin");
   if (pageErrors.length) throw new Error(`phase5 page errors: ${pageErrors.join(" | ")}`);
   if (apiResponses.some(({ status }) => status >= 400)) throw new Error("phase5 received a failing API response");
-  await writeFile(resolve(evidence, "result.json"), JSON.stringify({ localOnly: true, stage: "rich-compose", composeVisible, loginVisible, portalVisible, storedToken, activeMenu, boldPressed, toolbarContract, draftButtonIsTopmost, fixtureGuards: { wrongLogin: wrongLogin.status, unknownRoute: unknownResponse.status, wrongMethod: wrongMethod.status }, networkCount: network.length, apiResponses, pageErrors }, null, 2));
+  await writeFile(resolve(evidence, "result.json"), JSON.stringify({ localOnly: true, stage: "rich-compose", composeVisible, loginVisible, portalVisible, storedToken, activeMenu, editorFocused, clickToTypeApplied, boldPressed, toolbarContract, draftButtonIsTopmost, fixtureGuards: { wrongLogin: wrongLogin.status, unknownRoute: unknownResponse.status, wrongMethod: wrongMethod.status }, networkCount: network.length, apiResponses, pageErrors }, null, 2));
   process.stdout.write("PHASE5_PASS\n");
 } catch (error) {
   process.stderr.write(`PHASE5_FAIL ${error instanceof Error ? error.message : String(error)}\n`);

@@ -1,4 +1,4 @@
-import { Component, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent, type ErrorInfo, type ReactNode } from "react";
+import { Component, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent, type ErrorInfo, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import type { Editor, JSONContent } from "@tiptap/core";
 import FileHandler from "@tiptap/extension-file-handler";
 import Highlight from "@tiptap/extension-highlight";
@@ -521,6 +521,15 @@ function MailRichTextEditorRuntime({ value, onChange, onUploadImage, onError, re
     return editor.chain().focus().extendMarkRange("link").setLink({ href }).run();
   };
 
+  const focusEditorSurface = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (disabled || !editor) return;
+    const target = event.target as HTMLElement;
+    if (target.closest("a, img, td, th, button, input, select, [data-resize-handle]")) return;
+    if (target === event.currentTarget || target.classList.contains("ProseMirror")) {
+      editor.commands.focus(editor.isEmpty ? "start" : undefined);
+    }
+  };
+
   return (
     <div className="mail-rich-text-editor" data-disabled={disabled || undefined} style={{ containerType: "inline-size" }}>
       <div className="mail-rich-text-editor__toolbar" role="toolbar" aria-label="메일 본문 서식">
@@ -592,6 +601,7 @@ function MailRichTextEditorRuntime({ value, onChange, onUploadImage, onError, re
       </div>
       <div
         className="mail-rich-text-editor__content"
+        onPointerDown={focusEditorSurface}
         onPasteCapture={(event: ReactClipboardEvent<HTMLDivElement>) => {
           const files = [...event.clipboardData.files];
           if (files.length === 0) return;
