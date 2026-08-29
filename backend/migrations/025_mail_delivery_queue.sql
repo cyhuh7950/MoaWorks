@@ -7,6 +7,46 @@ ALTER TABLE mail_provider_configs
     ADD COLUMN IF NOT EXISTS max_retry_count INTEGER NOT NULL DEFAULT 3,
     ADD COLUMN IF NOT EXISTS retry_interval_sec INTEGER NOT NULL DEFAULT 60;
 
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'mail_delivery_queue'
+          AND column_name = 'provider_id'
+    ) AND NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'mail_delivery_queue'
+          AND column_name = 'provider_config_id'
+    ) THEN
+        IF to_regclass('public.mail_delivery_queue_v007') IS NOT NULL
+            OR to_regclass('public.mail_delivery_attempts_v007') IS NOT NULL
+            OR to_regclass('public.mail_delivery_events_v007') IS NOT NULL THEN
+            RAISE EXCEPTION 'legacy mail delivery preservation tables already exist';
+        END IF;
+
+        IF to_regclass('public.mail_delivery_attempts') IS NOT NULL THEN
+            ALTER TABLE public.mail_delivery_attempts RENAME TO mail_delivery_attempts_v007;
+            ALTER TABLE public.mail_delivery_attempts_v007
+                RENAME CONSTRAINT mail_delivery_attempts_pkey TO mail_delivery_attempts_v007_pkey;
+        END IF;
+
+        IF to_regclass('public.mail_delivery_events') IS NOT NULL THEN
+            ALTER TABLE public.mail_delivery_events RENAME TO mail_delivery_events_v007;
+            ALTER TABLE public.mail_delivery_events_v007
+                RENAME CONSTRAINT mail_delivery_events_pkey TO mail_delivery_events_v007_pkey;
+        END IF;
+
+        ALTER TABLE public.mail_delivery_queue RENAME TO mail_delivery_queue_v007;
+        ALTER TABLE public.mail_delivery_queue_v007
+            RENAME CONSTRAINT mail_delivery_queue_pkey TO mail_delivery_queue_v007_pkey;
+    END IF;
+END
+$$;
+
 CREATE TABLE IF NOT EXISTS mail_delivery_queue (
     id TEXT PRIMARY KEY,
     company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
