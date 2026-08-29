@@ -13,6 +13,7 @@ for (const token of ["TranslationReview", "fetchTranslationReviews", "applyTrans
   check(api.includes(token), `missing translation operations API: ${token}`);
 }
 check(api.includes('const defaultApiBase = "/api/v1";'), "translation browser API must remain same-origin");
+check(!app.includes("void refreshTranslationState();"), "관리 로그인 전 공개 translation status를 호출하면 안 됩니다.");
 check(!/https?:\/\/(?:server|localhost|127\.0\.0\.1)(?::\d+)?/i.test(api), "translation browser API must not expose internal absolute URLs");
 
 for (const token of [

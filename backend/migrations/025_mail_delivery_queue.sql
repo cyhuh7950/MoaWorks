@@ -8,38 +8,102 @@ ALTER TABLE mail_provider_configs
     ADD COLUMN IF NOT EXISTS retry_interval_sec INTEGER NOT NULL DEFAULT 60;
 
 DO $$
+DECLARE
+    queue_columns TEXT[];
+    attempt_columns TEXT[];
+    event_columns TEXT[];
+    heartbeat_columns TEXT[];
+    legacy_queue_columns CONSTANT TEXT[] := ARRAY[
+        'attempt_count','body_html','body_text','company_id','created_at','id','last_error','mail_id',
+        'next_retry_at','provider_id','provider_key','recipient_email','sender_email','sent_at','status','subject','updated_at'
+    ];
+    modern_queue_columns CONSTANT TEXT[] := ARRAY[
+        'accepted_at','attempt_count','company_id','created_at','id','last_error','lease_expires_at','mail_id',
+        'next_attempt_at','provider_config_id','recipient_id','sent_at','status','updated_at','worker_id'
+    ];
+    legacy_attempt_columns CONSTANT TEXT[] := ARRAY[
+        'attempted_at','error_message','id','queue_id','response_detail','status'
+    ];
+    modern_attempt_columns CONSTANT TEXT[] := ARRAY[
+        'attempt_number','error_message','finished_at','id','queue_id','relay_response','result','started_at'
+    ];
+    legacy_event_columns CONSTANT TEXT[] := ARRAY[
+        'created_at','event_type','id','message','payload','queue_id'
+    ];
+    modern_heartbeat_columns CONSTANT TEXT[] := ARRAY[
+        'last_error','last_heartbeat_at','last_success_at','status','updated_at','worker_id'
+    ];
+    fresh_state BOOLEAN;
+    legacy_state BOOLEAN;
+    modern_state BOOLEAN;
 BEGIN
-    IF EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = 'mail_delivery_queue'
-          AND column_name = 'provider_id'
-    ) AND NOT EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = 'mail_delivery_queue'
-          AND column_name = 'provider_config_id'
-    ) THEN
-        IF to_regclass('public.mail_delivery_queue_v007') IS NOT NULL
-            OR to_regclass('public.mail_delivery_attempts_v007') IS NOT NULL
-            OR to_regclass('public.mail_delivery_events_v007') IS NOT NULL THEN
-            RAISE EXCEPTION 'legacy mail delivery preservation tables already exist';
-        END IF;
+    SELECT COALESCE(array_agg(column_name::TEXT ORDER BY column_name), ARRAY[]::TEXT[])
+      INTO queue_columns
+      FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'mail_delivery_queue';
+    SELECT COALESCE(array_agg(column_name::TEXT ORDER BY column_name), ARRAY[]::TEXT[])
+      INTO attempt_columns
+      FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'mail_delivery_attempts';
+    SELECT COALESCE(array_agg(column_name::TEXT ORDER BY column_name), ARRAY[]::TEXT[])
+      INTO event_columns
+      FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'mail_delivery_events';
+    SELECT COALESCE(array_agg(column_name::TEXT ORDER BY column_name), ARRAY[]::TEXT[])
+      INTO heartbeat_columns
+      FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'mail_delivery_worker_heartbeats';
 
-        IF to_regclass('public.mail_delivery_attempts') IS NOT NULL THEN
-            ALTER TABLE public.mail_delivery_attempts RENAME TO mail_delivery_attempts_v007;
-            ALTER TABLE public.mail_delivery_attempts_v007
-                RENAME CONSTRAINT mail_delivery_attempts_pkey TO mail_delivery_attempts_v007_pkey;
-        END IF;
+    fresh_state := queue_columns = ARRAY[]::TEXT[]
+        AND attempt_columns = ARRAY[]::TEXT[]
+        AND event_columns = ARRAY[]::TEXT[]
+        AND heartbeat_columns = ARRAY[]::TEXT[]
+        AND to_regclass('public.mail_delivery_queue_v007') IS NULL
+        AND to_regclass('public.mail_delivery_attempts_v007') IS NULL
+        AND to_regclass('public.mail_delivery_events_v007') IS NULL;
 
-        IF to_regclass('public.mail_delivery_events') IS NOT NULL THEN
-            ALTER TABLE public.mail_delivery_events RENAME TO mail_delivery_events_v007;
-            ALTER TABLE public.mail_delivery_events_v007
-                RENAME CONSTRAINT mail_delivery_events_pkey TO mail_delivery_events_v007_pkey;
-        END IF;
+    legacy_state := queue_columns = legacy_queue_columns
+        AND attempt_columns = legacy_attempt_columns
+        AND event_columns = legacy_event_columns
+        AND heartbeat_columns = ARRAY[]::TEXT[]
+        AND to_regclass('public.mail_delivery_queue_v007') IS NULL
+        AND to_regclass('public.mail_delivery_attempts_v007') IS NULL
+        AND to_regclass('public.mail_delivery_events_v007') IS NULL
+        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_queue' AND constraint_name='mail_delivery_queue_pkey' AND constraint_type='PRIMARY KEY')
+        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_queue' AND constraint_name='mail_delivery_queue_company_id_fkey' AND constraint_type='FOREIGN KEY')
+        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_queue' AND constraint_name='mail_delivery_queue_provider_id_fkey' AND constraint_type='FOREIGN KEY')
+        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_queue' AND constraint_name='mail_delivery_queue_mail_id_fkey' AND constraint_type='FOREIGN KEY')
+        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_attempts' AND constraint_name='mail_delivery_attempts_pkey' AND constraint_type='PRIMARY KEY')
+        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_attempts' AND constraint_name='mail_delivery_attempts_queue_id_fkey' AND constraint_type='FOREIGN KEY')
+        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_events' AND constraint_name='mail_delivery_events_pkey' AND constraint_type='PRIMARY KEY')
+        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_events' AND constraint_name='mail_delivery_events_queue_id_fkey' AND constraint_type='FOREIGN KEY');
 
+    modern_state := queue_columns = modern_queue_columns
+        AND attempt_columns = modern_attempt_columns
+        AND event_columns = ARRAY[]::TEXT[]
+        AND heartbeat_columns = modern_heartbeat_columns
+        AND to_regclass('public.mail_delivery_queue_v007') IS NULL
+        AND to_regclass('public.mail_delivery_attempts_v007') IS NULL
+        AND to_regclass('public.mail_delivery_events_v007') IS NULL
+        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_queue' AND constraint_name='mail_delivery_queue_pkey' AND constraint_type='PRIMARY KEY')
+        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_queue' AND constraint_name='mail_delivery_queue_company_id_fkey' AND constraint_type='FOREIGN KEY')
+        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_queue' AND constraint_name='mail_delivery_queue_provider_config_id_fkey' AND constraint_type='FOREIGN KEY')
+        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_queue' AND constraint_name='mail_delivery_queue_mail_id_fkey' AND constraint_type='FOREIGN KEY')
+        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_queue' AND constraint_name='mail_delivery_queue_recipient_id_fkey' AND constraint_type='FOREIGN KEY')
+        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_attempts' AND constraint_name='mail_delivery_attempts_pkey' AND constraint_type='PRIMARY KEY')
+        AND EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='mail_delivery_attempts' AND constraint_name='mail_delivery_attempts_queue_id_fkey' AND constraint_type='FOREIGN KEY');
+
+    IF NOT fresh_state AND NOT legacy_state AND NOT modern_state THEN
+        RAISE EXCEPTION 'MAIL_DELIVERY_025_UNSUPPORTED_CATALOG_STATE';
+    END IF;
+
+    IF legacy_state THEN
+        ALTER TABLE public.mail_delivery_attempts RENAME TO mail_delivery_attempts_v007;
+        ALTER TABLE public.mail_delivery_attempts_v007
+            RENAME CONSTRAINT mail_delivery_attempts_pkey TO mail_delivery_attempts_v007_pkey;
+        ALTER TABLE public.mail_delivery_events RENAME TO mail_delivery_events_v007;
+        ALTER TABLE public.mail_delivery_events_v007
+            RENAME CONSTRAINT mail_delivery_events_pkey TO mail_delivery_events_v007_pkey;
         ALTER TABLE public.mail_delivery_queue RENAME TO mail_delivery_queue_v007;
         ALTER TABLE public.mail_delivery_queue_v007
             RENAME CONSTRAINT mail_delivery_queue_pkey TO mail_delivery_queue_v007_pkey;

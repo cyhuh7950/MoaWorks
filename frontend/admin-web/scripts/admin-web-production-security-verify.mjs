@@ -47,6 +47,7 @@ check(nginx.includes("location /api/") && nginx.includes("proxy_pass http://serv
 check(nginx.includes("auth_request /_admin_access_check") && nginx.includes("internal;"), "Nginx must enforce the internal admin access policy");
 check(nginx.includes("${ADMIN_ACCESS_CHECK_TOKEN}") && nginx.includes("${TRUSTED_PROXY_CIDR}"), "Nginx template must receive access token and trusted proxy CIDR at runtime");
 check(nginx.includes('add_header Content-Security-Policy'), "Nginx must provide CSP");
+check(!nginx.includes("upgrade-insecure-requests"), "HTTP staging host must not upgrade assets before HTTPS SNI is ready");
 check(nginx.includes('add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;'), "Nginx must provide HSTS");
 check(nginx.includes('add_header Permissions-Policy "camera=(), geolocation=(), microphone=(), payment=(), usb=()" always;'), "Nginx must provide Permissions-Policy");
 

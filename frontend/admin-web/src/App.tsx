@@ -1552,7 +1552,6 @@ export default function App() {
       setErrors([error instanceof Error ? error.message : "상태 조회 실패"]);
     });
     void refreshPublicUiContract();
-    void refreshTranslationState();
   }, []);
 
   useEffect(() => {

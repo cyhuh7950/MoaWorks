@@ -100,7 +100,13 @@ function installMountedMailFetch() {
     if (url.includes("/mail/sent") || url.includes("/mail/drafts") || url.includes("/mail/scheduled")) return mountedJson({ mails: [], total: 0, limit: 50, offset: 0, hasMore: false });
     if (url.includes("/mail/mail-source")) return mountedJson(mountedSourceMail);
     if (url.includes("/mail/delivery/status")) return mountedJson({ provider: { enabled: true, lastTestStatus: "success" } });
-    if (url.includes("/mail/preferences/basic")) return mountedJson(mountedBasicPreferences);
+    if (url.includes("/mail/preferences/basic")) {
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body ?? "{}")) as { senderDisplayMode?: "name" | "id" | "name_email" };
+        if (body.senderDisplayMode) mountedBasicPreferences = createMountedBasicPreferences(body.senderDisplayMode);
+      }
+      return mountedJson(mountedBasicPreferences);
+    }
     if (url.includes("/mail/signatures")) return mountedJson({ enabled: false, position: "body_bottom", defaultSignatureId: null, version: 1, updatedAt: "2026-08-26T00:00:00Z", signatures: [] });
     if (url.includes("/workspace/personal-ai/providers")) return mountedJson({ providers: [{ provider: "openai", label: "OpenAI", apiKeyRequired: true }] });
     if (url.includes("/workspace/personal-ai/config")) return mountedJson({ provider: "openai", model: "gpt-test", apiKeyConfigured: true, connectionStatus: "ready", lastTestCode: "PERSONAL_AI_CONNECTION_READY", lastTestedAt: "2026-08-28T00:00:00Z", configSource: "personal" });
@@ -225,6 +231,27 @@ describe("메일 rich compose 재작업 계약", () => {
     expect(await screen.findByRole("heading", { name: "ID 표시 메일" })).toBeTruthy();
     const senderTerm = screen.getByText("보낸 사람");
     expect(senderTerm.parentElement?.querySelector("dd")?.textContent).toBe("hong.gildong");
+  });
+
+  it("mounted App은 sender mode 선택을 유지하고 저장·재조회 뒤 목록에 즉시 반영한다", async () => {
+    const requests = installMountedMailFetch();
+    localStorage.setItem("moaworks.userToken", "test-token");
+    vi.resetModules();
+    const { default: MountedApp } = await import("./App");
+    render(<MountedApp />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "환경설정" }));
+    const select = await screen.findByLabelText("보낸 사람 표시") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "id" } });
+    expect(select.value).toBe("id");
+    const save = screen.getByRole("button", { name: /^저장$/ }) as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+
+    await waitFor(() => expect(requests.some(({ url, init }) => url.includes("/mail/preferences/basic") && init?.method === "PUT" && JSON.parse(String(init.body)).senderDisplayMode === "id")).toBe(true));
+    expect((await screen.findByLabelText("보낸 사람 표시") as HTMLSelectElement).value).toBe("id");
+    fireEvent.click(screen.getByRole("button", { name: /^닫기$/ }));
+    expect((await screen.findByRole("button", { name: /CID 전달 원문/ })).textContent).toContain("source");
   });
 
   it("mounted App의 메신저 다음 AI 채팅 메뉴가 실제 개인 AI 패널을 연다", async () => {

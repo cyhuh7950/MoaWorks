@@ -19,10 +19,37 @@ def test_modern_queue_migration_preserves_preexisting_v007_tables() -> None:
     modern_sql = (MIGRATIONS / "025_mail_delivery_queue.sql").read_text(encoding="utf-8")
 
     assert "information_schema.columns" in modern_sql
-    assert "column_name = 'provider_id'" in modern_sql
-    assert "column_name = 'provider_config_id'" in modern_sql
+    assert "'provider_id'" in modern_sql
+    assert "'provider_config_id'" in modern_sql
     assert "mail_delivery_queue_v007" in modern_sql
     assert "mail_delivery_attempts_v007" in modern_sql
     assert "mail_delivery_events_v007" in modern_sql
     assert "RENAME CONSTRAINT mail_delivery_queue_pkey" in modern_sql
     assert "RENAME CONSTRAINT mail_delivery_attempts_pkey" in modern_sql
+
+
+def test_modern_queue_migration_rejects_partial_or_mixed_catalog_states() -> None:
+    modern_sql = (MIGRATIONS / "025_mail_delivery_queue.sql").read_text(encoding="utf-8")
+
+    for marker in (
+        "MAIL_DELIVERY_025_UNSUPPORTED_CATALOG_STATE",
+        "mail_delivery_queue_v007",
+        "mail_delivery_attempts_v007",
+        "mail_delivery_events_v007",
+        "mail_delivery_worker_heartbeats",
+        "mail_delivery_queue_company_id_fkey",
+        "mail_delivery_queue_provider_id_fkey",
+        "mail_delivery_queue_mail_id_fkey",
+        "mail_delivery_attempts_queue_id_fkey",
+        "mail_delivery_events_queue_id_fkey",
+    ):
+        assert marker in modern_sql
+
+    assert "legacy_queue_columns CONSTANT TEXT[] := ARRAY[" in modern_sql
+    assert "modern_queue_columns CONSTANT TEXT[] := ARRAY[" in modern_sql
+    assert "legacy_attempt_columns CONSTANT TEXT[] := ARRAY[" in modern_sql
+    assert "modern_attempt_columns CONSTANT TEXT[] := ARRAY[" in modern_sql
+    assert "legacy_event_columns CONSTANT TEXT[] := ARRAY[" in modern_sql
+    assert "fresh_state" in modern_sql
+    assert "legacy_state" in modern_sql
+    assert "modern_state" in modern_sql

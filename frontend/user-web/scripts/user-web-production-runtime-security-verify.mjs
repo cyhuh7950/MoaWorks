@@ -31,6 +31,7 @@ assert.doesNotMatch(nginxConfig, /script-src[^;"']*'unsafe-(?:inline|eval)'/i, "
 assert.equal((nginxConfig.match(/add_header\s+Content-Security-Policy/g) ?? []).length, 3, "location의 add_header가 상위 보안 헤더를 가리지 않도록 HTML과 asset에도 CSP를 명시해야 합니다.");
 assert.equal((nginxConfig.match(/add_header\s+Strict-Transport-Security/g) ?? []).length, 3, "HTML과 asset 응답에도 HSTS가 유지되어야 합니다.");
 const cspValues = [...nginxConfig.matchAll(/add_header\s+Content-Security-Policy\s+"([^"]+)"\s+always\s*;/gi)].map((match) => match[1]);
+assert.equal(cspValues.some((value) => value.includes("upgrade-insecure-requests")), false, "HTTP staging host에서는 HTTPS SNI가 준비되기 전 upgrade-insecure-requests를 보내면 안 됩니다.");
 for (const csp of cspValues) {
   const imageSources = csp.match(/(?:^|;)\s*img-src\s+([^;]+)/i)?.[1].trim().split(/\s+/) ?? [];
   assert.ok(imageSources.includes("https:"), "사용자가 외부 이미지 표시를 허용하면 HTTPS 메일 이미지를 로드할 수 있어야 합니다.");
