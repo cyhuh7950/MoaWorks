@@ -94,7 +94,7 @@ class MailDailySendQuota:
                 raise TypeError("quota reset_at must be timezone-aware datetime")
 
             if usage_date is None:
-                if used is not None:
+                if self.limit == 0 or used is not None:
                     raise TypeError("quota limit result must not contain attempt_count")
                 raise MailDailySendLimitExceeded(
                     limit=self.limit,
@@ -108,6 +108,8 @@ class MailDailySendQuota:
                 raise TypeError("quota usage_date must be date")
             if not isinstance(used, int) or isinstance(used, bool) or used < 1:
                 raise TypeError("quota attempt_count must be a positive integer")
+            if self.limit > 0 and used > self.limit:
+                raise TypeError("quota attempt_count exceeds configured limit")
 
             return MailQuotaReservation(
                 usage_date=usage_date,

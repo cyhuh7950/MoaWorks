@@ -213,6 +213,30 @@ def test_normal_limit_result_is_the_only_result_mapped_to_exceeded() -> None:
         MailDailySendQuota(_ResultDatabase(row), limit=10).reserve_attempt()
 
 
+def test_unlimited_limit_result_cannot_be_exceeded() -> None:
+    MailDailySendQuota, _, MailDailyQuotaUnavailable = _quota_types()
+    row = {
+        "usage_date": None,
+        "attempt_count": None,
+        "reset_at": datetime(2026, 8, 29, 15, 0, tzinfo=timezone.utc),
+    }
+
+    with pytest.raises(MailDailyQuotaUnavailable):
+        MailDailySendQuota(_ResultDatabase(row), limit=0).reserve_attempt()
+
+
+def test_positive_limit_result_cannot_exceed_configured_limit() -> None:
+    MailDailySendQuota, _, MailDailyQuotaUnavailable = _quota_types()
+    row = {
+        "usage_date": date(2026, 8, 29),
+        "attempt_count": 3,
+        "reset_at": datetime(2026, 8, 29, 15, 0, tzinfo=timezone.utc),
+    }
+
+    with pytest.raises(MailDailyQuotaUnavailable):
+        MailDailySendQuota(_ResultDatabase(row), limit=2).reserve_attempt()
+
+
 class _SchemaDatabase:
     def __init__(self, schema_name: str, session_timezone: str = "UTC") -> None:
         self.schema_name = schema_name
