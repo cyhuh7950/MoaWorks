@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import date, datetime, timezone
 import os
 from pathlib import Path
+import time
 import uuid
 
 import pytest
 from pydantic import ValidationError
 from psycopg import sql
+from psycopg.errors import CheckViolation
 
 from app.core.config import Settings
 from app.services.postgres_service import PostgresService
@@ -79,6 +81,136 @@ def test_missing_database_result_is_fail_closed() -> None:
 
     with pytest.raises(MailDailyQuotaUnavailable):
         MailDailySendQuota(EmptyDatabase(), limit=10).reserve_attempt()
+
+
+class _ResultCursor:
+    def __init__(self, row=None, failure_stage: str | None = None) -> None:
+        self.row = row
+        self.failure_stage = failure_stage
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+    def execute(self, query, params):
+        if self.failure_stage == "execute":
+            raise RuntimeError("execute failed")
+
+    def fetchone(self):
+        if self.failure_stage == "fetch":
+            raise RuntimeError("fetch failed")
+        return self.row
+
+
+class _ResultConnection:
+    def __init__(self, row=None, failure_stage: str | None = None) -> None:
+        self.row = row
+        self.failure_stage = failure_stage
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self.failure_stage == "connection_exit":
+            raise RuntimeError("commit failed")
+        return False
+
+    def cursor(self):
+        if self.failure_stage == "cursor":
+            raise RuntimeError("cursor creation failed")
+        return _ResultCursor(self.row, self.failure_stage)
+
+
+class _ResultDatabase:
+    def __init__(self, row=None, failure_stage: str | None = None) -> None:
+        self.row = row
+        self.failure_stage = failure_stage
+
+    def connect(self):
+        if self.failure_stage == "connect":
+            raise RuntimeError("connect failed")
+        return _ResultConnection(self.row, self.failure_stage)
+
+
+def _valid_result_row() -> dict:
+    return {
+        "usage_date": date(2026, 8, 29),
+        "attempt_count": 1,
+        "reset_at": datetime(2026, 8, 29, 15, 0, tzinfo=timezone.utc),
+    }
+
+
+@pytest.mark.parametrize(
+    "failure_stage",
+    ["connect", "cursor", "execute", "fetch", "connection_exit"],
+)
+def test_database_failure_matrix_is_fail_closed(failure_stage: str) -> None:
+    MailDailySendQuota, _, MailDailyQuotaUnavailable = _quota_types()
+    quota = MailDailySendQuota(
+        _ResultDatabase(_valid_result_row(), failure_stage),
+        limit=10,
+    )
+
+    with pytest.raises(MailDailyQuotaUnavailable):
+        quota.reserve_attempt()
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {},
+        {"usage_date": date(2026, 8, 29), "attempt_count": 1},
+        {
+            "usage_date": "2026-08-29",
+            "attempt_count": 1,
+            "reset_at": datetime(2026, 8, 29, 15, 0, tzinfo=timezone.utc),
+        },
+        {
+            "usage_date": date(2026, 8, 29),
+            "attempt_count": "1",
+            "reset_at": datetime(2026, 8, 29, 15, 0, tzinfo=timezone.utc),
+        },
+        {
+            "usage_date": date(2026, 8, 29),
+            "attempt_count": 1,
+            "reset_at": "2026-08-30T00:00:00+09:00",
+        },
+        {
+            "usage_date": date(2026, 8, 29),
+            "attempt_count": 1,
+            "reset_at": datetime(2026, 8, 30),
+        },
+        {
+            "usage_date": datetime(2026, 8, 29, tzinfo=timezone.utc),
+            "attempt_count": 1,
+            "reset_at": datetime(2026, 8, 29, 15, 0, tzinfo=timezone.utc),
+        },
+        {
+            "usage_date": None,
+            "attempt_count": 1,
+            "reset_at": datetime(2026, 8, 29, 15, 0, tzinfo=timezone.utc),
+        },
+    ],
+)
+def test_malformed_database_result_is_fail_closed(row: dict) -> None:
+    MailDailySendQuota, _, MailDailyQuotaUnavailable = _quota_types()
+
+    with pytest.raises(MailDailyQuotaUnavailable):
+        MailDailySendQuota(_ResultDatabase(row), limit=10).reserve_attempt()
+
+
+def test_normal_limit_result_is_the_only_result_mapped_to_exceeded() -> None:
+    MailDailySendQuota, MailDailySendLimitExceeded, _ = _quota_types()
+    row = {
+        "usage_date": None,
+        "attempt_count": None,
+        "reset_at": datetime(2026, 8, 29, 15, 0, tzinfo=timezone.utc),
+    }
+
+    with pytest.raises(MailDailySendLimitExceeded):
+        MailDailySendQuota(_ResultDatabase(row), limit=10).reserve_attempt()
 
 
 class _SchemaDatabase:
@@ -188,6 +320,69 @@ def test_migration_067_executes_and_exposes_expected_schema(quota_schema: str) -
     assert constraint_types.count("CHECK") >= 1
 
 
+def test_migration_067_enforces_non_negative_count_and_timestamp_default(
+    quota_schema: str,
+) -> None:
+    connection = _SchemaDatabase(quota_schema).connect()
+    usage_date = date(2000, 1, 1)
+    try:
+        with pytest.raises(CheckViolation):
+            with connection.transaction():
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO mail_engine_daily_send_usage (
+                            usage_date,
+                            attempt_count
+                        ) VALUES (%s, %s)
+                        """,
+                        (usage_date, -1),
+                    )
+
+        with connection.transaction():
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO mail_engine_daily_send_usage (usage_date)
+                    VALUES (%s)
+                    RETURNING attempt_count, updated_at
+                    """,
+                    (usage_date,),
+                )
+                inserted = cursor.fetchone()
+
+        assert inserted["attempt_count"] == 0
+        assert isinstance(inserted["updated_at"], datetime)
+        assert inserted["updated_at"].tzinfo is not None
+
+        with pytest.raises(CheckViolation):
+            with connection.transaction():
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE mail_engine_daily_send_usage
+                        SET attempt_count = -1
+                        WHERE usage_date = %s
+                        """,
+                        (usage_date,),
+                    )
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT attempt_count, updated_at
+                FROM mail_engine_daily_send_usage
+                WHERE usage_date = %s
+                """,
+                (usage_date,),
+            )
+            preserved = cursor.fetchone()
+        assert preserved == inserted
+    finally:
+        connection.rollback()
+        connection.close()
+
+
 def test_reserve_attempt_allows_n_and_rejects_n_plus_one(quota_schema: str) -> None:
     MailDailySendQuota, MailDailySendLimitExceeded, _ = _quota_types()
     quota = MailDailySendQuota(_SchemaDatabase(quota_schema), limit=2)
@@ -246,6 +441,73 @@ def test_postgres_seoul_date_and_reset_ignore_session_timezone(
     assert utc.reset_at == honolulu.reset_at == expected["reset_at"]
     assert isinstance(utc.reset_at, datetime)
     assert utc.reset_at.tzinfo is not None
+
+
+def test_worker_process_timezone_and_python_clock_do_not_change_db_clock_result(
+    monkeypatch,
+    quota_schema: str,
+) -> None:
+    import app.services.mail_daily_send_quota as quota_module
+
+    class LocalDateMustNotBeUsed(date):
+        @classmethod
+        def today(cls):
+            raise AssertionError("Python local date must not be used")
+
+    class LocalDateTimeMustNotBeUsed(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            raise AssertionError("Python local datetime must not be used")
+
+    original_tz = os.environ.get("TZ")
+    monkeypatch.setattr(quota_module, "date", LocalDateMustNotBeUsed)
+    monkeypatch.setattr(quota_module, "datetime", LocalDateTimeMustNotBeUsed)
+    try:
+        reservations = []
+        for worker_tz in ("Pacific/Kiritimati", "America/Adak"):
+            monkeypatch.setenv("TZ", worker_tz)
+            if hasattr(time, "tzset"):
+                time.tzset()
+            reservations.append(
+                quota_module.MailDailySendQuota(
+                    _SchemaDatabase(quota_schema), limit=0
+                ).reserve_attempt()
+            )
+    finally:
+        if original_tz is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", original_tz)
+        if hasattr(time, "tzset"):
+            time.tzset()
+
+    connection = _SchemaDatabase(quota_schema).connect()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    timezone('Asia/Seoul', statement_timestamp())::date AS usage_date,
+                    (
+                        (
+                            timezone('Asia/Seoul', statement_timestamp())::date + 1
+                        )::timestamp AT TIME ZONE 'Asia/Seoul'
+                    ) AS reset_at
+                """
+            )
+            expected = cursor.fetchone()
+    finally:
+        connection.rollback()
+        connection.close()
+
+    assert [reservation.usage_date for reservation in reservations] == [
+        expected["usage_date"],
+        expected["usage_date"],
+    ]
+    assert [reservation.reset_at for reservation in reservations] == [
+        expected["reset_at"],
+        expected["reset_at"],
+    ]
 
 
 def test_restart_preserves_usage(quota_schema: str) -> None:

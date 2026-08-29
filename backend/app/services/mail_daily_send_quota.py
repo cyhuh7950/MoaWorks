@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 
+_DATE_TYPE = date
+_DATETIME_TYPE = datetime
+
 
 class MailDailySendLimitExceeded(RuntimeError):
     def __init__(self, *, limit: int, reset_at: datetime) -> None:
@@ -76,21 +79,43 @@ class MailDailySendQuota:
                 with connection.cursor() as cursor:
                     cursor.execute(self._RESERVE_SQL, {"limit": self.limit})
                     row = cursor.fetchone()
+
+            if row is None:
+                raise ValueError("quota query returned no row")
+
+            usage_date = row["usage_date"]
+            used = row["attempt_count"]
+            reset_at = row["reset_at"]
+            if (
+                not isinstance(reset_at, _DATETIME_TYPE)
+                or reset_at.tzinfo is None
+                or reset_at.utcoffset() is None
+            ):
+                raise TypeError("quota reset_at must be timezone-aware datetime")
+
+            if usage_date is None:
+                if used is not None:
+                    raise TypeError("quota limit result must not contain attempt_count")
+                raise MailDailySendLimitExceeded(
+                    limit=self.limit,
+                    reset_at=reset_at,
+                )
+
+            if (
+                not isinstance(usage_date, _DATE_TYPE)
+                or isinstance(usage_date, _DATETIME_TYPE)
+            ):
+                raise TypeError("quota usage_date must be date")
+            if not isinstance(used, int) or isinstance(used, bool) or used < 1:
+                raise TypeError("quota attempt_count must be a positive integer")
+
+            return MailQuotaReservation(
+                usage_date=usage_date,
+                used=used,
+                limit=self.limit,
+                reset_at=reset_at,
+            )
+        except MailDailySendLimitExceeded:
+            raise
         except Exception as exc:
             raise MailDailyQuotaUnavailable("daily mail quota unavailable") from exc
-
-        if row is None:
-            raise MailDailyQuotaUnavailable("daily mail quota unavailable")
-
-        if row["usage_date"] is None:
-            raise MailDailySendLimitExceeded(
-                limit=self.limit,
-                reset_at=row["reset_at"],
-            )
-
-        return MailQuotaReservation(
-            usage_date=row["usage_date"],
-            used=row["attempt_count"],
-            limit=self.limit,
-            reset_at=row["reset_at"],
-        )
