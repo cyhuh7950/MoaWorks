@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, AppState, Button, Linking, Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, AppState, BackHandler, Button, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { createMobileSessionAdapter, isSessionInvalidatedError, requestJson } from "./auth-session";
 import { buildMonthGrid, buildSchedulePayload, createSubmissionGate, filterSchedulesForMonth, monthKeyForDate, selectDefaultCalendar, scheduleErrorMessage, scheduleItems, shiftMonthKey, dateKey } from "./schedule-api";
 import { createDirectoryActionGate, directoryUsers as readDirectoryUsers, directRoomPayload, filterDirectoryUsers, mailtoUrl } from "./directory-api";
@@ -10,6 +10,9 @@ const { aiViewModel, approvalViewModel, buildHomeViewModel, calendarViewModel, d
 const { buildMailSendPayload, mailboxRequestPath, mailboxViewModel } = require("./mail-compose.js");
 const { buildTranslationPayload, messengerViewModel } = require("./messenger-translation.js");
 const mobileNavigation = navigationModel();
+const { createSettingsHistory } = require("./mobile-navigation.js");
+const { buildRoomCreatePayload } = require("./messenger-compose.js");
+const { withMobileTypography } = require("./mobile-typography.js");
 
 type AuthUser = {
   userId: string;
@@ -300,6 +303,16 @@ export default function App() {
   const visibleSchedules = useMemo(() => filterSchedulesForMonth(schedules, scheduleMonthKey, timezone), [schedules, scheduleMonthKey, timezone]);
   const [moreScreen, setMoreScreen] = useState<Exclude<ScreenKey, MobileTab>>("directory");
   const [moreMenuOpen, setMoreMenuOpen] = useState(true);
+  const settingsHistoryRef = useRef(createSettingsHistory());
+  const [roomCreateOpen, setRoomCreateOpen] = useState(false);
+  const [roomCreateForm, setRoomCreateForm] = useState({ roomType: "direct", roomName: "", participantUserIds: [] as string[] });
+  const [roomCreateQuery, setRoomCreateQuery] = useState("");
+  const [roomCreateError, setRoomCreateError] = useState("");
+  const [roomCreatePending, setRoomCreatePending] = useState(false);
+  const [roomDirectoryLoading, setRoomDirectoryLoading] = useState(false);
+  const [roomDirectoryError, setRoomDirectoryError] = useState("");
+  const roomDirectoryRequestRef = useRef(0);
+  const roomCreateGateRef = useRef(false);
   const [directoryUsers, setDirectoryUsers] = useState<DirectoryUser[]>([]);
   const [directoryQuery, setDirectoryQuery] = useState("");
   const [directorySection, setDirectorySection] = useState<"all" | "favorites" | "recent">("all");
@@ -348,6 +361,7 @@ export default function App() {
   const [aiMessages, setAiMessages] = useState<Array<{ role: "user" | "assistant"; body: string }>>([]);
   const sessionControllerRef = useRef(createMobileSessionAdapter({
     onLoginCommitted({ token: nextToken, user: nextUser }) {
+      resetMobileOverlays();
       setToken(nextToken);
       setMe(nextUser);
       scheduleSubmissionGateRef.current.reset();
@@ -377,6 +391,7 @@ export default function App() {
       mailSendGateRef.current = false;
     },
     onSessionReset(nextState) {
+      resetMobileOverlays();
       setToken(nextState.token);
       setMe(nextState.user);
       setPassword(nextState.password);
@@ -983,6 +998,96 @@ export default function App() {
     }
   }
 
+  function resetMobileOverlays() {
+    settingsHistoryRef.current.reset();
+    setRoomCreateOpen(false);
+    setRoomCreateForm({ roomType: "direct", roomName: "", participantUserIds: [] });
+    setRoomCreateQuery("");
+    setRoomCreateError("");
+    setRoomCreatePending(false);
+    setRoomDirectoryLoading(false);
+    setRoomDirectoryError("");
+    roomDirectoryRequestRef.current += 1;
+    roomCreateGateRef.current = false;
+  }
+
+  function openSettings() {
+    settingsHistoryRef.current.enter({ activeTab, moreScreen, moreMenuOpen });
+    setActiveTab("more");
+    setMoreScreen("settings");
+    setMoreMenuOpen(false);
+    if (token && !personalAiConfigDirty) void loadPersonalAi(token);
+  }
+
+  function leaveSettings() {
+    const previous = settingsHistoryRef.current.back();
+    setActiveTab(previous.activeTab);
+    setMoreScreen(previous.moreScreen);
+    setMoreMenuOpen(previous.moreMenuOpen);
+  }
+
+  useEffect(() => {
+    if (!me || activeTab !== "more" || moreScreen !== "settings" || moreMenuOpen) return;
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      leaveSettings();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [me, activeTab, moreScreen, moreMenuOpen]);
+
+  function openRoomComposer() {
+    setRoomCreateForm({ roomType: "direct", roomName: "", participantUserIds: [] });
+    setRoomCreateQuery("");
+    setRoomCreateError("");
+    setRoomCreateOpen(true);
+    setDirectoryUsers([]);
+    setRoomDirectoryLoading(true);
+    setRoomDirectoryError("");
+    const requestGeneration = roomDirectoryRequestRef.current + 1;
+    roomDirectoryRequestRef.current = requestGeneration;
+    const context = sessionControllerRef.current.capture(token);
+    void request<{ users: DirectoryUser[] }>("/workspace/directory", { headers: { Authorization: `Bearer ${token}` } }, context)
+      .then((body) => {
+        if (!sessionControllerRef.current.isCurrent(context) || roomDirectoryRequestRef.current !== requestGeneration) return;
+        setDirectoryUsers(readDirectoryUsers(body));
+      })
+      .catch((error) => {
+        if (isSessionInvalidatedError(error) || !sessionControllerRef.current.isCurrent(context) || roomDirectoryRequestRef.current !== requestGeneration) return;
+        setRoomDirectoryError(error instanceof Error ? error.message : "참여자 조회 실패");
+      })
+      .finally(() => {
+        if (sessionControllerRef.current.isCurrent(context) && roomDirectoryRequestRef.current === requestGeneration) setRoomDirectoryLoading(false);
+      });
+  }
+
+  function toggleRoomParticipant(id: string) {
+    setRoomCreateError("");
+    setRoomCreateForm((current) => ({ ...current, participantUserIds: current.roomType === "direct"
+      ? [id]
+      : current.participantUserIds.includes(id) ? current.participantUserIds.filter((item) => item !== id) : [...current.participantUserIds, id] }));
+  }
+
+  async function submitRoomCreate() {
+    if (roomCreateGateRef.current) return;
+    const context = sessionControllerRef.current.capture(token);
+    try {
+      const payload = buildRoomCreatePayload(roomCreateForm, directoryUsers, me?.userId);
+      roomCreateGateRef.current = true;
+      setRoomCreatePending(true);
+      setRoomCreateError("");
+      const body = await request<{ roomId: string }>("/messenger/rooms", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(payload) }, context);
+      if (!sessionControllerRef.current.isCurrent(context)) return;
+      if (!body.roomId) throw new Error("대화방 생성 결과를 확인하지 못했습니다.");
+      setRoomCreateOpen(false);
+      setActiveTab("chat");
+      await loadRooms(token, body.roomId, context);
+    } catch (error) {
+      if (!isSessionInvalidatedError(error) && sessionControllerRef.current.isCurrent(context)) setRoomCreateError(error instanceof Error ? error.message : "대화방 생성 실패");
+    } finally {
+      if (sessionControllerRef.current.isCurrent(context)) { roomCreateGateRef.current = false; setRoomCreatePending(false); }
+    }
+  }
+
   async function startDirectRoom(member: DirectoryUser) {
     if (!directoryActionGateRef.current.tryEnter(member.id)) return;
     const context = sessionControllerRef.current.capture(token);
@@ -1363,6 +1468,11 @@ export default function App() {
     <SafeAreaView style={styles.safe}>
       {me ? (
         <View style={styles.mobileShellHeader}>
+          {activeTab === "more" && moreScreen === "settings" && !moreMenuOpen ? (
+            <Pressable accessibilityRole="button" accessibilityLabel="설정 이전 화면으로" onPress={leaveSettings} style={styles.settingsBackButton}>
+              <Text style={styles.backGlyph}>‹</Text><Text style={styles.settingsBackText}>뒤로</Text>
+            </Pressable>
+          ) : null}
           <View>
             <Text style={styles.shellBrand}>MoaWorks</Text>
             <Text style={styles.shellTitle}>{activeTabLabel}</Text>
@@ -1437,7 +1547,7 @@ export default function App() {
               {activeTab === "more" && moreMenuOpen ? (
                 <View style={styles.mobileSubNav}>
                   {mobileNavigation.more.map((item: { id: string; label: string; icon: IconName }) => (
-                    <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} accessibilityHint="선택한 더보기 화면으로 이동합니다." onPress={() => { setMoreScreen(item.id as Exclude<ScreenKey, MobileTab>); setMoreMenuOpen(false); if (item.id === "directory" && token) void loadDirectory(token); if ((item.id === "settings" || (item.id === "ai" && !personalAiTestReady)) && token) void loadPersonalAi(token); }} style={[styles.mobileSubTab, moreScreen === item.id ? styles.mobileSubTabActive : styles.mobileSubTabIdle]}><MoaIcon name={item.icon as IconName} color={moreScreen === item.id ? "#ffffff" : "#0f766e"} /><Text style={[styles.mobileTabLabel, moreScreen === item.id ? styles.mobileTabLabelActive : null]}>{item.label}</Text></Pressable>
+                    <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} accessibilityHint="선택한 더보기 화면으로 이동합니다." onPress={() => { if (item.id === "settings") { openSettings(); return; } setMoreScreen(item.id as Exclude<ScreenKey, MobileTab>); setMoreMenuOpen(false); if (item.id === "directory" && token) void loadDirectory(token); if (item.id === "ai" && !personalAiTestReady && token) void loadPersonalAi(token); }} style={[styles.mobileSubTab, moreScreen === item.id ? styles.mobileSubTabActive : styles.mobileSubTabIdle]}><MoaIcon name={item.icon as IconName} color={moreScreen === item.id ? "#ffffff" : "#0f766e"} /><Text style={[styles.mobileTabLabel, moreScreen === item.id ? styles.mobileTabLabelActive : null]}>{item.label}</Text></Pressable>
                   ))}
                 </View>
               ) : null}
@@ -1488,7 +1598,7 @@ export default function App() {
 
             {activeTab === "more" && moreScreen === "ai" ? (
               <View style={styles.aiScreen}>
-                <View style={styles.aiHeader}><View><Text accessibilityRole="header" style={styles.aiTitle}>AI 채팅</Text><Text style={styles.aiProviderStatus}>{aiScreen.providerLabel || "PROVIDER"} · {llmConfigSource === "admin_default" ? "관리자 기본 LLM 사용 중" : aiScreen.ready ? "연결됨" : "연결 필요"}</Text></View><Text accessibilityRole="button" accessibilityLabel="개인 AI 설정 열기" onPress={() => { setMoreScreen("settings"); setMoreMenuOpen(false); }} style={styles.aiSettingsAction}>⚙ 설정</Text></View>
+                <View style={styles.aiHeader}><View><Text accessibilityRole="header" style={styles.aiTitle}>AI 채팅</Text><Text style={styles.aiProviderStatus}>{aiScreen.providerLabel || "PROVIDER"} · {llmConfigSource === "admin_default" ? "관리자 기본 LLM 사용 중" : aiScreen.ready ? "연결됨" : "연결 필요"}</Text></View><Text accessibilityRole="button" accessibilityLabel="개인 AI 설정 열기" onPress={openSettings} style={styles.aiSettingsAction}>⚙ 설정</Text></View>
                 <View accessibilityLabel="AI 대화" style={styles.aiConversation}>
                   {aiScreen.messages.map((item, index) => <View key={`${item.role}-${index}`} style={[styles.aiMessageGroup, item.role === "user" ? styles.aiMessageGroupUser : null]}>{item.role === "assistant" ? <View style={styles.aiAvatar}><Text style={styles.aiAvatarText}>M</Text></View> : null}<View style={[styles.aiMessageBubble, item.role === "user" ? styles.aiMessageUser : styles.aiMessageAssistant]}><Text style={item.role === "user" ? styles.aiMessageTextUser : styles.aiMessageTextAssistant}>{item.body}</Text></View></View>)}
                   {aiScreen.messages.length === 0 ? <View style={styles.aiMessageGroup}><View style={styles.aiAvatar}><Text style={styles.aiAvatarText}>M</Text></View><View style={[styles.aiMessageBubble, styles.aiMessageAssistant]}><Text style={styles.aiMessageTextAssistant}>안녕하세요, MoaWorks AI입니다. 무엇을 도와드릴까요?</Text></View></View> : null}
@@ -1777,10 +1887,10 @@ export default function App() {
                 <View style={styles.messengerHeader}>
                   <View style={styles.messengerAvatar}><Text style={styles.messengerAvatarText}>{messengerScreen.selectedRoom?.roomName?.slice(0, 1) || "M"}</Text></View>
                   <View style={styles.messengerHeaderText}><Text accessibilityRole="header" style={styles.messengerRoomTitle}>{messengerScreen.selectedRoom?.roomName || "메신저"}</Text><Text style={styles.messengerRoomMeta}>{messengerScreen.selectedRoom ? `참여자 ${messengerScreen.selectedRoom.participantIds.length}명` : "대화방을 선택해 주세요"}</Text></View>
-                  <Pressable accessibilityRole="button" accessibilityLabel="새 대화 시작" onPress={() => { setActiveTab("more"); setMoreScreen("directory"); setMoreMenuOpen(false); if (token) void loadDirectory(token); }}><Text style={styles.messengerHeaderIcon}>＋</Text></Pressable><Text style={styles.messengerHeaderIcon}>⌕</Text>
+                  <Pressable accessibilityRole="button" accessibilityLabel="새 대화 시작" onPress={openRoomComposer} style={styles.roomCreateIconButton}><Text style={styles.messengerHeaderIcon}>＋</Text></Pressable><Text style={styles.messengerHeaderIcon}>⌕</Text>
                 </View>
                 {rooms.length > 1 ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.messengerRoomStrip}>{rooms.map((room) => <Pressable key={room.roomId} accessibilityRole="button" accessibilityLabel={`${room.roomName} 대화방 열기`} onPress={() => { void openRoom(room.roomId); }} style={[styles.messengerRoomChip, messengerScreen.selectedRoom?.roomId === room.roomId ? styles.messengerRoomChipActive : null]}><Text style={styles.messengerRoomChipText}>{room.roomName}</Text>{room.unreadCount > 0 ? <Text style={styles.messengerUnreadBadge}>{room.unreadCount}</Text> : null}</Pressable>)}</ScrollView> : null}
-                {!messengerScreen.selectedRoom ? <View style={styles.messengerEmpty}><Text style={styles.messengerEmptyTitle}>참여 중인 대화방이 없습니다.</Text><Pressable accessibilityRole="button" accessibilityLabel="주소록에서 대화 시작" onPress={() => { setActiveTab("more"); setMoreScreen("directory"); setMoreMenuOpen(false); if (token) void loadDirectory(token); }} style={styles.primaryCompactButton}><Text style={styles.primaryCompactButtonText}>주소록에서 대화 시작</Text></Pressable></View> : <>
+                {!messengerScreen.selectedRoom ? <View style={styles.messengerEmpty}><Text style={styles.messengerEmptyTitle}>참여 중인 대화방이 없습니다.</Text><Pressable accessibilityRole="button" accessibilityLabel="새 대화 시작" onPress={openRoomComposer} style={styles.primaryCompactButton}><Text style={styles.primaryCompactButtonText}>새 대화</Text></Pressable></View> : <>
                   <View accessibilityLabel="메시지 목록" style={styles.messageCanvas}>
                     {messengerScreen.messages.map((item) => {
                       const mine = item.senderUserId === me?.userId;
@@ -1827,6 +1937,57 @@ export default function App() {
           </>
         ) : null}
       </ScrollView>
+      <Modal visible={roomCreateOpen} transparent animationType="slide" onRequestClose={() => { if (!roomCreateGateRef.current) setRoomCreateOpen(false); }}>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.roomCreateBackdrop}>
+          <View accessibilityViewIsModal style={styles.roomCreateModal}>
+            <View style={styles.employeeSearchModalHeader}>
+              <Text accessibilityRole="header" style={styles.employeeSearchModalTitle}>새 대화</Text>
+              <Pressable accessibilityRole="button" accessibilityLabel="새 대화 닫기" disabled={roomCreatePending} onPress={() => setRoomCreateOpen(false)} style={styles.roomCreateIconButton}>
+                <Text style={styles.employeeSearchClose}>닫기</Text>
+              </Pressable>
+            </View>
+            <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.roomCreateContent}>
+              <View style={styles.roomCreateTypes}>
+                {([ ["direct", "1:1 대화"], ["group", "그룹 대화"] ] as const).map(([roomType, label]) => (
+                  <Pressable key={roomType} accessibilityRole="radio" accessibilityLabel={label} accessibilityState={{ checked: roomCreateForm.roomType === roomType, disabled: roomCreatePending }} disabled={roomCreatePending}
+                    onPress={() => { setRoomCreateError(""); setRoomCreateForm((current) => ({ ...current, roomType, participantUserIds: roomType === "direct" ? current.participantUserIds.slice(0, 1) : current.participantUserIds })); }}
+                    style={[styles.roomCreateType, roomCreateForm.roomType === roomType ? styles.roomCreateTypeSelected : null]}>
+                    <Text style={styles.roomCreateLabel}>{label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+              {roomCreateForm.roomType === "group" ? <>
+                <Text style={styles.roomCreateLabel}>대화방 이름</Text>
+                <TextInput accessibilityLabel="그룹 대화방 이름" placeholder="대화방 이름 (최대 80자)" editable={!roomCreatePending} value={roomCreateForm.roomName} onChangeText={(roomName) => setRoomCreateForm((current) => ({ ...current, roomName }))} style={styles.input} />
+              </> : null}
+              <Text style={styles.roomCreateLabel}>참여자 선택 · 본인 포함 {roomCreateForm.participantUserIds.length + 1}명</Text>
+              <Text style={styles.roomCreateMeta}>{roomCreateForm.roomType === "direct" ? "대화 상대 한 명을 선택하세요." : "같은 회사의 참여자를 선택하세요. 본인 포함 최대 100명입니다."}</Text>
+              <TextInput accessibilityLabel="대화 참여자 검색" placeholder="이름·부서·이메일 검색" editable={!roomCreatePending} value={roomCreateQuery} onChangeText={setRoomCreateQuery} style={styles.input} />
+              {roomCreateForm.participantUserIds.length > 0 ? <View style={styles.roomCreateSelections}>
+                {directoryUsers.filter((member) => roomCreateForm.participantUserIds.includes(member.id)).map((member) => (
+                  <Pressable key={member.id} accessibilityRole="button" accessibilityLabel={`${member.name} 선택 해제`} disabled={roomCreatePending} style={styles.roomCreateSelection} onPress={() => setRoomCreateForm((current) => ({ ...current, participantUserIds: current.participantUserIds.filter((id) => id !== member.id) }))}>
+                    <Text style={styles.roomCreateLabel}>{member.name} ×</Text>
+                  </Pressable>
+                ))}
+              </View> : null}
+              {roomDirectoryLoading ? <Text style={styles.roomCreateMeta}>참여자를 불러오는 중입니다.</Text> : roomDirectoryError ? <Text accessibilityRole="alert" style={styles.error}>{roomDirectoryError}</Text> : null}
+              {!roomDirectoryLoading && !roomDirectoryError && filterDirectoryUsers(directoryUsers, roomCreateQuery).filter((member: DirectoryUser) => member.id !== me?.userId).length === 0 ? <Text style={styles.roomCreateMeta}>선택할 참여자가 없습니다.</Text> : null}
+              {!roomDirectoryLoading && !roomDirectoryError ? filterDirectoryUsers(directoryUsers, roomCreateQuery).filter((member: DirectoryUser) => member.id !== me?.userId).map((member: DirectoryUser) => {
+                const selected = roomCreateForm.participantUserIds.includes(member.id);
+                const disabled = roomCreatePending || (roomCreateForm.roomType === "group" && !selected && roomCreateForm.participantUserIds.length >= 99);
+                return <Pressable key={member.id} accessibilityRole={roomCreateForm.roomType === "group" ? "checkbox" : "radio"} accessibilityLabel={`${member.name} 참여자`} accessibilityState={{ checked: selected, disabled }} disabled={disabled} onPress={() => toggleRoomParticipant(member.id)} style={[styles.roomCreateParticipant, selected ? styles.roomCreateTypeSelected : null]}>
+                  <View style={styles.roomCreateMemberInfo}><Text style={styles.employeeSearchName}>{member.name}</Text><Text style={styles.employeeSearchMeta}>{member.department_name} · {member.email}</Text></View>
+                  <Text style={styles.roomCreateLabel}>{selected ? "선택됨" : "선택"}</Text>
+                </Pressable>;
+              }) : null}
+              {roomCreateError ? <Text accessibilityRole="alert" style={styles.error}>{roomCreateError}</Text> : null}
+            </ScrollView>
+            <Pressable accessibilityRole="button" accessibilityLabel="대화방 생성" accessibilityState={{ disabled: roomCreatePending || roomDirectoryLoading || Boolean(roomDirectoryError) }} disabled={roomCreatePending || roomDirectoryLoading || Boolean(roomDirectoryError)} onPress={() => void submitRoomCreate()} style={[styles.primaryCompactButton, styles.roomCreateSubmit, roomCreatePending || roomDirectoryLoading || roomDirectoryError ? styles.roomCreateDisabled : null]}>
+              <Text style={styles.primaryCompactButtonText}>{roomCreatePending ? "생성 중…" : "대화방 생성"}</Text>
+            </Pressable>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
       <Modal visible={employeeSearchOpen} transparent animationType="fade" onRequestClose={() => setEmployeeSearchOpen(false)}>
         <View style={styles.employeeSearchBackdrop}>
           <View accessibilityViewIsModal style={styles.employeeSearchModal}>
@@ -1860,7 +2021,25 @@ export default function App() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = StyleSheet.create(withMobileTypography({
+  settingsBackButton: { flexDirection: "row", alignItems: "center", minHeight: 44, paddingRight: 12, gap: 4 },
+  backGlyph: { fontSize: 28, color: "#ffffff" },
+  settingsBackText: { fontSize: 14, fontWeight: "600", color: "#ffffff" },
+  roomCreateBackdrop: { flex: 1, justifyContent: "center", padding: 16, backgroundColor: "rgba(15,23,42,0.45)" },
+  roomCreateModal: { maxHeight: "90%", flexShrink: 1, padding: 16, borderRadius: 20, backgroundColor: "#ffffff" },
+  roomCreateContent: { gap: 12, paddingBottom: 12 },
+  roomCreateTypes: { flexDirection: "row", gap: 8 },
+  roomCreateType: { flex: 1, minHeight: 44, justifyContent: "center", alignItems: "center", borderWidth: 1, borderColor: "#cbd5e1", borderRadius: 12 },
+  roomCreateTypeSelected: { backgroundColor: "#ccfbf1", borderColor: "#0f766e" },
+  roomCreateLabel: { color: "#0f172a", fontSize: 14, fontWeight: "600" },
+  roomCreateMeta: { color: "#475569", fontSize: 12 },
+  roomCreateIconButton: { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" },
+  roomCreateSelections: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  roomCreateSelection: { minHeight: 44, justifyContent: "center", paddingHorizontal: 10, borderRadius: 12, backgroundColor: "#ccfbf1" },
+  roomCreateParticipant: { flexDirection: "row", alignItems: "center", gap: 8, minHeight: 60, padding: 10, borderWidth: 1, borderColor: "#e2e8f0", borderRadius: 12 },
+  roomCreateMemberInfo: { flex: 1 },
+  roomCreateSubmit: { minHeight: 44, justifyContent: "center", alignItems: "center", marginTop: 12 },
+  roomCreateDisabled: { opacity: 0.5 },
   safe: {
     flex: 1,
     backgroundColor: "#eef4f3",
@@ -3799,4 +3978,4 @@ const styles = StyleSheet.create({
     backgroundColor: "#f1f5f9",
     color: "#334155",
   },
-});
+}));

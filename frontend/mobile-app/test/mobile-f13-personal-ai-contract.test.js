@@ -181,7 +181,10 @@ test("설정 저장은 성공과 실패 전에 key draft를 폐기하고 현재 
 });
 
 test("AI와 설정 진입은 server state를 갱신하고 입력 및 동작 접근성 이름을 제공한다", () => {
-  assert.match(appSource, /item\.id === "settings" \|\| \(item\.id === "ai" && !personalAiTestReady\)/);
+  assert.match(appSource, /if \(item\.id === "settings"\) \{ openSettings\(\); return; \}/);
+  assert.match(appSource, /item\.id === "ai" && !personalAiTestReady && token/);
+  const settingsEntry = appSource.slice(appSource.indexOf("function openSettings()"), appSource.indexOf("function leaveSettings()"));
+  assert.match(settingsEntry, /if \(token && !personalAiConfigDirty\) void loadPersonalAi\(token\)/);
   assert.match(appSource, /void loadPersonalAi\(token\)/);
   for (const label of ["개인 AI 질문", "개인 AI 질문 보내기", "개인 AI 모델", "개인 AI API 키", "개인 AI 연결 시험", "개인 AI 설정 저장"]) {
     assert.match(appSource, new RegExp(`accessibilityLabel="${label}"`));
