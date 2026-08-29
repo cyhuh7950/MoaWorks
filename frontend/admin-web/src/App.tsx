@@ -96,6 +96,17 @@ import {
   validateOrgImport,
   validateSetup,
   verifyDomain,
+  verifyAdminMfa,
+  requestAdminMfaRecoveryEmail,
+  verifyAdminMfaRecoveryEmail,
+  requestAdminMfaRecovery,
+  verifyAdminMfaRecovery,
+  startAdminMfaTotp,
+  fetchAdminMfaTotpQr,
+  confirmAdminMfaTotp,
+  fetchAdminMfaStatus,
+  type AdminMfaStatus,
+  type AdminMfaTotpStarted,
   queueOperationalBackup,
   queueOperationalRestoreDrill,
   resolveMonitoringAlert,
@@ -143,6 +154,12 @@ const initialForm: SetupForm = {
 type LoginForm = {
   loginId: string;
   password: string;
+};
+
+type AdminMfaLoginStep = {
+  nextAction: "mfa_required" | "mfa_enrollment_required";
+  challengeId: string;
+  expiresAt: string;
 };
 
 type MailDomainOperationsForm = {
@@ -785,6 +802,19 @@ export default function App() {
   });
   const [form, setForm] = useState<SetupForm>(initialForm);
   const [loginForm, setLoginForm] = useState<LoginForm>({ loginId: "", password: "" });
+  const [adminMfaLoginStep, setAdminMfaLoginStep] = useState<AdminMfaLoginStep | null>(null);
+  const [adminMfaCode, setAdminMfaCode] = useState("");
+  const [adminMfaRecoveryEmail, setAdminMfaRecoveryEmail] = useState("");
+  const [adminMfaEmailChallengeId, setAdminMfaEmailChallengeId] = useState("");
+  const [adminMfaEmailCode, setAdminMfaEmailCode] = useState("");
+  const [adminMfaTotpSetup, setAdminMfaTotpSetup] = useState<AdminMfaTotpStarted | null>(null);
+  const [adminMfaQrUrl, setAdminMfaQrUrl] = useState("");
+  const [adminMfaRecoveryCodes, setAdminMfaRecoveryCodes] = useState<string[]>([]);
+  const [adminMfaPendingToken, setAdminMfaPendingToken] = useState("");
+  const [adminMfaRecoveryMode, setAdminMfaRecoveryMode] = useState(false);
+  const [adminMfaRecoveryChallengeId, setAdminMfaRecoveryChallengeId] = useState("");
+  const [adminMfaRecoveryCode, setAdminMfaRecoveryCode] = useState("");
+  const [adminMfaStatus, setAdminMfaStatus] = useState<AdminMfaStatus | null>(null);
   const [publicUiContractState, setPublicUiContractState] = useState<PublicUiContractState>("pending");
   const [publicUiContractError, setPublicUiContractError] = useState("");
   const [userForm, setUserForm] = useState<UserForm>(initialUserForm);
@@ -1526,6 +1556,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    return () => {
+      if (adminMfaQrUrl) {
+        URL.revokeObjectURL(adminMfaQrUrl);
+      }
+    };
+  }, [adminMfaQrUrl]);
+
+  useEffect(() => {
     if (!message) return;
     const timer = window.setTimeout(() => {
       setMessage("");
@@ -1673,18 +1711,207 @@ export default function App() {
         email: buildCompanyLoginEmail(loginForm.loginId, uiContractDraft.company.domain),
         password: loginForm.password,
       });
-      storeToken(response.accessToken);
-      setToken(response.accessToken);
-      await refreshDirectory(response.accessToken);
-      await refreshMailDelivery(response.accessToken);
-      await refreshAdminMessengerRooms(response.accessToken);
-      await refreshTranslationState(response.accessToken);
-      await reloadUiContract(response.accessToken);
+      if (response.nextAction !== "authenticated") {
+        setAdminMfaLoginStep(response);
+        setAdminMfaCode("");
+        return;
+      }
+      await completeAdminLogin(response.accessToken);
     } catch (error) {
       setErrors([error instanceof Error ? error.message : "로그인 실패"]);
     } finally {
       setLoading(false);
     }
+  }
+
+  async function completeAdminLogin(accessToken: string) {
+    storeToken(accessToken);
+    setToken(accessToken);
+    setAdminMfaLoginStep(null);
+    setAdminMfaCode("");
+    setAdminMfaRecoveryEmail("");
+    setAdminMfaEmailChallengeId("");
+    setAdminMfaEmailCode("");
+    setAdminMfaTotpSetup(null);
+    setAdminMfaQrUrl("");
+    setAdminMfaRecoveryCodes([]);
+    setAdminMfaPendingToken("");
+    setAdminMfaRecoveryMode(false);
+    setAdminMfaRecoveryChallengeId("");
+    setAdminMfaRecoveryCode("");
+    await refreshDirectory(accessToken);
+    await refreshMailDelivery(accessToken);
+    await refreshAdminMessengerRooms(accessToken);
+    await refreshTranslationState(accessToken);
+    await reloadUiContract(accessToken);
+    try {
+      setAdminMfaStatus(await fetchAdminMfaStatus(accessToken));
+    } catch {
+      setAdminMfaStatus(null);
+    }
+  }
+
+  async function handleAdminMfaVerify(event: FormEvent) {
+    event.preventDefault();
+    if (!adminMfaLoginStep) return;
+    setLoading(true);
+    setErrors([]);
+    try {
+      const response = await verifyAdminMfa({
+        challengeId: adminMfaLoginStep.challengeId,
+        code: adminMfaCode,
+      });
+      await completeAdminLogin(response.accessToken);
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "인증 앱 코드 확인 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleAdminMfaRecoveryEmailRequest(event: FormEvent) {
+    event.preventDefault();
+    if (!adminMfaLoginStep || adminMfaLoginStep.nextAction !== "mfa_enrollment_required") return;
+    setLoading(true);
+    setErrors([]);
+    try {
+      const response = await requestAdminMfaRecoveryEmail({
+        flowChallengeId: adminMfaLoginStep.challengeId,
+        recoveryEmail: adminMfaRecoveryEmail,
+      });
+      setAdminMfaEmailChallengeId(response.challengeId);
+      setAdminMfaEmailCode("");
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "복구 이메일 인증 요청 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleAdminMfaEnrollmentEmailVerify(event: FormEvent) {
+    event.preventDefault();
+    if (!adminMfaLoginStep || !adminMfaEmailChallengeId) return;
+    setLoading(true);
+    setErrors([]);
+    try {
+      await verifyAdminMfaRecoveryEmail({
+        flowChallengeId: adminMfaLoginStep.challengeId,
+        verificationChallengeId: adminMfaEmailChallengeId,
+        recoveryEmail: adminMfaRecoveryEmail,
+        code: adminMfaEmailCode,
+      });
+      const setup = await startAdminMfaTotp({
+        flowChallengeId: adminMfaLoginStep.challengeId,
+        verificationChallengeId: adminMfaEmailChallengeId,
+      });
+      const qrBlob = await fetchAdminMfaTotpQr(setup.challengeId);
+      setAdminMfaTotpSetup(setup);
+      setAdminMfaQrUrl(URL.createObjectURL(qrBlob));
+      setAdminMfaCode("");
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "복구 이메일 확인 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleAdminMfaEnrollmentConfirm(event: FormEvent) {
+    event.preventDefault();
+    if (!adminMfaTotpSetup) return;
+    setLoading(true);
+    setErrors([]);
+    try {
+      const response = await confirmAdminMfaTotp({
+        challengeId: adminMfaTotpSetup.challengeId,
+        code: adminMfaCode,
+      });
+      setAdminMfaPendingToken(response.accessToken);
+      setAdminMfaRecoveryCodes(response.recoveryCodes);
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "인증 앱 등록 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function beginAdminMfaReenrollment(flowChallengeId: string) {
+    const setup = await startAdminMfaTotp({ flowChallengeId });
+    const qrBlob = await fetchAdminMfaTotpQr(setup.challengeId);
+    setAdminMfaLoginStep({
+      nextAction: "mfa_enrollment_required",
+      challengeId: flowChallengeId,
+      expiresAt: setup.expiresAt,
+    });
+    setAdminMfaTotpSetup(setup);
+    setAdminMfaQrUrl(URL.createObjectURL(qrBlob));
+    setAdminMfaCode("");
+    setAdminMfaRecoveryMode(false);
+  }
+
+  async function handleAdminMfaRecoveryRequest() {
+    setLoading(true);
+    setErrors([]);
+    try {
+      const response = await requestAdminMfaRecovery({
+        email: buildCompanyLoginEmail(loginForm.loginId, uiContractDraft.company.domain),
+      });
+      setAdminMfaRecoveryChallengeId(response.challengeId);
+      setAdminMfaEmailCode("");
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "복구 이메일 코드 요청 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleAdminMfaRecoveryOtpVerify(event: FormEvent) {
+    event.preventDefault();
+    setLoading(true);
+    setErrors([]);
+    try {
+      const response = await verifyAdminMfaRecovery({
+        challengeId: adminMfaRecoveryChallengeId,
+        code: adminMfaEmailCode,
+      });
+      await beginAdminMfaReenrollment(response.challengeId);
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "복구 이메일 코드 확인 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleAdminMfaRecoveryCodeVerify(event: FormEvent) {
+    event.preventDefault();
+    setLoading(true);
+    setErrors([]);
+    try {
+      const response = await verifyAdminMfaRecovery({
+        email: buildCompanyLoginEmail(loginForm.loginId, uiContractDraft.company.domain),
+        recoveryCode: adminMfaRecoveryCode,
+      });
+      await beginAdminMfaReenrollment(response.challengeId);
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "복구 코드 확인 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function resetAdminMfaLogin() {
+    setAdminMfaLoginStep(null);
+    setAdminMfaCode("");
+    setAdminMfaRecoveryEmail("");
+    setAdminMfaEmailChallengeId("");
+    setAdminMfaEmailCode("");
+    setAdminMfaTotpSetup(null);
+    setAdminMfaQrUrl("");
+    setAdminMfaRecoveryCodes([]);
+    setAdminMfaPendingToken("");
+    setAdminMfaRecoveryMode(false);
+    setAdminMfaRecoveryChallengeId("");
+    setAdminMfaRecoveryCode("");
+    setErrors([]);
   }
 
   function resetDepartmentEditor() {
@@ -2615,6 +2842,11 @@ export default function App() {
               ))}
             </div>
             <div className="status-card">
+              <strong>관리자 추가 인증</strong>
+              <p>상태: {adminMfaStatus?.status ?? "확인 전"}</p>
+              <p>복구 이메일: {adminMfaStatus?.recoveryEmailMasked ?? "등록 정보 없음"}</p>
+            </div>
+            <div className="status-card">
               <strong>운영 이벤트(최근)</strong>
               <ul>
                 {monitoringEvents.slice(0, 5).map((item) => (
@@ -3469,6 +3701,135 @@ export default function App() {
                 <ul>{visibleWarnings.map((item) => <li key={item}>{item}</li>)}</ul>
               </div>
             )}
+            {adminMfaLoginStep ? (
+              adminMfaLoginStep.nextAction === "mfa_enrollment_required" ? (
+                adminMfaRecoveryCodes.length > 0 ? (
+                  <div className="compact-form">
+                    <p className="muted">아래 복구 코드는 다시 표시되지 않습니다. 안전한 장소에 저장하세요.</p>
+                    <ol className="mfa-recovery-codes">
+                      {adminMfaRecoveryCodes.map((code) => <li key={code}><code>{code}</code></li>)}
+                    </ol>
+                    <button
+                      type="button"
+                      disabled={loading || !adminMfaPendingToken}
+                      onClick={() => void completeAdminLogin(adminMfaPendingToken)}
+                    >
+                      복구 코드를 저장했습니다
+                    </button>
+                  </div>
+                ) : adminMfaTotpSetup ? (
+                  <form className="compact-form" onSubmit={handleAdminMfaEnrollmentConfirm}>
+                    <p className="muted">인증 앱에서 QR을 스캔하거나 수동 키를 입력한 뒤 6자리 코드를 확인하세요.</p>
+                    {adminMfaQrUrl ? <img className="mfa-qr" src={adminMfaQrUrl} alt="인증 앱 등록 QR" referrerPolicy="no-referrer" /> : null}
+                    <p><strong>수동 키</strong> <code>{adminMfaTotpSetup.manualKey}</code></p>
+                    <label>
+                      인증 앱 코드
+                      <input
+                        value={adminMfaCode}
+                        onChange={(event) => setAdminMfaCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        maxLength={6}
+                        pattern="[0-9]{6}"
+                        required
+                      />
+                    </label>
+                    <button type="submit" disabled={loading || adminMfaCode.length !== 6}>인증 앱 등록 완료</button>
+                  </form>
+                ) : adminMfaEmailChallengeId ? (
+                  <form className="compact-form" onSubmit={handleAdminMfaEnrollmentEmailVerify}>
+                    <p className="muted">복구 이메일로 보낸 6자리 코드를 입력하세요.</p>
+                    <label>
+                      이메일 인증 코드
+                      <input
+                        value={adminMfaEmailCode}
+                        onChange={(event) => setAdminMfaEmailCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        maxLength={6}
+                        pattern="[0-9]{6}"
+                        required
+                      />
+                    </label>
+                    <button type="submit" disabled={loading || adminMfaEmailCode.length !== 6}>이메일 확인</button>
+                  </form>
+                ) : (
+                  <form className="compact-form" onSubmit={handleAdminMfaRecoveryEmailRequest}>
+                    <p className="muted">관리자 계정을 활성화하려면 복구 이메일과 인증 앱을 등록해야 합니다.</p>
+                    <label>
+                      복구 이메일
+                      <input
+                        type="email"
+                        value={adminMfaRecoveryEmail}
+                        onChange={(event) => setAdminMfaRecoveryEmail(event.target.value)}
+                        autoComplete="email"
+                        required
+                      />
+                    </label>
+                    <button type="submit" disabled={loading || !adminMfaRecoveryEmail.includes("@")}>인증 코드 보내기</button>
+                    <button type="button" className="secondary" disabled={loading} onClick={resetAdminMfaLogin}>이전</button>
+                  </form>
+                )
+              ) : adminMfaRecoveryMode ? (
+                adminMfaRecoveryChallengeId ? (
+                  <form className="compact-form" onSubmit={handleAdminMfaRecoveryOtpVerify}>
+                    <p className="muted">등록된 복구 이메일로 보낸 6자리 코드를 입력하세요.</p>
+                    <label>
+                      이메일 인증 코드
+                      <input
+                        value={adminMfaEmailCode}
+                        onChange={(event) => setAdminMfaEmailCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        maxLength={6}
+                        pattern="[0-9]{6}"
+                        required
+                      />
+                    </label>
+                    <button type="submit" disabled={loading || adminMfaEmailCode.length !== 6}>복구 이메일 확인</button>
+                    <button type="button" className="secondary" onClick={() => setAdminMfaRecoveryChallengeId("")}>다른 방법</button>
+                  </form>
+                ) : (
+                  <div className="compact-form">
+                    <p className="muted">복구 이메일 또는 보관한 일회용 복구 코드로 인증 앱을 다시 등록할 수 있습니다.</p>
+                    <button type="button" disabled={loading} onClick={() => void handleAdminMfaRecoveryRequest()}>복구 이메일로 코드 받기</button>
+                    <form className="compact-form" onSubmit={handleAdminMfaRecoveryCodeVerify}>
+                      <label>
+                        일회용 복구 코드
+                        <input
+                          value={adminMfaRecoveryCode}
+                          onChange={(event) => setAdminMfaRecoveryCode(event.target.value)}
+                          autoComplete="one-time-code"
+                          minLength={20}
+                          required
+                        />
+                      </label>
+                      <button type="submit" disabled={loading || adminMfaRecoveryCode.length < 20}>복구 코드 확인</button>
+                    </form>
+                    <button type="button" className="secondary" disabled={loading} onClick={() => setAdminMfaRecoveryMode(false)}>인증 앱 코드 입력으로 돌아가기</button>
+                  </div>
+                )
+              ) : (
+                <form className="compact-form" onSubmit={handleAdminMfaVerify}>
+                  <p className="muted">인증 앱에 표시된 6자리 코드를 입력하세요.</p>
+                  <label>
+                    인증 앱 코드
+                    <input
+                      value={adminMfaCode}
+                      onChange={(event) => setAdminMfaCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      maxLength={6}
+                      pattern="[0-9]{6}"
+                      required
+                    />
+                  </label>
+                  <button type="submit" disabled={loading || adminMfaCode.length !== 6}>코드 확인</button>
+                  <button type="button" className="secondary" disabled={loading} onClick={() => setAdminMfaRecoveryMode(true)}>인증 앱을 사용할 수 없나요?</button>
+                  <button type="button" className="secondary" disabled={loading} onClick={resetAdminMfaLogin}>이전</button>
+                </form>
+              )
+            ) : (
             <form className="compact-form" onSubmit={handleLogin}>
               <label>
                 {copy.adminEmail}
@@ -3483,6 +3844,7 @@ export default function App() {
               </label>
               <button type="submit" disabled={loading || publicUiContractState !== "ready"}>로그인</button>
             </form>
+            )}
           </article>
         </section>
       )}

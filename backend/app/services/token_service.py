@@ -14,12 +14,34 @@ class TokenService:
     def __init__(self) -> None:
         self.security = SecurityService()
 
-    def issue_access_token(self, user: AuthUserSummary, expires_in: int = 3600) -> str:
+    def issue_access_token(
+        self,
+        user: AuthUserSummary,
+        expires_in: int = 3600,
+        *,
+        mfa_profile_version: int | None = None,
+        mfa_policy_epoch: int | None = None,
+        mfa_verified_at: datetime | None = None,
+    ) -> str:
+        issued_at = datetime.now(UTC)
         payload = {
             "subject": user.userId,
             "sessionVersion": getattr(user, "authSessionVersion", 0),
-            "exp": (datetime.now(UTC) + timedelta(seconds=expires_in)).isoformat(),
+            "exp": (issued_at + timedelta(seconds=expires_in)).isoformat(),
         }
+        mfa_values = (mfa_profile_version, mfa_policy_epoch, mfa_verified_at)
+        if any(value is not None for value in mfa_values):
+            if any(value is None for value in mfa_values):
+                raise ValueError("관리자 MFA token claim은 모두 함께 제공해야 합니다.")
+            payload.update(
+                {
+                    "iat": issued_at.isoformat(),
+                    "amr": ["pwd", "otp"],
+                    "mfaVerifiedAt": mfa_verified_at.isoformat(),
+                    "mfaProfileVersion": mfa_profile_version,
+                    "mfaPolicyEpoch": mfa_policy_epoch,
+                }
+            )
         return self.security.encrypt_secret(json.dumps(payload, ensure_ascii=True))
 
     def decode_access_token(self, token: str) -> dict[str, Any]:

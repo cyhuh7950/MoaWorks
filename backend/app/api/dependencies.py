@@ -1,5 +1,6 @@
 from fastapi import Depends, Header, HTTPException, status
 
+from app.core.config import settings
 from app.schemas.directory import AuthUserSummary
 from app.services.directory_store import DirectoryStore
 from app.services.token_service import TokenService
@@ -9,6 +10,49 @@ def _resolve_token(authorization: str | None = None) -> str | None:
     if authorization and authorization.startswith("Bearer "):
         return authorization.removeprefix("Bearer ").strip()
     return None
+
+
+def _validate_admin_mfa_claims(
+    payload: dict,
+    user: AuthUserSummary,
+    store: DirectoryStore,
+) -> None:
+    is_privileged = getattr(user, "userType", None) == "admin" or "admin:*" in user.permissions
+    if settings.admin_mfa_enforcement != "required" or not is_privileged:
+        return
+    with store.db.connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT profile.profile_version,
+                       profile.status AS profile_status,
+                       policy.required_epoch
+                FROM admin_mfa_policy AS policy
+                LEFT JOIN admin_mfa_profiles AS profile
+                  ON profile.user_id = %s
+                WHERE policy.singleton = TRUE
+                """,
+                (user.userId,),
+            )
+            current = cursor.fetchone()
+    valid = (
+        current is not None
+        and current["profile_status"] == "active"
+        and payload.get("amr") == ["pwd", "otp"]
+        and isinstance(payload.get("mfaProfileVersion"), int)
+        and payload["mfaProfileVersion"] == current["profile_version"]
+        and isinstance(payload.get("mfaPolicyEpoch"), int)
+        and payload["mfaPolicyEpoch"] == current["required_epoch"]
+    )
+    if not valid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": "AUTH_MFA_SESSION_STALE",
+                "userMessage": "관리자 인증이 만료되었습니다. 다시 로그인하세요.",
+                "adminMessage": "관리자 MFA claim 또는 현재 profile/policy version 불일치",
+            },
+        )
 
 
 def get_current_user(authorization: str | None = Header(default=None)) -> AuthUserSummary:
@@ -42,7 +86,8 @@ def get_current_user(authorization: str | None = Header(default=None)) -> AuthUs
         )
 
     try:
-        user = DirectoryStore().get_user_summary(user_id)
+        store = DirectoryStore()
+        user = store.get_user_summary(user_id)
         token_version = payload.get("sessionVersion", 0)
         if not isinstance(token_version, int) or token_version != getattr(user, "authSessionVersion", 0):
             raise HTTPException(
@@ -53,6 +98,7 @@ def get_current_user(authorization: str | None = Header(default=None)) -> AuthUs
                     "adminMessage": "비밀번호 재설정으로 기존 세션이 폐기되었습니다.",
                 },
             )
+        _validate_admin_mfa_claims(payload, user, store)
         return user
     except PermissionError as exc:
         raise HTTPException(
@@ -72,6 +118,14 @@ def get_current_user(authorization: str | None = Header(default=None)) -> AuthUs
                 "adminMessage": str(exc),
             },
         ) from exc
+
+
+def get_optional_current_user(
+    authorization: str | None = Header(default=None),
+) -> AuthUserSummary | None:
+    if _resolve_token(authorization=authorization) is None:
+        return None
+    return get_current_user(authorization)
 
 
 def require_admin(user: AuthUserSummary = Depends(get_current_user)) -> AuthUserSummary:

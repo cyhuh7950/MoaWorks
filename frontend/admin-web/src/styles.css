@@ -513,6 +513,29 @@ h1 {
   font-weight: 600;
 }
 
+.mfa-qr {
+  width: 180px;
+  height: 180px;
+  justify-self: center;
+  border: 1px solid #cad5cf;
+  border-radius: 14px;
+  background: #ffffff;
+}
+
+.mfa-recovery-codes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 18px;
+  margin: 0;
+  padding: 10px 10px 10px 34px;
+  border-radius: 14px;
+  background: #f7fbf8;
+}
+
+.mfa-recovery-codes code {
+  overflow-wrap: anywhere;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;

@@ -24,11 +24,43 @@ export type AuthUser = {
   mustChangePassword: boolean;
 };
 
-export type LoginResponse = {
+export type AuthenticatedLoginResponse = {
+  nextAction: "authenticated";
   accessToken: string;
   tokenType: string;
   expiresIn: number;
   user: AuthUser;
+};
+
+export type AdminMfaChallengeResponse = {
+  nextAction: "mfa_required" | "mfa_enrollment_required";
+  challengeId: string;
+  expiresAt: string;
+};
+
+export type LoginResponse = AuthenticatedLoginResponse | AdminMfaChallengeResponse;
+
+export type AdminMfaRecoveryEmailRequested = {
+  challengeId: string;
+  expiresAt: string;
+};
+
+export type AdminMfaTotpStarted = {
+  challengeId: string;
+  expiresAt: string;
+  manualKey: string;
+  qrPath: string;
+};
+
+export type AdminMfaEnrollmentCompleted = AuthenticatedLoginResponse & {
+  recoveryCodes: string[];
+};
+
+export type AdminMfaStatus = {
+  enrolled: boolean;
+  status: "not_enrolled" | "pending" | "active" | "disabled";
+  recoveryEmailMasked: string | null;
+  profileVersion: number | null;
 };
 
 export type Department = {
@@ -737,6 +769,102 @@ export async function login(payload: { email: string; password: string }) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+  });
+}
+
+export async function verifyAdminMfa(payload: { challengeId: string; code: string }) {
+  return request<AuthenticatedLoginResponse>("/auth/admin/mfa/verify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function requestAdminMfaRecoveryEmail(payload: {
+  flowChallengeId?: string;
+  recoveryEmail: string;
+  currentPassword?: string;
+  currentTotp?: string;
+}) {
+  return request<AdminMfaRecoveryEmailRequested>("/auth/admin/mfa/recovery-email/request", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function verifyAdminMfaRecoveryEmail(payload: {
+  flowChallengeId?: string;
+  verificationChallengeId: string;
+  recoveryEmail: string;
+  code: string;
+}) {
+  return request<{ verified: true }>("/auth/admin/mfa/recovery-email/verify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function startAdminMfaTotp(payload: {
+  flowChallengeId?: string;
+  verificationChallengeId?: string;
+}) {
+  return request<AdminMfaTotpStarted>("/auth/admin/mfa/totp/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function requestAdminMfaRecovery(payload: { email: string }) {
+  return request<AdminMfaRecoveryEmailRequested>("/auth/admin/mfa/recovery/request", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function verifyAdminMfaRecovery(
+  payload:
+    | { challengeId: string; code: string }
+    | { email: string; recoveryCode: string },
+) {
+  return request<{ nextAction: "mfa_reenroll_required"; challengeId: string; expiresAt: string }>(
+    "/auth/admin/mfa/recovery/verify",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function fetchAdminMfaTotpQr(challengeId: string): Promise<Blob> {
+  const response = await fetch(`${apiBase}/auth/admin/mfa/totp/qr`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ challengeId }),
+    cache: "no-store",
+    referrerPolicy: "no-referrer",
+  });
+  if (!response.ok) {
+    throw new ApiRequestError("인증 앱 QR을 불러오지 못했습니다.", response.status);
+  }
+  return response.blob();
+}
+
+export async function confirmAdminMfaTotp(payload: { challengeId: string; code: string }) {
+  return request<AdminMfaEnrollmentCompleted>("/auth/admin/mfa/totp/confirm", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchAdminMfaStatus(token: string) {
+  return request<AdminMfaStatus>("/auth/admin/mfa/status", {
+    headers: { Authorization: `Bearer ${token}` },
   });
 }
 
