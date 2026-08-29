@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -34,6 +35,12 @@ class Settings(BaseSettings):
         "172.16.0.0/12",
         "192.168.0.0/16",
     ]
+    admin_mfa_enforcement: Literal["optional", "required"] = "optional"
+    admin_mfa_totp_current_key_version: int = Field(default=0, ge=0)
+    admin_mfa_totp_keyring: str = Field(default="", repr=False)
+    admin_mfa_otp_hmac_key: str = Field(default="", repr=False)
+    admin_mfa_recovery_code_hmac_key: str = Field(default="", repr=False)
+    admin_mfa_break_glass_approver_keyring: str = Field(default="", repr=False)
     oci_email_api_enabled: bool = False
     oci_region: str = "ap-seoul-1"
     oci_tenancy_id: str = ""
