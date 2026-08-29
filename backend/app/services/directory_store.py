@@ -174,9 +174,10 @@ class DirectoryStore:
                 cursor.execute(
                     """
                     INSERT INTO departments (
-                        id, company_id, name, parent_id, status, sort_order, is_default, created_at
+                        id, company_id, system_department_code, department_code,
+                        name, parent_id, status, sort_order, is_default, created_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, TRUE, %s)
                     """,
                     (department_id, company_id, self._new_system_department_code(), "HQ", "본사", None, "active", 100, now),
                 )
