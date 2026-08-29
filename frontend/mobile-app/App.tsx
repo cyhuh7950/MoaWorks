@@ -369,6 +369,7 @@ export default function App() {
   const sessionControllerRef = useRef(createMobileSessionAdapter({
     onLoginCommitted({ token: nextToken, user: nextUser }) {
       resetMobileOverlays();
+      setMailSenderDisplayMode("name");
       setToken(nextToken);
       setMe(nextUser);
       scheduleSubmissionGateRef.current.reset();
@@ -399,6 +400,7 @@ export default function App() {
     },
     onSessionReset(nextState) {
       resetMobileOverlays();
+      setMailSenderDisplayMode("name");
       setToken(nextState.token);
       setMe(nextState.user);
       setPassword(nextState.password);
@@ -1097,6 +1099,7 @@ export default function App() {
 
   async function loadMailSenderDisplayPreference(activeToken: string = token, context = sessionControllerRef.current.capture(activeToken)) {
     if (!activeToken) return;
+    setMailSenderDisplayMode("name");
     try {
       const preferencesResponse = await applyProtectedResponse(context, () => request<MailBasicPreferences>("/mail/preferences/basic", {
         headers: { Authorization: `Bearer ${activeToken}` },

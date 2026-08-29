@@ -68,15 +68,32 @@ async function mountApp(t) {
   ];
   const credential = { email: "qa@fixture.invalid", password: randomUUID() };
   const accessToken = randomUUID();
-  const state = { posts: [], rooms: [], unknown: [], directory: async () => response({ users: directory }), create: async () => response({ detail: { userMessage: "생성 시험 오류" } }, 500) };
+  const state = {
+    posts: [], rooms: [], unknown: [], nextLogin: null,
+    directory: async () => response({ users: directory }),
+    create: async () => response({ detail: { userMessage: "생성 시험 오류" } }, 500),
+    mailList: async () => response({ mails: [] }),
+    mailDetail: async () => response({}),
+    preference: async () => response({ senderDisplayMode: "name" }),
+  };
   global.fetch = async (url, init = {}) => {
     const route = new URL(url).pathname.replace("/api/v1", "");
     const method = init.method || "GET";
     if (route === "/auth/login" && method === "POST") {
-      assert.deepEqual(JSON.parse(init.body), credential);
+      const body = JSON.parse(init.body);
+      if (state.nextLogin && body.email === state.nextLogin.credential.email && body.password === state.nextLogin.credential.password) {
+        return response({ accessToken: state.nextLogin.accessToken });
+      }
+      assert.deepEqual(body, credential);
       return response({ accessToken });
     }
-    if (route !== "/ui-contract" && init.headers?.Authorization !== `Bearer ${accessToken}`) return response({}, 401);
+    const requestToken = String(init.headers?.Authorization ?? "").replace(/^Bearer\s+/, "");
+    const requestUser = requestToken === accessToken ? user : state.nextLogin?.accessToken === requestToken ? state.nextLogin.user : null;
+    if (route !== "/ui-contract" && !requestUser) return response({}, 401);
+    if (route === "/auth/me" && method === "GET") return response({ user: requestUser });
+    if (route === "/mail/preferences/basic" && method === "GET") return state.preference(requestToken);
+    if (route === "/mail/inbox" && method === "GET") return state.mailList(requestToken);
+    if (/^\/mail\/[^/]+$/.test(route) && method === "GET") return state.mailDetail(route.slice("/mail/".length), requestToken);
     if (route === "/workspace/directory" && method === "GET") return state.directory();
     if (route === "/messenger/rooms" && method === "POST") {
       const payload = JSON.parse(init.body);
@@ -84,7 +101,7 @@ async function mountApp(t) {
       return state.create(payload);
     }
     const get = {
-      "/ui-contract": {}, "/auth/me": { user }, "/approvals": { documents: [] },
+      "/ui-contract": {}, "/approvals": { documents: [] },
       "/notifications/summary": { unreadCount: 0, severityCount: {} }, "/notifications": { notifications: [] },
       "/mail/inbox": { messages: [] }, "/messenger/rooms": { rooms: state.rooms },
       "/messenger/rooms/new-room/messages": { messages: [] },
@@ -122,7 +139,14 @@ async function mountApp(t) {
   await input("비밀번호", credential.password);
   await press("업무 포털 로그인");
   assert.ok(find("헤더 로그아웃"));
-  return { state, find, press, input, hardwareBack, propsByNode };
+  const waitFor = async (predicate, message) => {
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      if (predicate()) return;
+      await React.act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    }
+    assert.fail(message);
+  };
+  return { state, find, press, input, waitFor, hardwareBack, propsByNode, credential, accessToken };
 }
 
 test("실제 App: 더보기/AI에서 설정 진입 후 화면 버튼과 Android 뒤로가기로 원위치 복귀", async (t) => {
@@ -217,4 +241,60 @@ test("실제 App: 새 대화 재진입은 이전 주소록 성공/실패/finally
   assert.ok(app.find("이둘 참여자"), "이전 실패는 현재 목록을 숨기지 않는다");
   assert.equal(app.propsByNode.get(app.find("대화방 생성")).disabled, false);
   assert.doesNotMatch(document.body.textContent, /이전 요청 실패/);
+});
+
+test("실제 App: 사용자 전환은 sender mode를 name으로 격리하고 current preference만 적용한다", async (t) => {
+  const app = await mountApp(t);
+  const summary = {
+    mailId: "mail-session", accountId: "account-1", senderEmail: "Hong@Example.com", senderDisplayName: "홍길동",
+    subject: "세션 메일", status: "received", isRead: false, isStarred: false, sentAt: null,
+    receivedAt: "2026-08-29T00:00:00Z", retentionExpiresAt: null, attachmentCount: 0, preview: "세션 표시 확인",
+  };
+  const detail = {
+    ...summary, senderUserId: "sender-1", bodyText: "세션 표시 확인", bodyHtml: null,
+    createdAt: "2026-08-29T00:00:00Z", updatedAt: "2026-08-29T00:00:00Z",
+    recipients: [],
+  };
+  app.state.mailList = async () => response({ mails: [summary] });
+  app.state.mailDetail = async () => response(detail);
+  app.state.preference = async () => response({ senderDisplayMode: "id" });
+
+  await app.press("메일 메뉴");
+  await app.waitFor(() => app.find("Hong 세션 메일 메일 열기"), "이전 사용자의 id mode가 실제 목록 label에 적용돼야 한다");
+
+  let resolveStalePreference;
+  app.state.preference = () => new Promise((resolve) => { resolveStalePreference = resolve; });
+  await app.press("메일 메뉴");
+  await app.waitFor(() => typeof resolveStalePreference === "function", "이전 세션 preference 요청이 시작돼야 한다");
+  await app.press("헤더 로그아웃");
+
+  const nextCredential = { email: "next@fixture.invalid", password: randomUUID() };
+  const nextToken = randomUUID();
+  app.state.nextLogin = {
+    credential: nextCredential,
+    accessToken: nextToken,
+    user: { userId: "next", userName: "다음 사용자", userEmail: nextCredential.email, roleName: "user", permissions: [] },
+  };
+  await app.input("아이디 또는 이메일", nextCredential.email);
+  await app.input("비밀번호", nextCredential.password);
+  await app.press("업무 포털 로그인");
+
+  let rejectCurrentPreference;
+  app.state.preference = () => new Promise((_resolve, reject) => { rejectCurrentPreference = reject; });
+  await app.press("메일 메뉴");
+  await app.waitFor(() => typeof rejectCurrentPreference === "function", "새 세션 preference 요청이 시작돼야 한다");
+  assert.ok(app.find("홍길동 세션 메일 메일 열기"), "새 세션은 preference 응답 전 name을 렌더해야 한다");
+
+  await React.act(async () => resolveStalePreference(response({ senderDisplayMode: "name_email" })));
+  assert.ok(app.find("홍길동 세션 메일 메일 열기"), "이전 세션 성공 응답은 새 세션 mode를 바꾸면 안 된다");
+  await React.act(async () => rejectCurrentPreference(new Error("preference unavailable")));
+  assert.ok(app.find("홍길동 세션 메일 메일 열기"), "현재 preference 실패 뒤에도 name을 유지해야 한다");
+
+  let resolveCurrentPreference;
+  app.state.preference = () => new Promise((resolve) => { resolveCurrentPreference = resolve; });
+  await app.press("메일 메뉴");
+  await app.waitFor(() => typeof resolveCurrentPreference === "function", "현재 세션 재시도 요청이 시작돼야 한다");
+  assert.ok(app.find("홍길동 세션 메일 메일 열기"), "현재 성공 응답 전에도 name을 유지해야 한다");
+  await React.act(async () => resolveCurrentPreference(response({ senderDisplayMode: "id" })));
+  await app.waitFor(() => app.find("Hong 세션 메일 메일 열기"), "현재 세션 성공 응답만 id mode를 적용해야 한다");
 });

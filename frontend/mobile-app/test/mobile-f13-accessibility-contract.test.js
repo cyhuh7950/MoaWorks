@@ -215,7 +215,10 @@ test("AI 오류 alert는 카드 안에서 잘리지 않는 compact 전용 스타
 });
 
 test("접근성 속성은 secret binding이나 승인되지 않은 동적 이름을 참조하지 않는다", () => {
-  const allowedDynamicNameRoots = new Set(["BUSINESS_SEARCH_CATEGORY_LABELS", "approvalScreen", "calendarScreen", "cell", "daySchedules", "directoryScreen", "doc", "filter", "index", "item", "member", "name", "option", "result", "room", "section", "undefined", "view"]);
+  const senderDefinition = appSource.match(/const sender = formatMailSender\(([^;]+)\);/);
+  assert.ok(senderDefinition, "sender accessibility value is produced by the mail sender formatter");
+  assert.doesNotMatch(senderDefinition[1], /apiKeyDraft|llmApiKey|password|token/, "sender formatter inputs exclude secret bindings");
+  const allowedDynamicNameRoots = new Set(["BUSINESS_SEARCH_CATEGORY_LABELS", "approvalScreen", "calendarScreen", "cell", "daySchedules", "directoryScreen", "doc", "filter", "index", "item", "member", "name", "option", "result", "room", "section", "sender", "undefined", "view"]);
   const forbiddenSecretBindings = new Set(["apiKeyDraft", "llmApiKey", "password", "token"]);
   walk(ast, (node) => {
     if (node.type !== "JSXElement") return;
