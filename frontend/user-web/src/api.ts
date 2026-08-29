@@ -1489,7 +1489,7 @@ export async function collectExternalMailAccount(token: string, id: string): Pro
 }
 
 export type MailBasicPreferences = {
-  senderDisplayMode: "name" | "name_email";
+  senderDisplayMode: "name" | "id" | "name_email";
   blockRemoteImages: boolean;
   disableRiskyTags: boolean;
   showRouteCountry: boolean;

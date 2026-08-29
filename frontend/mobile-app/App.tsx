@@ -8,6 +8,7 @@ import { normalizeBusinessSearchText, searchLoadedBusinessSummaries, updateBusin
 
 const { aiViewModel, approvalViewModel, buildHomeViewModel, calendarViewModel, directoryViewModel, navigationModel } = require("./mobile-ui-design.js");
 const { buildMailSendPayload, mailboxRequestPath, mailboxViewModel } = require("./mail-compose.js");
+const { formatMailSender, resolveMailSenderDisplayMode } = require("./mail-sender-display.js");
 const { buildTranslationPayload, messengerViewModel } = require("./messenger-translation.js");
 const mobileNavigation = navigationModel();
 const { createSettingsHistory } = require("./mobile-navigation.js");
@@ -62,6 +63,7 @@ type MailSummary = {
   mailId: string;
   accountId: string;
   senderEmail: string;
+  senderDisplayName: string;
   subject: string;
   status: string;
   isRead: boolean;
@@ -79,6 +81,7 @@ type MailDetail = {
   accountId: string;
   senderUserId: string;
   senderEmail: string;
+  senderDisplayName: string;
   subject: string;
   bodyText: string;
   bodyHtml: string | null;
@@ -98,6 +101,9 @@ type MailDetail = {
     readAt: string | null;
   }>;
 };
+
+type MailBasicPreferences = { senderDisplayMode: "name" | "id" | "name_email" };
+type SenderDisplayMode = MailBasicPreferences["senderDisplayMode"];
 
 type MessengerRoom = {
   roomId: string;
@@ -271,6 +277,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<MobileTab>("home");
   const [uiContract, setUiContract] = useState<UiContract>(defaultUiContract);
   const [mailItems, setMailItems] = useState<MailSummary[]>([]);
+  const [mailSenderDisplayMode, setMailSenderDisplayMode] = useState<SenderDisplayMode>("name");
   const [selectedMailId, setSelectedMailId] = useState("");
   const [selectedMailDetail, setSelectedMailDetail] = useState<MailDetail | null>(null);
   const [mailDetailExpanded, setMailDetailExpanded] = useState(false);
@@ -1088,6 +1095,21 @@ export default function App() {
     }
   }
 
+  async function loadMailSenderDisplayPreference(activeToken: string = token, context = sessionControllerRef.current.capture(activeToken)) {
+    if (!activeToken) return;
+    try {
+      const preferencesResponse = await applyProtectedResponse(context, () => request<MailBasicPreferences>("/mail/preferences/basic", {
+        headers: { Authorization: `Bearer ${activeToken}` },
+      }, context), (preferences) => {
+        setMailSenderDisplayMode(resolveMailSenderDisplayMode(preferences));
+      });
+      if (!preferencesResponse.applied) return;
+    } catch (error) {
+      if (isSessionInvalidatedError(error) || !sessionControllerRef.current.isCurrent(context)) return;
+      setMailSenderDisplayMode("name");
+    }
+  }
+
   async function startDirectRoom(member: DirectoryUser) {
     if (!directoryActionGateRef.current.tryEnter(member.id)) return;
     const context = sessionControllerRef.current.capture(token);
@@ -1262,6 +1284,7 @@ export default function App() {
       return;
     }
     if (nextTab === "mail") {
+      void loadMailSenderDisplayPreference(token);
       void loadMail(token);
       return;
     }
@@ -1794,17 +1817,18 @@ export default function App() {
                   ))}
                 </View> : null}
                 <View accessibilityLabel="메일 목록" style={[styles.mailList, styles.mailListCompact]}>
-                  {visibleMailItems.map((item) => (
-                    <Pressable
+                  {visibleMailItems.map((item) => {
+                    const sender = formatMailSender(item.senderDisplayName, item.senderEmail, mailSenderDisplayMode);
+                    return <Pressable
                       key={item.mailId}
                       accessibilityRole="button"
-                      accessibilityLabel={`${item.senderEmail} ${item.subject} 메일 열기`}
+                      accessibilityLabel={`${sender} ${item.subject} 메일 열기`}
                       onPress={() => { void openMail(item.mailId); }}
                       style={[styles.mailRow, styles.mailRowCompact, !item.isRead ? styles.mailRowUnread : null, selectedMailId === item.mailId ? styles.mailRowSelected : null]}
                     >
                       <View style={styles.mailRowMain}>
                         <View style={styles.mailRowTop}>
-                          <Text style={[styles.mailSender, !item.isRead ? styles.mailUnreadText : null]} numberOfLines={1}>{item.senderEmail}</Text>
+                          <Text style={[styles.mailSender, !item.isRead ? styles.mailUnreadText : null]} numberOfLines={1}>{sender}</Text>
                           {item.isStarred ? <Text accessibilityLabel="중요 메일" style={styles.mailStar}>★</Text> : null}
                           <Text style={styles.mailDate}>{formatStamp(item.receivedAt || item.sentAt)}</Text>
                         </View>
@@ -1813,15 +1837,15 @@ export default function App() {
                           <Text style={styles.mailPreview} numberOfLines={1}>{item.preview || item.snippet || "본문 미리보기 없음"}</Text>
                         </View>
                       </View>
-                    </Pressable>
-                  ))}
+                    </Pressable>;
+                  })}
                 </View>
                 {visibleMailItems.length === 0 ? <Text style={styles.emptyState}>조건에 맞는 메일이 없습니다.</Text> : null}
                 {selectedMailDetail && mailDetailExpanded ? (
                   <View style={styles.mailDetailCard}>
                     <View style={styles.mailDetailHeader}><Text style={styles.mailDetailKicker}>메일 상세</Text><Pressable accessibilityRole="button" accessibilityLabel="메일 상세 닫기" onPress={() => setMailDetailExpanded(false)}><Text style={styles.mailDetailAction}>닫기</Text></Pressable>{mailboxTab === "inbox" || mailboxTab === "starred" ? <Text accessibilityRole="button" accessibilityLabel="중요 표시 전환" onPress={() => { void toggleMailStarState(selectedMailDetail.mailId); }} style={styles.mailDetailAction}>★ 중요</Text> : null}</View>
                     <Text style={styles.mailDetailTitle}>{selectedMailDetail.subject}</Text>
-                    <Text style={styles.mailDetailMeta}>{selectedMailDetail.senderEmail} · {formatStamp(selectedMailDetail.sentAt || selectedMailDetail.createdAt)}</Text>
+                    <Text style={styles.mailDetailMeta}>{formatMailSender(selectedMailDetail.senderDisplayName, selectedMailDetail.senderEmail, mailSenderDisplayMode)} · {formatStamp(selectedMailDetail.sentAt || selectedMailDetail.createdAt)}</Text>
                     <Text style={styles.mailDetailBody}>{selectedMailDetail.bodyText}</Text>
                     <Text style={styles.mailDetailMeta}>수신: {selectedMailDetail.recipients.map((item) => item.recipientEmail).join(", ") || "-"}</Text>
                   </View>
