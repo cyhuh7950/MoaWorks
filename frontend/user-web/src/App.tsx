@@ -962,14 +962,14 @@ function MailBasicSettingsPanel({ value, saved, loading, error, conflict, transl
     <nav aria-label="메일 설정 탭">{MAIL_SETTINGS_TABS.map((tab, index) => <button key={tab} type="button" aria-current={index === 0 ? "page" : undefined} onClick={index === 1 ? onOpenSignature : index === 2 ? onOpenMailbox : index === 3 ? onOpenSpam : index === 4 ? onOpenClassification : index === 5 ? onOpenForwarding : index === 6 ? onOpenOutOfOffice : index === 7 ? openExternalMailTab : index === 8 ? openRecentMailTab : undefined}>{tab}</button>)}</nav>
     {error ? <CompactWarning item={{ id: "mail-basic-preferences", source: "mail-settings", tone: "warning", title: conflict ? "다른 위치에서 설정이 변경되었습니다." : "설정을 처리하지 못했습니다.", message: error, action: conflict ? { label: "서버 최신값 다시 불러오기", onAction: onReload } : undefined }} /> : null}
     <div className="user-mail-settings__body">
-      <fieldset><legend>메일 읽기 설정</legend>
+      <fieldset disabled={loading}><legend>메일 읽기 설정</legend>
         <label><span>보낸 사람 표시</span><select value={value.senderDisplayMode} onChange={(event) => onChange({ senderDisplayMode: event.target.value as MailBasicPreferences["senderDisplayMode"] })}><option value="name">이름</option><option value="id">ID(이메일 @ 앞)</option><option value="name_email">이름 + 이메일</option></select></label>
         {toggle("blockRemoteImages", "원격 이미지 차단", "외부 이미지 자동 로드를 차단합니다.")}
         {toggle("disableRiskyTags", "위험 태그 비활성화", "향후 HTML 표시에서도 위험 요소를 차단합니다.")}
         {toggle("showRouteCountry", "전달 경로 국가 표시")}
         {toggle("includeSpamTrashInSearch", "검색에 스팸·휴지통 포함")}
       </fieldset>
-      <fieldset><legend>메일 쓰기 설정</legend>
+      <fieldset disabled={loading}><legend>메일 쓰기 설정</legend>
         <label><span>수신자 입력 방식</span><select value={value.recipientInputMode} onChange={(event) => onChange({ recipientInputMode: event.target.value as MailBasicPreferences["recipientInputMode"] })}><option value="autocomplete">자동완성</option><option value="name_only">이름만 입력</option><option value="search">검색 선택</option></select></label>
         {toggle("confirmBeforeSend", "발송 전 확인")}{toggle("saveSentCopy", "보낸메일 저장", "끄면 발송 원문은 유지하고 보낸편지함에서만 숨깁니다.")}{toggle("readReceiptEnabled", "수신확인 요청")}
         <label><span>편집 방식</span><select value={value.editorMode} onChange={(event) => onChange({ editorMode: event.target.value as MailBasicPreferences["editorMode"] })}><option value="html">HTML</option><option value="plain">일반 텍스트</option></select></label>

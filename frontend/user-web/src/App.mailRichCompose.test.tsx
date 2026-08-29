@@ -30,7 +30,7 @@ vi.mock("./api", async (importOriginal) => {
     fetchMailDetail: async (_token: string, mailId: string) => mountedDetailLoader ? mountedDetailLoader(mailId) : mountedDetail,
     markMailRead: async () => ({ mailId: "mail-read", status: "read", isRead: true }),
     fetchMailDeliveryStatus: async () => ({ provider: { enabled: true, lastTestStatus: "success" } }),
-    fetchMailBasicPreferences: async () => mountedBasicPreferences,
+    fetchMailBasicPreferences: async () => mountedBasicPreferencesLoader ? mountedBasicPreferencesLoader() : mountedBasicPreferences,
     fetchMailAttachmentPreview: async () => mountedPreviewLoader ? mountedPreviewLoader() : Promise.reject(new Error("preview unavailable")),
     fetchTranslationStatus: async () => ({ available: true, enabled: true, provider: "fixture" }),
     requestTranslation: async (payload: { texts: Array<{ text: string; sourceLocale: string; targetLocale: string }> }) => mountedTranslationLoader
@@ -83,6 +83,7 @@ function createMountedBasicPreferences(senderDisplayMode: "name" | "name_email" 
 }
 
 let mountedBasicPreferences = createMountedBasicPreferences();
+let mountedBasicPreferencesLoader: (() => Promise<ReturnType<typeof createMountedBasicPreferences>>) | null = null;
 
 function mountedJson(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
@@ -130,6 +131,7 @@ afterEach(() => {
   mountedSendCalls = 0;
   mountedDraftFailure = false;
   mountedBasicPreferences = createMountedBasicPreferences();
+  mountedBasicPreferencesLoader = null;
   mountedLists.inbox = { mails: [{ mailId: "mail-source", accountId: "account-1", senderEmail: "source@example.test", senderDisplayName: "Source", subject: "CID 전달 원문", previewText: "본문 이미지", status: "sent", isRead: true, isStarred: false, sentAt: "2026-08-26T00:00:00Z", receivedAt: "2026-08-26T00:00:00Z", scheduledAt: null, retentionExpiresAt: null, attachmentCount: 2, category: "primary" }], total: 1, limit: 50, offset: 0, hasMore: false };
   mountedLists.draft = { mails: [], total: 0, limit: 50, offset: 0, hasMore: false };
   mountedLists.scheduled = { mails: [], total: 0, limit: 50, offset: 0, hasMore: false };
@@ -252,6 +254,36 @@ describe("메일 rich compose 재작업 계약", () => {
     expect((await screen.findByLabelText("보낸 사람 표시") as HTMLSelectElement).value).toBe("id");
     fireEvent.click(screen.getByRole("button", { name: /^닫기$/ }));
     expect((await screen.findByRole("button", { name: /CID 전달 원문/ })).textContent).toContain("source");
+  });
+
+  it("메일 환경설정은 최신값을 불러오는 동안 sender mode 조작을 막고 응답 뒤 변경을 보존한다", async () => {
+    let resolvePreferences!: (value: ReturnType<typeof createMountedBasicPreferences>) => void;
+    let delayPreferenceFetch = false;
+    mountedBasicPreferencesLoader = () => {
+      if (!delayPreferenceFetch) return Promise.resolve(mountedBasicPreferences);
+      return new Promise((resolve) => { resolvePreferences = resolve; });
+    };
+    installMountedMailFetch();
+    localStorage.setItem("moaworks.userToken", "test-token");
+    vi.resetModules();
+    const { default: MountedApp } = await import("./App");
+    render(<MountedApp />);
+
+    await screen.findByRole("button", { name: /CID 전달 원문/ });
+    fireEvent.click(screen.getByRole("button", { name: "환경설정" }));
+    await screen.findByLabelText("보낸 사람 표시");
+    fireEvent.click(screen.getByRole("button", { name: /^닫기$/ }));
+
+    delayPreferenceFetch = true;
+    fireEvent.click(screen.getByRole("button", { name: "환경설정" }));
+    const loadingSelect = await screen.findByLabelText("보낸 사람 표시") as HTMLSelectElement;
+    expect(loadingSelect.matches(":disabled")).toBe(true);
+
+    resolvePreferences(createMountedBasicPreferences("name"));
+    await waitFor(() => expect(loadingSelect.matches(":disabled")).toBe(false));
+    fireEvent.change(loadingSelect, { target: { value: "id" } });
+    expect(loadingSelect.value).toBe("id");
+    expect((screen.getByRole("button", { name: /^저장$/ }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("inbox 목록은 자동 상세 응답이 지연되어도 즉시 렌더되고 loading을 해제한다", async () => {
