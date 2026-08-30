@@ -44,4 +44,5 @@ __pycache__/
 
 .idea/
 .vscode/
+.claude/
 .worktrees/
