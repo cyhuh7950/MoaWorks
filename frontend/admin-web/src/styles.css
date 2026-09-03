@@ -544,19 +544,35 @@ h1 {
 }
 
 button {
-  border: 0;
-  border-radius: 999px;
-  padding: 8px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  padding: 0 12px;
   min-height: 34px;
-  background: #145f50;
-  color: white;
+  background: #fff;
+  color: #1e293b;
   cursor: pointer;
   font-size: 12px;
 }
 
 button.secondary {
-  background: #d7e8e0;
-  color: #15332d;
+  border-color: #cbd5e1;
+  background: #fff;
+  color: #1e293b;
+}
+
+button:hover:not(:disabled) {
+  border-color: #94a3b8;
+  background: #f8fafc;
+}
+
+button:focus-visible {
+  outline: 2px solid #94a3b8;
+  outline-offset: 2px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .badge {
@@ -1576,9 +1592,9 @@ button.secondary {
 }
 
 .danger-action {
-  background: #9f1239;
-  border-color: #9f1239;
-  color: #ffffff;
+  background: #fff;
+  border-color: #fecaca;
+  color: #b42318;
 }
 
 .danger-action:disabled {
