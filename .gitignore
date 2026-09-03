@@ -46,3 +46,8 @@ __pycache__/
 .vscode/
 .claude/
 .worktrees/
+
+# Keep only user/admin/install manuals public; retain other local documents locally.
+/docs/*
+!/docs/manuals/
+!/docs/manuals/**
