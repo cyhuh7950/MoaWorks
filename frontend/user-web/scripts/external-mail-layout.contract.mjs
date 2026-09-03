@@ -7,6 +7,7 @@ const cssSource = await readFile(new URL("../src/global.css", import.meta.url), 
 
 test("외부메일 패널은 가변 빈 행 없이 콘텐츠를 위에서부터 배치한다", () => {
   assert.match(cssSource, /\.user-mail-external\s*\{[^}]*grid-template-rows:\s*auto auto auto auto/s);
+  assert.match(cssSource, /\.user-mail-external\s*\{[^}]*align-content:\s*start/s);
 });
 
 test("외부메일 팝업 옵션은 전용 영역에서 정렬한다", () => {
