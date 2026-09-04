@@ -121,6 +121,24 @@ export type MailProvider = {
   updatedAt: string;
 };
 
+export type MailSubmissionCredential = {
+  userId: string;
+  userName: string;
+  userEmail: string;
+  username: string;
+  active: boolean;
+  issuedAt: string | null;
+  revokedAt: string | null;
+};
+
+export type MailSubmissionCredentialIssue = {
+  username: string;
+  password: string;
+  smtpHost: string;
+  smtpPort: number;
+  secure: boolean;
+};
+
 export type DirectoryOverview = {
   company: {
     id: string;
@@ -997,6 +1015,22 @@ export async function fetchMailDeliveryQueue(token: string): Promise<MailDeliver
 
 export async function fetchMailOperations(token: string): Promise<MailOperationsOverview> {
   return request<MailOperationsOverview>("/admin/mail-operations", { headers: authHeaders(token) });
+}
+
+export async function fetchMailSubmissionCredentials(token: string): Promise<MailSubmissionCredential[]> {
+  return request<MailSubmissionCredential[]>("/admin/mail-operations/submission-credentials", { headers: authHeaders(token) });
+}
+
+export async function issueMailSubmissionCredential(token: string, userId: string): Promise<MailSubmissionCredentialIssue> {
+  return request<MailSubmissionCredentialIssue>(`/admin/mail-operations/submission-credentials/${userId}/issue`, {
+    method: "POST", headers: authHeaders(token),
+  });
+}
+
+export async function revokeMailSubmissionCredential(token: string, userId: string): Promise<MailSubmissionCredential> {
+  return request<MailSubmissionCredential>(`/admin/mail-operations/submission-credentials/${userId}/revoke`, {
+    method: "POST", headers: authHeaders(token),
+  });
 }
 
 export async function updateMailOperationsDomain(token: string, payload: {

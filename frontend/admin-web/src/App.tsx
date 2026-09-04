@@ -33,6 +33,9 @@ import {
   fetchAdminMessengerRooms,
   fetchMailDeliveryStatus,
   fetchMailOperations,
+  fetchMailSubmissionCredentials,
+  issueMailSubmissionCredential,
+  revokeMailSubmissionCredential,
   generateSelfHostedDkim,
   fetchMonitoringEvents,
   fetchMonitoringAlerts,
@@ -74,6 +77,8 @@ import {
   type MailDeliveryStatusResponse,
   type MailOperationsProvider,
   type MailOperationsOverview,
+  type MailSubmissionCredential,
+  type MailSubmissionCredentialIssue,
   type MailSendResponse,
   type Role,
   type DomainVerifyResponse,
@@ -753,6 +758,20 @@ function formatMailProviderDkimStatus(provider: MailOperationsProvider): string 
     return provider.dkimDomain && provider.dkimSelector ? `${provider.dkimSelector} OCI 관리` : "미설정";
   }
   return provider.dkimPrivateKeyConfigured ? `${provider.dkimSelector ?? "-"} 설정` : "미설정";
+}
+
+function SmtpCredentialPanel({ token, users }: { token: string | null; users: UserView[] }) {
+  const [credentials, setCredentials] = useState<MailSubmissionCredential[]>([]);
+  const [issued, setIssued] = useState<MailSubmissionCredentialIssue | null>(null);
+  const [busy, setBusy] = useState(false);
+  const refresh = async () => { if (token) setCredentials(await fetchMailSubmissionCredentials(token)); };
+  useEffect(() => { void refresh(); }, [token]);
+  const issue = async (userId: string) => { if (!token) return; setBusy(true); try { setIssued(await issueMailSubmissionCredential(token, userId)); await refresh(); } finally { setBusy(false); } };
+  const revoke = async (userId: string) => { if (!token) return; setBusy(true); try { await revokeMailSubmissionCredential(token, userId); await refresh(); } finally { setBusy(false); } };
+  return <div className="ops-list-panel"><div className="ops-list-head"><strong>사용자별 SMTP 암호</strong><span className="muted">암호는 발급 직후 한 번만 표시됩니다.</span></div>
+    {issued ? <div className="stack-list"><strong>발급된 SMTP 접속정보</strong><p>호스트: {issued.smtpHost} · 포트: {issued.smtpPort} · STARTTLS</p><p>아이디: {issued.username}</p><p>암호: <code>{issued.password}</code></p><button type="button" className="secondary" onClick={() => setIssued(null)}>암호 표시 닫기</button></div> : null}
+    <div className="table-wrap"><table className="data-table"><thead><tr><th>사용자</th><th>SMTP 아이디</th><th>상태</th><th>관리</th></tr></thead><tbody>{users.map((user) => { const credential = credentials.find((item) => item.userId === user.userId); return <tr key={user.userId}><td>{user.userName} ({user.userEmail})</td><td>{credential?.username ?? user.userEmail}</td><td>{credential?.active ? "활성" : "미발급/폐기"}</td><td><div className="actions compact-actions"><button type="button" disabled={busy || user.status !== "active"} onClick={() => void issue(user.userId)}>{credential?.active ? "재발급" : "발급"}</button>{credential?.active ? <button type="button" className="secondary" disabled={busy} onClick={() => void revoke(user.userId)}>폐기</button> : null}</div></td></tr>; })}</tbody></table></div>
+  </div>;
 }
 
 export default function App() {
@@ -3015,8 +3034,8 @@ export default function App() {
                       <option value="yes">예</option>
                     </select>
                   </label>
-                </div>
-                <div className="actions compact-actions">
+              </div>
+              <div className="actions compact-actions">
                   <button type="submit" disabled={loading}>
                     {userForm.userId ? copy.editUser : copy.createUser}
                   </button>
@@ -3231,7 +3250,8 @@ export default function App() {
                      {` · 초기화 시각: ${contentDate(mailOperations?.dailySendUsage?.resetAt)}`}
                    </small>
                  </article>
-               </div>
+              </div>
+              <SmtpCredentialPanel token={token} users={directory?.users ?? []} />
               <div className="actions compact-actions">
                 <button type="button" disabled={loading || mailOperations?.domain?.activeOutboundProvider === "self_hosted"} onClick={() => void handleMailProviderSwitch("self_hosted")}>자체 엔진으로 전환</button>
                 <button type="button" disabled={loading || mailOperations?.domain?.activeOutboundProvider === "oci_email_delivery"} onClick={() => void handleMailProviderSwitch("oci_email_delivery")}>OCI로 전환</button>
