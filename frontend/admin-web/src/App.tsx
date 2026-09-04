@@ -116,6 +116,7 @@ import {
   queueOperationalRestoreDrill,
   resolveMonitoringAlert,
 } from "./api";
+import { getCredentialIssueCandidates, getCredentialRows } from "./smtpCredentialPanel";
 import { resolveLocale, supportedLocales, supportedTimezones, t, type AppLocale } from "./i18n";
 
 type SetupForm = {
@@ -763,14 +764,20 @@ function formatMailProviderDkimStatus(provider: MailOperationsProvider): string 
 function SmtpCredentialPanel({ token, users }: { token: string | null; users: DirectoryOverview["users"] }) {
   const [credentials, setCredentials] = useState<MailSubmissionCredential[]>([]);
   const [issued, setIssued] = useState<MailSubmissionCredentialIssue | null>(null);
+  const [issueDialogOpen, setIssueDialogOpen] = useState(false);
+  const [selectedUserId, setSelectedUserId] = useState("");
   const [busy, setBusy] = useState(false);
   const refresh = async () => { if (token) setCredentials(await fetchMailSubmissionCredentials(token)); };
   useEffect(() => { void refresh(); }, [token]);
   const issue = async (userId: string) => { if (!token) return; setBusy(true); try { setIssued(await issueMailSubmissionCredential(token, userId)); await refresh(); } finally { setBusy(false); } };
   const revoke = async (userId: string) => { if (!token) return; setBusy(true); try { await revokeMailSubmissionCredential(token, userId); await refresh(); } finally { setBusy(false); } };
-  return <div className="ops-list-panel"><div className="ops-list-head"><strong>사용자별 SMTP 암호</strong><span className="muted">암호는 발급 직후 한 번만 표시됩니다.</span></div>
+  const rows = getCredentialRows(users, credentials);
+  const issueCandidates = getCredentialIssueCandidates(users, credentials);
+  return <div className="ops-list-panel"><div className="ops-list-head"><strong>사용자별 SMTP 암호</strong><span className="muted">발급된 사용자만 표시됩니다. 암호는 발급 직후 한 번만 표시됩니다.</span><button type="button" disabled={busy || issueCandidates.length === 0} onClick={() => { setSelectedUserId(issueCandidates[0]?.userId ?? ""); setIssueDialogOpen(true); }}>SMTP 암호 발급</button></div>
     {issued ? <div className="stack-list"><strong>발급된 SMTP 접속정보</strong><p>호스트: {issued.smtpHost} · 포트: {issued.smtpPort} · STARTTLS</p><p>아이디: {issued.username}</p><p>암호: <code>{issued.password}</code></p><button type="button" className="secondary" onClick={() => setIssued(null)}>암호 표시 닫기</button></div> : null}
-    <div className="table-wrap"><table className="data-table"><thead><tr><th>사용자</th><th>SMTP 아이디</th><th>상태</th><th>관리</th></tr></thead><tbody>{users.map((user) => { const credential = credentials.find((item) => item.userId === user.userId); return <tr key={user.userId}><td>{user.userName} ({user.userEmail})</td><td>{credential?.username ?? user.userEmail}</td><td>{credential?.active ? "활성" : "미발급/폐기"}</td><td><div className="actions compact-actions"><button type="button" disabled={busy || user.status !== "active"} onClick={() => void issue(user.userId)}>{credential?.active ? "재발급" : "발급"}</button>{credential?.active ? <button type="button" className="secondary" disabled={busy} onClick={() => void revoke(user.userId)}>폐기</button> : null}</div></td></tr>; })}</tbody></table></div>
+    <div className="table-wrap"><table className="data-table"><thead><tr><th>사용자</th><th>SMTP 아이디</th><th>상태</th><th>관리</th></tr></thead><tbody>{rows.map((credential) => <tr key={credential.userId}><td>{credential.userName} ({credential.userEmail})</td><td>{credential.username}</td><td>활성</td><td><div className="actions compact-actions"><button type="button" disabled={busy} onClick={() => void issue(credential.userId)}>재발급</button><button type="button" className="secondary" disabled={busy} onClick={() => void revoke(credential.userId)}>폐기</button></div></td></tr>)}</tbody></table></div>
+    {rows.length === 0 ? <p className="muted">발급된 SMTP 암호가 없습니다.</p> : null}
+    {issueDialogOpen ? <div className="modal-backdrop" role="presentation"><div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="smtp-issue-title"><div className="modal-header"><h3 id="smtp-issue-title">SMTP 암호 발급</h3><button type="button" className="secondary" onClick={() => setIssueDialogOpen(false)}>닫기</button></div><p className="muted">발급할 활성 사용자를 선택하세요.</p><label>사용자<select value={selectedUserId} onChange={(event) => setSelectedUserId(event.target.value)}>{issueCandidates.map((user) => <option key={user.userId} value={user.userId}>{user.userName} ({user.userEmail})</option>)}</select></label><div className="actions"><button type="button" disabled={busy || !selectedUserId} onClick={async () => { await issue(selectedUserId); setIssueDialogOpen(false); }}>발급</button><button type="button" className="secondary" onClick={() => setIssueDialogOpen(false)}>취소</button></div></div></div> : null}
   </div>;
 }
 
