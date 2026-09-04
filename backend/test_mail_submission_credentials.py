@@ -9,6 +9,12 @@ from app.schemas.mail_submission import (
     MailSubmissionCredentialIssueResponse,
     MailSubmissionCredentialView,
 )
+from app.services.mail_submission_credentials import (
+    build_submission_username,
+    generate_submission_password,
+    hash_submission_password,
+    verify_submission_password,
+)
 
 
 MIGRATION = Path(__file__).parent / "migrations" / "069_mail_submission_credentials.sql"
@@ -39,3 +45,17 @@ def test_credential_views_never_expose_password_hash():
 def test_issue_response_password_is_secret_string():
     field = MailSubmissionCredentialIssueResponse.model_fields["password"]
     assert "SecretStr" in str(field.annotation)
+
+
+def test_submission_password_is_generated_and_only_hash_is_persistable():
+    password = generate_submission_password()
+    password_hash = hash_submission_password(password)
+
+    assert password != password_hash
+    assert password_hash.startswith("{SHA512-CRYPT}$6$")
+    assert verify_submission_password(password, password_hash)
+    assert not verify_submission_password("wrong-password", password_hash)
+
+
+def test_submission_username_is_derived_from_existing_user_identity():
+    assert build_submission_username("User.Name@Example.COM") == "User.Name@example.com"
