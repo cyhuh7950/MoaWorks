@@ -9,9 +9,9 @@ const users = [
 ];
 
 const credentials = [
-  { userId: "active-issued", userName: "발급 사용자", userEmail: "issued@example.com", username: "issued@example.com", active: true },
-  { userId: "deleted", userName: "삭제 사용자", userEmail: "deleted@example.com", username: "deleted@example.com", active: true },
-  { userId: "revoked", userName: "폐기 사용자", userEmail: "revoked@example.com", username: "revoked@example.com", active: false },
+  { userId: "active-issued", userName: "발급 사용자", userEmail: "issued@example.com", username: "issued@example.com", active: true, issuedAt: null, revokedAt: null },
+  { userId: "deleted", userName: "삭제 사용자", userEmail: "deleted@example.com", username: "deleted@example.com", active: true, issuedAt: null, revokedAt: null },
+  { userId: "revoked", userName: "폐기 사용자", userEmail: "revoked@example.com", username: "revoked@example.com", active: false, issuedAt: null, revokedAt: null },
 ];
 
 describe("SMTP credential panel selectors", () => {
