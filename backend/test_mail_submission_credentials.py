@@ -42,9 +42,16 @@ def test_credential_views_never_expose_password_hash():
     }
 
 
-def test_issue_response_password_is_secret_string():
-    field = MailSubmissionCredentialIssueResponse.model_fields["password"]
-    assert "SecretStr" in str(field.annotation)
+def test_issue_response_keeps_one_time_password_for_json_delivery():
+    response = MailSubmissionCredentialIssueResponse(
+        username="user@example.com",
+        password="one-time-password",
+        smtpHost="mx.dev.moaworks.sinsan.kr",
+        smtpPort=587,
+        secure=True,
+    )
+
+    assert response.model_dump(mode="json")["password"] == "one-time-password"
 
 
 def test_submission_password_is_generated_and_only_hash_is_persistable():
