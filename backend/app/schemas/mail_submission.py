@@ -5,6 +5,8 @@ from pydantic import BaseModel, SecretStr
 
 class MailSubmissionCredentialView(BaseModel):
     userId: str
+    userName: str
+    userEmail: str
     username: str
     active: bool
     issuedAt: str | None = None

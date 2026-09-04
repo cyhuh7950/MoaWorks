@@ -80,6 +80,9 @@ class AdminInterfaceIntegrationContractTest(unittest.TestCase):
             ("/admin/content/help-policies", "GET"),
             ("/admin/mail-delivery/status", "GET"),
             ("/admin/mail-delivery/provider", "PATCH"),
+            ("/admin/mail-operations/submission-credentials", "GET"),
+            ("/admin/mail-operations/submission-credentials/{user_id}/issue", "POST"),
+            ("/admin/mail-operations/submission-credentials/{user_id}/revoke", "POST"),
         }
         self.assertTrue(expected.issubset(registered), expected - registered)
 
