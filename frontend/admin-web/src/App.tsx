@@ -760,7 +760,7 @@ function formatMailProviderDkimStatus(provider: MailOperationsProvider): string 
   return provider.dkimPrivateKeyConfigured ? `${provider.dkimSelector ?? "-"} 설정` : "미설정";
 }
 
-function SmtpCredentialPanel({ token, users }: { token: string | null; users: UserView[] }) {
+function SmtpCredentialPanel({ token, users }: { token: string | null; users: DirectoryOverview["users"] }) {
   const [credentials, setCredentials] = useState<MailSubmissionCredential[]>([]);
   const [issued, setIssued] = useState<MailSubmissionCredentialIssue | null>(null);
   const [busy, setBusy] = useState(false);
@@ -3251,7 +3251,7 @@ export default function App() {
                    </small>
                  </article>
               </div>
-              <SmtpCredentialPanel token={token} users={directory?.users ?? []} />
+              <SmtpCredentialPanel token={token} users={overview?.users ?? []} />
               <div className="actions compact-actions">
                 <button type="button" disabled={loading || mailOperations?.domain?.activeOutboundProvider === "self_hosted"} onClick={() => void handleMailProviderSwitch("self_hosted")}>자체 엔진으로 전환</button>
                 <button type="button" disabled={loading || mailOperations?.domain?.activeOutboundProvider === "oci_email_delivery"} onClick={() => void handleMailProviderSwitch("oci_email_delivery")}>OCI로 전환</button>
