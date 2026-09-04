@@ -87,6 +87,7 @@ services:
       SMTP_SUBMISSION_PASSWORD_HASH: ${SMTP_SUBMISSION_PASSWORD_HASH:-}
     ports:
       - "25:25"
+      - "587:587"
     volumes:
       - mail-spool:/var/spool/postfix
       - ${SMTP_TLS_LIVE_DIR:-/etc/ssl/certs}:/run/moaworks-mail-tls/live/${SMTP_TLS_CERT_NAME:-disabled}:ro

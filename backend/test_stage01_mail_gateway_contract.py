@@ -164,6 +164,15 @@ class MailGatewayContractTest(unittest.TestCase):
         self.assertIn("image: clamav/clamav-debian:1.4.3", compose)
         self.assertIn('"127.0.0.1:${BACKEND_PORT:-8510}:8000"', compose)
 
+    def test_oracle_compose_exposes_authenticated_submission_port_separately(self) -> None:
+        compose = (ROOT / "deploy" / "docker-compose.oracle.yml").read_text(encoding="utf-8")
+
+        self.assertIn('"25:25"', compose)
+        self.assertIn('"587:587"', compose)
+        self.assertIn("SMTP_AUTH_ENABLED: ${SMTP_AUTH_ENABLED:-false}", compose)
+        self.assertIn("SMTP_SUBMISSION_USERNAME: ${SMTP_SUBMISSION_USERNAME:-}", compose)
+        self.assertIn("SMTP_SUBMISSION_PASSWORD_HASH: ${SMTP_SUBMISSION_PASSWORD_HASH:-}", compose)
+
     def test_gateway_rejects_unknown_recipient_and_delivers_only_after_internal_ingest(self) -> None:
         main_cf = (ROOT / "deploy" / "mail-gateway" / "main.cf").read_text(encoding="utf-8")
         master_cf = (ROOT / "deploy" / "mail-gateway" / "master.cf").read_text(encoding="utf-8")
@@ -187,6 +196,27 @@ class MailGatewayContractTest(unittest.TestCase):
         self.assertIn("${SMTPD_TLS_SECURITY_LEVEL} ${SMTPD_TLS_CERT_FILE} ${SMTPD_TLS_KEY_FILE}", entrypoint)
         self.assertIn("chown root:postfix", entrypoint)
         self.assertIn("chmod 0640", entrypoint)
+
+    def test_gateway_separates_port_25_inbound_policy_from_port_587_submission_policy(self) -> None:
+        main_cf = (ROOT / "deploy" / "mail-gateway" / "main.cf").read_text(encoding="utf-8")
+        master_cf = (ROOT / "deploy" / "mail-gateway" / "master.cf").read_text(encoding="utf-8")
+
+        inbound_restrictions = next(
+            line for line in main_cf.splitlines() if line.startswith("smtpd_recipient_restrictions =")
+        )
+        self.assertNotIn("permit_sasl_authenticated", inbound_restrictions)
+        inbound_relay_restrictions = next(
+            line for line in main_cf.splitlines() if line.startswith("smtpd_relay_restrictions =")
+        )
+        self.assertEqual("smtpd_relay_restrictions = reject_unauth_destination", inbound_relay_restrictions)
+        self.assertIn("submission inet n       -       n       -       -       smtpd", master_cf)
+        self.assertIn("-o smtpd_tls_security_level=encrypt", master_cf)
+        self.assertIn("-o smtpd_tls_auth_only=yes", master_cf)
+        self.assertIn("-o smtpd_sasl_auth_enable=yes", master_cf)
+        self.assertIn("-o smtpd_recipient_restrictions=permit_sasl_authenticated,reject_unauth_destination", master_cf)
+        self.assertIn("-o smtpd_relay_restrictions=permit_sasl_authenticated,reject", master_cf)
+        self.assertIn("-o smtpd_client_connection_rate_limit=20", master_cf)
+        self.assertIn("-o smtpd_client_message_rate_limit=100", master_cf)
 
     def test_oracle_gateway_can_relay_only_explicit_test_domains(self) -> None:
         compose = (ROOT / "deploy" / "docker-compose.oracle.yml").read_text(encoding="utf-8")
@@ -321,7 +351,7 @@ class MailGatewayContractTest(unittest.TestCase):
         self.assertIn("SMTP AUTH requires certificate TLS mode", result.stderr)
         self.assertNotIn("POSTGRES_HOST is required", result.stderr)
 
-    def test_rendered_gateway_allows_authenticated_relay_only_after_tls(self) -> None:
+    def test_rendered_gateway_keeps_authenticated_relay_on_submission_only(self) -> None:
         rendered = self._render_main_cf(
             MAIL_HOSTNAME="mail.dev.moaworks.sinsan.kr",
             SMTP_RELAY_DOMAINS="",
@@ -333,13 +363,21 @@ class MailGatewayContractTest(unittest.TestCase):
 
         self.assertIn("smtpd_sasl_type = dovecot", rendered)
         self.assertIn("smtpd_sasl_path = private/auth", rendered)
-        self.assertIn("smtpd_sasl_auth_enable = yes", rendered)
+        self.assertIn("smtpd_sasl_auth_enable = no", rendered)
         self.assertIn("smtpd_tls_auth_only = yes", rendered)
         restrictions = next(
             line for line in rendered.splitlines() if line.startswith("smtpd_recipient_restrictions =")
         )
-        self.assertLess(restrictions.index("permit_sasl_authenticated"), restrictions.index("reject_unlisted_recipient"))
+        self.assertNotIn("permit_sasl_authenticated", restrictions)
+        self.assertIn("reject_unlisted_recipient", restrictions)
         self.assertIn("reject_unauth_destination", restrictions)
+        relay_restrictions = next(
+            line for line in rendered.splitlines() if line.startswith("smtpd_relay_restrictions =")
+        )
+        self.assertEqual("smtpd_relay_restrictions = reject_unauth_destination", relay_restrictions)
+
+        master_cf = (ROOT / "deploy" / "mail-gateway" / "master.cf").read_text(encoding="utf-8")
+        self.assertIn("-o smtpd_recipient_restrictions=permit_sasl_authenticated,reject_unauth_destination", master_cf)
 
     def test_wsl_gateway_packages_and_configures_dovecot_auth_socket(self) -> None:
         dockerfile = (ROOT / "deploy" / "mail-gateway" / "Dockerfile").read_text(encoding="utf-8")
@@ -354,6 +392,7 @@ class MailGatewayContractTest(unittest.TestCase):
         self.assertIn("dovecot -c /etc/dovecot/dovecot.conf", entrypoint)
         self.assertIn("SMTP_AUTH_ENABLED: ${SMTP_AUTH_ENABLED:-false}", compose)
         self.assertIn('"25:25"', compose)
+        self.assertIn('"587:587"', compose)
         self.assertNotIn('"2525:25"', compose)
 
     def test_certificate_mode_rejects_missing_invalid_hostname_and_key_mismatch(self) -> None:
