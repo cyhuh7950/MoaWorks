@@ -325,9 +325,9 @@ class OrgImportService:
                         cursor.execute(
                             """
                             INSERT INTO mail_accounts (
-                                id, user_id, email, quota_mb, status, provider_config_id, created_at, updated_at
+                                id, user_id, email, quota_mb, status, created_at, updated_at
                             )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
                             """,
                             (
                                 mail_account_id,
@@ -335,7 +335,6 @@ class OrgImportService:
                                 email,
                                 2048,
                                 "active" if user["status"] == "active" else "inactive",
-                                analysis["provider_id"],
                                 now,
                                 now,
                             ),
@@ -488,7 +487,6 @@ class OrgImportService:
         preserve_system_codes: bool = False,
     ) -> dict:
         company = self._fetch_company_row(cursor)
-        provider = self._fetch_provider_row(cursor)
         cursor.execute(
             "SELECT id, company_id, system_department_code, department_code, name, parent_id, status, sort_order, created_at FROM departments ORDER BY sort_order ASC, created_at ASC"
         )
@@ -690,7 +688,6 @@ class OrgImportService:
         return {
             "company_id": company["id"],
             "company_domain": company["domain"],
-            "provider_id": provider["id"],
             "current_active_departments": [item for item in existing_departments if item["status"] == "active"],
             "departments": normalized_departments,
             "users": normalized_users,
@@ -745,21 +742,6 @@ class OrgImportService:
         row = cursor.fetchone()
         if row is None:
             raise ValueError("초기 설정이 완료되지 않았습니다.")
-        return row
-
-    def _fetch_provider_row(self, cursor) -> dict:
-        cursor.execute(
-            """
-            SELECT id, company_id, provider_type, relay_host, relay_port, username,
-                   encrypted_password, active, last_test_status, last_test_message, updated_at
-            FROM mail_provider_configs
-            ORDER BY updated_at DESC
-            LIMIT 1
-            """
-        )
-        row = cursor.fetchone()
-        if row is None:
-            raise ValueError("메일 설정이 존재하지 않습니다.")
         return row
 
     def _fetch_batch_row(self, cursor, batch_id: str, *, for_update: bool = False) -> dict:

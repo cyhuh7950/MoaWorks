@@ -60,8 +60,8 @@ def _raise_admin_active_limit(exc: DirectoryAdminActiveLimitError) -> NoReturn:
 
 
 @router.get("/directory", response_model=DirectoryOverviewResponse)
-def get_directory(_: AuthUserSummary = Depends(require_admin)) -> DirectoryOverviewResponse:
-    return DirectoryStore().get_overview()
+def get_directory(actor: AuthUserSummary = Depends(require_admin)) -> DirectoryOverviewResponse:
+    return DirectoryStore().get_overview(company_id=actor.companyId)
 
 
 @router.post("/departments", response_model=DepartmentRecord)
@@ -193,9 +193,12 @@ def verify_domain(
 @router.post("/relay/test", response_model=RelayTestResponse)
 def test_relay(
     payload: RelayTestRequest,
-    _: AuthUserSummary = Depends(require_admin),
+    actor: AuthUserSummary = Depends(require_admin),
 ) -> RelayTestResponse:
-    return RelayService(DirectoryStore()).test(payload.providerConfigId, payload.testRecipient)
+    try:
+        return RelayService(DirectoryStore()).test(payload.providerConfigId, payload.testRecipient, company_id=actor.companyId)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.get("/org-import/template")

@@ -60,7 +60,7 @@ class MailAccountRecord(BaseModel):
     email: str
     quotaMb: int
     status: str
-    providerConfigId: str
+    providerConfigId: str | None = None
     createdAt: datetime
     updatedAt: datetime
 
@@ -506,7 +506,7 @@ class DirectoryOverviewResponse(BaseModel):
     departments: list[DepartmentRecord]
     roles: list[RoleRecord]
     users: list[UserView]
-    mailProvider: MailProviderConfigView
+    mailProvider: MailProviderConfigView | None = None
 
 
 class OrgImportDepartmentPreview(BaseModel):

@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   requestAdminMfaRecovery: vi.fn(),
   verifyAdminMfaRecovery: vi.fn(),
   fetchMailOperations: vi.fn(),
+  fetchDirectory: vi.fn(),
+  testRelay: vi.fn(),
 }));
 
 vi.mock("./api", async () => {
@@ -34,12 +36,13 @@ vi.mock("./api", async () => {
       providerAvailable: false,
       cacheAvailable: false,
     }),
-    fetchDirectory: vi.fn().mockResolvedValue({
-      company: { name: "MoaWorks", domain: "moaworks.invalid" },
-      users: [],
-      departments: [],
-      roles: [],
-    }),
+    fetchDirectory: mocks.fetchDirectory,
+    testRelay: mocks.testRelay,
+    fetchMailSubmissionCredentials: vi.fn().mockResolvedValue([]),
+    fetchMonitoringOverview: vi.fn().mockResolvedValue({ alertOpenCount: 0 }),
+    fetchMonitoringEvents: vi.fn().mockResolvedValue({ events: [] }),
+    fetchMonitoringAlerts: vi.fn().mockResolvedValue({ alerts: [] }),
+    fetchOperationalBackups: vi.fn().mockResolvedValue({ policy: { enabled: false, intervalHours: 24, retentionDays: 7 }, backups: [], drills: [] }),
     fetchMailDeliveryStatus: vi.fn().mockResolvedValue({ provider: { providerKey: "self_hosted" } }),
     fetchMailDeliveryQueue: vi.fn().mockResolvedValue({ queue: [] }),
     fetchMailOperations: mocks.fetchMailOperations,
@@ -94,6 +97,9 @@ describe("admin MFA login", () => {
     mocks.requestAdminMfaRecovery.mockReset();
     mocks.verifyAdminMfaRecovery.mockReset();
     mocks.fetchMailOperations.mockReset();
+    mocks.fetchDirectory.mockReset();
+    mocks.testRelay.mockReset();
+    mocks.fetchDirectory.mockResolvedValue({ company: { name: "MoaWorks", domain: "moaworks.invalid" }, users: [], departments: [], roles: [], mailProvider: null });
     mocks.fetchMailOperations.mockResolvedValue({
       domain: null,
       providers: [],
@@ -114,6 +120,31 @@ describe("admin MFA login", () => {
 
   afterEach(() => {
     cleanup();
+  });
+
+  it.each([false, true])("Relay 기본 선택은 서버 정책을 사용하고 null provider에서는 요청하지 않는다: active=%s", async (active) => {
+    mocks.fetchDirectory.mockResolvedValue({ company: { name: "MoaWorks", domain: "moaworks.invalid" }, users: [], departments: [], roles: [], mailProvider: active ? { id: "stale-display-provider" } : null });
+    mocks.login.mockResolvedValue({ nextAction: "authenticated", accessToken: "verified-admin-token", tokenType: "bearer", expiresIn: 3600, user: {} });
+    mocks.testRelay.mockResolvedValue({ providerConfigId: "current-provider", status: "success" });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.type(await screen.findByLabelText(/관리자 아이디/), "admin");
+    await user.type(screen.getByLabelText("비밀번호"), "fixture-password");
+    await user.click(screen.getByRole("button", { name: "로그인" }));
+    await user.click((await screen.findAllByRole("button", { name: "서비스 운영" }))[0]);
+    await user.click(await screen.findByRole("button", { name: "Relay 테스트 실행" }));
+    const submit = screen.getByRole("button", { name: /^Relay 테스트$/ }) as HTMLButtonElement;
+    if (!active) {
+      expect(submit.disabled).toBe(true);
+      expect(screen.getByText(/활성 발송 Provider가 없거나 중복되었습니다/)).toBeTruthy();
+      await user.click(submit);
+      expect(mocks.testRelay).not.toHaveBeenCalled();
+    } else {
+      await user.clear(screen.getByLabelText("테스트 수신자"));
+      await user.type(screen.getByLabelText("테스트 수신자"), "qa@example.test");
+      await user.click(submit);
+      await waitFor(() => expect(mocks.testRelay).toHaveBeenCalledWith("verified-admin-token", { testRecipient: "qa@example.test" }));
+    }
   });
 
   it("does not store a token before the TOTP challenge succeeds", async () => {

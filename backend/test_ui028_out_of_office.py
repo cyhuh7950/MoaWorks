@@ -218,9 +218,10 @@ class _ScriptedOutOfOfficeCursor:
             }
         elif lowered.startswith("select a.id,a.email"):
             self._one = {
-                "id": "account-1", "email": "owner@example.com", "provider_config_id": "provider-1",
-                "delivery_enabled": not self.provider_locked, "last_test_status": "success",
+                "id": "account-1", "email": "owner@example.com",
             }
+        elif lowered.startswith("select * from mail_provider_configs"):
+            self._all = [{"id": "provider-1", "delivery_enabled": not self.provider_locked, "last_test_status": "success"}]
         elif lowered.startswith("select domain from companies"):
             self._one = {"domain": "example.com"}
         elif lowered.startswith("select id,lower(email)"):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.outbound_provider_resolver import OutboundProviderResolver
+
 import base64
 import re
 
@@ -138,7 +140,7 @@ class MailAdminOperations:
                 "inboundMxHost": domain.get("inbound_mx_host") or domain["mail_host"],
                 "adminAccessMode": domain["admin_access_mode"],
                 "adminAllowedCidrs": list(domain.get("admin_allowed_cidrs") or []),
-                "activeOutboundProvider": domain["active_outbound_provider_key"],
+                "activeOutboundProvider": (self._provider_key(active[0]['provider_type']) if len(active := [p for p in providers if p.get('active')]) == 1 else None),
                 "previousOutboundProvider": domain.get("previous_outbound_provider_key"),
                 "providerSwitchedAt": domain.get("provider_switched_at"),
             }
@@ -170,9 +172,7 @@ class MailAdminOperations:
         )
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT active_outbound_provider_key FROM mail_domain_settings WHERE company_id=%s", (actor.companyId,))
-                state = cursor.fetchone()
-                active_provider = state["active_outbound_provider_key"] if state else self._active_provider_key(cursor, actor.companyId)
+                active_provider = self._active_provider_key(cursor, actor.companyId)
                 self.policy.save_domain_contract(cursor=cursor, company_id=actor.companyId, contract=contract, active_provider=active_provider)
                 self._audit(cursor, actor, "mail_domain_settings", actor.companyId, "mail.domain.updated", contract.admin_access_mode)
             connection.commit()
@@ -290,7 +290,7 @@ class MailAdminOperations:
                     raise ValueError("먼저 메일 도메인 설정을 저장해야 합니다.")
                 plan = self.policy.switch_outbound_provider(
                     cursor=cursor, company_id=actor.companyId, actor_user_id=actor.userId,
-                    actor_user_name=actor.userName, current_provider=state["active_outbound_provider_key"],
+                    actor_user_name=actor.userName, current_provider=None,
                     target_provider=target_provider,
                 )
             connection.commit()
@@ -375,10 +375,9 @@ class MailAdminOperations:
             connection.commit()
         return result
 
-    def _active_provider_key(self, cursor, company_id: str) -> str:
-        cursor.execute("SELECT provider_type FROM mail_provider_configs WHERE company_id=%s ORDER BY active DESC,updated_at DESC LIMIT 1", (company_id,))
-        row = cursor.fetchone()
-        return self._provider_key(row["provider_type"]) if row else "self_hosted"
+    def _active_provider_key(self, cursor, company_id: str) -> str | None:
+        row = OutboundProviderResolver.readiness(cursor, company_id)
+        return OutboundProviderResolver.provider_key(row) if row else None
 
     @staticmethod
     def _find_provider(cursor, company_id: str, provider_key: str):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.outbound_provider_resolver import OutboundProviderResolver
+
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from secrets import compare_digest
@@ -91,14 +93,9 @@ class MailDeliveryOperations:
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(
-                    """SELECT delivery_enabled,last_test_status FROM mail_provider_configs
-                    WHERE company_id=%s ORDER BY active DESC,updated_at DESC LIMIT 1""",
-                    (actor.companyId,),
-                )
-                provider = cursor.fetchone()
+                provider = OutboundProviderResolver.readiness(cursor, actor.companyId)
         if provider is None:
-            raise ValueError("메일 provider를 찾을 수 없습니다.")
+            provider = {"delivery_enabled": False, "last_test_status": "untested"}
         return {
             "provider": {
                 "enabled": bool(provider["delivery_enabled"]),
@@ -454,10 +451,7 @@ class MailDeliveryOperations:
         (worker_id, status, now, now if last_success else None, error, now))
 
     def _provider(self, cursor, company_id):
-        cursor.execute("SELECT * FROM mail_provider_configs WHERE company_id=%s ORDER BY active DESC,updated_at DESC LIMIT 1", (company_id,))
-        row = cursor.fetchone()
-        if row is None: raise ValueError("메일 provider를 찾을 수 없습니다.")
-        return dict(row)
+        return OutboundProviderResolver.resolve(cursor, company_id)
 
     def _provider_by_id(self, cursor, provider_id, company_id):
         cursor.execute("SELECT * FROM mail_provider_configs WHERE id=%s AND company_id=%s", (provider_id, company_id))

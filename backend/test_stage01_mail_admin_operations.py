@@ -427,7 +427,7 @@ class MailAdminOperationsContractTest(unittest.TestCase):
         self.assertIn("INSERT INTO mail_provider_configs", cursor.statements[1][0])
 
     def test_domain_creation_uses_current_provider_when_domain_state_is_absent(self) -> None:
-        cursor = RecordingCursor(one_rows=[None, {"provider_type": "oci_email_delivery"}])
+        cursor = RecordingCursor(all_rows=[[{"provider_type": "oci_email_delivery"}]])
         operation = MailAdminOperations(db=FakeDb(cursor))
         with patch.object(operation.policy, "save_domain_contract") as save, patch.object(operation, "get_overview", return_value={}):
             operation.update_domain(

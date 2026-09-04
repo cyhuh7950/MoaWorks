@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.outbound_provider_resolver import OutboundProviderResolver
+
 from datetime import UTC, date, datetime, timedelta
 from functools import wraps
 import json
@@ -284,9 +286,9 @@ class DirectoryStore:
                 cursor.execute(
                     """
                     INSERT INTO mail_accounts (
-                        id, user_id, email, quota_mb, status, provider_config_id, created_at, updated_at
+                        id, user_id, email, quota_mb, status, created_at, updated_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         admin_mail_account_id,
@@ -294,7 +296,6 @@ class DirectoryStore:
                         payload.adminUser.email,
                         4096,
                         "active",
-                        provider_id,
                         now,
                         now,
                     ),
@@ -356,26 +357,31 @@ class DirectoryStore:
             "expected_admin_email": expected_admin_email,
         }
 
-    def get_overview(self) -> DirectoryOverviewResponse:
+    def get_overview(self, *, company_id: str | None = None) -> DirectoryOverviewResponse:
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
-                company_row = self._fetch_company_row(cursor)
-                provider_row = self._fetch_provider_row(cursor)
+                company_row = self._fetch_company_row(cursor, company_id=company_id)
+                company_id = company_row['id']
+                provider_row = OutboundProviderResolver.readiness(cursor, company_id)
                 cursor.execute(
                     """
                     SELECT id, company_id, system_department_code, department_code, name, parent_id, status, sort_order, created_at
                     FROM departments
+                    WHERE company_id = %s
                     ORDER BY sort_order ASC, created_at ASC
-                    """
+                    """,
+                    (company_id,),
                 )
                 departments = [self._to_department_record(row) for row in cursor.fetchall()]
                 cursor.execute(
                     """
                     SELECT id, company_id, name, permissions, status, created_at
                     FROM roles
+                    WHERE company_id = %s
                     ORDER BY created_at ASC
-                    """
+                    """,
+                    (company_id,),
                 )
                 roles = [self._to_role_record(row) for row in cursor.fetchall()]
                 cursor.execute(
@@ -400,8 +406,10 @@ class DirectoryStore:
                     JOIN departments d ON d.id = u.department_id
                     JOIN roles r ON r.id = u.role_id
                     JOIN mail_accounts ma ON ma.user_id = u.id
+                    WHERE u.company_id = %s
                     ORDER BY u.created_at ASC
-                    """
+                    """,
+                    (company_id,),
                 )
                 user_rows = cursor.fetchall()
 
@@ -411,7 +419,7 @@ class DirectoryStore:
             departments=departments,
             roles=roles,
             users=users,
-            mailProvider=self._to_mail_provider_view(provider_row),
+            mailProvider=self._to_mail_provider_view(provider_row) if provider_row else None,
         )
 
     def authenticate(self, email: str, password: str) -> AuthUserSummary:
@@ -677,7 +685,6 @@ class DirectoryStore:
             with connection.cursor() as cursor:
                 department = self._fetch_required_department(cursor, payload.departmentId)
                 role = self._fetch_required_role(cursor, payload.roleId)
-                provider = self._fetch_provider_row(cursor)
                 cursor.execute("SELECT 1 FROM users WHERE email = %s", (normalized_email,))
                 if cursor.fetchone() is not None:
                     raise DirectoryUserEmailConflictError("이미 존재하는 이메일입니다.")
@@ -725,9 +732,9 @@ class DirectoryStore:
                 cursor.execute(
                     """
                     INSERT INTO mail_accounts (
-                        id, user_id, email, quota_mb, status, provider_config_id, created_at, updated_at
+                        id, user_id, email, quota_mb, status, created_at, updated_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         mail_account_id,
@@ -735,7 +742,6 @@ class DirectoryStore:
                         normalized_email,
                         2048,
                         "active" if payload.status == "active" else "inactive",
-                        provider["id"],
                         now,
                         now,
                     ),
@@ -893,28 +899,28 @@ class DirectoryStore:
             connection.commit()
         return self._row_to_user_view(row)
 
-    def get_provider(self, provider_config_id: str | None = None) -> MailProviderConfigRecord:
+    def get_provider(self, provider_config_id: str | None = None, *, company_id: str) -> MailProviderConfigRecord:
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
                 if provider_config_id is None:
-                    row = self._fetch_provider_row(cursor)
+                    row = self._fetch_provider_row(cursor, company_id)
                 else:
                     cursor.execute(
                         """
                         SELECT id, company_id, provider_type, relay_host, relay_port, username,
                                encrypted_password, active, last_test_status, last_test_message, updated_at
                         FROM mail_provider_configs
-                        WHERE id = %s
+                        WHERE id = %s AND company_id = %s
                         """,
-                        (provider_config_id,),
+                        (provider_config_id, company_id),
                     )
                     row = cursor.fetchone()
                     if row is None:
                         raise ValueError("대상 Relay 설정을 찾을 수 없습니다.")
         return self._to_mail_provider_record(row)
 
-    def update_relay_test_status(self, provider_config_id: str, status_value: str, message: str) -> MailProviderConfigRecord:
+    def update_relay_test_status(self, provider_config_id: str, status_value: str, message: str, *, company_id: str) -> MailProviderConfigRecord:
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
@@ -924,11 +930,11 @@ class DirectoryStore:
                     SET last_test_status = %s,
                         last_test_message = %s,
                         updated_at = %s
-                    WHERE id = %s
+                    WHERE id = %s AND company_id = %s
                     RETURNING id, company_id, provider_type, relay_host, relay_port, username,
                               encrypted_password, active, last_test_status, last_test_message, updated_at
                     """,
-                    (status_value, message, self._now(), provider_config_id),
+                    (status_value, message, self._now(), provider_config_id, company_id),
                 )
                 row = cursor.fetchone()
                 if row is None:
@@ -2161,27 +2167,18 @@ class DirectoryStore:
     def admin_force_reject(self, actor_id: str, document_id: str, reason: ApprovalActionReason) -> ApprovalDocumentResponse:
         return self._process_approval_decision(actor_id, document_id, reason.reason, accepted=False, forced=True)
 
-    def _fetch_company_row(self, cursor) -> dict:
-        cursor.execute("SELECT id, name, domain, status, created_at FROM companies ORDER BY created_at ASC LIMIT 1")
+    def _fetch_company_row(self, cursor, *, company_id: str | None = None) -> dict:
+        if company_id is None:
+            cursor.execute("SELECT id, name, domain, status, created_at FROM companies ORDER BY created_at ASC LIMIT 1")
+        else:
+            cursor.execute("SELECT id, name, domain, status, created_at FROM companies WHERE id = %s", (company_id,))
         row = cursor.fetchone()
         if row is None:
             raise ValueError("초기 설정이 완료되지 않았습니다.")
         return row
 
-    def _fetch_provider_row(self, cursor) -> dict:
-        cursor.execute(
-            """
-            SELECT id, company_id, provider_type, relay_host, relay_port, username,
-                   encrypted_password, active, last_test_status, last_test_message, updated_at
-            FROM mail_provider_configs
-            ORDER BY updated_at DESC
-            LIMIT 1
-            """
-        )
-        row = cursor.fetchone()
-        if row is None:
-            raise ValueError("메일 설정이 존재하지 않습니다.")
-        return row
+    def _fetch_provider_row(self, cursor, company_id: str) -> dict:
+        return OutboundProviderResolver.resolve(cursor, company_id)
 
     def _fetch_required_department(self, cursor, department_id: str) -> dict:
         cursor.execute(

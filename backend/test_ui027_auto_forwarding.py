@@ -241,8 +241,10 @@ class DuplicateDirectRecipientCursor:
             self.next_all = []
         elif "FROM MAIL_RECIPIENTS" in upper and "DELIVERY_SOURCE='DIRECT'" in upper:
             self.next_all = [{"recipient_email": email} for email in self.direct_emails]
-        elif upper.startswith("SELECT A.ID,A.EMAIL,A.PROVIDER_CONFIG_ID"):
-            self.next_one = {"id": "account-a", "email": "owner@example.com", "provider_config_id": "provider-a", "delivery_enabled": False, "last_test_status": "success"}
+        elif upper.startswith("SELECT A.ID,A.EMAIL"):
+            self.next_one = {"id": "account-a", "email": "owner@example.com"}
+        elif upper.startswith("SELECT * FROM MAIL_PROVIDER_CONFIGS"):
+            self.next_all = [{"id": "provider-a", "delivery_enabled": False, "last_test_status": "success"}]
 
     def fetchone(self):
         value, self.next_one = self.next_one, None

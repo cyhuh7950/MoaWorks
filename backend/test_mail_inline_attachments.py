@@ -199,7 +199,7 @@ class PersistenceCursor:
         return self._one
 
     def fetchall(self) -> list[dict]:
-        return self._many
+        return [self._one] if self._one and self._one.get('last_test_status') == 'success' else self._many
 
 
 class PersistenceConnection:
@@ -397,7 +397,6 @@ class MailInlinePersistenceTests(unittest.TestCase):
         service._fetch_mail_account = lambda _cursor, _user_id: {
             "id": "account-1",
             "email": "sender@example.test",
-            "provider_config_id": "provider-1",
         }
         service._ensure_basic_preferences = lambda _cursor, _actor: {
             "sender_display_name": "Sender",

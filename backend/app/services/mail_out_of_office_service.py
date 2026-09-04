@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.outbound_provider_resolver import OutboundProviderResolver
+
 from datetime import UTC, date, datetime, timedelta
 import json
 import logging
@@ -141,12 +143,7 @@ class MailOutOfOfficeService:
                     (actor.companyId, actor.userId),
                 )
                 total = cursor.fetchone()
-                cursor.execute(
-                    "SELECT delivery_enabled,last_test_status FROM mail_provider_configs "
-                    "WHERE company_id=%s ORDER BY active DESC,updated_at DESC LIMIT 1",
-                    (actor.companyId,),
-                )
-                provider = cursor.fetchone()
+                provider = OutboundProviderResolver.readiness(cursor, actor.companyId)
         enabled = False if policy is None else policy["enabled"]
         start = None if policy is None else policy["start_date"]
         end = None if policy is None else policy["end_date"]
@@ -218,9 +215,8 @@ class MailOutOfOfficeService:
                 cursor.execute("RELEASE SAVEPOINT out_of_office")
                 return None
             cursor.execute(
-                "SELECT a.id,a.email,a.provider_config_id,p.delivery_enabled,p.last_test_status "
-                "FROM mail_accounts a JOIN mail_provider_configs p ON p.id=a.provider_config_id "
-                "WHERE a.user_id=%s AND a.status='active' AND p.company_id=%s ORDER BY a.created_at LIMIT 1",
+                "SELECT a.id,a.email FROM mail_accounts a JOIN users u ON u.id=a.user_id "
+                "WHERE a.user_id=%s AND a.status='active' AND u.company_id=%s ORDER BY a.created_at LIMIT 1",
                 (user_id, company_id),
             )
             owner = cursor.fetchone()
@@ -265,13 +261,14 @@ class MailOutOfOfficeService:
                 status, reason, completed = "internal_delivered", "INTERNAL_DELIVERED", now
             else:
                 queue_id = self._new_id("delivery")
-                status = "queued" if owner["delivery_enabled"] and owner["last_test_status"] == "success" else "blocked"
+                provider = OutboundProviderResolver.resolve(cursor, company_id)
+                status = "queued" if provider["delivery_enabled"] and provider["last_test_status"] == "success" else "blocked"
                 reason = "PROVIDER_READY" if status == "queued" else "PROVIDER_LOCKED"
                 completed = None
                 cursor.execute(
                     "INSERT INTO mail_delivery_queue(id,company_id,provider_config_id,mail_id,recipient_id,status,attempt_count,next_attempt_at,created_at,updated_at,delivery_kind,sender_email_override) "
                     "VALUES(%s,%s,%s,%s,%s,%s,0,%s,%s,%s,'out_of_office',%s) ON CONFLICT(mail_id,recipient_id) DO NOTHING",
-                    (queue_id, company_id, owner["provider_config_id"], response_mail_id, response_recipient_id,
+                    (queue_id, company_id, provider["id"], response_mail_id, response_recipient_id,
                      status, now if status == "queued" else None, now, now, owner["email"]),
                 )
             cursor.execute(

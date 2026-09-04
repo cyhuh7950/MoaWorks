@@ -2413,11 +2413,14 @@ export default function App() {
   async function handleRelayTest(event: FormEvent) {
     event.preventDefault();
     if (!token || !overview) return;
+    if (!overview.mailProvider) {
+      setErrors(["회사의 활성 발송 Provider가 없거나 중복되어 Relay 테스트를 실행할 수 없습니다."]);
+      return;
+    }
     setLoading(true);
     setErrors([]);
     try {
       const response = await testRelay(token, {
-        providerConfigId: overview.mailProvider.id,
         testRecipient: relayRecipient,
       });
       setRelayResult(response);
@@ -3239,7 +3242,7 @@ export default function App() {
                 </div>
               </div>
               <div className="overview-grid">
-                <article className="status-card"><strong>활성 Provider</strong><span className="mini-stat">{mailOperations?.domain?.activeOutboundProvider ?? mailDeliveryStatus?.provider.providerKey ?? "미설정"}</span></article>
+                <article className="status-card"><strong>활성 Provider</strong><span className="mini-stat">{mailOperations?.domain?.activeOutboundProvider ?? "미설정"}</span></article>
                 <article className="status-card"><strong>관리자 접근</strong><span className="mini-stat">{mailOperations?.domain?.adminAccessMode ?? "미설정"}</span></article>
                  <article className="status-card"><strong>외부 메일 도메인</strong><span className="mini-stat">{mailOperations?.domain?.mailDomain ?? "미설정"}</span></article>
                  <article className="status-card"><strong>반송 / OCI suppression</strong><span className="mini-stat">{mailOperations?.feedbackCount ?? 0} / {mailOperations?.ociSuppression.activeCount ?? 0}</span><small className="muted">마지막 동기화: {contentDate(mailOperations?.ociSuppression.lastSeenAt)}</small></article>
@@ -4226,7 +4229,7 @@ export default function App() {
                 <section className="management-modal operations-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
                   <div className="management-modal-head"><strong>{operationsDialog === "domain" ? "도메인 검증 실행" : operationsDialog === "relay" ? "Relay 테스트 실행" : operationsDialog === "mailTest" ? "테스트 발송" : operationsDialog === "provider" ? "메일 제공자 설정" : operationsDialog === "storage" ? "운영 점검 실행" : operationsDialog === "brand" ? "브랜드/화면 설정 편집" : operationsDialog === "language" ? "다국어/메시지 설정" : operationsDialog === "help" ? "도움말/정책 상세" : "감사 로그 상세"}</strong><button type="button" className="secondary" onClick={() => setOperationsDialog(null)}>닫기</button></div>
                   {operationsDialog === "domain" ? <form className="compact-form" onSubmit={(event) => { void handleDomainVerify(event); setOperationsDialog(null); }}><label>검증 도메인<input value={domainInput} onChange={(event) => setDomainInput(event.target.value)} /></label><button type="submit" disabled={loading}>검증 실행</button></form> : null}
-                  {operationsDialog === "relay" ? <form className="compact-form" onSubmit={(event) => { void handleRelayTest(event); setOperationsDialog(null); }}><label>테스트 수신자<input type="email" value={relayRecipient} onChange={(event) => setRelayRecipient(event.target.value)} /></label><button type="submit" disabled={loading}>Relay 테스트</button></form> : null}
+                  {operationsDialog === "relay" ? <form className="compact-form" onSubmit={(event) => { void handleRelayTest(event); setOperationsDialog(null); }}><label>테스트 수신자<input type="email" value={relayRecipient} onChange={(event) => setRelayRecipient(event.target.value)} /></label>{!overview?.mailProvider ? <p role="status">활성 발송 Provider가 없거나 중복되었습니다. 발신 Provider 설정을 확인하세요.</p> : null}<button type="submit" disabled={loading || !overview?.mailProvider}>Relay 테스트</button></form> : null}
                   {operationsDialog === "mailTest" ? <form className="compact-form" onSubmit={(event) => { void handleMailDeliveryTest(event); setOperationsDialog(null); }}><label>테스트 Provider<select value={mailProviderOperationsForm.providerKey} onChange={(event) => setMailProviderOperationsForm((current) => ({ ...current, providerKey: event.target.value as MailProviderOperationsForm["providerKey"] }))}><option value="self_hosted">자체 메일 엔진</option><option value="oci_email_delivery">OCI Email Delivery</option></select></label><label>실제 외부 수신자<input type="email" required value={relayRecipient} onChange={(event) => setRelayRecipient(event.target.value)} /></label><button type="submit" disabled={loading}>실제 외부 SMTP 테스트</button></form> : null}
                   {operationsDialog === "provider" ? (
                     <div className="stack-list">

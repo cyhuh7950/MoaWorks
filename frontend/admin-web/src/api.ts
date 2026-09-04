@@ -150,7 +150,7 @@ export type DirectoryOverview = {
   departments: Department[];
   roles: Role[];
   users: UserView[];
-  mailProvider: MailProvider;
+  mailProvider: MailProvider | null;
 };
 
 export type OrgImportIssue = {
@@ -494,7 +494,7 @@ export type MailOperationsOverview = {
     inboundMxHost: string;
     adminAccessMode: "public" | "restricted" | "private";
     adminAllowedCidrs: string[];
-    activeOutboundProvider: "self_hosted" | "oci_email_delivery";
+    activeOutboundProvider: "self_hosted" | "oci_email_delivery" | null;
     previousOutboundProvider: "self_hosted" | "oci_email_delivery" | null;
     providerSwitchedAt: string | null;
   };
@@ -1059,7 +1059,7 @@ export async function generateSelfHostedDkim(token: string): Promise<SelfHostedD
 
 
 export async function switchMailOperationsProvider(token: string, targetProvider: "self_hosted" | "oci_email_delivery") {
-  return request<{ previousProvider: string; activeProvider: string; pinnedQueueCount: number }>("/admin/mail-operations/providers/switch", {
+  return request<{ previousProvider: string | null; activeProvider: string; pinnedQueueCount: number }>("/admin/mail-operations/providers/switch", {
     method: "POST", headers: authHeaders(token), body: JSON.stringify({ targetProvider }),
   });
 }
@@ -1071,7 +1071,7 @@ export async function testMailOperationsProvider(token: string, providerKey: "se
 }
 
 export async function rollbackMailOperationsProvider(token: string) {
-  return request<{ previousProvider: string; activeProvider: string; pinnedQueueCount: number }>("/admin/mail-operations/providers/rollback", {
+  return request<{ previousProvider: string | null; activeProvider: string; pinnedQueueCount: number }>("/admin/mail-operations/providers/rollback", {
     method: "POST", headers: authHeaders(token),
   });
 }

@@ -12,14 +12,14 @@ class RelayService:
     def __init__(self, store: DirectoryStore) -> None:
         self.store = store
 
-    def test(self, provider_config_id: str | None, test_recipient: str) -> RelayTestResponse:
-        provider = self.store.get_provider(provider_config_id)
+    def test(self, provider_config_id: str | None, test_recipient: str, *, company_id: str) -> RelayTestResponse:
+        provider = self.store.get_provider(provider_config_id, company_id=company_id)
         recipient_domain = test_recipient.split("@")[-1].lower()
         request_id = f"req_{uuid4().hex}"
 
         if provider.providerType == "smtp" and provider.relayHost == "mail-layer":
             message = f"로컬 Relay(mail-layer) 연결 테스트 성공, 수신자 {test_recipient} 기준 발신 경로를 확인했습니다."
-            saved = self.store.update_relay_test_status(provider.id, "success", message)
+            saved = self.store.update_relay_test_status(provider.id, "success", message, company_id=company_id)
             self._emit_relay_event(
                 status="success",
                 request_id=request_id,
@@ -34,12 +34,12 @@ class RelayService:
                 testedAt=datetime.now(UTC),
             )
 
-        if recipient_domain != self.store.get_overview().company.domain.lower():
+        if recipient_domain != self.store.get_overview(company_id=company_id).company.domain.lower():
             message = "현재 단계 2 테스트는 회사 도메인 또는 로컬 mail-layer Relay 기준만 성공으로 판정합니다."
         else:
             message = "외부 Relay 실연동은 아직 연결되지 않았습니다. 설정 형식만 저장된 상태입니다."
 
-        saved = self.store.update_relay_test_status(provider.id, "failed", message)
+        saved = self.store.update_relay_test_status(provider.id, "failed", message, company_id=company_id)
         self._emit_relay_event(
             status="failed",
             request_id=request_id,
@@ -85,7 +85,7 @@ class RelayService:
                     title="메일 Relay 테스트 결과",
                     message=message,
                     source="relay-service",
-                    companyId="cmp_default",
+                    companyId=provider.companyId,
                     targets=[],
                     visibility=Visibility.ADMIN,
                     payload=payload,
