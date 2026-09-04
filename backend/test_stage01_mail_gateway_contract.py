@@ -384,6 +384,7 @@ class MailGatewayContractTest(unittest.TestCase):
         entrypoint = (ROOT / "deploy" / "mail-gateway" / "entrypoint.sh").read_text(encoding="utf-8")
         compose = (ROOT / "deploy" / "docker-compose.wsl.yml").read_text(encoding="utf-8")
         dovecot_config = ROOT / "deploy" / "mail-gateway" / "dovecot.conf"
+        dovecot_sql = ROOT / "deploy" / "mail-gateway" / "dovecot-sql.conf.ext"
 
         self.assertIn("dovecot-core", dockerfile)
         self.assertTrue(dovecot_config.is_file())
@@ -394,6 +395,9 @@ class MailGatewayContractTest(unittest.TestCase):
         self.assertIn('"25:25"', compose)
         self.assertIn('"587:587"', compose)
         self.assertNotIn('"2525:25"', compose)
+        self.assertIn("dovecot-pgsql", dockerfile)
+        self.assertIn("driver = sql", dovecot_config.read_text(encoding="utf-8"))
+        self.assertIn("mail_submission_credentials", dovecot_sql.read_text(encoding="utf-8"))
 
     def test_certificate_mode_rejects_missing_invalid_hostname_and_key_mismatch(self) -> None:
         if not Path(self.bash).exists() or not Path(self.openssl).exists():

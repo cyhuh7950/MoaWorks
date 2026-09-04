@@ -194,6 +194,10 @@ SMTPD_TLS_KEY_FILE="$smtpd_tls_key_file"
 SMTPD_SASL_AUTH_ENABLE="$smtpd_sasl_auth_enable"
 export SMTP_RELAY_DOMAINS SMTPD_TLS_SECURITY_LEVEL SMTPD_TLS_CERT_FILE SMTPD_TLS_KEY_FILE SMTPD_SASL_AUTH_ENABLE
 envsubst '${MAIL_HOSTNAME} ${SMTP_RELAY_DOMAINS} ${SMTPD_TLS_SECURITY_LEVEL} ${SMTPD_TLS_CERT_FILE} ${SMTPD_TLS_KEY_FILE} ${SMTPD_SASL_AUTH_ENABLE}' < /etc/postfix/main.cf.template > /etc/postfix/main.cf
+envsubst '${POSTGRES_HOST} ${POSTGRES_PORT} ${POSTGRES_DB} ${POSTGRES_USER} ${POSTGRES_PASSWORD}' < /etc/dovecot/dovecot-sql.conf.ext > /etc/dovecot/dovecot-sql.conf.ext.rendered
+mv /etc/dovecot/dovecot-sql.conf.ext.rendered /etc/dovecot/dovecot-sql.conf.ext
+chown root:dovecot /etc/dovecot/dovecot-sql.conf.ext
+chmod 0640 /etc/dovecot/dovecot-sql.conf.ext
 envsubst < /etc/postfix/pgsql-virtual-domains.cf.template > /etc/postfix/pgsql-virtual-domains.cf
 envsubst < /etc/postfix/pgsql-virtual-recipients.cf.template > /etc/postfix/pgsql-virtual-recipients.cf
 chown root:postfix /etc/postfix/pgsql-virtual-domains.cf /etc/postfix/pgsql-virtual-recipients.cf
