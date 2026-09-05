@@ -257,6 +257,8 @@ class SelfHostedSmtpTransport:
         before_network_attempt: Callable[[], object] | None = None,
         before_data: Callable[[], object] | None = None,
     ) -> DeliveryReceipt:
+        if tls_mode == "tls":
+            raise MailTransportFailure("자체 SMTP는 implicit TLS를 지원하지 않습니다.", transient=False)
         normalized_relay_host = relay_host.strip().rstrip(".").lower()
         normalized_username = username.strip()
         if normalized_relay_host and bool(normalized_username) != bool(password):

@@ -30,6 +30,7 @@ import {
   fetchDirectory,
   fetchHealth,
   fetchMailDeliveryQueue,
+  fetchMailDeliveryDetail,
   fetchAdminMessengerRooms,
   fetchMailDeliveryStatus,
   fetchMailOperations,
@@ -176,7 +177,12 @@ type MailDomainOperationsForm = {
   adminAllowedCidrs: string;
 };
 
+function deliveryLabel(status: string): string {
+  return ({ queued: "외부 접수·대기", processing: "SMTP 전달 처리 중", retry_pending: "재시도 대기", sent: "상대 SMTP 수락 (수신함 도착 미확인)", failed: "전달 실패", blocked: "발송 차단", result_unknown: "결과 확인 필요 (중복 위험)" } as Record<string, string>)[status] ?? status;
+}
+
 type MailProviderOperationsForm = {
+  providerId?: string;
   providerKey: "self_hosted" | "oci_email_delivery";
   relayHost: string;
   relayPort: string;
@@ -797,6 +803,7 @@ export default function App() {
   const [relayResult, setRelayResult] = useState<RelayTestResponse | null>(null);
   const [mailDeliveryStatus, setMailDeliveryStatus] = useState<MailDeliveryStatusResponse | null>(null);
   const [mailDeliveryQueue, setMailDeliveryQueue] = useState<MailDeliveryQueueResponse | null>(null);
+  const [mailDeliveryError, setMailDeliveryError] = useState("");
   const [mailDeliveryTestResult, setMailDeliveryTestResult] = useState<MailSendResponse | null>(null);
   const [adminMessengerRooms, setAdminMessengerRooms] = useState<AdminMessengerRoom[]>([]);
   const [adminMessengerStatus, setAdminMessengerStatus] = useState<"active" | "deleted" | "all">("all");
@@ -1098,14 +1105,20 @@ export default function App() {
 
   async function refreshMailDelivery(nextToken = token) {
     if (!nextToken) return;
-    const [status, queue, operations] = await Promise.all([
+    setMailDeliveryError("");
+    const [statusResult, queueResult, operationsResult] = await Promise.allSettled([
       fetchMailDeliveryStatus(nextToken),
       fetchMailDeliveryQueue(nextToken),
       fetchMailOperations(nextToken),
     ]);
-    setMailDeliveryStatus(status);
-    setMailDeliveryQueue(queue);
-    setMailOperations(operations);
+    setMailDeliveryStatus(statusResult.status === "fulfilled" ? statusResult.value : null);
+    setMailDeliveryQueue(queueResult.status === "fulfilled" ? queueResult.value : null);
+    setMailOperations(operationsResult.status === "fulfilled" ? operationsResult.value : null);
+    const failures = [statusResult, queueResult, operationsResult].flatMap((result, index) =>
+      result.status === "rejected" ? [`${["메일 상태", "전달 큐", "Provider 설정"][index]} 조회 실패: ${result.reason instanceof Error ? result.reason.message : "응답 확인 필요"}`] : []);
+    setMailDeliveryError(failures.join(" / "));
+    if (operationsResult.status !== "fulfilled") return;
+    const operations = operationsResult.value;
     if (operations.domain) {
       setMailDomainOperationsForm({
         registeredDomain: operations.domain.registeredDomain,
@@ -1115,11 +1128,14 @@ export default function App() {
         adminAllowedCidrs: operations.domain.adminAllowedCidrs.join("\n"),
       });
     }
-    const selected = operations.providers.find((item) => item.providerKey === mailProviderOperationsForm.providerKey)
-      ?? operations.providers.find((item) => item.active);
+    const active = operations.providers.filter((item) => item.active);
+    const selected = mailProviderOperationsForm.providerId
+      ? operations.providers.find((item) => item.providerId === mailProviderOperationsForm.providerId)
+      : active.length === 1 ? active[0] : undefined;
     if (selected) {
       setMailProviderOperationsForm((current) => ({
         ...current,
+        providerId: selected.providerId,
         providerKey: selected.providerKey,
         relayHost: selected.relayHost,
         relayPort: String(selected.relayPort),
@@ -2435,13 +2451,19 @@ export default function App() {
 
   async function handleMailDeliveryTest(event: FormEvent) {
     event.preventDefault();
-    if (!token || !relayRecipient.trim()) return;
+    const active = mailOperations?.providers.filter((item) => item.active) ?? [];
+    if (active.length !== 1) { setErrors(["회사의 활성 Provider가 없거나 중복됩니다."]); return; }
+    await handleProviderConnectionTest(active[0]);
+  }
+
+  async function handleProviderConnectionTest(provider: MailOperationsProvider) {
+    if (!token) return;
     setLoading(true);
     setErrors([]);
     try {
-      const response = await testMailOperationsProvider(token, mailProviderOperationsForm.providerKey, relayRecipient.trim());
+      const response = await testMailOperationsProvider(token, provider.providerId, "connection-probe@example.net");
       setMailDeliveryTestResult({ mailId: `provider-test-${response.providerId}`, status: response.lastTestStatus, sentAt: response.lastConnectionAt });
-      setMessage(`${response.providerKey} 실제 외부 SMTP 테스트 결과: ${response.lastTestStatus}`);
+      setMessage(`${response.providerId} 연결 검증: ${response.lastTestStatus}. 메일 미전송 · 발송 잠금은 별도 조작입니다.`);
       await refreshMailDelivery();
     } catch (error) {
       setErrors([error instanceof Error ? error.message : "자체 SMTP 테스트 실패"]);
@@ -2452,17 +2474,45 @@ export default function App() {
 
   async function handleMailDeliveryRetry(queueId: string) {
     if (!token) return;
+    const item = mailDeliveryQueue?.items.find((row) => row.queueId === queueId);
+    if (!item) return;
+    const unknown = item.status === "result_unknown";
+    if (unknown && !window.confirm("상대 SMTP가 이미 수락했을 수 있어 재시도하면 중복 메일이 전달될 수 있습니다. 수신 결과를 확인했으며 중복 위험을 감수하고 재시도할까요?")) return;
     setLoading(true);
     setErrors([]);
     try {
-      const response = await retryMailDelivery(token, queueId);
-      setMessage(response.message);
+      const response = await retryMailDelivery(token, queueId, unknown);
+      setMessage(`수동 재시도 접수: ${response.item.status}. 기존 Provider 경로를 유지합니다.`);
       await refreshMailDelivery();
     } catch (error) {
       setErrors([error instanceof Error ? error.message : "외부 발송 재시도 실패"]);
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleDeliveryDetail(queueId: string) {
+    if (!token) return;
+    setLoading(true);
+    try {
+      const detail = await fetchMailDeliveryDetail(token, queueId);
+      setOperationDetail({ title: "전달 상세", lines: [detail.item.recipientEmail, detail.item.subject, deliveryLabel(detail.item.status),
+        ...detail.attempts.map((a) => `시도 ${a.attemptNumber}: ${deliveryLabel(a.result)} · ${a.errorMessage || a.relayResponse || "추가 오류 없음"}`),
+        ...detail.audits.map((a) => `${a.created_at} · ${a.event} · ${a.status_before ?? "-"} → ${a.status_after ?? "-"} · ${a.reason ?? ""}`)] });
+      setOperationsDialog("audit");
+    } catch (error) { setErrors([error instanceof Error ? error.message : "전달 상세 조회 실패"]); }
+    finally { setLoading(false); }
+  }
+
+  async function handleProviderLock(provider: MailOperationsProvider) {
+    if (!token) return;
+    setLoading(true);
+    try {
+      await updateMailOperationsProvider(token, provider.providerId, { deliveryEnabled: !provider.deliveryEnabled });
+      setMessage(provider.deliveryEnabled ? "발송을 잠갔습니다. 활성 Provider 선택은 변경하지 않았습니다." : "발송 잠금을 명시적으로 해제했습니다. 활성 Provider 선택은 변경하지 않았습니다.");
+      await refreshMailDelivery();
+    } catch (error) { setErrors([error instanceof Error ? error.message : "발송 잠금 변경 실패"]); }
+    finally { setLoading(false); }
   }
 
   async function handleMailDomainOperationsSave(event: FormEvent) {
@@ -2504,7 +2554,7 @@ export default function App() {
       };
       if (mailProviderOperationsForm.password) payload.password = mailProviderOperationsForm.password;
       if (mailProviderOperationsForm.dkimPrivateKey) payload.dkimPrivateKey = mailProviderOperationsForm.dkimPrivateKey;
-      await updateMailOperationsProvider(token, mailProviderOperationsForm.providerKey, payload);
+      await updateMailOperationsProvider(token, mailProviderOperationsForm.providerId || mailProviderOperationsForm.providerKey, payload);
       await refreshMailDelivery();
       setMessage("발신 Provider 설정을 저장했습니다. 변경 후 연결 테스트가 필요합니다.");
     } catch (error) {
@@ -3270,9 +3320,18 @@ export default function App() {
               </div>
               <div className="ops-list-panel">
                 <div className="ops-list-head"><strong>Provider 상태</strong><span className="muted">비밀값은 화면과 API 응답에 노출하지 않습니다.</span></div>
-                <div className="table-wrap"><table className="data-table"><thead><tr><th>Provider</th><th>활성</th><th>발송 잠금</th><th>연결 검증</th><th>DKIM</th></tr></thead><tbody>{(mailOperations?.providers ?? []).map((provider) => <tr key={provider.providerId}><td>{provider.providerKey}</td><td>{provider.active ? "활성" : "대기"}</td><td>{provider.deliveryEnabled ? "해제" : "잠김"}</td><td>{provider.lastTestStatus}</td><td>{formatMailProviderDkimStatus(provider)}</td></tr>)}{(mailOperations?.providers.length ?? 0) === 0 ? <tr><td colSpan={5}>Provider 설정이 없습니다.</td></tr> : null}</tbody></table></div>
+                <div className="table-wrap"><table className="data-table"><thead><tr><th>Provider / ID</th><th>활성</th><th>발송 잠금</th><th>연결 검증</th><th>DKIM</th><th>조작</th></tr></thead><tbody>{(mailOperations?.providers ?? []).map((provider) => <tr key={provider.providerId}><td>{provider.providerKey}<small>{provider.providerId}</small></td><td>{provider.active ? "활성" : "대기"}</td><td>{provider.deliveryEnabled ? "해제" : "잠김"}</td><td>{provider.lastTestStatus}{provider.lastConnectionError ? <small>{provider.lastConnectionError}</small> : null}</td><td>{formatMailProviderDkimStatus(provider)}</td><td><button type="button" disabled={loading} onClick={() => void handleProviderConnectionTest(provider)}>연결 검증 (메일 미전송)</button><button type="button" disabled={loading || (!provider.deliveryEnabled && provider.lastTestStatus !== "success")} onClick={() => void handleProviderLock(provider)}>{provider.deliveryEnabled ? "발송 잠금" : "발송 잠금 해제"}</button></td></tr>)}{mailOperations && mailOperations.providers.length === 0 ? <tr><td colSpan={6}>Provider 설정이 없습니다.</td></tr> : null}</tbody></table></div>
               </div>
-              <div className="ops-list-panel"><div className="ops-list-head"><strong>최근 전달 이력</strong></div><div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>수신자</th><th>제목</th><th>상태</th><th>재시도</th></tr></thead><tbody>{(mailDeliveryQueue?.queue ?? []).map((item) => <tr key={item.queueId} onDoubleClick={() => { setOperationDetail({ title: "전달 상세", lines: [item.recipient, item.subject, item.status, `재시도 ${item.attemptCount}`, item.lastError ?? "오류 없음"] }); setOperationsDialog("audit"); }}><td>{item.recipient}</td><td>{item.subject}</td><td>{item.status}</td><td>{item.attemptCount}</td></tr>)}{(mailDeliveryQueue?.queue?.length ?? 0) === 0 ? <tr><td colSpan={4}>전달 이력이 없습니다.</td></tr> : null}</tbody></table></div></div>
+              <div className="ops-list-panel">
+                <div className="ops-list-head"><strong>최근 전달 이력</strong><span>{mailDeliveryQueue ? `총 ${mailDeliveryQueue.total}건 (최근 최대100건)` : "미확인"}</span></div>
+                {mailDeliveryError ? <p role="alert">{mailDeliveryError}</p> : null}
+                {mailDeliveryStatus ? <p>worker: {mailDeliveryStatus.worker.status ?? "미확인"} · heartbeat: {contentDate(mailDeliveryStatus.worker.last_heartbeat_at)} · {Object.entries(mailDeliveryStatus.summary).map(([key, count]) => `${deliveryLabel(key)} ${count}건`).join(" / ")}</p> : null}
+                <div className="table-wrap ops-scroll"><table className="data-table"><thead><tr><th>수신자</th><th>제목</th><th>상태</th><th>시도횟수</th><th>조작</th></tr></thead><tbody>
+                  {(mailDeliveryQueue?.items ?? []).map((item) => <tr key={item.queueId} onDoubleClick={() => void handleDeliveryDetail(item.queueId)}><td>{item.recipientEmail}</td><td>{item.subject}</td><td>{deliveryLabel(item.status)}</td><td>{item.attemptCount}</td><td><button type="button" disabled={loading} onClick={() => void handleDeliveryDetail(item.queueId)}>전달 상세</button>{["failed", "blocked", "retry_pending", "result_unknown"].includes(item.status) ? <button type="button" disabled={loading} onClick={() => void handleMailDeliveryRetry(item.queueId)}>수동 재시도</button> : null}</td></tr>)}
+                  {mailDeliveryQueue?.items.length === 0 ? <tr><td colSpan={5}>전달 이력이 없습니다.</td></tr> : null}
+                  {!mailDeliveryQueue && !mailDeliveryError ? <tr><td colSpan={5}>전달 이력 조회 중</td></tr> : null}
+                </tbody></table></div>
+              </div>
             </div>
           </section>
         );
@@ -4227,10 +4286,10 @@ export default function App() {
             {operationsDialog ? (
               <div className="management-modal-backdrop" role="presentation" onClick={() => !loading && setOperationsDialog(null)}>
                 <section className="management-modal operations-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-                  <div className="management-modal-head"><strong>{operationsDialog === "domain" ? "도메인 검증 실행" : operationsDialog === "relay" ? "Relay 테스트 실행" : operationsDialog === "mailTest" ? "테스트 발송" : operationsDialog === "provider" ? "메일 제공자 설정" : operationsDialog === "storage" ? "운영 점검 실행" : operationsDialog === "brand" ? "브랜드/화면 설정 편집" : operationsDialog === "language" ? "다국어/메시지 설정" : operationsDialog === "help" ? "도움말/정책 상세" : "감사 로그 상세"}</strong><button type="button" className="secondary" onClick={() => setOperationsDialog(null)}>닫기</button></div>
+                  <div className="management-modal-head"><strong>{operationsDialog === "domain" ? "도메인 검증 실행" : operationsDialog === "relay" ? "Relay 테스트 실행" : operationsDialog === "mailTest" ? "Provider 연결 검증" : operationsDialog === "provider" ? "메일 제공자 설정" : operationsDialog === "storage" ? "운영 점검 실행" : operationsDialog === "brand" ? "브랜드/화면 설정 편집" : operationsDialog === "language" ? "다국어/메시지 설정" : operationsDialog === "help" ? "도움말/정책 상세" : "감사 로그 상세"}</strong><button type="button" className="secondary" onClick={() => setOperationsDialog(null)}>닫기</button></div>
                   {operationsDialog === "domain" ? <form className="compact-form" onSubmit={(event) => { void handleDomainVerify(event); setOperationsDialog(null); }}><label>검증 도메인<input value={domainInput} onChange={(event) => setDomainInput(event.target.value)} /></label><button type="submit" disabled={loading}>검증 실행</button></form> : null}
                   {operationsDialog === "relay" ? <form className="compact-form" onSubmit={(event) => { void handleRelayTest(event); setOperationsDialog(null); }}><label>테스트 수신자<input type="email" value={relayRecipient} onChange={(event) => setRelayRecipient(event.target.value)} /></label>{!overview?.mailProvider ? <p role="status">활성 발송 Provider가 없거나 중복되었습니다. 발신 Provider 설정을 확인하세요.</p> : null}<button type="submit" disabled={loading || !overview?.mailProvider}>Relay 테스트</button></form> : null}
-                  {operationsDialog === "mailTest" ? <form className="compact-form" onSubmit={(event) => { void handleMailDeliveryTest(event); setOperationsDialog(null); }}><label>테스트 Provider<select value={mailProviderOperationsForm.providerKey} onChange={(event) => setMailProviderOperationsForm((current) => ({ ...current, providerKey: event.target.value as MailProviderOperationsForm["providerKey"] }))}><option value="self_hosted">자체 메일 엔진</option><option value="oci_email_delivery">OCI Email Delivery</option></select></label><label>실제 외부 수신자<input type="email" required value={relayRecipient} onChange={(event) => setRelayRecipient(event.target.value)} /></label><button type="submit" disabled={loading}>실제 외부 SMTP 테스트</button></form> : null}
+                  {operationsDialog === "mailTest" ? <form className="compact-form" onSubmit={(event) => void handleMailDeliveryTest(event)}><p>현재 회사의 활성 Provider에 TCP/EHLO/TLS/AUTH 연결만 검증합니다. 메일 DATA는 전송하지 않으며 발송 잠금을 자동 해제하지 않습니다.</p><button type="submit" disabled={loading}>활성 Provider 연결 검증</button></form> : null}
                   {operationsDialog === "provider" ? (
                     <div className="stack-list">
                       <form className="compact-form" onSubmit={(event) => void handleMailDomainOperationsSave(event)}>
@@ -4244,11 +4303,11 @@ export default function App() {
                       </form>
                       <form className="compact-form" onSubmit={(event) => void handleMailProviderOperationsSave(event)}>
                         <strong>발신 Provider 설정</strong>
-                        <label>Provider<select value={mailProviderOperationsForm.providerKey} onChange={(event) => {
-                          const providerKey = event.target.value as MailProviderOperationsForm["providerKey"];
-                          const provider = mailOperations?.providers.find((item) => item.providerKey === providerKey);
-                          setMailProviderOperationsForm((current) => ({ ...current, providerKey, relayHost: provider?.relayHost ?? "", relayPort: String(provider?.relayPort ?? (providerKey === "oci_email_delivery" ? 587 : 25)), tlsMode: provider?.tlsMode ?? (providerKey === "oci_email_delivery" ? "starttls" : "none"), senderAddress: provider?.senderAddress ?? "", username: "", password: "", dkimDomain: provider?.dkimDomain ?? "", dkimSelector: provider?.dkimSelector ?? "", dkimPrivateKey: "" }));
-                        }}><option value="self_hosted">자체 메일 엔진</option><option value="oci_email_delivery">OCI Email Delivery</option></select></label>
+                        <label>Provider<select value={mailProviderOperationsForm.providerId || mailProviderOperationsForm.providerKey} onChange={(event) => {
+                          const provider = mailOperations?.providers.find((item) => item.providerId === event.target.value);
+                          const providerKey = provider?.providerKey ?? event.target.value as MailProviderOperationsForm["providerKey"];
+                          setMailProviderOperationsForm((current) => ({ ...current, providerId: provider?.providerId, providerKey, relayHost: provider?.relayHost ?? "", relayPort: String(provider?.relayPort ?? (providerKey === "oci_email_delivery" ? 587 : 25)), tlsMode: provider?.tlsMode ?? (providerKey === "oci_email_delivery" ? "starttls" : "none"), senderAddress: provider?.senderAddress ?? "", username: "", password: "", dkimDomain: provider?.dkimDomain ?? "", dkimSelector: provider?.dkimSelector ?? "", dkimPrivateKey: "" }));
+                        }}><option value="self_hosted">자체 메일 엔진 (타입 지정·중복 시 거부)</option><option value="oci_email_delivery">OCI Email Delivery (타입 지정·중복 시 거부)</option>{mailOperations?.providers.map((provider) => <option key={provider.providerId} value={provider.providerId}>{provider.providerKey} · {provider.providerId}{provider.active ? " (활성)" : " (대기)"}</option>)}</select></label>
                         <label>SMTP/MX 호스트<input value={mailProviderOperationsForm.relayHost} onChange={(event) => setMailProviderOperationsForm((current) => ({ ...current, relayHost: event.target.value }))} required /></label>
                         <label>포트<input type="number" min="1" max="65535" value={mailProviderOperationsForm.relayPort} onChange={(event) => setMailProviderOperationsForm((current) => ({ ...current, relayPort: event.target.value }))} required /></label>
                         <label>TLS<select value={mailProviderOperationsForm.tlsMode} onChange={(event) => setMailProviderOperationsForm((current) => ({ ...current, tlsMode: event.target.value as MailProviderOperationsForm["tlsMode"] }))}><option value="none">none</option><option value="starttls">STARTTLS</option><option value="tls">TLS</option></select></label>

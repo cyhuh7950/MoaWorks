@@ -97,15 +97,16 @@ def test_admin_routes_forward_actor_company_for_overview_and_relay():
         relay.return_value.test.assert_called_once_with('inactive', 'qa@example.test', company_id='tenant-a')
 
 
-def test_relay_threads_company_to_provider_read_and_test_result_write():
+def test_relay_threads_company_to_provider_read_without_fabricating_result_write():
     store = Mock()
     store.get_provider.return_value = SimpleNamespace(id='inactive', providerType='smtp', relayHost='mail-layer')
     store.update_relay_test_status.return_value = SimpleNamespace(id='inactive')
     service = RelayService(store)
     with patch.object(service, '_emit_relay_event'):
-        service.test('inactive', 'qa@example.test', company_id='a')
+        result = service.test('inactive', 'qa@example.test', company_id='a')
     store.get_provider.assert_called_once_with('inactive', company_id='a')
-    assert store.update_relay_test_status.call_args.kwargs == {'company_id': 'a'}
+    store.update_relay_test_status.assert_not_called()
+    assert result.status == 'untested'
 
 
 class ScheduledCursor(RecordingCursor):

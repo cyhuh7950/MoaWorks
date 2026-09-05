@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from app.services.outbound_provider_resolver import OutboundProviderResolver
+from app.services.mail_connection_probe import probe_smtp_connection
 
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from secrets import compare_digest
-import smtplib
-import ssl
 from threading import Event, Thread
 from uuid import uuid4
 
@@ -187,29 +186,25 @@ class MailDeliveryOperations:
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
                 provider = self._provider(cursor, actor.companyId)
+                cursor.execute("SELECT * FROM mail_provider_configs WHERE company_id=%s AND id=%s FOR UPDATE",
+                               (actor.companyId, provider["id"]))
+                provider = cursor.fetchone()
+                if provider is None or not provider["active"]:
+                    raise ValueError("활성 Provider가 변경되었습니다. 다시 확인하세요.")
                 try:
-                    host, port, mode = provider["relay_host"], int(provider["relay_port"]), provider["tls_mode"]
-                    password = self.security.decrypt_secret(provider["encrypted_password"]) if provider["username"] else ""
-                    client_class = smtplib.SMTP_SSL if mode == "tls" else smtplib.SMTP
-                    if mode == "tls":
-                        client = client_class(host, port, timeout=timeout_seconds, context=ssl.create_default_context())
-                    else:
-                        client = client_class(host, port, timeout=timeout_seconds)
-                    with client:
-                        client.ehlo()
-                        if mode == "starttls":
-                            client.starttls(context=ssl.create_default_context()); client.ehlo()
-                        if provider["username"]: client.login(provider["username"], password)
+                    message = probe_smtp_connection(provider, self.security, timeout=timeout_seconds)
                     test_status = "success"
-                except Exception as exc:
-                    test_status, error = "failed", mask_delivery_error(str(exc))
+                except Exception:
+                    test_status, error = "failed", "SMTP 연결 검증 실패. 관리자 설정을 확인하세요."
+                    message = "연결 검증 실패 (메일 미전송)"
                 cursor.execute("""UPDATE mail_provider_configs SET last_test_status=%s,last_test_message=%s,
-                last_connection_at=%s,last_connection_error=%s,updated_at=%s WHERE id=%s""",
-                (test_status, "TCP/EHLO/TLS/auth 연결 검증 완료" if test_status == "success" else "연결 검증 실패", now, error, now, provider["id"]))
+                last_connection_at=%s,last_connection_error=%s,updated_at=%s WHERE id=%s AND company_id=%s RETURNING *""",
+                (test_status, message, now, error, now, provider["id"], actor.companyId))
+                provider = cursor.fetchone()
                 self._audit(cursor, actor.companyId, actor.userId, actor.userName, "mail_provider_config", provider["id"],
                             "mail.delivery.provider.tested", None, test_status, now)
             connection.commit()
-        return self.get_status(actor)["provider"]
+        return self._provider_view(provider)
 
     def claim_next(self, worker_id):
         self.db.ensure_migrations_applied()

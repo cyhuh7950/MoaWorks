@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { JSONContent } from "@tiptap/core";
+import { mailDeliveryLabel, mailSubmissionMessage } from "./mailDeliveryPresentation";
 
 import {
   ackNotification,
@@ -1371,7 +1372,7 @@ function MailAutoForwardingPanel({ value, loading, error, busy, onReload, onClos
   if (loading && !value) return <FeedbackState state="loading" title="자동전달 설정을 불러오는 중입니다." />;
   if (!value) return <FeedbackState state="error" title="자동전달 설정을 불러오지 못했습니다." message={error} action={{ label: "다시 시도", onAction: onReload }} />;
   const externalCount = value.targets.filter((item) => item.targetKind === "external").length;
-  const resultLabel = (result: { status: string } | null) => result ? ({ internal_delivered: "내부 전달", queued: "대기", blocked: "외부 발송 잠금", retry_pending: "재시도", sent: "발송 완료", failed: "실패" }[result.status] ?? result.status) : "실행 전";
+  const resultLabel = (result: { status: string } | null) => result ? mailDeliveryLabel(result.status) : "실행 전";
   const savePolicy = async () => { if (value.enabled && value.providerLocked && externalCount > 0) setActivationConfirm(true); else await onSavePolicy(); };
   const editException = (item: MailAutoForwardException | null) => { setExceptionEditor(item); setExceptionForm(item ? { matcherType: item.matcherType, matcherValue: item.matcherValue, action: item.action, targetEmails: item.targetEmails, enabled: item.enabled } : emptyAutoForwardException()); setExceptionError(""); };
   return <section className="user-mail-settings user-mail-auto-forwarding" aria-label="자동전달 환경설정">
@@ -1407,7 +1408,7 @@ function MailOutOfOfficePanel({ value, saved, loading, error, busy, onReload, on
   if (!value) return <FeedbackState state="error" title="부재중응답 설정을 불러오지 못했습니다." message={error} action={{ label: "다시 시도", onAction: onReload }} />;
   const dirty = Boolean(saved && JSON.stringify(value) !== JSON.stringify(saved));
   const stateLabel = { disabled: "사용 안 함", scheduled: "예약", active: "사용 중", expired: "기간 종료" }[value.state];
-  const resultLabel = value.lastResult ? ({ internal_delivered: "내부 응답 완료", queued: "외부 발송 대기", blocked: "외부 발송 잠금", retry_pending: "재시도 대기", sent: "외부 발송 완료", failed: "응답 실패" }[value.lastResult.status]) : "응답 기록 없음";
+  const resultLabel = value.lastResult ? mailDeliveryLabel(value.lastResult.status) : "응답 기록 없음";
   const requestSave = async () => {
     if (value.enabled && !saved?.enabled) setActivationConfirm(true);
     else await onSave();
@@ -2323,7 +2324,7 @@ export default function App() {
       if (action === "cancel") await cancelScheduledMail(token, selectedMailDetail.mailId);
       else if (action === "retry") await retryScheduledMail(token, selectedMailDetail.mailId);
       else await sendScheduledMailNow(token, selectedMailDetail.mailId);
-      setMessage(action === "cancel" ? "예약을 취소하고 임시보관함으로 이동했습니다." : action === "retry" ? "외부 전달 재시도를 요청했습니다." : "예약 메일을 지금 발송했습니다.");
+      setMessage(action === "cancel" ? "예약을 취소하고 임시보관함으로 이동했습니다." : action === "retry" ? "외부 전달 재시도를 요청했습니다." : "예약 메일의 전달을 요청했습니다. 상세 상태를 확인하세요.");
       await loadMailWorkspace(token, "sent", undefined, action === "cancel" ? "draft" : "sent", { ...mailListQuery, offset: 0 });
     } catch (error) { setMailError(normalizeClientError(error, "예약 메일 처리 실패")); }
     finally { setMailLoading(false); }
@@ -3671,10 +3672,10 @@ export default function App() {
         setMessage(editingDraftMailId ? "임시저장 메일을 수정했습니다." : "메일을 임시저장했습니다.");
       } else if (action === "schedule") {
         setMessage(editingScheduledMailId ? "예약 메일을 수정했습니다." : "메일을 예약했습니다.");
-      } else if (action === "send" && "externalCount" in response && response.externalCount) {
-        setMessage(`메일을 발송했습니다. 외부 ${response.externalCount}건 / 대기 ${response.queuedCount} / 운영 설정 필요 ${response.blockedCount}`);
+      } else if (action === "send" && "externalCount" in response) {
+        setMessage(mailSubmissionMessage(response));
       } else {
-        setMessage("메일을 발송했습니다.");
+        setMessage("메일을 접수했습니다. 전달 상태는 상세 화면에서 확인하세요.");
       }
       setMailComposeForm(createEmptyMailComposeForm());
       setMailComposeFiles([]);
@@ -5913,7 +5914,7 @@ export default function App() {
                         <section className="user-mail-read-receipt" aria-label="외부 전달 상태">
                           <header><div><strong>외부 전달 상태</strong><small>Relay 상세 주소와 오류는 관리자에게만 표시됩니다.</small></div></header>
                           <ul>{selectedMailDetail.externalDeliveries.map(delivery => (
-                            <li key={delivery.recipientEmail+":"+delivery.recipientKind}><span><small>{delivery.recipientKind}</small><strong>{delivery.recipientEmail}</strong></span><span>{delivery.lastError ? `실패 사유: ${delivery.lastError}` : delivery.status === "queued" ? "외부 대기" : delivery.status === "blocked" ? "운영 설정 필요" : delivery.status === "retry_pending" ? "재시도 예정" : delivery.status === "sent" ? "전달 완료" : delivery.status === "failed" ? "전달 실패" : delivery.status}</span></li>
+                            <li key={delivery.recipientEmail+":"+delivery.recipientKind}><span><small>{delivery.recipientKind}</small><strong>{delivery.recipientEmail}</strong></span><span>{mailDeliveryLabel(delivery.status)}{delivery.lastError ? ` · 상세: ${delivery.lastError}` : ""}</span></li>
                           ))}</ul>
                         </section>
                       ) : null}

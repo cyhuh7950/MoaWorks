@@ -593,12 +593,12 @@ export type MailAutoClassificationSettings = {
   rules: MailAutoClassificationRule[]; folders: MailFolder[]; tags: MailTag[];
 };
 
-export type MailAutoForwardLastResult = { status: "internal_delivered" | "queued" | "blocked" | "retry_pending" | "sent" | "failed"; reasonCode: string; createdAt: string };
+export type MailAutoForwardLastResult = { status: "internal_delivered" | "queued" | "blocked" | "retry_pending" | "sent" | "failed" | "result_unknown"; reasonCode: string; createdAt: string };
 export type MailAutoForwardTarget = { targetId: string; email: string; targetKind: "internal" | "external"; lastResult: MailAutoForwardLastResult | null };
 export type MailAutoForwardExceptionPayload = { matcherType: "sender_email" | "sender_domain"; matcherValue: string; action: "skip" | "override"; targetEmails: string[]; enabled: boolean };
 export type MailAutoForwardException = MailAutoForwardExceptionPayload & { exceptionId: string; version: number; lastResult: MailAutoForwardLastResult | null; createdAt: string; updatedAt: string };
 export type MailAutoForwardSettings = { enabled: boolean; keepOriginal: boolean; version: number; updatedAt: string; providerLocked: boolean; targets: MailAutoForwardTarget[]; exceptions: MailAutoForwardException[] };
-export type MailOutOfOfficeLastResult = { status: "internal_delivered" | "queued" | "blocked" | "retry_pending" | "sent" | "failed"; reasonCode: string; createdAt: string };
+export type MailOutOfOfficeLastResult = { status: "internal_delivered" | "queued" | "blocked" | "retry_pending" | "sent" | "failed" | "result_unknown"; reasonCode: string; createdAt: string };
 export type MailOutOfOfficeSettings = {
   enabled: boolean;
   startDate: string | null;
