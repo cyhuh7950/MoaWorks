@@ -56,6 +56,8 @@ import {
   testTranslationProviderConnection,
   testRelay,
   syncOciMailSuppressions,
+  syncOciSenders,
+  fetchOciSenderSyncStatus,
   switchMailOperationsProvider,
   fetchTranslationPolicy,
   fetchTranslationProviderModels,
@@ -78,6 +80,7 @@ import {
   type MailDeliveryStatusResponse,
   type MailOperationsProvider,
   type MailOperationsOverview,
+  type OciSenderSyncStatus,
   type MailSubmissionCredential,
   type MailSubmissionCredentialIssue,
   type MailSendResponse,
@@ -809,6 +812,7 @@ export default function App() {
   const [adminMessengerStatus, setAdminMessengerStatus] = useState<"active" | "deleted" | "all">("all");
   const [messengerDeleteTarget, setMessengerDeleteTarget] = useState<AdminMessengerRoom | null>(null);
   const [mailOperations, setMailOperations] = useState<MailOperationsOverview | null>(null);
+  const [ociSenderSyncStatus, setOciSenderSyncStatus] = useState<OciSenderSyncStatus | null>(null);
   const [mailDomainOperationsForm, setMailDomainOperationsForm] = useState<MailDomainOperationsForm>({ registeredDomain: "", mailDomain: "", inboundMxHost: "", adminAccessMode: "restricted", adminAllowedCidrs: "" });
   const [mailProviderOperationsForm, setMailProviderOperationsForm] = useState<MailProviderOperationsForm>({ providerKey: "self_hosted", relayHost: "", relayPort: "25", tlsMode: "none", senderAddress: "", username: "", password: "", dkimDomain: "", dkimSelector: "", dkimPrivateKey: "" });
   const [translationStatus, setTranslationStatus] = useState<TranslationStatus | null>(null);
@@ -1106,16 +1110,18 @@ export default function App() {
   async function refreshMailDelivery(nextToken = token) {
     if (!nextToken) return;
     setMailDeliveryError("");
-    const [statusResult, queueResult, operationsResult] = await Promise.allSettled([
+    const [statusResult, queueResult, operationsResult, senderSyncResult] = await Promise.allSettled([
       fetchMailDeliveryStatus(nextToken),
       fetchMailDeliveryQueue(nextToken),
       fetchMailOperations(nextToken),
+      fetchOciSenderSyncStatus(nextToken),
     ]);
     setMailDeliveryStatus(statusResult.status === "fulfilled" ? statusResult.value : null);
     setMailDeliveryQueue(queueResult.status === "fulfilled" ? queueResult.value : null);
     setMailOperations(operationsResult.status === "fulfilled" ? operationsResult.value : null);
-    const failures = [statusResult, queueResult, operationsResult].flatMap((result, index) =>
-      result.status === "rejected" ? [`${["메일 상태", "전달 큐", "Provider 설정"][index]} 조회 실패: ${result.reason instanceof Error ? result.reason.message : "응답 확인 필요"}`] : []);
+    setOciSenderSyncStatus(senderSyncResult.status === "fulfilled" ? senderSyncResult.value : null);
+    const failures = [statusResult, queueResult, operationsResult, senderSyncResult].flatMap((result, index) =>
+      result.status === "rejected" ? [`${["메일 상태", "전달 큐", "Provider 설정", "OCI 발신자 동기화 상태"][index]} 조회 실패: ${result.reason instanceof Error ? result.reason.message : "응답 확인 필요"}`] : []);
     setMailDeliveryError(failures.join(" / "));
     if (operationsResult.status !== "fulfilled") return;
     const operations = operationsResult.value;
@@ -2630,6 +2636,21 @@ export default function App() {
     }
   }
 
+  async function handleOciSenderSync() {
+    if (!token) return;
+    setLoading(true);
+    setErrors([]);
+    try {
+      const result = await syncOciSenders(token);
+      await refreshMailDelivery();
+      setMessage(`OCI 승인 발신자를 동기화했습니다. 신규 ${result.created}건 / 제거 ${result.deleted}건`);
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "OCI 승인 발신자 동기화 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   const isPublicLoginContractPending = health?.initialized === true && !token && publicUiContractState === "pending";
   const isHealthPending = health === null || isPublicLoginContractPending;
   const initialized = health?.initialized === true;
@@ -3317,6 +3338,8 @@ export default function App() {
                 <button type="button" disabled={loading || mailOperations?.domain?.activeOutboundProvider === "oci_email_delivery"} onClick={() => void handleMailProviderSwitch("oci_email_delivery")}>OCI로 전환</button>
                 <button type="button" className="secondary" disabled={loading || !mailOperations?.domain?.previousOutboundProvider} onClick={() => void handleMailProviderRollback()}>직전 Provider로 rollback</button>
                 <button type="button" className="secondary" disabled={loading} onClick={() => void handleOciSuppressionSync()}>OCI suppression 동기화</button>
+                <button type="button" className="secondary" disabled={loading || mailOperations?.domain?.activeOutboundProvider !== "oci_email_delivery"} onClick={() => void handleOciSenderSync()}>OCI 승인 발신자 동기화</button>
+                <small className="muted">대기 {ociSenderSyncStatus?.pending ?? "-"} · 실패 {ociSenderSyncStatus?.failed ?? "-"} · 최근 {contentDate(ociSenderSyncStatus?.lastUpdatedAt)}</small>
               </div>
               <div className="ops-list-panel">
                 <div className="ops-list-head"><strong>Provider 상태</strong><span className="muted">비밀값은 화면과 API 응답에 노출하지 않습니다.</span></div>

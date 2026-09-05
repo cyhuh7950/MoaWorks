@@ -13,7 +13,8 @@ from app.schemas.mail_operations import MailOperationsDomainUpdateRequest, MailO
 from app.services.mail_admin_operations import MailAdminOperations, generate_dkim_keypair
 from app.services.mail_daily_send_quota import MailDailyQuotaUnavailable, MailDailySendLimitExceeded
 from app.services.mail_operations_policy import ProviderSwitchPlan, build_mail_domain_contract
-from app.services.oci_email_operations import OciEmailGateway, OciEmailOperations
+from app.services.oci_email_operations import OciEmailGateway, OciEmailOperations, build_desired_sender_emails
+from app.workers.mail_delivery_worker import run_oci_sender_sync_once
 
 
 class RecordingCursor:
@@ -113,7 +114,89 @@ class PagingClient:
         )
 
 
+class SenderMutationClient:
+    def __init__(self) -> None:
+        self.created = []
+        self.deleted = []
+        self.senders = [
+            SimpleNamespace(id="sender-admin", email_address="admin@moaworks.sinsan.kr", lifecycle_state="ACTIVE"),
+            SimpleNamespace(id="sender-old", email_address="old@moaworks.sinsan.kr", lifecycle_state="ACTIVE"),
+        ]
+
+    def create_sender(self, _details):
+        self.created.append(_details.email_address)
+        return SimpleNamespace(data=SimpleNamespace(id="sender-new", email_address=_details.email_address))
+
+    def delete_sender(self, sender_id):
+        self.deleted.append(sender_id)
+        return SimpleNamespace(data=None)
+
+    def list_senders(self, _compartment_id, **_kwargs):
+        return SimpleNamespace(data=SimpleNamespace(items=self.senders), headers={})
+
+    def list_suppressions(self, _tenancy_id, **_kwargs):
+        return SimpleNamespace(data=SimpleNamespace(items=[]), headers={})
+
+    def list_email_domains(self, _compartment_id, **_kwargs):
+        return SimpleNamespace(data=SimpleNamespace(items=[]), headers={})
+
+
 class MailAdminOperationsContractTest(unittest.TestCase):
+    def test_oci_sender_sync_worker_reconciles_each_active_oci_company(self) -> None:
+        class Cursor:
+            def __enter__(self): return self
+            def __exit__(self, *_args): return None
+            def execute(self, _sql): return None
+            def fetchall(self): return [{"company_id": "company-1", "mail_domain": "moaworks.sinsan.kr"}]
+
+        class Connection:
+            def __enter__(self): return self
+            def __exit__(self, *_args): return None
+            def cursor(self): return Cursor()
+
+        class Db:
+            def ensure_migrations_applied(self): pass
+            def connect(self): return Connection()
+
+        class Sync:
+            def __init__(self): self.calls = []
+            def reconcile_company(self, **kwargs): self.calls.append(kwargs); return {}
+
+        sync = Sync()
+        self.assertEqual(run_oci_sender_sync_once(db=Db(), operations=sync), 1)
+        self.assertEqual(sync.calls[0]["company_id"], "company-1")
+
+    def test_desired_sender_set_contains_only_active_managed_domain_users(self) -> None:
+        rows = [
+            {"email": "SamsungLife@moaworks.sinsan.kr", "status": "active"},
+            {"email": "deleted@moaworks.sinsan.kr", "status": "deleted"},
+            {"email": "inactive@moaworks.sinsan.kr", "status": "inactive"},
+            {"email": "outside@example.net", "status": "active"},
+        ]
+        self.assertEqual(
+            build_desired_sender_emails(rows, "moaworks.sinsan.kr", {"admin@moaworks.sinsan.kr"}),
+            {"admin@moaworks.sinsan.kr", "samsunglife@moaworks.sinsan.kr"},
+        )
+
+    def test_oci_gateway_creates_sender_with_email_details(self) -> None:
+        client = SenderMutationClient()
+        gateway = OciEmailGateway(client_factory=lambda: client)
+        result = gateway.create_sender("new@moaworks.sinsan.kr")
+        self.assertEqual(result["email"], "new@moaworks.sinsan.kr")
+        self.assertEqual(client.created, ["new@moaworks.sinsan.kr"])
+
+    def test_oci_gateway_reconcile_adds_missing_and_removes_unprotected_stale_sender(self) -> None:
+        client = SenderMutationClient()
+        gateway = OciEmailGateway(client_factory=lambda: client)
+        result = gateway.reconcile_senders(
+            "moaworks.sinsan.kr",
+            {"admin@moaworks.sinsan.kr", "new@moaworks.sinsan.kr"},
+            {"admin@moaworks.sinsan.kr"},
+        )
+        self.assertEqual(client.created, ["new@moaworks.sinsan.kr"])
+        self.assertEqual(client.deleted, ["sender-old"])
+        self.assertEqual(result, {"created": 1, "deleted": 1, "unchanged": 1})
+
     def test_domain_contract_canonicalizes_admin_cidrs(self) -> None:
         contract = build_mail_domain_contract(
             registered_domain="sinsan.kr",
@@ -143,6 +226,7 @@ class MailAdminOperationsContractTest(unittest.TestCase):
             "/api/v1/admin/mail-operations/providers/switch": "post",
             "/api/v1/admin/mail-operations/providers/rollback": "post",
             "/api/v1/admin/mail-operations/oci/suppressions/sync": "post",
+            "/api/v1/admin/mail-operations/oci/senders/sync": "post",
             "/api/v1/admin/mail-operations/providers/self_hosted/dkim/generate": "post",
         }
         for path, method in expected.items():
@@ -174,6 +258,16 @@ class MailAdminOperationsContractTest(unittest.TestCase):
         self.assertEqual(snapshot.approved_senders[0]["status"], "ACTIVE")
         self.assertEqual(snapshot.email_domains[0]["status"], "ACTIVE")
         self.assertEqual(client.suppression_pages, 2)
+
+    def test_admin_can_reconcile_oci_senders_now(self) -> None:
+        class Oci:
+            def reconcile_company(self, **kwargs):
+                self.kwargs = kwargs
+                return {"created": 2, "deleted": 1, "unchanged": 3}
+
+        cursor = RecordingCursor(one_rows=[{"mail_domain": "moaworks.sinsan.kr"}])
+        result = MailAdminOperations(db=FakeDb(cursor), oci_operations=Oci()).sync_oci_senders(actor())
+        self.assertEqual(result["created"], 2)
 
     def test_oci_sync_replaces_active_snapshot_and_writes_audit(self) -> None:
         snapshot_gateway = SimpleNamespace(
@@ -495,6 +589,18 @@ class MailAdminOperationsContractTest(unittest.TestCase):
         result = MailAdminOperations(db=FakeDb(sync_cursor), oci_operations=oci).sync_oci_suppressions(actor())
         self.assertEqual(result["suppressionCount"], 2)
 
+    def test_oci_sender_sync_status_summarizes_outbox(self) -> None:
+        cursor = RecordingCursor(all_rows=[[{
+            "status": "pending", "count": 2, "updated_at": "later"
+        }, {
+            "status": "failed", "count": 1, "updated_at": "latest"
+        }]])
+        result = MailAdminOperations(db=FakeDb(cursor)).get_oci_sender_sync_status(actor())
+        self.assertEqual(result["pending"], 2)
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(result["succeeded"], 0)
+        self.assertEqual(result["lastUpdatedAt"], "latest")
+
     def test_non_active_provider_connection_test_preserves_lock_before_switch(self) -> None:
         provider = {
             "id": "provider-oci", "provider_type": "oci_email_delivery",
@@ -555,6 +661,8 @@ class MailAdminOperationsContractTest(unittest.TestCase):
             rollback_provider=lambda _actor: {"activeProvider": "self_hosted"},
             test_provider=lambda _actor, key, recipient: {"providerKey": key, "recipient": recipient},
             sync_oci_suppressions=lambda _actor: {"suppressionCount": 0},
+            sync_oci_senders=lambda _actor: {"created": 0, "deleted": 0, "unchanged": 1},
+            get_oci_sender_sync_status=lambda _actor: {"pending": 0, "processing": 0, "succeeded": 1, "failed": 0, "lastUpdatedAt": None},
         )
         try:
             with patch("app.api.routes.mail_operations_admin._service", return_value=service):
@@ -566,6 +674,8 @@ class MailAdminOperationsContractTest(unittest.TestCase):
                 self.assertEqual(client.post("/api/v1/admin/mail-operations/providers/oci_email_delivery/test", json={"recipient": "external@example.net"}).status_code, 200)
                 self.assertEqual(client.post("/api/v1/admin/mail-operations/providers/rollback").status_code, 200)
                 self.assertEqual(client.post("/api/v1/admin/mail-operations/oci/suppressions/sync").status_code, 200)
+                self.assertEqual(client.post("/api/v1/admin/mail-operations/oci/senders/sync").status_code, 200)
+                self.assertEqual(client.get("/api/v1/admin/mail-operations/oci/senders/sync-status").status_code, 200)
             failing = SimpleNamespace(get_overview=lambda _actor: (_ for _ in ()).throw(ValueError("invalid")))
             with patch("app.api.routes.mail_operations_admin._service", return_value=failing):
                 self.assertEqual(client.get("/api/v1/admin/mail-operations").status_code, 400)

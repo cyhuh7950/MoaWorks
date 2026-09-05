@@ -346,6 +346,37 @@ class MailAdminOperations:
             connection.commit()
         return result
 
+    def sync_oci_senders(self, actor) -> dict:
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT mail_domain FROM mail_domain_settings WHERE company_id=%s", (actor.companyId,))
+                state = cursor.fetchone()
+        if state is None or not state.get("mail_domain"):
+            raise ValueError("먼저 메일 도메인 설정을 저장해야 합니다.")
+        return self.oci_operations.reconcile_company(
+            db=self.db,
+            company_id=actor.companyId,
+            mail_domain=state["mail_domain"],
+        )
+
+    def get_oci_sender_sync_status(self, actor) -> dict:
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT status,COUNT(*) AS count,MAX(updated_at) AS updated_at
+                   FROM mail_oci_sender_sync_outbox
+                  WHERE company_id=%s GROUP BY status""",
+                (actor.companyId,),
+            )
+            rows = cursor.fetchall()
+        counts = {row["status"]: int(row["count"]) for row in rows}
+        return {
+            "pending": counts.get("pending", 0),
+            "processing": counts.get("processing", 0),
+            "succeeded": counts.get("succeeded", 0),
+            "failed": counts.get("failed", 0),
+            "lastUpdatedAt": max((row.get("updated_at") for row in rows if row.get("updated_at")), default=None),
+        }
+
     def _active_provider_key(self, cursor, company_id: str) -> str | None:
         row = OutboundProviderResolver.readiness(cursor, company_id)
         return OutboundProviderResolver.provider_key(row) if row else None

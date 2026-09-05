@@ -544,6 +544,14 @@ export type MailDeliveryQueueResponse = {
   total: number;
 };
 
+export type OciSenderSyncStatus = {
+  pending: number;
+  processing: number;
+  succeeded: number;
+  failed: number;
+  lastUpdatedAt: string | null;
+};
+
 export type MailDeliveryDetailResponse = {
   item: MailDeliveryQueueItem;
   attempts: MailDeliveryAttemptItem[];
@@ -1102,6 +1110,16 @@ export async function retryMailDelivery(token: string, queueId: string, confirmD
     headers: authHeaders(token),
     body: JSON.stringify({ confirmDuplicateRisk }),
   }));
+}
+
+export async function syncOciSenders(token: string) {
+  return request<{ created: number; deleted: number; unchanged: number }>("/admin/mail-operations/oci/senders/sync", {
+    method: "POST", headers: authHeaders(token),
+  });
+}
+
+export async function fetchOciSenderSyncStatus(token: string) {
+  return request<OciSenderSyncStatus>("/admin/mail-operations/oci/senders/sync-status", { headers: authHeaders(token) });
 }
 
 export async function fetchAdminMessengerRooms(token: string, status: "active" | "deleted" | "all" = "all") {

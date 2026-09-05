@@ -117,6 +117,15 @@ class DirectoryStore:
         self.db = PostgresService()
         self.security = SecurityService()
 
+    @staticmethod
+    def _enqueue_oci_sender_sync(cursor, *, company_id: str, user_id: str | None, email: str | None, operation: str, now) -> None:
+        cursor.execute(
+            """INSERT INTO mail_oci_sender_sync_outbox(
+                id,company_id,user_id,email,operation,status,attempt_count,next_attempt_at,created_at,updated_at
+            ) VALUES(%s,%s,%s,%s,%s,'pending',0,%s,%s,%s)""",
+            (f"oci_sender_sync_{uuid4().hex}", company_id, user_id, email, operation, now, now, now),
+        )
+
     def is_initialized(self) -> bool:
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection:
@@ -758,6 +767,10 @@ class DirectoryStore:
                     status_after=payload.status,
                     reason="아이디 기반 자동 생성 / 최초 로그인 후 비밀번호 변경 필요" if must_change_password else None,
                 )
+                self._enqueue_oci_sender_sync(
+                    cursor=cursor, company_id=company.id, user_id=user_id,
+                    email=normalized_email, operation="create", now=now,
+                )
                 row = self._fetch_user_view_row(cursor, user_id)
             connection.commit()
         return self._row_to_user_view(row)
@@ -843,6 +856,12 @@ class DirectoryStore:
                     status_after=next_status,
                     reason=None,
                 )
+                if current["user_status"] != next_status:
+                    self._enqueue_oci_sender_sync(
+                        cursor=cursor, company_id=current["company_id"], user_id=user_id,
+                        email=current.get("user_email"),
+                        operation="deactivate" if next_status != "active" else "update", now=self._now(),
+                    )
                 row = self._fetch_user_view_row(cursor, user_id)
             connection.commit()
         return self._row_to_user_view(row)
@@ -894,6 +913,10 @@ class DirectoryStore:
                     status_before=current["user_status"],
                     status_after="deleted",
                     reason="상태 삭제",
+                )
+                self._enqueue_oci_sender_sync(
+                    cursor=cursor, company_id=current["company_id"], user_id=user_id,
+                    email=current.get("user_email"), operation="delete", now=self._now(),
                 )
                 row = self._fetch_user_view_row(cursor, user_id)
             connection.commit()

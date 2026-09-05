@@ -118,3 +118,19 @@ def sync_oci_suppressions(actor: AuthUserSummary = Depends(require_admin)):
         return _service().sync_oci_suppressions(actor)
     except Exception as exc:
         _raise_operation_error(exc)
+
+
+@router.post("/oci/senders/sync")
+def sync_oci_senders(actor: AuthUserSummary = Depends(require_admin)):
+    try:
+        return _service().sync_oci_senders(actor)
+    except Exception as exc:
+        _raise_operation_error(exc)
+
+
+@router.get("/oci/senders/sync-status")
+def get_oci_sender_sync_status(actor: AuthUserSummary = Depends(require_admin)):
+    try:
+        return _service().get_oci_sender_sync_status(actor)
+    except Exception as exc:
+        _raise_operation_error(exc)
