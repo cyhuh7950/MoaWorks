@@ -27,10 +27,17 @@ class FakeSmtp:
     def has_extn(self, _name):
         return False
 
-    def send_message(self, message, *, from_addr, to_addrs):
-        self.from_addr = from_addr
-        self.message = message
-        return {}
+    def mail(self, sender): self.from_addr=sender; return 250,b'ok'
+    def rcpt(self, recipient): return 250,b'ok'
+    def docmd(self, command): return 354,b'continue'
+    def send(self, payload):
+        from email.parser import BytesParser
+        from email.policy import default
+        import re
+        self.message=BytesParser(policy=default).parsebytes(re.sub(br'(?m)^\.\.',b'.',payload[:-3]))
+    def getreply(self): return 250,b'accepted'
+    def quit(self): pass
+    def close(self): pass
 
 
 class FakeDkimSigner:

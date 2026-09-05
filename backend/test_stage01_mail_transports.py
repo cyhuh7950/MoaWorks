@@ -41,9 +41,13 @@ class FakeSmtp:
         if self.auth_error:
             raise smtplib.SMTPAuthenticationError(535, b"secret rejected")
 
-    def send_message(self, message, *, from_addr: str, to_addrs: list[str]):
-        self.calls.append(("send_message", (from_addr, tuple(to_addrs), message["Message-ID"])))
-        return {}
+    def mail(self, sender): self.calls.append(('mail',sender)); return 250,b'ok'
+    def rcpt(self, recipient): self.calls.append(('rcpt',recipient)); return 250,b'ok'
+    def docmd(self, command): self.calls.append((command,None)); return 354,b'continue'
+    def send(self, payload): self.calls.append(('data',payload))
+    def getreply(self): return 250,b'accepted'
+    def quit(self): pass
+    def close(self): pass
 
 
 def sample_message() -> OutboundMessage:
@@ -123,7 +127,7 @@ class MailTransportTest(unittest.TestCase):
         self.assertEqual(calls, [("mail.dev.moaworks.sinsan.kr", 2525, 20)])
         self.assertIn(("starttls", True), smtp.calls)
         self.assertLess(smtp.calls.index(("starttls", True)), smtp.calls.index(("login", "sinsan-submit")))
-        send_index = next(index for index, call in enumerate(smtp.calls) if call[0] == "send_message")
+        send_index = next(index for index, call in enumerate(smtp.calls) if call[0] == "data")
         self.assertLess(smtp.calls.index(("login", "sinsan-submit")), send_index)
         self.assertEqual(receipt.endpoint, "smtp://mail.dev.moaworks.sinsan.kr:2525")
 
@@ -134,7 +138,7 @@ class MailTransportTest(unittest.TestCase):
             smtp_factory=lambda **_: smtp,
         )
 
-        with self.assertRaisesRegex(MailTransportFailure, "자체 SMTP 릴레이 인증 실패") as raised:
+        with self.assertRaisesRegex(MailTransportFailure, "SMTP 명시 응답 거부") as raised:
             transport.send(
                 sample_message(),
                 helo_name="mail.moaworks.sinsan.kr",
@@ -184,7 +188,7 @@ class MailTransportTest(unittest.TestCase):
             timeout_sec=20,
         )
 
-        with self.assertRaisesRegex(ValueError, "OCI SMTP 인증 실패") as raised:
+        with self.assertRaisesRegex(ValueError, "SMTP 명시 응답 거부") as raised:
             transport.send(sample_message(), config=config)
 
         self.assertNotIn("top-secret", str(raised.exception))

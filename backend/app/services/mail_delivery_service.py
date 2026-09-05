@@ -16,7 +16,7 @@ from app.services.mail_daily_send_quota import (
     MailDailyQuotaUnavailable,
     MailDailySendLimitExceeded,
 )
-from app.services.mail_transports import MailTransportFailure
+from app.services.mail_transports import MailTransportFailure, send_smtp_data, smtp_session, smtp_failure
 
 @dataclass(frozen=True)
 class RecipientClassification:
@@ -88,7 +88,7 @@ class MailDeliveryService:
 class MailDeliveryWorker:
     def __init__(self, worker_id: str, adapter: RelayAdapter, *, quota=None):
         self.worker_id, self.adapter, self.quota = worker_id, adapter, quota
-    def deliver_claimed(self, job, provider: dict) -> DeliveryResult:
+    def deliver_claimed(self, job, provider: dict, *, before_data=None) -> DeliveryResult:
         if not provider.get("delivery_enabled") or provider.get("last_test_status") != "success":
             return DeliveryResult("blocked", error_message="외부 발송 잠금 또는 연결 검증이 필요합니다.")
         if provider.get("provider_type") == "oci_email_delivery" and _job_value(job, "recipient_suppressed", False):
@@ -101,9 +101,12 @@ class MailDeliveryWorker:
             envelope["sender_email"] = _job_value(job, "sender_email_override") or envelope["sender_email"]
             envelope["sender_display_name"] = _job_value(job, "sender_display_name_override") or envelope["sender_display_name"]
             envelope["reply_to_email"] = _job_value(job, "reply_to_email_override") or envelope["reply_to_email"]
+        phase = 'prepare'
         try:
             if hasattr(self.adapter, "prepare") and hasattr(self.adapter, "send_prepared"):
                 prepared = self.adapter.prepare(envelope, provider)
+                phase = 'send'
+                ownership_options = {'before_data': before_data} if before_data is not None else {}
                 if self.quota is not None and getattr(
                     self.adapter, "supports_attempt_reservation", False
                 ):
@@ -111,16 +114,20 @@ class MailDeliveryWorker:
                         prepared,
                         provider,
                         before_network_attempt=self.quota.reserve_attempt,
+                        **ownership_options,
                     )
                 else:
                     if self.quota is not None:
                         self.quota.reserve_attempt()
-                    response = self.adapter.send_prepared(prepared, provider)
+                    response = self.adapter.send_prepared(prepared, provider, **ownership_options)
             else:  # compatibility for legacy in-process callers without quota
                 if self.quota is not None:
                     raise MailDailyQuotaUnavailable(
                         "quota-aware delivery requires prepare/send_prepared adapter"
                     )
+                if before_data is not None:
+                    raise RelayDeliveryError('소유권 확인을 지원하지 않는 발송 adapter입니다.')
+                phase = 'send'
                 response = self.adapter.send(envelope, provider)
             return DeliveryResult("sent", relay_response=mask_delivery_error(response))
         except MailDailySendLimitExceeded as exc:
@@ -136,12 +143,19 @@ class MailDeliveryWorker:
                 next_attempt_at=datetime.now(UTC) + timedelta(seconds=60),
             )
         except (RelayDeliveryError, MailTransportFailure) as exc:
+            if phase == 'prepare':
+                return DeliveryResult('failed', error_message=mask_delivery_error('PREPARE_FAILED: 발송 자료/설정 준비 실패'))
+            if getattr(exc, 'result_unknown', False):
+                return DeliveryResult('result_unknown', error_message=mask_delivery_error(str(exc)))
             maximum = int(provider.get("max_retry_count", 3))
             error = mask_delivery_error(str(exc))
             if exc.transient and attempt < maximum:
                 delay = int(provider.get("retry_interval_sec", 60)) * (2 ** (attempt - 1))
                 return DeliveryResult("retry_pending", error_message=error, next_attempt_at=datetime.now(UTC)+timedelta(seconds=delay))
             return DeliveryResult("failed", error_message=error)
+        except Exception:
+            return DeliveryResult('failed' if phase == 'prepare' else 'result_unknown',
+                error_message='PREPARE_FAILED: 발송 자료/설정 준비 실패' if phase == 'prepare' else 'SEND_RESULT_UNKNOWN: 중복 위험 확인 필요')
 
 class SmtpRelayAdapter:
     def build_message(self, envelope: dict, provider: dict) -> EmailMessage:
@@ -192,29 +206,29 @@ class SmtpRelayAdapter:
             )
         )
 
-    def send(self, envelope: dict, provider: dict) -> str:
+    def send(self, envelope: dict, provider: dict, *, before_data=None) -> str:
         try:
             message = self.build_message(envelope, provider)
         except ValueError as exc:
             raise RelayDeliveryError(str(exc), transient=False) from exc
+        return self.send_prepared(message, provider, envelope=envelope, before_data=before_data)
+
+    def send_prepared(self, message, provider, *, envelope, before_data=None):
         host, port = provider["relay_host"], int(provider["relay_port"])
         tls_mode = provider.get("tls_mode", "starttls")
         client_cls = smtplib.SMTP_SSL if tls_mode == "tls" else smtplib.SMTP
         try:
-            with client_cls(host, port, timeout=10, context=ssl.create_default_context()) if tls_mode == "tls" else client_cls(host, port, timeout=10) as client:
+            client = (client_cls(host, port, timeout=10, context=ssl.create_default_context())
+                      if tls_mode == 'tls' else client_cls(host, port, timeout=10))
+            with smtp_session(client):
                 client.ehlo()
                 if tls_mode == "starttls":
                     client.starttls(context=ssl.create_default_context()); client.ehlo()
                 if provider.get("username"):
                     client.login(provider["username"], provider["password"])
-                if envelope.get("delivery_kind") in {"auto_forward", "out_of_office"}:
-                    refused = client.send_message(message, from_addr=envelope["sender_email"], to_addrs=[envelope["recipient_email"]])
-                else:
-                    refused = client.send_message(message)
-                if refused:
-                    raise RelayDeliveryError("relay recipient refused", transient=False)
+                sender = (envelope['sender_email'] if envelope.get('delivery_kind') in {'auto_forward','out_of_office'}
+                          else provider.get('from_address') or envelope['sender_email'])
+                send_smtp_data(client,message,sender,envelope['recipient_email'],before_data=before_data)
                 return "relay accepted"
-        except (TimeoutError, OSError, smtplib.SMTPServerDisconnected, smtplib.SMTPConnectError) as exc:
-            raise RelayDeliveryError(str(exc), transient=True) from exc
-        except smtplib.SMTPException as exc:
-            raise RelayDeliveryError(str(exc), transient=False) from exc
+        except Exception as exc:
+            raise smtp_failure(exc) from exc

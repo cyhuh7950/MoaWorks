@@ -40,6 +40,7 @@ from app.services.resource_policy import ResourceNotFoundError, ResourceStateErr
 from app.schemas.mail_messenger import (
     MailDeliveryProviderTestRequest, MailDeliveryProviderUpdateRequest, MailDeliveryProviderView,
     MailDeliveryQueueDetailResponse, MailDeliveryQueueListResponse, MailDeliveryStatusResponse,
+    MailDeliveryRetryRequest,
     AdminMessengerRoomListResponse,
     MessengerRoomDeleteResponse,
 )
@@ -295,8 +296,8 @@ def get_mail_delivery_queue_detail(queue_id: str, user: AuthUserSummary = Depend
     except Exception as exc: _delivery_error(exc)
 
 @router.post("/mail-delivery/queue/{queue_id}/retry", response_model=MailDeliveryQueueDetailResponse)
-def retry_mail_delivery(queue_id: str, user: AuthUserSummary = Depends(require_admin)):
-    try: return _delivery_service().retry(user,queue_id)
+def retry_mail_delivery(queue_id: str, user: AuthUserSummary = Depends(require_admin), payload: MailDeliveryRetryRequest | None = None):
+    try: return _delivery_service().retry(user,queue_id,confirm_duplicate_risk=payload.confirmDuplicateRisk if payload else False)
     except Exception as exc: _delivery_error(exc)
 
 @router.post("/mail-delivery/provider/test", response_model=MailDeliveryProviderView)

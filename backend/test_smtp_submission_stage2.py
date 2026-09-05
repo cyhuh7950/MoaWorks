@@ -68,6 +68,16 @@ class Smtp:
     def has_extn(self, name): return True
     def starttls(self, **kwargs): pass
     def login(self, *args): pass
+    def mail(self, sender): self.sender=sender; self.recipients=[]; return 250,b'ok'
+    def rcpt(self, recipient): self.recipients.append(recipient); return 250,b'ok'
+    def docmd(self, command): assert command=='DATA'; return 354,b'continue'
+    def send(self, payload):
+        import re
+        assert payload.endswith(b'\r\n.\r\n')
+        self.deliveries.append((self.sender,self.recipients,re.sub(br'(?m)^\.\.',b'.',payload[:-3])))
+    def getreply(self): return 250,b'accepted'
+    def quit(self): pass
+    def close(self): pass
     def sendmail(self, sender, recipients, raw):
         self.deliveries.append((sender, recipients, raw))
         return {}

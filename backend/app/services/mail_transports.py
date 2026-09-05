@@ -1,4 +1,5 @@
 from __future__ import annotations
+from contextlib import contextmanager
 
 from dataclasses import dataclass
 from email.message import EmailMessage
@@ -46,9 +47,73 @@ MxResolver = Callable[[str], Sequence[str]]
 
 
 class MailTransportFailure(ValueError):
-    def __init__(self, message: str, *, transient: bool) -> None:
+    def __init__(self, message: str, *, transient: bool, result_unknown: bool = False) -> None:
         super().__init__(message)
         self.transient = transient
+        self.result_unknown = result_unknown
+
+
+def smtp_failure(exc: Exception) -> MailTransportFailure:
+    if isinstance(exc, MailTransportFailure):
+        return exc
+    # SMTPResponseException은 OSError 하위이므로 반드시 먼저 분류한다.
+    if isinstance(exc, smtplib.SMTPResponseException):
+        return MailTransportFailure('SMTP 명시 응답 거부', transient=400 <= exc.smtp_code < 500)
+    return MailTransportFailure('SMTP DATA 전 연결/처리 실패', transient=isinstance(
+        exc, (OSError, TimeoutError, smtplib.SMTPServerDisconnected)))
+
+
+@contextmanager
+def smtp_session(client):
+    try:
+        yield client
+    except BaseException:
+        try:
+            client.close()
+        except Exception:
+            pass
+        raise
+    else:
+        # DATA 확정 수락은 QUIT/close 오류로 취소되지 않는다.
+        try:
+            client.quit()
+        except Exception:
+            pass
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+
+def send_smtp_data(smtp, prepared, envelope_from, recipient_email, *, before_data=None):
+    payload = prepared if isinstance(prepared, bytes) else prepared.as_bytes(policy=SMTP)
+    payload = re.sub(br'(?m)^\.', b'..', payload)
+    if not payload.endswith(b'\r\n'):
+        payload += b'\r\n'
+    payload += b'.\r\n'
+    for operation, value in ((smtp.mail, envelope_from), (smtp.rcpt, recipient_email)):
+        code, _ = operation(value)
+        if not 200 <= code < 300:
+            raise MailTransportFailure('SMTP envelope 거부', transient=400 <= code < 500)
+    if before_data is not None:
+        before_data()
+    code, _ = smtp.docmd('DATA')
+    if code != 354:
+        raise MailTransportFailure('SMTP DATA 진입 거부', transient=400 <= code < 500)
+    if before_data is not None:
+        before_data()
+    try:
+        smtp.send(payload)
+        code, _ = smtp.getreply()
+    except Exception as exc:
+        raise MailTransportFailure('SMTP DATA 결과불명: 중복 위험 확인 필요',
+                                   transient=False, result_unknown=True) from exc
+    if code == 250:
+        return
+    if 400 <= code < 600:
+        raise MailTransportFailure('SMTP DATA 명시 거부', transient=code < 500)
+    raise MailTransportFailure('SMTP DATA 결과불명: 응답 확인 필요', transient=False, result_unknown=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +255,7 @@ class SelfHostedSmtpTransport:
         username: str = "",
         password: str = "",
         before_network_attempt: Callable[[], object] | None = None,
+        before_data: Callable[[], object] | None = None,
     ) -> DeliveryReceipt:
         normalized_relay_host = relay_host.strip().rstrip(".").lower()
         normalized_username = username.strip()
@@ -212,7 +278,7 @@ class SelfHostedSmtpTransport:
             if before_network_attempt is not None:
                 before_network_attempt()
             try:
-                with self.smtp_factory(host=host, port=port, timeout=max(3, min(timeout_sec, 60))) as smtp:
+                with smtp_session(self.smtp_factory(host=host, port=port, timeout=max(3, min(timeout_sec, 60)))) as smtp:
                     smtp.ehlo(helo_name)
                     starttls_required = normalized_relay_host and tls_mode == "starttls"
                     if starttls_required and not smtp.has_extn("starttls"):
@@ -222,27 +288,17 @@ class SelfHostedSmtpTransport:
                         smtp.ehlo(helo_name)
                     if normalized_relay_host and normalized_username:
                         smtp.login(normalized_username, password)
-                    refused = (smtp.sendmail(envelope_from, [recipient_email], prepared)
-                        if isinstance(prepared, bytes) else smtp.send_message(
-                            prepared, from_addr=envelope_from, to_addrs=[recipient_email]))
-                    if refused:
-                        raise ValueError("상대 SMTP 서버가 수신자를 거부했습니다.")
+                    send_smtp_data(smtp, prepared, envelope_from, recipient_email, before_data=before_data)
                 return DeliveryReceipt(
                     provider_key="self_hosted",
                     endpoint=f"smtp://{host}:{port}",
                     remote_smtp_accepted=True,
                 )
-            except Exception as exc:  # pragma: no cover - multi-host network path
-                last_error = exc
-        transient = isinstance(
-            last_error,
-            (TimeoutError, OSError, smtplib.SMTPServerDisconnected, smtplib.SMTPConnectError),
-        )
-        if isinstance(last_error, smtplib.SMTPAuthenticationError):
-            raise MailTransportFailure("자체 SMTP 릴레이 인증 실패", transient=False) from last_error
-        if isinstance(last_error, smtplib.SMTPResponseException):
-            transient = 400 <= int(last_error.smtp_code) < 500
-        raise MailTransportFailure(f"자체 SMTP 발송 실패: {last_error}", transient=transient) from last_error
+            except Exception as exc:
+                last_error = smtp_failure(exc)
+                if not last_error.transient or last_error.result_unknown:
+                    raise last_error from exc
+        raise last_error
 
 
 class OciEmailDeliveryTransport:
@@ -276,16 +332,18 @@ class OciEmailDeliveryTransport:
         envelope_from: str,
         recipient_email: str,
         config: RelaySmtpConfig,
+        before_data: Callable[[], object] | None = None,
     ) -> DeliveryReceipt:
         if config.port not in {465, 587}:
             raise MailTransportFailure("OCI SMTP 포트는 465 또는 587이어야 합니다.", transient=False)
         factory = self.smtp_ssl_factory if config.port == 465 else self.smtp_factory
         try:
-            with factory(
+            with smtp_session(factory(
                 host=config.host,
                 port=config.port,
                 timeout=max(3, min(config.timeout_sec, 60)),
-            ) as smtp:
+                **({'context': ssl.create_default_context()} if config.port == 465 else {}),
+            )) as smtp:
                 smtp.ehlo()
                 if config.port == 587:
                     if not smtp.has_extn("starttls"):
@@ -293,25 +351,9 @@ class OciEmailDeliveryTransport:
                     smtp.starttls(context=ssl.create_default_context())
                     smtp.ehlo()
                 smtp.login(config.username, config.password)
-                refused = (smtp.sendmail(envelope_from, [recipient_email], prepared)
-                    if isinstance(prepared, bytes) else smtp.send_message(
-                        prepared, from_addr=envelope_from, to_addrs=[recipient_email]))
-                if refused:
-                    raise ValueError("OCI SMTP 서버가 수신자를 거부했습니다.")
-        except smtplib.SMTPAuthenticationError as exc:
-            raise MailTransportFailure("OCI SMTP 인증 실패", transient=False) from exc
-        except MailTransportFailure:
-            raise
-        except ValueError as exc:
-            raise MailTransportFailure(str(exc), transient=False) from exc
-        except (TimeoutError, OSError, smtplib.SMTPServerDisconnected, smtplib.SMTPConnectError) as exc:
-            raise MailTransportFailure("OCI SMTP 연결 실패", transient=True) from exc
-        except smtplib.SMTPResponseException as exc:
-            raise MailTransportFailure(
-                "OCI SMTP 응답 실패", transient=400 <= int(exc.smtp_code) < 500
-            ) from exc
-        except Exception as exc:  # pragma: no cover - network dependent
-            raise MailTransportFailure("OCI SMTP 발송 실패", transient=False) from exc
+                send_smtp_data(smtp, prepared, envelope_from, recipient_email, before_data=before_data)
+        except Exception as exc:
+            raise smtp_failure(exc) from exc
         return DeliveryReceipt(
             provider_key="oci_email_delivery",
             endpoint=f"smtps://{config.host}:{config.port}",
@@ -455,6 +497,7 @@ class MailProviderRoutingAdapter:
         provider: dict,
         *,
         before_network_attempt: Callable[[], object] | None = None,
+        before_data: Callable[[], object] | None = None,
     ) -> str:
         if prepared.provider_type == "self_hosted":
             sender_domain = (
@@ -471,6 +514,8 @@ class MailProviderRoutingAdapter:
                 "username": str(provider.get("username") or ""),
                 "password": str(provider.get("password") or ""),
             }
+            if before_data is not None:
+                transport_options['before_data'] = before_data
             if hasattr(self.self_hosted_transport, "send_prepared"):
                 if before_network_attempt is not None and getattr(
                     self.self_hosted_transport, "supports_attempt_reservation", False
@@ -515,6 +560,7 @@ class MailProviderRoutingAdapter:
                     envelope_from=prepared.envelope_from,
                     recipient_email=prepared.recipient_email,
                     config=config,
+                    **({'before_data': before_data} if before_data is not None else {}),
                 )
             else:  # compatibility for existing non-network test doubles
                 if before_network_attempt is not None:
@@ -523,7 +569,13 @@ class MailProviderRoutingAdapter:
         elif prepared.provider_type in {"smtp", "aws_ses"} and self.legacy_relay_adapter is not None:
             if before_network_attempt is not None:
                 before_network_attempt()
-            return self.legacy_relay_adapter.send(prepared.legacy_envelope or {}, provider)
+            if hasattr(self.legacy_relay_adapter, 'send_prepared'):
+                return self.legacy_relay_adapter.send_prepared(prepared.message,provider,
+                    envelope=prepared.legacy_envelope or {},before_data=before_data)
+            if before_data is not None:
+                raise MailTransportFailure('소유권 확인을 지원하지 않는 발송 adapter입니다.',transient=False)
+            return self.legacy_relay_adapter.send(prepared.legacy_envelope or {}, provider,
+                **({'before_data': before_data} if before_data is not None else {}))
         else:
             raise MailTransportFailure(
                 f"지원하지 않는 발신 Provider입니다: {prepared.provider_type}", transient=False
