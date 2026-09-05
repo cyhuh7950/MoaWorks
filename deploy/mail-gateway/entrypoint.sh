@@ -125,15 +125,6 @@ case "$auth_enabled" in
             echo "SMTP AUTH requires certificate TLS mode" >&2
             exit 1
         fi
-        : "${SMTP_SUBMISSION_USERNAME:?SMTP_SUBMISSION_USERNAME is required when SMTP_AUTH_ENABLED=true}"
-        : "${SMTP_SUBMISSION_PASSWORD_HASH:?SMTP_SUBMISSION_PASSWORD_HASH is required when SMTP_AUTH_ENABLED=true}"
-        case "$SMTP_SUBMISSION_USERNAME" in
-            *[!A-Za-z0-9._@-]*|'') echo "SMTP_SUBMISSION_USERNAME is invalid" >&2; exit 1 ;;
-        esac
-        case "$SMTP_SUBMISSION_PASSWORD_HASH" in
-            "{SHA512-CRYPT}"*) ;;
-            *) echo "SMTP_SUBMISSION_PASSWORD_HASH must use SHA512-CRYPT" >&2; exit 1 ;;
-        esac
         smtpd_sasl_auth_enable="yes"
         ;;
     *)
@@ -200,6 +191,9 @@ chown root:dovecot /etc/dovecot/dovecot-sql.conf.ext
 chmod 0640 /etc/dovecot/dovecot-sql.conf.ext
 envsubst < /etc/postfix/pgsql-virtual-domains.cf.template > /etc/postfix/pgsql-virtual-domains.cf
 envsubst < /etc/postfix/pgsql-virtual-recipients.cf.template > /etc/postfix/pgsql-virtual-recipients.cf
+envsubst < /etc/postfix/pgsql-sender-login.cf.template > /etc/postfix/pgsql-sender-login.cf
+chown root:postfix /etc/postfix/pgsql-sender-login.cf
+chmod 0640 /etc/postfix/pgsql-sender-login.cf
 chown root:postfix /etc/postfix/pgsql-virtual-domains.cf /etc/postfix/pgsql-virtual-recipients.cf
 chmod 0640 /etc/postfix/pgsql-virtual-domains.cf /etc/postfix/pgsql-virtual-recipients.cf
 postmap /etc/postfix/transport
@@ -211,11 +205,13 @@ cp /etc/resolv.conf /var/spool/postfix/etc/resolv.conf
 cp /etc/hosts /var/spool/postfix/etc/hosts
 chmod 0644 /var/spool/postfix/etc/resolv.conf /var/spool/postfix/etc/hosts
 if [ "$auth_enabled" = "true" ]; then
-    printf '%s:%s\n' "$SMTP_SUBMISSION_USERNAME" "$SMTP_SUBMISSION_PASSWORD_HASH" > /etc/dovecot/submission-users
-    chown root:dovecot /etc/dovecot/submission-users
-    chmod 0640 /etc/dovecot/submission-users
     doveconf -c /etc/dovecot/dovecot.conf >/dev/null
     dovecot -c /etc/dovecot/dovecot.conf
 fi
+# queue_id pipe 매크로는 2.11 이상 필요. 새 큐 long ID 설정과 함께 확인한다.
+postfix_version="$(postconf -h mail_version)"
+case "$postfix_version" in
+    0.*|1.*|2.[0-9]|2.[0-9].*|2.10|2.10.*) echo "Postfix 2.11 or newer is required" >&2; exit 1 ;;
+esac
 postfix check
 exec postfix start-fg

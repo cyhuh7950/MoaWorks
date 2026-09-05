@@ -3,6 +3,9 @@ submission inet n       -       n       -       -       smtpd
   -o smtpd_tls_security_level=encrypt
   -o smtpd_tls_auth_only=yes
   -o smtpd_sasl_auth_enable=yes
+  -o content_filter=moaworks-submission:
+  -o smtpd_sender_login_maps=pgsql:/etc/postfix/pgsql-sender-login.cf
+  -o smtpd_sender_restrictions=check_sender_access,regexp:/etc/postfix/submission-sender-access,reject_authenticated_sender_login_mismatch
   -o smtpd_recipient_restrictions=permit_sasl_authenticated,reject_unauth_destination
   -o smtpd_relay_restrictions=permit_sasl_authenticated,reject
   -o smtpd_client_connection_rate_limit=20
@@ -33,3 +36,5 @@ scache    unix  -       -       y       -       1       scache
 postlog   unix-dgram n  -       n       -       1       postlogd
 moaworks-ingest unix -  n       n       -       -       pipe
   flags=Rq user=nobody argv=/usr/local/bin/moaworks-ingest.sh ${sender} ${recipient}
+moaworks-submission unix - n    n       -       -       pipe
+  flags= user=nobody null_sender= eol=\r\n argv=/usr/bin/python3 /usr/local/bin/moaworks-submission.py ${queue_id} ${sender} ${recipient}

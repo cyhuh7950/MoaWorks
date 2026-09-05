@@ -1376,6 +1376,9 @@ class MailMessengerService:
         expected_owner_user_id: str | None = None,
     ) -> dict:
         storage_key = attachment.get("storage_key")
+        if str(storage_key).startswith('mail/submission/'):
+            self.attachment_storage.verify_submission_attachment(attachment)
+            return attachment
         disposition = attachment.get("content_disposition") or "attachment"
         content_id = attachment.get("content_id")
         try:

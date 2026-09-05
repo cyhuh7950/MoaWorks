@@ -170,8 +170,8 @@ class MailGatewayContractTest(unittest.TestCase):
         self.assertIn('"25:25"', compose)
         self.assertIn('"587:587"', compose)
         self.assertIn("SMTP_AUTH_ENABLED: ${SMTP_AUTH_ENABLED:-false}", compose)
-        self.assertIn("SMTP_SUBMISSION_USERNAME: ${SMTP_SUBMISSION_USERNAME:-}", compose)
-        self.assertIn("SMTP_SUBMISSION_PASSWORD_HASH: ${SMTP_SUBMISSION_PASSWORD_HASH:-}", compose)
+        self.assertNotIn("SMTP_SUBMISSION_USERNAME:", compose)
+        self.assertNotIn("SMTP_SUBMISSION_PASSWORD_HASH:", compose)
 
     def test_gateway_rejects_unknown_recipient_and_delivers_only_after_internal_ingest(self) -> None:
         main_cf = (ROOT / "deploy" / "mail-gateway" / "main.cf").read_text(encoding="utf-8")
@@ -389,7 +389,7 @@ class MailGatewayContractTest(unittest.TestCase):
         self.assertIn("dovecot-core", dockerfile)
         self.assertTrue(dovecot_config.is_file())
         self.assertIn("/var/spool/postfix/private/auth", dovecot_config.read_text(encoding="utf-8"))
-        self.assertIn("SMTP_SUBMISSION_PASSWORD_HASH", entrypoint)
+        self.assertNotIn("SMTP_SUBMISSION_PASSWORD_HASH", entrypoint)
         self.assertIn("dovecot -c /etc/dovecot/dovecot.conf", entrypoint)
         self.assertIn("SMTP_AUTH_ENABLED: ${SMTP_AUTH_ENABLED:-false}", compose)
         self.assertIn('"25:25"', compose)

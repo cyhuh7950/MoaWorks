@@ -2,11 +2,14 @@ FROM debian:12-slim
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-       ca-certificates curl dovecot-core dovecot-pgsql gettext-base openssl postfix postfix-pgsql \
+       ca-certificates curl dovecot-core dovecot-pgsql gettext-base openssl postfix postfix-pgsql python3 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY deploy/mail-gateway/main.cf /etc/postfix/main.cf.template
 COPY deploy/mail-gateway/master.cf /etc/postfix/master.cf
+COPY deploy/mail-gateway/pgsql-sender-login.cf.template /etc/postfix/pgsql-sender-login.cf.template
+COPY deploy/mail-gateway/submission-sender-access /etc/postfix/submission-sender-access
+COPY deploy/mail-gateway/moaworks-submission.py /usr/local/bin/moaworks-submission.py
 COPY deploy/mail-gateway/dovecot.conf /etc/dovecot/dovecot.conf
 COPY deploy/mail-gateway/dovecot-sql.conf.ext /etc/dovecot/dovecot-sql.conf.ext
 COPY deploy/mail-gateway/pgsql-virtual-domains.cf.template /etc/postfix/pgsql-virtual-domains.cf.template

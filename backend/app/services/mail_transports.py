@@ -34,6 +34,8 @@ class SmtpClient(Protocol):
 
     def send_message(self, message, *, from_addr: str, to_addrs: list[str]) -> dict: ...
 
+    def sendmail(self, from_addr: str, to_addrs: list[str], msg: bytes) -> dict: ...
+
 
 class LegacyRelayAdapter(Protocol):
     def send(self, envelope: dict, provider: dict) -> str: ...
@@ -59,8 +61,17 @@ class DkimSigningConfig:
 class DkimSigner(Protocol):
     def sign(self, message: EmailMessage, config: DkimSigningConfig) -> None: ...
 
+    def sign_raw(self, raw: bytes, config: DkimSigningConfig) -> bytes: ...
+
 
 class DkimPySigner:
+    def sign_raw(self, raw: bytes, config: DkimSigningConfig) -> bytes:
+        import dkim
+        return dkim.sign(raw, selector=config.selector.encode('ascii'),
+            domain=config.domain.encode('idna'), privkey=config.private_key,
+            canonicalize=(b'relaxed', b'relaxed'),
+            include_headers=[b'from', b'to', b'subject', b'date', b'message-id', b'reply-to']) + raw
+
     def sign(self, message: EmailMessage, config: DkimSigningConfig) -> None:
         import dkim
 
@@ -95,7 +106,7 @@ class DeliveryReceipt:
 @dataclass(frozen=True, slots=True)
 class PreparedMailDelivery:
     provider_type: str
-    message: EmailMessage
+    message: EmailMessage | bytes
     envelope_from: str
     recipient_email: str
     legacy_envelope: dict | None = None
@@ -211,11 +222,9 @@ class SelfHostedSmtpTransport:
                         smtp.ehlo(helo_name)
                     if normalized_relay_host and normalized_username:
                         smtp.login(normalized_username, password)
-                    refused = smtp.send_message(
-                        prepared,
-                        from_addr=envelope_from,
-                        to_addrs=[recipient_email],
-                    )
+                    refused = (smtp.sendmail(envelope_from, [recipient_email], prepared)
+                        if isinstance(prepared, bytes) else smtp.send_message(
+                            prepared, from_addr=envelope_from, to_addrs=[recipient_email]))
                     if refused:
                         raise ValueError("상대 SMTP 서버가 수신자를 거부했습니다.")
                 return DeliveryReceipt(
@@ -284,11 +293,9 @@ class OciEmailDeliveryTransport:
                     smtp.starttls(context=ssl.create_default_context())
                     smtp.ehlo()
                 smtp.login(config.username, config.password)
-                refused = smtp.send_message(
-                    prepared,
-                    from_addr=envelope_from,
-                    to_addrs=[recipient_email],
-                )
+                refused = (smtp.sendmail(envelope_from, [recipient_email], prepared)
+                    if isinstance(prepared, bytes) else smtp.send_message(
+                        prepared, from_addr=envelope_from, to_addrs=[recipient_email]))
                 if refused:
                     raise ValueError("OCI SMTP 서버가 수신자를 거부했습니다.")
         except smtplib.SMTPAuthenticationError as exc:
@@ -330,7 +337,8 @@ class MailProviderRoutingAdapter:
         raw_provider_type = str(provider.get("provider_type") or "").strip().lower()
         provider_type = "self_hosted" if raw_provider_type == "self_hosted_smtp" else raw_provider_type
         delivery_kind = str(envelope.get("delivery_kind") or "direct")
-        automatic = delivery_kind in {"auto_forward", "out_of_office"}
+        submission = delivery_kind == 'submission'
+        automatic = delivery_kind in {"auto_forward", "out_of_office", "submission"}
         sender_email = str(
             envelope.get("sender_email")
             if automatic
@@ -344,7 +352,7 @@ class MailProviderRoutingAdapter:
         if provider_type != "oci_email_delivery" and queue_id:
             envelope_from = f"bounce+{queue_id}@{bounce_domain}"
         attachments: list[OutboundAttachment] = []
-        for item in envelope.get("attachments") or []:
+        for item in ([] if submission else envelope.get("attachments") or []):
             path = Path(str(item.get("path") or ""))
             if not path.is_file():
                 raise MailTransportFailure("첨부 파일을 찾을 수 없습니다.", transient=False)
@@ -386,21 +394,32 @@ class MailProviderRoutingAdapter:
         )
 
         try:
-            prepared_message = build_mail_message(message)
-        except ValueError as exc:
+            if submission:
+                from app.services.mail_submission_operations import load_submission_raw, validate_submission
+                if provider_type not in ('self_hosted', 'oci_email_delivery'):
+                    raise ValueError('SMTP 원문 발송 Provider를 사용할 수 없습니다.')
+                prepared_message = load_submission_raw(envelope.get('raw_storage_key'),
+                    envelope.get('raw_sha256'), envelope.get('raw_size'))
+                # 저장 후 변조 및 Bcc 잔존을 네트워크 호출 전에 거부한다.
+                if validate_submission(prepared_message, sender_email, recipient_email, 'StoredRaw') != prepared_message:
+                    raise ValueError('SMTP 원문에 비공개 수신 헤더가 남아 있습니다.')
+            else:
+                prepared_message = build_mail_message(message)
+        except (ValueError, TypeError, OSError) as exc:
             raise MailTransportFailure(str(exc), transient=False) from exc
 
         if provider_type == "self_hosted":
             private_key = provider.get("dkim_private_key")
             if private_key:
-                self.self_hosted_transport.dkim_signer.sign(
-                    prepared_message,
-                    DkimSigningConfig(
+                signing_config = DkimSigningConfig(
                         domain=str(provider.get("dkim_domain") or sender_domain),
                         selector=str(provider.get("dkim_selector") or "selector1"),
                         private_key=str(private_key).encode("utf-8"),
-                    ),
-                )
+                    )
+                if submission:
+                    prepared_message = self.self_hosted_transport.dkim_signer.sign_raw(prepared_message, signing_config)
+                else:
+                    self.self_hosted_transport.dkim_signer.sign(prepared_message, signing_config)
             normalized_relay_host = str(provider.get("relay_host") or "").strip()
             normalized_username = str(provider.get("username") or "").strip()
             password = str(provider.get("password") or "")

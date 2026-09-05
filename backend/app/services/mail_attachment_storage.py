@@ -219,6 +219,12 @@ class MailAttachmentStorage:
                 row = cursor.fetchone()
         if row is None:
             raise PermissionError("본문 이미지 미리보기에 접근할 권한이 없습니다.")
+        if str(row['storage_key']).startswith('mail/submission/'):
+            part = self.verify_submission_attachment(row)
+            if part['content_disposition'] != 'inline':
+                raise ValueError('본문 이미지 저장 상태가 올바르지 않습니다.')
+            return self._preview_payload({'normalized_content_type': part['content_type'],
+                'normalized_size_bytes': part['size_bytes']}, part['content'])
         try:
             upload_id = self._upload_id_from_storage_key(row["storage_key"])
             metadata = self._load_metadata(upload_id)
@@ -265,6 +271,9 @@ class MailAttachmentStorage:
         self._metadata_path(upload_id).write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
 
     def stored_path(self, storage_key: str) -> Path:
+        if str(storage_key).startswith('mail/submission/'):
+            from app.services.mail_submission_operations import verified_submission_attachment
+            return verified_submission_attachment(self.root, storage_key)['path']
         upload_match = re.fullmatch(r"mail/uploads/([0-9a-f]{32})\.bin", storage_key or "")
         inbound_match = re.fullmatch(
             r"mail/inbound/([0-9a-f]{2})/([0-9a-f]{64})/attachment-([0-9]+)\.bin",
@@ -281,6 +290,14 @@ class MailAttachmentStorage:
         if allowed_root not in path.parents or not path.is_file():
             raise ValueError("첨부 파일을 찾을 수 없습니다.")
         return path
+
+    def verify_submission_attachment(self, row: dict) -> dict:
+        from app.services.mail_submission_operations import verified_submission_attachment
+        part = verified_submission_attachment(self.root, row['storage_key'])
+        for key in ('file_name', 'content_type', 'size_bytes', 'content_disposition', 'content_id'):
+            if key in row and row[key] != part[key]:
+                raise ValueError('SMTP 첨부 메타데이터와 원문이 일치하지 않습니다.')
+        return part
 
     @staticmethod
     def _validate_inline_image_contract(file_name: str, content_type: str, content: bytes) -> str:
