@@ -9,6 +9,8 @@ from app.schemas.mail_operations import (
     MailOperationsProviderUpdateRequest,
 )
 from app.services.mail_admin_operations import MailAdminOperations
+from app.services.mail_submission_credential_service import MailSubmissionCredentialService
+from app.schemas.mail_submission import MailSubmissionCredentialIssueResponse, MailSubmissionCredentialView
 
 
 router = APIRouter()
@@ -16,6 +18,10 @@ router = APIRouter()
 
 def _service() -> MailAdminOperations:
     return MailAdminOperations()
+
+
+def _submission_service() -> MailSubmissionCredentialService:
+    return MailSubmissionCredentialService()
 
 
 def _raise_operation_error(exc: Exception):
@@ -30,6 +36,30 @@ def _raise_operation_error(exc: Exception):
 def get_mail_operations(actor: AuthUserSummary = Depends(require_admin)):
     try:
         return _service().get_overview(actor)
+    except Exception as exc:
+        _raise_operation_error(exc)
+
+
+@router.get("/submission-credentials", response_model=list[MailSubmissionCredentialView])
+def list_submission_credentials(actor: AuthUserSummary = Depends(require_admin)):
+    try:
+        return _submission_service().list_credentials(actor)
+    except Exception as exc:
+        _raise_operation_error(exc)
+
+
+@router.post("/submission-credentials/{user_id}/issue", response_model=MailSubmissionCredentialIssueResponse)
+def issue_submission_credential(user_id: str, actor: AuthUserSummary = Depends(require_admin)):
+    try:
+        return _submission_service().issue(actor, user_id)
+    except Exception as exc:
+        _raise_operation_error(exc)
+
+
+@router.post("/submission-credentials/{user_id}/revoke", response_model=MailSubmissionCredentialView)
+def revoke_submission_credential(user_id: str, actor: AuthUserSummary = Depends(require_admin)):
+    try:
+        return _submission_service().revoke(actor, user_id)
     except Exception as exc:
         _raise_operation_error(exc)
 
@@ -86,5 +116,21 @@ def rollback_mail_provider(actor: AuthUserSummary = Depends(require_admin)):
 def sync_oci_suppressions(actor: AuthUserSummary = Depends(require_admin)):
     try:
         return _service().sync_oci_suppressions(actor)
+    except Exception as exc:
+        _raise_operation_error(exc)
+
+
+@router.post("/oci/senders/sync")
+def sync_oci_senders(actor: AuthUserSummary = Depends(require_admin)):
+    try:
+        return _service().sync_oci_senders(actor)
+    except Exception as exc:
+        _raise_operation_error(exc)
+
+
+@router.get("/oci/senders/sync-status")
+def get_oci_sender_sync_status(actor: AuthUserSummary = Depends(require_admin)):
+    try:
+        return _service().get_oci_sender_sync_status(actor)
     except Exception as exc:
         _raise_operation_error(exc)

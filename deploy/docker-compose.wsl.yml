@@ -83,10 +83,9 @@ services:
       SMTP_TLS_KEY_FILE: ${SMTP_TLS_KEY_FILE:-}
       SMTP_TLS_CA_FILE: ${SMTP_TLS_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}
       SMTP_AUTH_ENABLED: ${SMTP_AUTH_ENABLED:-false}
-      SMTP_SUBMISSION_USERNAME: ${SMTP_SUBMISSION_USERNAME:-}
-      SMTP_SUBMISSION_PASSWORD_HASH: ${SMTP_SUBMISSION_PASSWORD_HASH:-}
     ports:
       - "25:25"
+      - "587:587"
     volumes:
       - mail-spool:/var/spool/postfix
       - ${SMTP_TLS_LIVE_DIR:-/etc/ssl/certs}:/run/moaworks-mail-tls/live/${SMTP_TLS_CERT_NAME:-disabled}:ro
@@ -128,9 +127,16 @@ services:
     container_name: moaworks-mail-layer
     image: moaworks-server-runtime:local
     command: ["python", "-m", "app.workers.mail_delivery_worker"]
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.workers.mail_delivery_healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
     env_file:
       - ../.env
     environment: &database-environment
+      MAIL_DELIVERY_WORKER_ID: moaworks-mail-layer
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: ${POSTGRES_DB}

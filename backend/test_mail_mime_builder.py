@@ -93,9 +93,17 @@ class _CaptureSmtp:
     def has_extn(self, _name) -> bool:
         return False
 
-    def send_message(self, message, *, from_addr, to_addrs):
-        self.message = message
-        return {}
+    def mail(self, sender): return 250,b'ok'
+    def rcpt(self, recipient): return 250,b'ok'
+    def docmd(self, command): return 354,b'continue'
+    def send(self, payload):
+        from email.parser import BytesParser
+        from email.policy import default
+        import re
+        self.message=BytesParser(policy=default).parsebytes(re.sub(br'(?m)^\.\.',b'.',payload[:-3]))
+    def getreply(self): return 250,b'accepted'
+    def quit(self): pass
+    def close(self): pass
 
     def login(self, _username, _password) -> None:
         return None

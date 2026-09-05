@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 import json
 from uuid import uuid4
 
+from app.services.outbound_provider_resolver import OutboundProviderResolver
+
 from app.services.mail_operations_policy import (
     MailDomainContract,
     ProviderSwitchPlan,
@@ -18,13 +20,13 @@ class MailOperationsService:
         cursor,
         company_id: str,
         contract: MailDomainContract,
-        active_provider: str,
+        active_provider: str | None,
     ) -> None:
         validated_provider = plan_provider_switch(
             current_provider=active_provider,
             target_provider=active_provider,
             queued_items=[],
-        ).new_message_provider
+        ).new_message_provider if active_provider is not None else None
         now = datetime.now(UTC)
         cursor.execute(
             """
@@ -69,15 +71,20 @@ class MailOperationsService:
         cursor,
         company_id: str,
         actor_user_id: str,
-        current_provider: str,
+        current_provider: str | None,
         target_provider: str,
         actor_user_name: str = "관리자",
     ) -> ProviderSwitchPlan:
+        # 회사 domain 행으로 전환을 직렬화하되 정책값은 provider에서 읽는다.
+        cursor.execute("SELECT company_id FROM mail_domain_settings WHERE company_id=%s FOR UPDATE", (company_id,))
+        active = OutboundProviderResolver.optional(cursor, company_id)
+        current_provider = OutboundProviderResolver.provider_key(active) if active else None
         cursor.execute(
             """
             SELECT q.id AS queue_id,
                    CASE
-                       WHEN p.provider_type IN ('self_hosted', 'self_hosted_smtp') THEN 'self_hosted'
+                       WHEN p.provider_type IN ('self_hosted', 'self_hosted_smtp', 'smtp') THEN 'self_hosted'
+                       WHEN p.provider_type IN ('oci_email_delivery', 'oci_smtp') THEN 'oci_email_delivery'
                        ELSE p.provider_type
                    END AS provider_key
             FROM mail_delivery_queue q
@@ -96,7 +103,7 @@ class MailOperationsService:
         target_types = (
             ("self_hosted", "self_hosted_smtp", "smtp")
             if plan.new_message_provider == "self_hosted"
-            else ("oci_email_delivery",)
+            else ("oci_email_delivery", "oci_smtp")
         )
         cursor.execute(
             """
@@ -104,54 +111,49 @@ class MailOperationsService:
             FROM mail_provider_configs
             WHERE company_id = %s
               AND provider_type = ANY(%s)
-            ORDER BY updated_at DESC
-            LIMIT 1
+            FOR UPDATE
             """,
             (company_id, list(target_types)),
         )
-        target = cursor.fetchone()
-        if target is None:
-            raise ValueError("전환할 발신 Provider 설정을 찾을 수 없습니다.")
+        targets = cursor.fetchall()
+        if len(targets) != 1:
+            raise ValueError("전환할 발신 Provider 설정이 정확히 하나여야 합니다.")
+        target = targets[0]
         if not target.get("delivery_enabled") or target.get("last_test_status") != "success":
             raise ValueError("실제 연결 테스트를 통과하고 활성화된 Provider만 선택할 수 있습니다.")
         now = datetime.now(UTC)
         cursor.execute(
             """
             UPDATE mail_provider_configs
-            SET active = (id = %s),
+            SET active = FALSE,
                 updated_at = %s
             WHERE company_id = %s
+              AND active = TRUE
             """,
-            (target["id"], now, company_id),
+            (now, company_id),
         )
         cursor.execute(
             """
-            UPDATE mail_accounts AS account
-            SET provider_config_id = %s,
-                updated_at = %s
-            FROM users AS owner
-            WHERE account.user_id = owner.id
-              AND owner.company_id = %s
-              AND account.status <> 'deleted'
+            UPDATE mail_provider_configs SET active = TRUE, updated_at = %s
+            WHERE id = %s AND company_id = %s
             """,
-            (target["id"], now, company_id),
+            (now, target["id"], company_id),
         )
         cursor.execute(
             """
             UPDATE mail_domain_settings
-            SET previous_outbound_provider_key = active_outbound_provider_key,
+            SET previous_outbound_provider_key = %s,
                 active_outbound_provider_key = %s,
                 provider_switched_at = %s,
                 updated_at = %s
             WHERE company_id = %s
-              AND active_outbound_provider_key = %s
             """,
             (
+                plan.previous_provider,
                 plan.new_message_provider,
                 now,
                 now,
                 company_id,
-                plan.previous_provider,
             ),
         )
         cursor.execute(

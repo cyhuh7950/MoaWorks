@@ -1,4 +1,5 @@
 from __future__ import annotations
+from smtp_phase_test_support import configure_smtp_mock, captured_message
 
 import unittest
 import json
@@ -168,7 +169,7 @@ class Ui028PipelineSecurityAndRouteTests(unittest.TestCase):
         client = Mock()
         client.__enter__ = Mock(return_value=client)
         client.__exit__ = Mock(return_value=False)
-        client.send_message.return_value = {}
+        configure_smtp_mock(client)
         envelope = {
             "delivery_kind": "out_of_office", "sender_email": "owner@example.com", "sender_display_name": "",
             "reply_to_email": None, "recipient_email": "sender@outside.test", "subject": "Away",
@@ -177,10 +178,10 @@ class Ui028PipelineSecurityAndRouteTests(unittest.TestCase):
         provider = {"relay_host": "relay", "relay_port": 25, "tls_mode": "plain", "from_address": "provider@example.net"}
         with patch("app.services.mail_delivery_service.smtplib.SMTP", return_value=client):
             SmtpRelayAdapter().send(envelope, provider)
-        message = client.send_message.call_args.args[0]
+        message = captured_message(client)
         self.assertEqual(message["From"], "owner@example.com")
-        self.assertEqual(client.send_message.call_args.kwargs["from_addr"], "owner@example.com")
-        self.assertEqual(client.send_message.call_args.kwargs["to_addrs"], ["sender@outside.test"])
+        self.assertEqual(client.mail.call_args.args[0], "owner@example.com")
+        self.assertEqual([call.args[0] for call in client.rcpt.call_args_list], ["sender@outside.test"])
         self.assertFalse(message.is_multipart())
 
     def test_get_patch_routes_use_split_permissions_before_dynamic_route(self):
@@ -218,9 +219,10 @@ class _ScriptedOutOfOfficeCursor:
             }
         elif lowered.startswith("select a.id,a.email"):
             self._one = {
-                "id": "account-1", "email": "owner@example.com", "provider_config_id": "provider-1",
-                "delivery_enabled": not self.provider_locked, "last_test_status": "success",
+                "id": "account-1", "email": "owner@example.com",
             }
+        elif lowered.startswith("select * from mail_provider_configs"):
+            self._all = [{"id": "provider-1", "delivery_enabled": not self.provider_locked, "last_test_status": "success"}]
         elif lowered.startswith("select domain from companies"):
             self._one = {"domain": "example.com"}
         elif lowered.startswith("select id,lower(email)"):

@@ -211,7 +211,7 @@ def test_self_hosted_mx_failover_reserves_before_each_network_attempt() -> None:
     smtp_hosts: list[str] = []
 
     class FailingSmtp:
-        def __enter__(self):
+        def ehlo(self, *args):
             raise OSError("first MX unavailable")
 
         def __exit__(self, *_args) -> None:
@@ -249,6 +249,8 @@ class QueueDeferCursor:
             "status": "processing",
             "attempt_count": 4,
             "worker_id": "worker-1",
+            "company_id": "company-1",
+            "claim_token": "token-1",
             "lease_expires_at": datetime(2026, 8, 29, 14, 0, tzinfo=UTC),
         }
         self.attempt_rows = 0
@@ -265,11 +267,12 @@ class QueueDeferCursor:
         normalized = " ".join(query.split())
         self.statements.append((normalized, params))
         if normalized.startswith("UPDATE mail_delivery_queue"):
-            next_attempt_at, code, _updated_at, queue_id, worker_id = params
+            next_attempt_at, code, _updated_at, queue_id, worker_id, company_id, token = params
             if (
                 self.queue["id"] == queue_id
                 and self.queue["worker_id"] == worker_id
                 and self.queue["status"] == "processing"
+                and self.queue['company_id']==company_id and self.queue['claim_token']==token
             ):
                 self.queue.update(
                     status="retry_pending",
@@ -322,7 +325,7 @@ def test_quota_defer_releases_lease_without_attempt_or_retry_increment() -> None
 
     deferred = operations.defer_claim_for_quota(
         "worker-1",
-        {"queue_id": "queue-quota-1", "company_id": "company-1", "attempt_count": 4},
+        {"queue_id": "queue-quota-1", "company_id": "company-1", "attempt_count": 4, "claim_token":"token-1"},
         "MAIL_DAILY_SEND_LIMIT_EXCEEDED",
         reset_at,
     )

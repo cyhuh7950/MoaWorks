@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.outbound_provider_resolver import OutboundProviderResolver
+
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from html import escape
@@ -1374,6 +1376,9 @@ class MailMessengerService:
         expected_owner_user_id: str | None = None,
     ) -> dict:
         storage_key = attachment.get("storage_key")
+        if str(storage_key).startswith('mail/submission/'):
+            self.attachment_storage.verify_submission_attachment(attachment)
+            return attachment
         disposition = attachment.get("content_disposition") or "attachment"
         content_id = attachment.get("content_id")
         try:
@@ -1467,7 +1472,19 @@ class MailMessengerService:
                     WHERE status = 'scheduled'
                       AND scheduled_at <= %s
                       AND sender_deleted_at IS NULL
-                    ORDER BY scheduled_at ASC
+                    ORDER BY GREATEST(scheduled_at, (
+                        SELECT MAX(a.created_at) FROM audit_logs a
+                        WHERE a.company_id = mail_messages.company_id
+                          AND a.target_type = 'mail' AND a.target_id = mail_messages.id
+                          AND a.event = 'mail.scheduled.blocked'
+                    )) ASC,
+                    -- 같은 now의 실패도 평가 횟수로 순환시켜 뒤 예약의 기아를 방지한다.
+                    (
+                        SELECT COUNT(*) FROM audit_logs a
+                        WHERE a.company_id = mail_messages.company_id
+                          AND a.target_type = 'mail' AND a.target_id = mail_messages.id
+                          AND a.event = 'mail.scheduled.blocked'
+                    ) ASC, scheduled_at ASC, id ASC
                     FOR UPDATE SKIP LOCKED
                     LIMIT %s
                     """,
@@ -1475,120 +1492,139 @@ class MailMessengerService:
                 )
                 rows = cursor.fetchall()
                 for row in rows:
-                    cursor.execute(
-                        "UPDATE mail_messages SET status = 'sent', sent_at = %s, updated_at = %s WHERE id = %s",
-                        (now, now, row["id"]),
-                    )
-                    cursor.execute(
-                        """SELECT recipient_email FROM mail_recipients
-                        WHERE message_id = %s AND delivery_source = 'direct'""",
-                        (row["id"],),
-                    )
-                    self._upsert_recent_recipients(
-                        cursor,
-                        company_id=row["company_id"],
-                        owner_user_id=row["sender_user_id"],
-                        recipient_emails=[item["recipient_email"] for item in cursor.fetchall()],
-                        now=now,
-                    )
-                    cursor.execute(
-                        """SELECT id, recipient_user_id, recipient_email FROM mail_recipients
-                           WHERE message_id = %s AND recipient_user_id IS NOT NULL
-                             AND received_at IS NULL AND delivery_source = 'direct'
-                           FOR UPDATE""",
-                        (row["id"],),
-                    )
-                    internal_recipients = cursor.fetchall()
-                    for recipient in internal_recipients:
-                        spam_decision = self._evaluate_recipient_spam_for_company(
-                            cursor,
-                            row["company_id"],
-                            recipient["recipient_user_id"],
-                            row["sender_email"],
-                            row["id"],
+                    cursor.execute("SAVEPOINT scheduled_mail")
+                    try:
+                        self._dispatch_scheduled_mail_row(cursor, row, now)
+                    except ValueError:
+                        cursor.execute("ROLLBACK TO SAVEPOINT scheduled_mail")
+                        self._write_mail_event_audit(
+                            cursor, company_id=row["company_id"], actor_user_id=row["sender_user_id"],
+                            actor_user_name="system", mail_id=row["id"], event="mail.scheduled.blocked",
+                            status_before="scheduled", status_after="scheduled", now=now,
+                            reason="예약 발송 정책/입력 검증 실패. 원본을 보존하고 발송을 차단했습니다.",
                         )
-                        cursor.execute(
-                            """UPDATE mail_recipients SET received_at = %s, is_spam = %s, spam_marked_at = %s
-                               WHERE id = %s AND message_id = %s AND recipient_user_id = %s""",
-                            (
-                                now,
-                                spam_decision.decision == "spam",
-                                now if spam_decision.decision == "spam" else None,
-                                recipient["id"],
-                                row["id"],
-                                recipient["recipient_user_id"],
-                            ),
-                        )
-                        self._write_spam_classification_audit_for_actor(
-                            cursor,
-                            company_id=row["company_id"],
-                            actor_user_id=row["sender_user_id"],
-                            actor_user_name="system",
-                            mail_id=row["id"],
-                            recipient_user_id=recipient["recipient_user_id"],
-                            decision=spam_decision,
-                            now=now,
-                        )
-                        if spam_decision.decision != "spam":
-                            self._apply_auto_classification(
-                                cursor, company_id=row["company_id"], recipient_user_id=recipient["recipient_user_id"],
-                                actor_user_id=row["sender_user_id"], actor_user_name="system", mail_id=row["id"],
-                                recipient_id=recipient["id"], sender_email=row["sender_email"], recipient_email=recipient["recipient_email"],
-                                subject=row.get("subject") or "", body=row.get("body_text") or "", has_attachment=bool(row.get("attachment_count")), now=now,
-                            )
-                            self._apply_auto_forwarding(
-                                cursor, company_id=row["company_id"], recipient_user_id=recipient["recipient_user_id"],
-                                actor_user_id=row["sender_user_id"], actor_user_name="system", mail_id=row["id"],
-                                recipient_id=recipient["id"], sender_email=row["sender_email"], recipient_email=recipient["recipient_email"],
-                                delivery_source="direct", subject=row.get("subject") or "", body=row.get("body_text") or "",
-                                has_attachment=bool(row.get("attachment_count")), now=now,
-                            )
-                            self._apply_out_of_office(
-                                cursor, company_id=row["company_id"], recipient_user_id=recipient["recipient_user_id"],
-                                actor_user_id=row["sender_user_id"], actor_user_name="system", mail_id=row["id"],
-                                recipient_id=recipient["id"], sender_email=row["sender_email"], delivery_source="direct",
-                                is_auto_generated=bool(row.get("is_auto_generated")), is_spam=False, now=now,
-                            )
-                    cursor.execute(
-                        """INSERT INTO mail_delivery_queue (
-                            id, company_id, provider_config_id, mail_id, recipient_id, status,
-                            attempt_count, next_attempt_at, created_at, updated_at
-                        )
-                        SELECT %s || '_' || r.id, m.company_id, a.provider_config_id, m.id, r.id,
-                               CASE WHEN p.delivery_enabled AND p.last_test_status = 'success' THEN 'queued' ELSE 'blocked' END,
-                               0, CASE WHEN p.delivery_enabled AND p.last_test_status = 'success' THEN %s ELSE NULL END, %s, %s
-                        FROM mail_messages m
-                        JOIN mail_accounts a ON a.id = m.sender_account_id
-                        JOIN mail_provider_configs p ON p.id = a.provider_config_id
-                        JOIN mail_recipients r ON r.message_id = m.id AND r.recipient_user_id IS NULL
-                        WHERE m.id = %s
-                        ON CONFLICT (mail_id, recipient_id) DO NOTHING""",
-                        (self._new_id("delivery"), now, now, now, row["id"]),
-                    )
-                    cursor.execute(
-                        """INSERT INTO audit_logs (
-                            id, company_id, actor_user_id, actor_user_name, target_type, target_id,
-                            event, status_before, status_after, reason, created_at
-                        )
-                        SELECT %s || '_' || q.id, q.company_id, %s, 'system', 'mail_delivery_queue', q.id,
-                               'mail.delivery.' || q.status, NULL, q.status, 'UI-021 scheduled transaction outbox', %s
-                        FROM mail_delivery_queue q WHERE q.mail_id = %s AND q.created_at = %s""",
-                        (self._new_id("audit"), row["sender_user_id"], now, row["id"], now),
-                    )
-                    self._write_mail_event_audit(
-                        cursor,
-                        company_id=row["company_id"],
-                        actor_user_id=row["sender_user_id"],
-                        actor_user_name="system",
-                        mail_id=row["id"],
-                        event="mail.scheduled.dispatched",
-                        status_before="scheduled",
-                        status_after="sent",
-                        now=now,
-                    )
+                        cursor.execute("RELEASE SAVEPOINT scheduled_mail")
+                        continue
+                    cursor.execute("RELEASE SAVEPOINT scheduled_mail")
                     dispatched += 1
             connection.commit()
         return dispatched
+
+    def _dispatch_scheduled_mail_row(self, cursor, row: dict, now: datetime) -> None:
+        cursor.execute(
+            "UPDATE mail_messages SET status = 'sent', sent_at = %s, updated_at = %s WHERE id = %s",
+            (now, now, row["id"]),
+        )
+        cursor.execute(
+            """SELECT recipient_email FROM mail_recipients
+            WHERE message_id = %s AND delivery_source = 'direct'""",
+            (row["id"],),
+        )
+        self._upsert_recent_recipients(
+            cursor,
+            company_id=row["company_id"],
+            owner_user_id=row["sender_user_id"],
+            recipient_emails=[item["recipient_email"] for item in cursor.fetchall()],
+            now=now,
+        )
+        cursor.execute(
+            """SELECT id, recipient_user_id, recipient_email FROM mail_recipients
+               WHERE message_id = %s AND recipient_user_id IS NOT NULL
+                 AND received_at IS NULL AND delivery_source = 'direct'
+               FOR UPDATE""",
+            (row["id"],),
+        )
+        internal_recipients = cursor.fetchall()
+        for recipient in internal_recipients:
+            spam_decision = self._evaluate_recipient_spam_for_company(
+                cursor,
+                row["company_id"],
+                recipient["recipient_user_id"],
+                row["sender_email"],
+                row["id"],
+            )
+            cursor.execute(
+                """UPDATE mail_recipients SET received_at = %s, is_spam = %s, spam_marked_at = %s
+                   WHERE id = %s AND message_id = %s AND recipient_user_id = %s""",
+                (
+                    now,
+                    spam_decision.decision == "spam",
+                    now if spam_decision.decision == "spam" else None,
+                    recipient["id"],
+                    row["id"],
+                    recipient["recipient_user_id"],
+                ),
+            )
+            self._write_spam_classification_audit_for_actor(
+                cursor,
+                company_id=row["company_id"],
+                actor_user_id=row["sender_user_id"],
+                actor_user_name="system",
+                mail_id=row["id"],
+                recipient_user_id=recipient["recipient_user_id"],
+                decision=spam_decision,
+                now=now,
+            )
+            if spam_decision.decision != "spam":
+                self._apply_auto_classification(
+                    cursor, company_id=row["company_id"], recipient_user_id=recipient["recipient_user_id"],
+                    actor_user_id=row["sender_user_id"], actor_user_name="system", mail_id=row["id"],
+                    recipient_id=recipient["id"], sender_email=row["sender_email"], recipient_email=recipient["recipient_email"],
+                    subject=row.get("subject") or "", body=row.get("body_text") or "", has_attachment=bool(row.get("attachment_count")), now=now,
+                )
+                self._apply_auto_forwarding(
+                    cursor, company_id=row["company_id"], recipient_user_id=recipient["recipient_user_id"],
+                    actor_user_id=row["sender_user_id"], actor_user_name="system", mail_id=row["id"],
+                    recipient_id=recipient["id"], sender_email=row["sender_email"], recipient_email=recipient["recipient_email"],
+                    delivery_source="direct", subject=row.get("subject") or "", body=row.get("body_text") or "",
+                    has_attachment=bool(row.get("attachment_count")), now=now,
+                )
+                self._apply_out_of_office(
+                    cursor, company_id=row["company_id"], recipient_user_id=recipient["recipient_user_id"],
+                    actor_user_id=row["sender_user_id"], actor_user_name="system", mail_id=row["id"],
+                    recipient_id=recipient["id"], sender_email=row["sender_email"], delivery_source="direct",
+                    is_auto_generated=bool(row.get("is_auto_generated")), is_spam=False, now=now,
+                )
+        provider = None
+        cursor.execute("SELECT id FROM mail_recipients WHERE message_id=%s AND recipient_user_id IS NULL LIMIT 1", (row['id'],))
+        if cursor.fetchone() is not None:
+            provider = OutboundProviderResolver.resolve(cursor, row['company_id'])
+        cursor.execute(
+            """INSERT INTO mail_delivery_queue (
+                id, company_id, provider_config_id, mail_id, recipient_id, status,
+                attempt_count, next_attempt_at, created_at, updated_at
+            )
+            SELECT %s || '_' || r.id, m.company_id, p.id, m.id, r.id,
+                   CASE WHEN p.delivery_enabled AND p.last_test_status = 'success' THEN 'queued' ELSE 'blocked' END,
+                   0, CASE WHEN p.delivery_enabled AND p.last_test_status = 'success' THEN %s ELSE NULL END, %s, %s
+            FROM mail_messages m
+            JOIN mail_provider_configs p ON p.id = %s AND p.company_id = m.company_id
+            JOIN mail_recipients r ON r.message_id = m.id AND r.recipient_user_id IS NULL
+            WHERE m.id = %s
+            ON CONFLICT (mail_id, recipient_id) DO NOTHING""",
+            (self._new_id("delivery"), now, now, now, provider['id'] if provider else None, row["id"]),
+        )
+        cursor.execute(
+            """INSERT INTO audit_logs (
+                id, company_id, actor_user_id, actor_user_name, target_type, target_id,
+                event, status_before, status_after, reason, created_at
+            )
+            SELECT %s || '_' || q.id, q.company_id, %s, 'system', 'mail_delivery_queue', q.id,
+                   'mail.delivery.' || q.status, NULL, q.status, 'UI-021 scheduled transaction outbox', %s
+            FROM mail_delivery_queue q WHERE q.mail_id = %s AND q.created_at = %s""",
+            (self._new_id("audit"), row["sender_user_id"], now, row["id"], now),
+        )
+        self._write_mail_event_audit(
+            cursor,
+            company_id=row["company_id"],
+            actor_user_id=row["sender_user_id"],
+            actor_user_name="system",
+            mail_id=row["id"],
+            event="mail.scheduled.dispatched",
+            status_before="scheduled",
+            status_after="sent",
+            now=now,
+        )
 
     def mark_mail_read(self, actor: AuthUserSummary, mail_id: str) -> MailStatusResponse:
         self.db.ensure_migrations_applied()
@@ -2873,10 +2909,7 @@ class MailMessengerService:
                     classification = MailDeliveryPolicy().classify(company["domain"], active_users, recipient_pairs)
                     internal_by_email = {email: user_id for _, email, user_id in classification.internal}
                     external_emails = {email for _, email in classification.external}
-                    cursor.execute("SELECT * FROM mail_provider_configs WHERE id = %s AND company_id = %s", (account["provider_config_id"], actor.companyId))
-                    provider = cursor.fetchone()
-                    if external_emails and provider is None:
-                        raise ValueError("외부 발송 provider를 찾을 수 없습니다.")
+                    provider = OutboundProviderResolver.resolve(cursor, actor.companyId) if external_emails else None
 
                 preferences = self._ensure_basic_preferences(cursor, actor)
                 signature = self._fetch_enabled_signature(cursor, actor)
@@ -3215,7 +3248,7 @@ class MailMessengerService:
         )
 
     def _fetch_mail_account(self, cursor, user_id: str) -> dict:
-        cursor.execute("SELECT id, email, status, provider_config_id FROM mail_accounts WHERE user_id = %s", (user_id,))
+        cursor.execute("SELECT id, email, status FROM mail_accounts WHERE user_id = %s", (user_id,))
         row = cursor.fetchone()
         if row is None:
             raise ValueError("메일 계정을 찾을 수 없습니다.")

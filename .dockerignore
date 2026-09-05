@@ -5,3 +5,36 @@ frontend/user-web/node_modules/
 backend/__pycache__/
 frontend/admin-web/dist/
 frontend/user-web/dist/
+
+# 비밀은 root/nested 모두 제외하고 공개 예제만 허용한다.
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+.smtp-submission-password
+**/.smtp-submission-password
+.agents/
+**/.agents/
+.codex/
+**/.codex/
+.worktrees/
+**/.worktrees/
+
+# 비매뉴얼 내부 문서와 QA는 build context에 포함하지 않는다.
+docs/*
+!docs/manuals/
+docs/work-progress/
+
+# 로컬 개발 환경·캐시·생성 산출물
+**/.venv/
+**/venv/
+**/node_modules/
+**/__pycache__/
+**/.pytest_cache/
+**/.cache/
+**/.vite/
+**/.vite-temp/
+**/dist/
+**/*.tsbuildinfo

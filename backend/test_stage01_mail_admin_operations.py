@@ -13,7 +13,8 @@ from app.schemas.mail_operations import MailOperationsDomainUpdateRequest, MailO
 from app.services.mail_admin_operations import MailAdminOperations, generate_dkim_keypair
 from app.services.mail_daily_send_quota import MailDailyQuotaUnavailable, MailDailySendLimitExceeded
 from app.services.mail_operations_policy import ProviderSwitchPlan, build_mail_domain_contract
-from app.services.oci_email_operations import OciEmailGateway, OciEmailOperations
+from app.services.oci_email_operations import OciEmailGateway, OciEmailOperations, build_desired_sender_emails
+from app.workers.mail_delivery_worker import run_oci_sender_sync_once
 
 
 class RecordingCursor:
@@ -35,6 +36,9 @@ class RecordingCursor:
         return self.one_rows.pop(0) if self.one_rows else None
 
     def fetchall(self):
+        if self.statements and "provider_type=ANY" in self.statements[-1][0] and "FOR UPDATE" in self.statements[-1][0]:
+            row = self.fetchone()
+            return [row] if row else []
         return self.all_rows.pop(0) if self.all_rows else []
 
 
@@ -110,7 +114,89 @@ class PagingClient:
         )
 
 
+class SenderMutationClient:
+    def __init__(self) -> None:
+        self.created = []
+        self.deleted = []
+        self.senders = [
+            SimpleNamespace(id="sender-admin", email_address="admin@moaworks.sinsan.kr", lifecycle_state="ACTIVE"),
+            SimpleNamespace(id="sender-old", email_address="old@moaworks.sinsan.kr", lifecycle_state="ACTIVE"),
+        ]
+
+    def create_sender(self, _details):
+        self.created.append(_details.email_address)
+        return SimpleNamespace(data=SimpleNamespace(id="sender-new", email_address=_details.email_address))
+
+    def delete_sender(self, sender_id):
+        self.deleted.append(sender_id)
+        return SimpleNamespace(data=None)
+
+    def list_senders(self, _compartment_id, **_kwargs):
+        return SimpleNamespace(data=SimpleNamespace(items=self.senders), headers={})
+
+    def list_suppressions(self, _tenancy_id, **_kwargs):
+        return SimpleNamespace(data=SimpleNamespace(items=[]), headers={})
+
+    def list_email_domains(self, _compartment_id, **_kwargs):
+        return SimpleNamespace(data=SimpleNamespace(items=[]), headers={})
+
+
 class MailAdminOperationsContractTest(unittest.TestCase):
+    def test_oci_sender_sync_worker_reconciles_each_active_oci_company(self) -> None:
+        class Cursor:
+            def __enter__(self): return self
+            def __exit__(self, *_args): return None
+            def execute(self, _sql): return None
+            def fetchall(self): return [{"company_id": "company-1", "mail_domain": "moaworks.sinsan.kr"}]
+
+        class Connection:
+            def __enter__(self): return self
+            def __exit__(self, *_args): return None
+            def cursor(self): return Cursor()
+
+        class Db:
+            def ensure_migrations_applied(self): pass
+            def connect(self): return Connection()
+
+        class Sync:
+            def __init__(self): self.calls = []
+            def reconcile_company(self, **kwargs): self.calls.append(kwargs); return {}
+
+        sync = Sync()
+        self.assertEqual(run_oci_sender_sync_once(db=Db(), operations=sync), 1)
+        self.assertEqual(sync.calls[0]["company_id"], "company-1")
+
+    def test_desired_sender_set_contains_only_active_managed_domain_users(self) -> None:
+        rows = [
+            {"email": "SamsungLife@moaworks.sinsan.kr", "status": "active"},
+            {"email": "deleted@moaworks.sinsan.kr", "status": "deleted"},
+            {"email": "inactive@moaworks.sinsan.kr", "status": "inactive"},
+            {"email": "outside@example.net", "status": "active"},
+        ]
+        self.assertEqual(
+            build_desired_sender_emails(rows, "moaworks.sinsan.kr", {"admin@moaworks.sinsan.kr"}),
+            {"admin@moaworks.sinsan.kr", "samsunglife@moaworks.sinsan.kr"},
+        )
+
+    def test_oci_gateway_creates_sender_with_email_details(self) -> None:
+        client = SenderMutationClient()
+        gateway = OciEmailGateway(client_factory=lambda: client)
+        result = gateway.create_sender("new@moaworks.sinsan.kr")
+        self.assertEqual(result["email"], "new@moaworks.sinsan.kr")
+        self.assertEqual(client.created, ["new@moaworks.sinsan.kr"])
+
+    def test_oci_gateway_reconcile_adds_missing_and_removes_unprotected_stale_sender(self) -> None:
+        client = SenderMutationClient()
+        gateway = OciEmailGateway(client_factory=lambda: client)
+        result = gateway.reconcile_senders(
+            "moaworks.sinsan.kr",
+            {"admin@moaworks.sinsan.kr", "new@moaworks.sinsan.kr"},
+            {"admin@moaworks.sinsan.kr"},
+        )
+        self.assertEqual(client.created, ["new@moaworks.sinsan.kr"])
+        self.assertEqual(client.deleted, ["sender-old"])
+        self.assertEqual(result, {"created": 1, "deleted": 1, "unchanged": 1})
+
     def test_domain_contract_canonicalizes_admin_cidrs(self) -> None:
         contract = build_mail_domain_contract(
             registered_domain="sinsan.kr",
@@ -140,6 +226,7 @@ class MailAdminOperationsContractTest(unittest.TestCase):
             "/api/v1/admin/mail-operations/providers/switch": "post",
             "/api/v1/admin/mail-operations/providers/rollback": "post",
             "/api/v1/admin/mail-operations/oci/suppressions/sync": "post",
+            "/api/v1/admin/mail-operations/oci/senders/sync": "post",
             "/api/v1/admin/mail-operations/providers/self_hosted/dkim/generate": "post",
         }
         for path, method in expected.items():
@@ -171,6 +258,16 @@ class MailAdminOperationsContractTest(unittest.TestCase):
         self.assertEqual(snapshot.approved_senders[0]["status"], "ACTIVE")
         self.assertEqual(snapshot.email_domains[0]["status"], "ACTIVE")
         self.assertEqual(client.suppression_pages, 2)
+
+    def test_admin_can_reconcile_oci_senders_now(self) -> None:
+        class Oci:
+            def reconcile_company(self, **kwargs):
+                self.kwargs = kwargs
+                return {"created": 2, "deleted": 1, "unchanged": 3}
+
+        cursor = RecordingCursor(one_rows=[{"mail_domain": "moaworks.sinsan.kr"}])
+        result = MailAdminOperations(db=FakeDb(cursor), oci_operations=Oci()).sync_oci_senders(actor())
+        self.assertEqual(result["created"], 2)
 
     def test_oci_sync_replaces_active_snapshot_and_writes_audit(self) -> None:
         snapshot_gateway = SimpleNamespace(
@@ -287,7 +384,7 @@ class MailAdminOperationsContractTest(unittest.TestCase):
         self.assertEqual(encrypt.call_args.args[0], "smtp-password")
         self.assertFalse(result["deliveryEnabled"])
         self.assertNotIn("smtp-password", str(result))
-        self.assertIn("last_test_status=%s", cursor.statements[1][0])
+        self.assertTrue(any("last_test_status=%s" in sql for sql, _ in cursor.statements))
 
     def test_oci_provider_accepts_managed_dkim_without_private_key(self) -> None:
         current = {
@@ -355,7 +452,7 @@ class MailAdminOperationsContractTest(unittest.TestCase):
             actor(), "self_hosted", MailOperationsProviderUpdateRequest()
         )
 
-        update_sql, update_params = cursor.statements[1]
+        update_sql, update_params = next(item for item in cursor.statements if item[0].startswith("UPDATE mail_provider_configs"))
         self.assertIn("provider_type=%s", update_sql)
         self.assertIn("self_hosted", update_params)
         self.assertFalse(result["deliveryEnabled"])
@@ -424,10 +521,10 @@ class MailAdminOperationsContractTest(unittest.TestCase):
         self.assertFalse(result["deliveryEnabled"])
         self.assertTrue(result["passwordConfigured"])
         self.assertNotIn("empty-cipher", str(result))
-        self.assertIn("INSERT INTO mail_provider_configs", cursor.statements[1][0])
+        self.assertTrue(any("INSERT INTO mail_provider_configs" in sql for sql, _ in cursor.statements))
 
     def test_domain_creation_uses_current_provider_when_domain_state_is_absent(self) -> None:
-        cursor = RecordingCursor(one_rows=[None, {"provider_type": "oci_email_delivery"}])
+        cursor = RecordingCursor(all_rows=[[{"provider_type": "oci_email_delivery"}]])
         operation = MailAdminOperations(db=FakeDb(cursor))
         with patch.object(operation.policy, "save_domain_contract") as save, patch.object(operation, "get_overview", return_value={}):
             operation.update_domain(
@@ -492,136 +589,65 @@ class MailAdminOperationsContractTest(unittest.TestCase):
         result = MailAdminOperations(db=FakeDb(sync_cursor), oci_operations=oci).sync_oci_suppressions(actor())
         self.assertEqual(result["suppressionCount"], 2)
 
-    def test_non_active_provider_can_run_real_delivery_test_before_switch(self) -> None:
-        provider = {
-            "id": "provider-oci", "provider_type": "oci_email_delivery", "relay_host": "smtp.oci.example",
-            "relay_port": 587, "tls_mode": "starttls", "from_address": "postmaster@moaworks.sinsan.kr",
-            "username": "smtp-user", "encrypted_password": "cipher", "active": False,
-            "delivery_enabled": False, "last_test_status": "untested", "encrypted_dkim_private_key": None,
-        }
-        updated = {
-            **provider,
-            "delivery_enabled": True,
-            "last_test_status": "success",
-            "last_connection_at": None,
-            "last_connection_error": None,
-        }
-        cursor = RecordingCursor(one_rows=[provider, {"mail_domain": "moaworks.sinsan.kr", "mail_host": "mail.moaworks.sinsan.kr"}, updated])
+    def test_oci_sender_sync_status_summarizes_outbox(self) -> None:
+        cursor = RecordingCursor(all_rows=[[{
+            "status": "pending", "count": 2, "updated_at": "later"
+        }, {
+            "status": "failed", "count": 1, "updated_at": "latest"
+        }]])
+        result = MailAdminOperations(db=FakeDb(cursor)).get_oci_sender_sync_status(actor())
+        self.assertEqual(result["pending"], 2)
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(result["succeeded"], 0)
+        self.assertEqual(result["lastUpdatedAt"], "latest")
 
-        class Adapter:
-            def __init__(self, quota) -> None:
-                self.calls = []
-                self.quota = quota
-
-            def prepare(self, envelope, config):
-                return (envelope, config)
-
-            def send_prepared(self, prepared, config):
-                self.assert_reserved()
-                self.calls.append((prepared[0], config))
-                return "provider=oci_email_delivery;endpoint=smtps://smtp.oci.example:587;accepted=true"
-
-            def assert_reserved(self):
-                if self.quota.calls != len(self.calls) + 1:
-                    raise AssertionError("quota must be reserved immediately before provider test")
-
-        quota = RecordingQuota()
-        adapter = Adapter(quota)
-        operation = MailAdminOperations(db=FakeDb(cursor), delivery_adapter=adapter, quota=quota)
-        with patch.object(operation.security, "decrypt_secret", return_value="smtp-password"):
-            result = operation.test_provider(actor(), "oci_email_delivery", "external@example.net")
-        self.assertEqual(result["lastTestStatus"], "success")
-        self.assertTrue(result["deliveryEnabled"])
-        self.assertEqual(adapter.calls[0][0]["recipient_email"], "external@example.net")
-        self.assertEqual(adapter.calls[0][1]["password"], "smtp-password")
-        self.assertEqual(quota.calls, 1)
-        self.assertNotIn("smtp-password", str(result))
-
-    def test_provider_quota_rejection_keeps_delivery_health_unchanged(self) -> None:
+    def test_non_active_provider_connection_test_preserves_lock_before_switch(self) -> None:
         provider = {
             "id": "provider-oci", "provider_type": "oci_email_delivery",
-            "relay_host": "smtp.oci.example", "relay_port": 587,
-            "tls_mode": "starttls", "from_address": "postmaster@moaworks.sinsan.kr",
-            "username": "smtp-user", "encrypted_password": "cipher", "active": True,
-            "delivery_enabled": True, "last_test_status": "success",
-            "encrypted_dkim_private_key": None,
+            "active": False, "delivery_enabled": False, "last_test_status": "untested",
         }
+        updated = {**provider, "last_test_status": "success"}
+        cursor = RecordingCursor(one_rows=[provider, updated])
+        quota = RecordingQuota()
+        operation = MailAdminOperations(db=FakeDb(cursor), delivery_adapter=SimpleNamespace(), quota=quota)
+        with patch("app.services.mail_admin_operations.probe_smtp_connection", return_value="연결 검증 완료") as probe:
+            result = operation.test_provider(actor(), "oci_email_delivery", "unused@example.invalid")
+        probe.assert_called_once()
+        self.assertEqual(result["lastTestStatus"], "success")
+        self.assertFalse(result["deliveryEnabled"])
+        self.assertEqual(quota.calls, 0)
+        sql = next(sql for sql, _ in cursor.statements if sql.startswith("UPDATE"))
+        self.assertNotIn("delivery_enabled=", sql)
+        self.assertNotIn("active=", sql)
 
-        for quota_error, expected_code in (
-            (
-                MailDailySendLimitExceeded(
-                    limit=1,
-                    reset_at=datetime(2026, 8, 29, 15, 0, tzinfo=UTC),
-                ),
-                "MAIL_DAILY_SEND_LIMIT_EXCEEDED",
-            ),
-            (MailDailyQuotaUnavailable("quota unavailable"), "MAIL_DAILY_QUOTA_UNAVAILABLE"),
-        ):
-            with self.subTest(expected_code=expected_code):
-                cursor = RecordingCursor(
-                    one_rows=[
-                        dict(provider),
-                        {"mail_domain": "moaworks.sinsan.kr", "mail_host": "mail.moaworks.sinsan.kr"},
-                    ]
-                )
-                operation = MailAdminOperations(
-                    db=FakeDb(cursor),
-                    delivery_adapter=SimpleNamespace(
-                        prepare=lambda envelope, config: (envelope, config),
-                        send_prepared=lambda *_args: self.fail("transport must not be called"),
-                    ),
-                    quota=RejectingQuota(quota_error),
-                )
-
-                with patch.object(operation.security, "decrypt_secret", return_value="smtp-password"):
-                    result = operation.test_provider(
-                        actor(), "oci_email_delivery", "external@example.net"
-                    )
-
-                self.assertEqual(result["quotaErrorCode"], expected_code)
-                self.assertTrue(result["deliveryEnabled"])
-                self.assertEqual(result["lastTestStatus"], "success")
-                self.assertFalse(
-                    any(statement.startswith("UPDATE mail_provider_configs") for statement, _ in cursor.statements)
-                )
-
-    def test_self_hosted_test_persists_canonical_provider_type_for_queue_worker(self) -> None:
+    def test_connection_probe_does_not_consume_delivery_quota(self) -> None:
         provider = {
-            "id": "provider-self", "provider_type": "smtp", "relay_host": "mail-layer",
-            "relay_port": 587, "tls_mode": "starttls", "from_address": None,
-            "username": "", "encrypted_password": None, "active": True,
-            "delivery_enabled": False, "last_test_status": "untested",
-            "encrypted_dkim_private_key": None,
+            "id": "provider-oci", "provider_type": "oci_email_delivery",
+            "active": True, "delivery_enabled": True, "last_test_status": "success",
         }
-        updated = {
-            **provider,
-            "provider_type": "self_hosted",
-            "delivery_enabled": True,
-            "last_test_status": "success",
-        }
-        cursor = RecordingCursor(one_rows=[provider, {"mail_domain": "dev.example.net", "mail_host": "mx.dev.example.net"}, updated])
-
-        class Adapter:
-            def prepare(self, envelope, config):
-                assert config["provider_type"] == "self_hosted"
-                return envelope
-
-            def send_prepared(self, envelope, config):
-                return "provider=self_hosted;endpoint=smtp://mx.example.net:25;remote_smtp_accepted=true"
-
-        result = MailAdminOperations(
-            db=FakeDb(cursor),
-            delivery_adapter=Adapter(),
-            quota=RecordingQuota(),
-        ).test_provider(
-            actor(), "self_hosted", "external@example.net"
-        )
-
-        update_sql, update_params = cursor.statements[2]
-        self.assertIn("provider_type=%s", update_sql)
-        self.assertIn("self_hosted", update_params)
-        self.assertEqual(result["providerKey"], "self_hosted")
+        cursor = RecordingCursor(one_rows=[provider, dict(provider)])
+        quota = RecordingQuota()
+        operation = MailAdminOperations(db=FakeDb(cursor), delivery_adapter=SimpleNamespace(), quota=quota)
+        with patch("app.services.mail_admin_operations.probe_smtp_connection", return_value="연결 검증 완료"):
+            result = operation.test_provider(actor(), "oci_email_delivery", "unused@example.invalid")
+        self.assertEqual(quota.calls, 0)
         self.assertTrue(result["deliveryEnabled"])
+        self.assertEqual(result["lastTestStatus"], "success")
+
+    def test_self_hosted_connection_test_does_not_change_type_or_lock(self) -> None:
+        provider = {
+            "id": "provider-self", "provider_type": "smtp",
+            "active": True, "delivery_enabled": False, "last_test_status": "untested",
+        }
+        cursor = RecordingCursor(one_rows=[provider, {**provider, "last_test_status": "success"}])
+        operation = MailAdminOperations(db=FakeDb(cursor), delivery_adapter=SimpleNamespace())
+        with patch("app.services.mail_admin_operations.probe_smtp_connection", return_value="연결 검증 완료"):
+            result = operation.test_provider(actor(), "self_hosted", "unused@example.invalid")
+        sql = next(sql for sql, _ in cursor.statements if sql.startswith("UPDATE"))
+        self.assertNotIn("provider_type=", sql)
+        self.assertNotIn("delivery_enabled=", sql)
+        self.assertEqual(result["providerKey"], "self_hosted")
+        self.assertFalse(result["deliveryEnabled"])
 
     def test_api_routes_use_authenticated_admin_and_map_validation_errors(self) -> None:
         client = TestClient(app)
@@ -635,6 +661,8 @@ class MailAdminOperationsContractTest(unittest.TestCase):
             rollback_provider=lambda _actor: {"activeProvider": "self_hosted"},
             test_provider=lambda _actor, key, recipient: {"providerKey": key, "recipient": recipient},
             sync_oci_suppressions=lambda _actor: {"suppressionCount": 0},
+            sync_oci_senders=lambda _actor: {"created": 0, "deleted": 0, "unchanged": 1},
+            get_oci_sender_sync_status=lambda _actor: {"pending": 0, "processing": 0, "succeeded": 1, "failed": 0, "lastUpdatedAt": None},
         )
         try:
             with patch("app.api.routes.mail_operations_admin._service", return_value=service):
@@ -646,6 +674,8 @@ class MailAdminOperationsContractTest(unittest.TestCase):
                 self.assertEqual(client.post("/api/v1/admin/mail-operations/providers/oci_email_delivery/test", json={"recipient": "external@example.net"}).status_code, 200)
                 self.assertEqual(client.post("/api/v1/admin/mail-operations/providers/rollback").status_code, 200)
                 self.assertEqual(client.post("/api/v1/admin/mail-operations/oci/suppressions/sync").status_code, 200)
+                self.assertEqual(client.post("/api/v1/admin/mail-operations/oci/senders/sync").status_code, 200)
+                self.assertEqual(client.get("/api/v1/admin/mail-operations/oci/senders/sync-status").status_code, 200)
             failing = SimpleNamespace(get_overview=lambda _actor: (_ for _ in ()).throw(ValueError("invalid")))
             with patch("app.api.routes.mail_operations_admin._service", return_value=failing):
                 self.assertEqual(client.get("/api/v1/admin/mail-operations").status_code, 400)

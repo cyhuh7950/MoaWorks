@@ -1,0 +1,1 @@
+/^<>$/ REJECT 5.7.1 Authenticated submission requires a sender

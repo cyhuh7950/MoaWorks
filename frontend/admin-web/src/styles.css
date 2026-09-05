@@ -1539,6 +1539,36 @@ button:disabled {
   background: rgba(10, 29, 24, 0.38);
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(10, 29, 24, 0.42);
+}
+
+.modal-card {
+  width: min(520px, calc(100vw - 40px));
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+  border: 1px solid rgba(18, 68, 56, 0.16);
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: 0 24px 80px rgba(8, 34, 27, 0.28);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(18, 68, 56, 0.1);
+}
+
 .management-modal {
   width: min(1040px, calc(100vw - 48px));
   max-height: min(820px, calc(100vh - 48px));

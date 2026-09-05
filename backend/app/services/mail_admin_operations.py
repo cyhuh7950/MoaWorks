@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from app.services.outbound_provider_resolver import OutboundProviderResolver
+from app.services.mail_connection_probe import probe_smtp_connection
+
 import base64
 import re
 
@@ -138,7 +141,7 @@ class MailAdminOperations:
                 "inboundMxHost": domain.get("inbound_mx_host") or domain["mail_host"],
                 "adminAccessMode": domain["admin_access_mode"],
                 "adminAllowedCidrs": list(domain.get("admin_allowed_cidrs") or []),
-                "activeOutboundProvider": domain["active_outbound_provider_key"],
+                "activeOutboundProvider": (self._provider_key(active[0]['provider_type']) if len(active := [p for p in providers if p.get('active')]) == 1 else None),
                 "previousOutboundProvider": domain.get("previous_outbound_provider_key"),
                 "providerSwitchedAt": domain.get("provider_switched_at"),
             }
@@ -170,26 +173,26 @@ class MailAdminOperations:
         )
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT active_outbound_provider_key FROM mail_domain_settings WHERE company_id=%s", (actor.companyId,))
-                state = cursor.fetchone()
-                active_provider = state["active_outbound_provider_key"] if state else self._active_provider_key(cursor, actor.companyId)
+                active_provider = self._active_provider_key(cursor, actor.companyId)
                 self.policy.save_domain_contract(cursor=cursor, company_id=actor.companyId, contract=contract, active_provider=active_provider)
                 self._audit(cursor, actor, "mail_domain_settings", actor.companyId, "mail.domain.updated", contract.admin_access_mode)
             connection.commit()
         return self.get_overview(actor)
 
     def update_provider(self, actor, provider_key: str, payload) -> dict:
-        if provider_key not in _PROVIDER_TYPES:
-            raise ValueError("Provider는 self_hosted 또는 oci_email_delivery여야 합니다.")
         values = payload.model_dump(exclude_none=True)
         for secret_field in ("password", "dkimPrivateKey"):
             if secret_field in values:
                 values[secret_field] = values[secret_field].get_secret_value()
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
+                if provider_key in _PROVIDER_TYPES:
+                    # 아직 행이 없는 동시 생성도 회사/타입별 transaction 안에서 직렬화한다.
+                    cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s),hashtext(%s))", (actor.companyId, provider_key))
                 row = self._find_provider(cursor, actor.companyId, provider_key)
                 if row is None:
                     row = self._create_locked_provider(cursor, actor.companyId, provider_key, values)
+                provider_key = self._provider_key(row['provider_type'])
                 merged_dkim_identity = (
                     values.get("dkimDomain", row.get("dkim_domain")),
                     values.get("dkimSelector", row.get("dkim_selector")),
@@ -204,7 +207,8 @@ class MailAdminOperations:
                     if any(merged_dkim) and not all(merged_dkim):
                         raise ValueError("자체 메일 엔진의 DKIM 도메인, selector, 개인키는 함께 설정해야 합니다.")
                 updates: dict[str, object] = {}
-                connection_changed = row.get("provider_type") != provider_key
+                # 순수 잠금 조작은 기존 alias/연결 설정을 바꾸거나 검증을 무효화하지 않는다.
+                connection_changed = row.get("provider_type") != provider_key and set(values) != {"deliveryEnabled"}
                 if connection_changed:
                     updates["provider_type"] = provider_key
                 mapping = {
@@ -290,15 +294,13 @@ class MailAdminOperations:
                     raise ValueError("먼저 메일 도메인 설정을 저장해야 합니다.")
                 plan = self.policy.switch_outbound_provider(
                     cursor=cursor, company_id=actor.companyId, actor_user_id=actor.userId,
-                    actor_user_name=actor.userName, current_provider=state["active_outbound_provider_key"],
+                    actor_user_name=actor.userName, current_provider=None,
                     target_provider=target_provider,
                 )
             connection.commit()
         return {"previousProvider": plan.previous_provider, "activeProvider": plan.new_message_provider, "pinnedQueueCount": len(plan.pinned_queue_providers)}
 
     def test_provider(self, actor, provider_key: str, recipient: str) -> dict:
-        if provider_key not in _PROVIDER_TYPES:
-            raise ValueError("Provider는 self_hosted 또는 oci_email_delivery여야 합니다.")
         now = datetime.now(UTC)
         error = None
         with self.db.connect() as connection:
@@ -306,46 +308,15 @@ class MailAdminOperations:
                 provider = self._find_provider(cursor, actor.companyId, provider_key)
                 if provider is None:
                     raise ValueError("테스트할 Provider 설정이 없습니다.")
-                cursor.execute("SELECT mail_domain,mail_host FROM mail_domain_settings WHERE company_id=%s", (actor.companyId,))
-                domain = cursor.fetchone()
-                if domain is None:
-                    raise ValueError("먼저 메일 도메인 설정을 저장해야 합니다.")
-                provider["provider_type"] = provider_key
-                provider["password"] = self.security.decrypt_secret(provider["encrypted_password"]) if provider.get("username") else ""
-                provider["dkim_private_key"] = self.security.decrypt_secret(provider["encrypted_dkim_private_key"]) if provider.get("encrypted_dkim_private_key") else ""
-                provider["helo_name"] = domain["mail_host"]
-                sender = str(provider.get("from_address") or f"postmaster@{domain['mail_domain']}")
                 try:
-                    envelope = {
-                            "queue_id": f"connection-test-{uuid4().hex}", "sender_email": sender,
-                            "recipient_email": recipient, "subject": "MoaWorks Provider 연결 테스트",
-                            "body_text": "관리자 화면에서 실행한 실제 외부 SMTP 연결 테스트입니다.",
-                    }
-                    prepared = self.delivery_adapter.prepare(envelope, provider)
-                    if getattr(self.delivery_adapter, "supports_attempt_reservation", False):
-                        response = self.delivery_adapter.send_prepared(
-                            prepared,
-                            provider,
-                            before_network_attempt=self.quota.reserve_attempt,
-                        )
-                    else:
-                        self.quota.reserve_attempt()
-                        response = self.delivery_adapter.send_prepared(prepared, provider)
+                    response = probe_smtp_connection(provider, self.security)
                     test_status = "success"
-                except MailDailySendLimitExceeded:
-                    result = self._provider_view(provider)
-                    result["quotaErrorCode"] = "MAIL_DAILY_SEND_LIMIT_EXCEEDED"
-                    return result
-                except MailDailyQuotaUnavailable:
-                    result = self._provider_view(provider)
-                    result["quotaErrorCode"] = "MAIL_DAILY_QUOTA_UNAVAILABLE"
-                    return result
                 except Exception as exc:
-                    test_status, response, error = "failed", "", mask_delivery_error(str(exc))
+                    test_status, response, error = "failed", "", "SMTP 연결 검증 실패. 관리자 설정을 확인하세요."
                 cursor.execute(
-                    """UPDATE mail_provider_configs SET provider_type=%s,last_test_status=%s,delivery_enabled=%s,last_test_message=%s,last_connection_at=%s,
+                    """UPDATE mail_provider_configs SET last_test_status=%s,last_test_message=%s,last_connection_at=%s,
                     last_connection_error=%s,updated_at=%s WHERE id=%s AND company_id=%s RETURNING *""",
-                    (provider_key, test_status, test_status == "success", response or "실제 외부 SMTP 연결 테스트 실패", now, error, now, provider["id"], actor.companyId),
+                    (test_status, response or "SMTP 연결 검증 실패 (메일 미전송)", now, error, now, provider["id"], actor.companyId),
                 )
                 updated = cursor.fetchone()
                 self._audit(cursor, actor, "mail_provider_config", provider["id"], "mail.provider.tested", test_status)
@@ -375,16 +346,53 @@ class MailAdminOperations:
             connection.commit()
         return result
 
-    def _active_provider_key(self, cursor, company_id: str) -> str:
-        cursor.execute("SELECT provider_type FROM mail_provider_configs WHERE company_id=%s ORDER BY active DESC,updated_at DESC LIMIT 1", (company_id,))
-        row = cursor.fetchone()
-        return self._provider_key(row["provider_type"]) if row else "self_hosted"
+    def sync_oci_senders(self, actor) -> dict:
+        with self.db.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT mail_domain FROM mail_domain_settings WHERE company_id=%s", (actor.companyId,))
+                state = cursor.fetchone()
+        if state is None or not state.get("mail_domain"):
+            raise ValueError("먼저 메일 도메인 설정을 저장해야 합니다.")
+        return self.oci_operations.reconcile_company(
+            db=self.db,
+            company_id=actor.companyId,
+            mail_domain=state["mail_domain"],
+        )
+
+    def get_oci_sender_sync_status(self, actor) -> dict:
+        with self.db.connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT status,COUNT(*) AS count,MAX(updated_at) AS updated_at
+                   FROM mail_oci_sender_sync_outbox
+                  WHERE company_id=%s GROUP BY status""",
+                (actor.companyId,),
+            )
+            rows = cursor.fetchall()
+        counts = {row["status"]: int(row["count"]) for row in rows}
+        return {
+            "pending": counts.get("pending", 0),
+            "processing": counts.get("processing", 0),
+            "succeeded": counts.get("succeeded", 0),
+            "failed": counts.get("failed", 0),
+            "lastUpdatedAt": max((row.get("updated_at") for row in rows if row.get("updated_at")), default=None),
+        }
+
+    def _active_provider_key(self, cursor, company_id: str) -> str | None:
+        row = OutboundProviderResolver.readiness(cursor, company_id)
+        return OutboundProviderResolver.provider_key(row) if row else None
 
     @staticmethod
     def _find_provider(cursor, company_id: str, provider_key: str):
-        cursor.execute("SELECT * FROM mail_provider_configs WHERE company_id=%s AND provider_type=ANY(%s) ORDER BY updated_at DESC LIMIT 1", (company_id, list(_PROVIDER_TYPES[provider_key])))
-        row = cursor.fetchone()
-        return dict(row) if row else None
+        if provider_key in _PROVIDER_TYPES:
+            cursor.execute("SELECT * FROM mail_provider_configs WHERE company_id=%s AND provider_type=ANY(%s) FOR UPDATE", (company_id, list(_PROVIDER_TYPES[provider_key])))
+        else:
+            cursor.execute("SELECT * FROM mail_provider_configs WHERE company_id=%s AND id=%s FOR UPDATE", (company_id, provider_key))
+        rows = cursor.fetchall()
+        if len(rows) > 1:
+            raise ValueError("같은 타입의 Provider가 중복됩니다. 명시적 Provider ID를 선택하세요.")
+        if not rows and provider_key not in _PROVIDER_TYPES:
+            raise ValueError("회사에 해당하는 Provider ID를 찾을 수 없습니다.")
+        return dict(rows[0]) if rows else None
 
     def _create_locked_provider(self, cursor, company_id: str, provider_key: str, values: dict) -> dict:
         provider_id = f"mail_provider_{uuid4().hex}"

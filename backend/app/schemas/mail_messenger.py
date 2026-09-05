@@ -844,7 +844,7 @@ class MailAutoForwardExceptionsDeleteRequest(BaseModel):
 
 
 class MailAutoForwardLastResult(BaseModel):
-    status: Literal["internal_delivered", "queued", "blocked", "retry_pending", "sent", "failed"]
+    status: Literal["internal_delivered", "queued", "blocked", "retry_pending", "sent", "failed", "result_unknown"]
     reasonCode: str
     createdAt: datetime
 
@@ -890,7 +890,7 @@ class MailOutOfOfficePolicyUpdateRequest(BaseModel):
 
 
 class MailOutOfOfficeLastResult(BaseModel):
-    status: Literal["internal_delivered", "queued", "blocked", "retry_pending", "sent", "failed"]
+    status: Literal["internal_delivered", "queued", "blocked", "retry_pending", "sent", "failed", "result_unknown"]
     reasonCode: str
     createdAt: datetime
 
@@ -1526,6 +1526,10 @@ class MailUserDeliveryStatusResponse(BaseModel):
 class MailDeliveryQueueListResponse(BaseModel):
     items: list[MailDeliveryQueueItem]
     total: int
+
+class MailDeliveryRetryRequest(BaseModel):
+    confirmDuplicateRisk: bool = Field(default=False, strict=True)
+
 
 class MailDeliveryQueueDetailResponse(BaseModel):
     item: MailDeliveryQueueItem

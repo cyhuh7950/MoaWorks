@@ -1,0 +1,4 @@
+driver = pgsql
+connect = host=${POSTGRES_HOST} port=${POSTGRES_PORT} dbname=${POSTGRES_DB} user=${POSTGRES_USER} password=${POSTGRES_PASSWORD}
+default_pass_scheme = SHA512-CRYPT
+password_query = SELECT c.username AS user, c.password_hash AS password FROM mail_submission_credentials c JOIN users u ON u.id=c.user_id AND u.company_id=c.company_id JOIN mail_accounts a ON a.user_id=u.id JOIN mail_domain_settings d ON d.company_id=u.company_id WHERE c.username='%u' AND c.active=TRUE AND c.revoked_at IS NULL AND u.status='active' AND a.status='active' AND LOWER(u.email)=LOWER(c.username) AND LOWER(a.email)=LOWER(c.username) AND LOWER(split_part(a.email,'@',2))=LOWER(d.mail_domain)

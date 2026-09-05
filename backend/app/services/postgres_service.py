@@ -65,6 +65,8 @@ class PostgresService:
 
             with self.connect(db_config) as connection:
                 with connection.cursor() as cursor:
+                    # 모든 API/worker 프로세스가 schema 생성/조회 전에 같은 transaction lock을 취득한다.
+                    cursor.execute("SELECT pg_advisory_xact_lock(1297043799, 1)")
                     cursor.execute(
                         """
                         CREATE TABLE IF NOT EXISTS schema_migrations (

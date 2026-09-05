@@ -121,6 +121,24 @@ export type MailProvider = {
   updatedAt: string;
 };
 
+export type MailSubmissionCredential = {
+  userId: string;
+  userName: string;
+  userEmail: string;
+  username: string;
+  active: boolean;
+  issuedAt: string | null;
+  revokedAt: string | null;
+};
+
+export type MailSubmissionCredentialIssue = {
+  username: string;
+  password: string;
+  smtpHost: string;
+  smtpPort: number;
+  secure: boolean;
+};
+
 export type DirectoryOverview = {
   company: {
     id: string;
@@ -132,7 +150,7 @@ export type DirectoryOverview = {
   departments: Department[];
   roles: Role[];
   users: UserView[];
-  mailProvider: MailProvider;
+  mailProvider: MailProvider | null;
 };
 
 export type OrgImportIssue = {
@@ -413,18 +431,15 @@ export type TranslationReviewList = { items: TranslationReview[]; total: number 
 
 export type MailDeliveryProviderStatus = {
   providerId: string;
-  companyId: string;
-  providerKey: string;
-  enabled: boolean;
-  senderDomain: string;
-  heloName: string;
-  senderAddress: string;
-  useTls: boolean;
-  timeoutSec: number;
-  maxRetryCount: number;
-  retryIntervalSec: number;
-  createdAt: string;
-  updatedAt: string;
+  providerType: string;
+  relayHost: string;
+  relayPort: number;
+  tlsMode: string;
+  fromAddress: string | null;
+  deliveryEnabled: boolean;
+  lastTestStatus: string;
+  lastConnectionAt: string | null;
+  lastConnectionError: string | null;
 };
 
 export type MailDeliveryQueueSummary = {
@@ -438,7 +453,8 @@ export type MailDeliveryQueueSummary = {
 
 export type MailDeliveryStatusResponse = {
   provider: MailDeliveryProviderStatus;
-  summary: MailDeliveryQueueSummary;
+  worker: { status?: string; last_heartbeat_at?: string; last_success_at?: string | null; last_error?: string | null };
+  summary: Record<string, number>;
 };
 
 export type MailOperationsProvider = {
@@ -476,7 +492,7 @@ export type MailOperationsOverview = {
     inboundMxHost: string;
     adminAccessMode: "public" | "restricted" | "private";
     adminAllowedCidrs: string[];
-    activeOutboundProvider: "self_hosted" | "oci_email_delivery";
+    activeOutboundProvider: "self_hosted" | "oci_email_delivery" | null;
     previousOutboundProvider: "self_hosted" | "oci_email_delivery" | null;
     providerSwitchedAt: string | null;
   };
@@ -496,26 +512,22 @@ export type MailOperationsOverview = {
 export type MailDeliveryQueueItem = {
   queueId: string;
   mailId: string;
-  sender: string;
-  recipient: string;
+  recipientEmail: string;
   subject: string;
-  provider: string;
   status: string;
   attemptCount: number;
-  lastError: string | null;
-  nextRetryAt: string | null;
-  sentAt: string | null;
+  nextAttemptAt: string | null;
+  leaseExpiresAt: string | null;
   createdAt: string;
-  updatedAt: string;
 };
 
 export type MailDeliveryAttemptItem = {
-  attemptId: string;
-  queueId: string;
-  status: string;
+  attemptNumber: number;
+  result: string;
   errorMessage: string | null;
-  responseDetail: string | null;
-  attemptedAt: string;
+  relayResponse: string | null;
+  startedAt: string;
+  finishedAt: string;
 };
 
 export type MailDeliveryEventItem = {
@@ -528,11 +540,22 @@ export type MailDeliveryEventItem = {
 };
 
 export type MailDeliveryQueueResponse = {
-  provider: MailDeliveryProviderStatus;
-  summary: MailDeliveryQueueSummary;
-  queue: MailDeliveryQueueItem[];
+  items: MailDeliveryQueueItem[];
+  total: number;
+};
+
+export type OciSenderSyncStatus = {
+  pending: number;
+  processing: number;
+  succeeded: number;
+  failed: number;
+  lastUpdatedAt: string | null;
+};
+
+export type MailDeliveryDetailResponse = {
+  item: MailDeliveryQueueItem;
   attempts: MailDeliveryAttemptItem[];
-  events: MailDeliveryEventItem[];
+  audits: { event: string; status_before: string | null; status_after: string | null; reason: string | null; created_at: string }[];
 };
 
 export type AdminMessengerRoom = {
@@ -984,19 +1007,52 @@ export async function testRelay(token: string, payload: { providerConfigId?: str
 
 
 export async function fetchMailDeliveryStatus(token: string): Promise<MailDeliveryStatusResponse> {
-  return request<MailDeliveryStatusResponse>("/mail/delivery/status", {
+  const result = await request<MailDeliveryStatusResponse>("/admin/mail-delivery/status", {
     headers: authHeaders(token),
   });
+  if (!result?.provider || !result.worker || !result.summary) throw new Error("메일 상태 응답 형식이 올바르지 않습니다.");
+  return result;
 }
 
 export async function fetchMailDeliveryQueue(token: string): Promise<MailDeliveryQueueResponse> {
-  return request<MailDeliveryQueueResponse>("/admin/mail-delivery/queue", {
+  const result = await request<MailDeliveryQueueResponse>("/admin/mail-delivery/queue", {
     headers: authHeaders(token),
   });
+  if (!Array.isArray(result?.items) || !Number.isInteger(result.total) || result.total < 0 || !result.items.every(validDeliveryItem)) throw new Error("메일 큐 응답 형식이 올바르지 않습니다.");
+  return result;
+}
+
+function validDeliveryItem(item: MailDeliveryQueueItem): boolean {
+  return Boolean(item && typeof item.queueId === 'string' && typeof item.mailId === 'string' && typeof item.recipientEmail === 'string' && typeof item.subject === 'string' && typeof item.status === 'string' && Number.isInteger(item.attemptCount));
+}
+
+function deliveryDetail(result: MailDeliveryDetailResponse): MailDeliveryDetailResponse {
+  if (!validDeliveryItem(result?.item) || !Array.isArray(result.attempts) || !Array.isArray(result.audits)) throw new Error("메일 전달 상세 응답 형식이 올바르지 않습니다.");
+  return result;
+}
+
+export async function fetchMailDeliveryDetail(token: string, queueId: string): Promise<MailDeliveryDetailResponse> {
+  return deliveryDetail(await request<MailDeliveryDetailResponse>(`/admin/mail-delivery/queue/${encodeURIComponent(queueId)}`, { headers: authHeaders(token) }));
 }
 
 export async function fetchMailOperations(token: string): Promise<MailOperationsOverview> {
   return request<MailOperationsOverview>("/admin/mail-operations", { headers: authHeaders(token) });
+}
+
+export async function fetchMailSubmissionCredentials(token: string): Promise<MailSubmissionCredential[]> {
+  return request<MailSubmissionCredential[]>("/admin/mail-operations/submission-credentials", { headers: authHeaders(token) });
+}
+
+export async function issueMailSubmissionCredential(token: string, userId: string): Promise<MailSubmissionCredentialIssue> {
+  return request<MailSubmissionCredentialIssue>(`/admin/mail-operations/submission-credentials/${userId}/issue`, {
+    method: "POST", headers: authHeaders(token),
+  });
+}
+
+export async function revokeMailSubmissionCredential(token: string, userId: string): Promise<MailSubmissionCredential> {
+  return request<MailSubmissionCredential>(`/admin/mail-operations/submission-credentials/${userId}/revoke`, {
+    method: "POST", headers: authHeaders(token),
+  });
 }
 
 export async function updateMailOperationsDomain(token: string, payload: {
@@ -1011,8 +1067,8 @@ export async function updateMailOperationsDomain(token: string, payload: {
   });
 }
 
-export async function updateMailOperationsProvider(token: string, providerKey: "self_hosted" | "oci_email_delivery", payload: Record<string, unknown>) {
-  return request<MailOperationsProvider>(`/admin/mail-operations/providers/${providerKey}`, {
+export async function updateMailOperationsProvider(token: string, providerKey: string, payload: Record<string, unknown>) {
+  return request<MailOperationsProvider>(`/admin/mail-operations/providers/${encodeURIComponent(providerKey)}`, {
     method: "PUT", headers: authHeaders(token), body: JSON.stringify(payload),
   });
 }
@@ -1025,19 +1081,19 @@ export async function generateSelfHostedDkim(token: string): Promise<SelfHostedD
 
 
 export async function switchMailOperationsProvider(token: string, targetProvider: "self_hosted" | "oci_email_delivery") {
-  return request<{ previousProvider: string; activeProvider: string; pinnedQueueCount: number }>("/admin/mail-operations/providers/switch", {
+  return request<{ previousProvider: string | null; activeProvider: string; pinnedQueueCount: number }>("/admin/mail-operations/providers/switch", {
     method: "POST", headers: authHeaders(token), body: JSON.stringify({ targetProvider }),
   });
 }
 
-export async function testMailOperationsProvider(token: string, providerKey: "self_hosted" | "oci_email_delivery", recipient: string) {
-  return request<MailOperationsProvider>(`/admin/mail-operations/providers/${providerKey}/test`, {
+export async function testMailOperationsProvider(token: string, providerKey: string, recipient: string) {
+  return request<MailOperationsProvider>(`/admin/mail-operations/providers/${encodeURIComponent(providerKey)}/test`, {
     method: "POST", headers: authHeaders(token), body: JSON.stringify({ recipient }),
   });
 }
 
 export async function rollbackMailOperationsProvider(token: string) {
-  return request<{ previousProvider: string; activeProvider: string; pinnedQueueCount: number }>("/admin/mail-operations/providers/rollback", {
+  return request<{ previousProvider: string | null; activeProvider: string; pinnedQueueCount: number }>("/admin/mail-operations/providers/rollback", {
     method: "POST", headers: authHeaders(token),
   });
 }
@@ -1048,22 +1104,22 @@ export async function syncOciMailSuppressions(token: string) {
   });
 }
 
-export async function testMailDelivery(
-  token: string,
-  payload: { recipient: string; subject?: string; bodyText?: string },
-): Promise<MailSendResponse> {
-  return request<MailSendResponse>("/mail/delivery/test", {
+export async function retryMailDelivery(token: string, queueId: string, confirmDuplicateRisk = false) {
+  return deliveryDetail(await request<MailDeliveryDetailResponse>(`/admin/mail-delivery/queue/${encodeURIComponent(queueId)}/retry`, {
     method: "POST",
     headers: authHeaders(token),
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ confirmDuplicateRisk }),
+  }));
+}
+
+export async function syncOciSenders(token: string) {
+  return request<{ created: number; deleted: number; unchanged: number }>("/admin/mail-operations/oci/senders/sync", {
+    method: "POST", headers: authHeaders(token),
   });
 }
 
-export async function retryMailDelivery(token: string, queueId: string) {
-  return request<{ queueItem: MailDeliveryQueueItem; message: string }>(`/mail/delivery/${queueId}/retry`, {
-    method: "POST",
-    headers: authHeaders(token),
-  });
+export async function fetchOciSenderSyncStatus(token: string) {
+  return request<OciSenderSyncStatus>("/admin/mail-operations/oci/senders/sync-status", { headers: authHeaders(token) });
 }
 
 export async function fetchAdminMessengerRooms(token: string, status: "active" | "deleted" | "all" = "all") {

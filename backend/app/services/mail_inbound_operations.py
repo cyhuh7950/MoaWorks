@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 import json
 import os
@@ -72,9 +73,15 @@ class MailInboundOperations:
     def _id(prefix: str) -> str:
         return f"{prefix}_{uuid4().hex}"
 
-    def ingest(self, *, envelope_from: str, recipient_email: str, raw_message: bytes) -> MailInboundIngestResult:
+    def ingest(self, *, envelope_from: str, recipient_email: str, raw_message: bytes,
+               connection=None, submission_mail_id: str | None = None,
+               recipient_kind: str = 'to', recipient_company_id: str | None = None,
+               submission_queue_id: str | None = None) -> MailInboundIngestResult:
+        if bool(submission_mail_id) != bool(submission_queue_id):
+            raise ValueError('submission 메일과 queue source를 함께 지정해야 합니다.')
+        owns_transaction = connection is None
         normalized_recipient = recipient_email.strip().lower()
-        if normalized_recipient.startswith("bounce+"):
+        if owns_transaction and normalized_recipient.startswith("bounce+"):
             feedback = parse_delivery_feedback(
                 envelope_recipient=normalized_recipient,
                 raw_message=raw_message,
@@ -91,16 +98,17 @@ class MailInboundOperations:
         decision = classify_inbound_security(parsed)
         recipient_email = normalized_recipient
         now = datetime.now(UTC)
-        self.db.ensure_migrations_applied()
-        with self.db.connect() as connection:
+        if owns_transaction:
+            self.db.ensure_migrations_applied()
+        with (self.db.connect() if owns_transaction else nullcontext(connection)) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """SELECT u.id AS user_id,u.company_id
                     FROM users u JOIN mail_domain_settings d ON d.company_id=u.company_id
                     WHERE u.status='active' AND LOWER(u.email)=%s
                       AND LOWER(split_part(u.email,'@',2))=LOWER(d.mail_domain)
-                    LIMIT 1""",
-                    (recipient_email,),
+                    """ + (' AND u.company_id=%s' if recipient_company_id else '') + ' LIMIT 1',
+                    (recipient_email, recipient_company_id) if recipient_company_id else (recipient_email,),
                 )
                 recipient = cursor.fetchone()
                 if recipient is None:
@@ -108,19 +116,25 @@ class MailInboundOperations:
 
                 raw_storage_key = self.storage.store_raw(parsed.content_sha256, raw_message)
                 inbound_id = self._id("inbound")
+                conflict_clause = (
+                    'ON CONFLICT (company_id, content_sha256) WHERE submission_queue_id IS NULL'
+                    if submission_queue_id is None else
+                    'ON CONFLICT (company_id, submission_queue_id) WHERE submission_queue_id IS NOT NULL'
+                )
                 cursor.execute(
-                    """INSERT INTO mail_inbound_messages (
+                    f"""INSERT INTO mail_inbound_messages (
                         id,company_id,internet_message_id,content_sha256,raw_storage_key,envelope_from,
                         header_from,authentication_results,spam_result,virus_status,security_disposition,
-                        processing_status,received_at,created_at,updated_at
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,'spooled',%s,%s,%s)
-                    ON CONFLICT (company_id, content_sha256) DO UPDATE SET updated_at=EXCLUDED.updated_at
+                        processing_status,received_at,created_at,updated_at,submission_queue_id
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,'spooled',%s,%s,%s,%s)
+                    {conflict_clause} DO UPDATE SET updated_at=EXCLUDED.updated_at
                     RETURNING id,mail_message_id,processing_status""",
                     (
                         inbound_id, recipient["company_id"], parsed.message_id, parsed.content_sha256,
                         raw_storage_key, envelope_from.strip().lower(), parsed.sender_email,
                         json.dumps(parsed.authentication_results, ensure_ascii=False), parsed.spam_result,
                         parsed.virus_status, decision.disposition, now, now, now,
+                        submission_queue_id,
                     ),
                 )
                 inbound = cursor.fetchone()
@@ -131,7 +145,8 @@ class MailInboundOperations:
                     (inbound_id, recipient["user_id"]),
                 )
                 if cursor.fetchone() is not None:
-                    connection.commit()
+                    if owns_transaction:
+                        connection.commit()
                     return MailInboundIngestResult(inbound_id, decision.disposition, True)
 
                 if decision.disposition == "quarantine":
@@ -142,10 +157,11 @@ class MailInboundOperations:
                         (now, now, inbound_id),
                     )
                     self._audit(cursor, recipient, inbound_id, "mail.inbound.quarantined", decision.reason, now)
-                    connection.commit()
+                    if owns_transaction:
+                        connection.commit()
                     return MailInboundIngestResult(inbound_id, decision.disposition, False)
 
-                message_id = inbound.get("mail_message_id")
+                message_id = inbound.get("mail_message_id") or submission_mail_id
                 if message_id is None:
                     message_id = self._id("mail")
                     cursor.execute(
@@ -177,10 +193,11 @@ class MailInboundOperations:
                     """INSERT INTO mail_recipients (
                         id,message_id,recipient_user_id,recipient_email,recipient_kind,is_read,is_starred,
                         received_at,is_spam,spam_marked_at,delivery_source
-                    ) VALUES (%s,%s,%s,%s,'to',FALSE,FALSE,%s,%s,%s,'external_smtp')""",
+                    ) VALUES (%s,%s,%s,%s,%s,FALSE,FALSE,%s,%s,%s,%s)""",
                     (
-                        mail_recipient_id, message_id, recipient["user_id"], recipient_email, now,
+                        mail_recipient_id, message_id, recipient["user_id"], recipient_email, recipient_kind, now,
                         decision.disposition == "spam", now if decision.disposition == "spam" else None,
+                        'direct' if submission_mail_id else 'external_smtp',
                     ),
                 )
                 self._insert_inbound_recipient(
@@ -192,7 +209,8 @@ class MailInboundOperations:
                     (message_id, now, now, inbound_id),
                 )
                 self._audit(cursor, recipient, inbound_id, "mail.inbound.processed", decision.reason, now)
-            connection.commit()
+            if owns_transaction:
+                connection.commit()
         return MailInboundIngestResult(inbound_id, decision.disposition, False)
 
     def _insert_inbound_recipient(self, cursor, inbound_id, recipient, recipient_email, disposition, mail_recipient_id, now):

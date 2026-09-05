@@ -199,7 +199,7 @@ class PersistenceCursor:
         return self._one
 
     def fetchall(self) -> list[dict]:
-        return self._many
+        return [self._one] if self._one and self._one.get('last_test_status') == 'success' else self._many
 
 
 class PersistenceConnection:
@@ -397,7 +397,6 @@ class MailInlinePersistenceTests(unittest.TestCase):
         service._fetch_mail_account = lambda _cursor, _user_id: {
             "id": "account-1",
             "email": "sender@example.test",
-            "provider_config_id": "provider-1",
         }
         service._ensure_basic_preferences = lambda _cursor, _actor: {
             "sender_display_name": "Sender",
@@ -1704,6 +1703,7 @@ class MailInlineQueueAndDownloadTests(unittest.TestCase):
         return DeliveryDatabase(
             {
                 "queue_id": "queue-1",
+                "status": "queued",
                 "attempt_count": 0,
                 "company_id": "company-a",
                 "sender_user_id": "user-a",
@@ -1754,7 +1754,8 @@ class MailInlineQueueAndDownloadTests(unittest.TestCase):
             claimed = operations.claim_next("worker-1")
 
             self.assertIsNotNone(claimed)
-            job, _provider = claimed
+            job = claimed
+            operations.prepare_claim(job)
             self.assertEqual(len(job["attachments"]), 1)
             envelope = job["attachments"][0]
             self.assertEqual(envelope["file_name"], uploaded.fileName)
@@ -1804,9 +1805,9 @@ class MailInlineQueueAndDownloadTests(unittest.TestCase):
                 operations = MailDeliveryOperations(db=database, storage=storage)
 
                 with self.assertRaisesRegex(ValueError, "저장 상태"):
-                    operations.claim_next("worker-1")
+                    operations.prepare_claim(operations.claim_next("worker-1"))
 
-                self.assertEqual(database.connection.commit_count, 0)
+                self.assertEqual(database.connection.commit_count, 1)
 
     def test_queue_claim_accepts_legacy_ordinary_and_calculates_actual_sha256(self) -> None:
         """A legacy ordinary sidecar without canonical inline fields remains queueable."""
@@ -1840,7 +1841,8 @@ class MailInlineQueueAndDownloadTests(unittest.TestCase):
             claimed = operations.claim_next("worker-1")
 
             self.assertIsNotNone(claimed)
-            envelope = claimed[0]["attachments"][0]
+            operations.prepare_claim(claimed)
+            envelope = claimed["attachments"][0]
             self.assertEqual(envelope["content_disposition"], "attachment")
             self.assertIsNone(envelope["content_id"])
             self.assertEqual(envelope["sha256"], sha256(content).hexdigest())
@@ -1874,9 +1876,9 @@ class MailInlineQueueAndDownloadTests(unittest.TestCase):
                 operations = MailDeliveryOperations(db=database, storage=storage)
 
                 with self.assertRaisesRegex(ValueError, "저장 상태"):
-                    operations.claim_next("worker-1")
+                    operations.prepare_claim(operations.claim_next("worker-1"))
 
-                self.assertEqual(database.connection.commit_count, 0)
+                self.assertEqual(database.connection.commit_count, 1)
 
     def test_queue_claim_still_requires_complete_untampered_inline_sidecar(self) -> None:
         """Legacy ordinary compatibility never relaxes the canonical inline contract."""
@@ -1901,7 +1903,7 @@ class MailInlineQueueAndDownloadTests(unittest.TestCase):
                 operations = MailDeliveryOperations(db=self.database(attachment), storage=storage)
 
                 with self.assertRaisesRegex(ValueError, "저장 상태"):
-                    operations.claim_next("worker-1")
+                    operations.prepare_claim(operations.claim_next("worker-1"))
 
     def test_queue_claim_rejects_tampered_inline_binary(self) -> None:
         """A persisted inline binary whose SHA no longer matches its sidecar must never enter the queue."""
@@ -1914,9 +1916,9 @@ class MailInlineQueueAndDownloadTests(unittest.TestCase):
             operations = MailDeliveryOperations(db=database, storage=storage)
 
             with self.assertRaisesRegex(ValueError, "저장 상태"):
-                operations.claim_next("worker-1")
+                operations.prepare_claim(operations.claim_next("worker-1"))
 
-            self.assertEqual(database.connection.commit_count, 0)
+            self.assertEqual(database.connection.commit_count, 1)
 
     def test_queue_claim_rejects_inline_sidecar_disguised_as_ordinary_row(self) -> None:
         """A DB disposition change must not let an inline upload bypass sidecar verification."""
@@ -1929,7 +1931,7 @@ class MailInlineQueueAndDownloadTests(unittest.TestCase):
             operations = MailDeliveryOperations(db=database, storage=storage)
 
             with self.assertRaisesRegex(ValueError, "저장 상태"):
-                operations.claim_next("worker-1")
+                operations.prepare_claim(operations.claim_next("worker-1"))
 
     def test_inline_attachment_is_not_available_from_normal_download(self) -> None:
         """Inline rows must be served only by preview and excluded from normal attachment download."""

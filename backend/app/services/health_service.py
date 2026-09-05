@@ -1,6 +1,5 @@
 from pathlib import Path
 import os
-import socket
 import threading
 from uuid import uuid4
 
@@ -9,6 +8,7 @@ from app.schemas.observability import EventEnvelope, MonitoringCategory, Severit
 from app.schemas.health import ComponentHealth, HealthResponse
 from app.services.directory_store import DirectoryStore
 from app.services.observability_service import ObservabilityService
+from app.services.mail_health_service import MailHealthService
 
 
 class HealthService:
@@ -88,45 +88,24 @@ class HealthService:
         threading.Thread(target=_runner, daemon=True).start()
 
     def _build_db(self) -> ComponentHealth:
-        details = {
-            "host": settings.postgres_host,
-            "port": str(settings.postgres_port),
-            "database": settings.postgres_db,
-        }
         try:
-            with socket.create_connection((settings.postgres_host, settings.postgres_port), timeout=2):
-                return ComponentHealth(
-                    status="ok",
-                    message="DB 연결 확인 완료",
-                    details=details,
-                )
-        except OSError as exc:
+            with self.directory_store.db.connect() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("SET LOCAL statement_timeout = '3000ms'")
+                    cursor.execute("SELECT 1 AS ok")
+                    if cursor.fetchone() != {"ok": 1}:
+                        raise ValueError("DB probe failed")
+            return ComponentHealth(status="ok", message="DB 인증 및 SQL 조회 확인 완료")
+        except Exception:
             return ComponentHealth(
                 status="error",
-                message="DB 연결을 확인할 수 없습니다.",
-                details={**details, "reason": str(exc)},
+                message="DB 인증 및 SQL 조회를 확인할 수 없습니다.",
             )
 
     def _build_mail(self, initialized: bool) -> ComponentHealth:
         if not initialized:
             return ComponentHealth(status="not_configured", message="초기 설정 전입니다.")
-        with self.directory_store.db.connect() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    "SELECT provider_type, relay_host, relay_port FROM mail_provider_configs ORDER BY updated_at DESC LIMIT 1"
-                )
-                provider = cursor.fetchone()
-        if provider is None:
-            return ComponentHealth(status="not_configured", message="메일 설정이 존재하지 않습니다.")
-        return ComponentHealth(
-            status="ok",
-            message="메일 Relay 설정이 PostgreSQL에서 확인되었습니다.",
-            details={
-                "provider": provider["provider_type"],
-                "relay_host": provider["relay_host"],
-                "relay_port": str(provider["relay_port"]),
-            },
-        )
+        return MailHealthService(self.directory_store.db).build()
 
     def _build_storage(self, initialized: bool) -> ComponentHealth:
         path = settings.storage_path

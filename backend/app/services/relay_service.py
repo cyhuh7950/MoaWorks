@@ -12,44 +12,13 @@ class RelayService:
     def __init__(self, store: DirectoryStore) -> None:
         self.store = store
 
-    def test(self, provider_config_id: str | None, test_recipient: str) -> RelayTestResponse:
-        provider = self.store.get_provider(provider_config_id)
-        recipient_domain = test_recipient.split("@")[-1].lower()
-        request_id = f"req_{uuid4().hex}"
-
-        if provider.providerType == "smtp" and provider.relayHost == "mail-layer":
-            message = f"로컬 Relay(mail-layer) 연결 테스트 성공, 수신자 {test_recipient} 기준 발신 경로를 확인했습니다."
-            saved = self.store.update_relay_test_status(provider.id, "success", message)
-            self._emit_relay_event(
-                status="success",
-                request_id=request_id,
-                provider=provider,
-                test_recipient=test_recipient,
-                message=message,
-            )
-            return RelayTestResponse(
-                providerConfigId=saved.id,
-                status="success",
-                message=message,
-                testedAt=datetime.now(UTC),
-            )
-
-        if recipient_domain != self.store.get_overview().company.domain.lower():
-            message = "현재 단계 2 테스트는 회사 도메인 또는 로컬 mail-layer Relay 기준만 성공으로 판정합니다."
-        else:
-            message = "외부 Relay 실연동은 아직 연결되지 않았습니다. 설정 형식만 저장된 상태입니다."
-
-        saved = self.store.update_relay_test_status(provider.id, "failed", message)
-        self._emit_relay_event(
-            status="failed",
-            request_id=request_id,
-            provider=provider,
-            test_recipient=test_recipient,
-            message=message,
-        )
+    def test(self, provider_config_id: str | None, test_recipient: str, *, company_id: str) -> RelayTestResponse:
+        provider = self.store.get_provider(provider_config_id, company_id=company_id)
+        # 레거시 문자열 판정은 연결 증거가 아니다. 저장된 검증/발송 잠금은 변경하지 않는다.
+        message = "미검증: 레거시 Relay 시험은 지원하지 않습니다. 메일 설정의 Provider 연결 검증을 사용하세요. 메일은 전송하지 않았습니다."
         return RelayTestResponse(
-            providerConfigId=saved.id,
-            status="failed",
+            providerConfigId=provider.id,
+            status="untested",
             message=message,
             testedAt=datetime.now(UTC),
         )
@@ -85,7 +54,7 @@ class RelayService:
                     title="메일 Relay 테스트 결과",
                     message=message,
                     source="relay-service",
-                    companyId="cmp_default",
+                    companyId=provider.companyId,
                     targets=[],
                     visibility=Visibility.ADMIN,
                     payload=payload,

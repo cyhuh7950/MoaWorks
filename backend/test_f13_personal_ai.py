@@ -806,6 +806,14 @@ class PersonalAiProviderTest(unittest.TestCase):
 
 
 class PersonalAiServiceTest(unittest.TestCase):
+    def setUp(self) -> None:
+        company_store_guard = patch(
+            "app.services.personal_ai_service.TranslationOperationsStore",
+            side_effect=AssertionError("단위 테스트는 company_llm_store를 명시 주입해야 합니다"),
+        )
+        company_store_guard.start()
+        self.addCleanup(company_store_guard.stop)
+
     def _configured_store(
         self, *, status_value: str = "ready", api_key: str = "fixture-personal-credential"
     ) -> InMemoryPersonalAiStore:
@@ -853,6 +861,7 @@ class PersonalAiServiceTest(unittest.TestCase):
 
         service = PersonalAiService(
             store=self._configured_store(),
+            company_llm_store=self._admin_store(),
             provider_client=FixturePersonalAiProviderClient(),
         )
 
@@ -963,7 +972,9 @@ class PersonalAiServiceTest(unittest.TestCase):
 
         store = self._configured_store(status_value="untested")
         service = PersonalAiService(
-            store=store, provider_client=FixturePersonalAiProviderClient()
+            store=store,
+            company_llm_store=self._admin_store(),
+            provider_client=FixturePersonalAiProviderClient(),
         )
 
         results = [service.test_connection(personal_ai_actor()) for _ in range(5)]
@@ -983,6 +994,7 @@ class PersonalAiServiceTest(unittest.TestCase):
         store = self._configured_store(status_value="untested")
         service = PersonalAiService(
             store=store,
+            company_llm_store=self._admin_store(),
             provider_client=FixturePersonalAiProviderClient(
                 connection_error=RuntimeError(
                     "external-body fixture-personal-credential internal-host"
@@ -1007,6 +1019,7 @@ class PersonalAiServiceTest(unittest.TestCase):
         store = self._configured_store(status_value="untested")
         service = PersonalAiService(
             store=store,
+            company_llm_store=self._admin_store(),
             provider_client=FixturePersonalAiProviderClient(
                 connection_error=PersonalAiProviderError(
                     "PERSONAL_AI_RESPONSE_INVALID",
@@ -1051,6 +1064,7 @@ class PersonalAiServiceTest(unittest.TestCase):
         )
         not_ready = PersonalAiService(
             store=self._configured_store(status_value="untested"),
+            company_llm_store=self._admin_store(),
             provider_client=FixturePersonalAiProviderClient(),
         )
         with self.assertRaises(HTTPException) as captured:
@@ -1059,6 +1073,7 @@ class PersonalAiServiceTest(unittest.TestCase):
 
         failed = PersonalAiService(
             store=self._configured_store(),
+            company_llm_store=self._admin_store(),
             provider_client=FixturePersonalAiProviderClient(
                 chat_error=RuntimeError(
                     "external-body fixture-personal-credential internal-host"
@@ -1081,6 +1096,7 @@ class PersonalAiServiceTest(unittest.TestCase):
         store = self._configured_store()
         service = PersonalAiService(
             store=store,
+            company_llm_store=self._admin_store(),
             provider_client=FixturePersonalAiProviderClient(output="안전한 업무 답변"),
         )
         request = PersonalAiChatRequest(

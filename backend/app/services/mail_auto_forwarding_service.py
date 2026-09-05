@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.outbound_provider_resolver import OutboundProviderResolver
+
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
@@ -146,8 +148,7 @@ class MailAutoForwardingService:
                     for item in cursor.fetchall():
                         exception_targets[item["exception_id"]].append(item["normalized_email"])
                 exceptions = [self._exception_view(row, exception_targets[row["id"]]) for row in exception_rows]
-                cursor.execute("SELECT delivery_enabled,last_test_status FROM mail_provider_configs WHERE company_id=%s ORDER BY active DESC,updated_at DESC LIMIT 1", (actor.companyId,))
-                provider = cursor.fetchone()
+                provider = OutboundProviderResolver.readiness(cursor, actor.companyId)
         return MailAutoForwardSettingsResponse(
             enabled=False if policy is None else policy["enabled"], keepOriginal=True if policy is None else policy["keep_original"],
             version=1 if policy is None else policy["version"], updatedAt=now if policy is None else policy["updated_at"],
@@ -293,10 +294,11 @@ class MailAutoForwardingService:
             if not decision.targetEmails:
                 cursor.execute("RELEASE SAVEPOINT auto_forwarding")
                 return decision
-            cursor.execute("SELECT a.id,a.email,a.provider_config_id,p.delivery_enabled,p.last_test_status FROM mail_accounts a JOIN mail_provider_configs p ON p.id=a.provider_config_id WHERE a.user_id=%s AND a.status='active' AND p.company_id=%s", (user_id, company_id))
+            cursor.execute("SELECT a.id,a.email FROM mail_accounts a JOIN users u ON u.id=a.user_id WHERE a.user_id=%s AND a.status='active' AND u.company_id=%s", (user_id, company_id))
             owner_account = cursor.fetchone()
             if owner_account is None:
                 raise ValueError("자동전달 소유자의 메일 계정을 찾을 수 없습니다.")
+            provider = OutboundProviderResolver.resolve(cursor, company_id) if any(by_email[email]['target_kind'] != 'internal' for email in decision.targetEmails) else None
             for email in decision.targetEmails:
                 item = by_email[email]
                 forwarded_recipient_id = self._new_id("rcpt")
@@ -309,10 +311,10 @@ class MailAutoForwardingService:
                         classify_internal(item["target_user_id"], forwarded_recipient_id, email)
                 else:
                     queue_id = self._new_id("delivery")
-                    status = "queued" if owner_account["delivery_enabled"] and owner_account["last_test_status"] == "success" else "blocked"
+                    status = "queued" if provider["delivery_enabled"] and provider["last_test_status"] == "success" else "blocked"
                     reason = "PROVIDER_READY" if status == "queued" else "PROVIDER_LOCKED"
                     cursor.execute("""INSERT INTO mail_delivery_queue(id,company_id,provider_config_id,mail_id,recipient_id,status,attempt_count,next_attempt_at,created_at,updated_at,delivery_kind,sender_email_override,reply_to_email_override)
-                        VALUES(%s,%s,%s,%s,%s,%s,0,%s,%s,%s,'auto_forward',%s,%s) ON CONFLICT(mail_id,recipient_id) DO NOTHING""", (queue_id, company_id, owner_account["provider_config_id"], mail_id, forwarded_recipient_id, status, now if status == "queued" else None, now, now, owner_account["email"], sender_email))
+                        VALUES(%s,%s,%s,%s,%s,%s,0,%s,%s,%s,'auto_forward',%s,%s) ON CONFLICT(mail_id,recipient_id) DO NOTHING""", (queue_id, company_id, provider["id"], mail_id, forwarded_recipient_id, status, now if status == "queued" else None, now, now, owner_account["email"], sender_email))
                 cursor.execute("""INSERT INTO mail_auto_forward_deliveries(id,company_id,user_id,origin_mail_id,origin_recipient_id,exception_id,target_email,target_user_id,forwarded_recipient_id,delivery_queue_id,status,reason_code,created_at,updated_at,completed_at)
                     VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(origin_recipient_id,target_email) DO NOTHING""", (self._new_id("forwarddelivery"), company_id, user_id, mail_id, recipient_id, decision.exceptionId, email, item.get("target_user_id"), forwarded_recipient_id, queue_id, status, reason, now, now, now if status == "internal_delivered" else None))
             if not policy["keep_original"]:

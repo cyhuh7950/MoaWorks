@@ -21,6 +21,23 @@ def _value(item, name: str, default=None):
     return getattr(item, name, default)
 
 
+def build_desired_sender_emails(user_rows: list[dict], mail_domain: str, protected_emails: set[str]) -> set[str]:
+    suffix = f"@{mail_domain.strip().lower()}"
+    desired = {
+        email.strip().lower()
+        for email in protected_emails
+        if email and email.strip() and email.strip().lower().endswith(suffix)
+    }
+    desired.update(
+        email.strip().lower()
+        for row in user_rows
+        if str(row.get("status", "")).strip().lower() == "active"
+        for email in [str(row.get("email", ""))]
+        if email.strip().lower().endswith(suffix)
+    )
+    return desired
+
+
 class OciEmailGateway:
     def __init__(self, client_factory: Callable | None = None) -> None:
         self.client_factory = client_factory
@@ -69,6 +86,7 @@ class OciEmailGateway:
             ),
             approved_senders=tuple(
                 {
+                    "id": str(_value(item, "id", "")),
                     "email": str(_value(item, "email_address", "")),
                     "status": str(_value(item, "lifecycle_state", "UNKNOWN")),
                 }
@@ -83,10 +101,79 @@ class OciEmailGateway:
             ),
         )
 
+    def create_sender(self, email: str) -> dict:
+        normalized = email.strip().lower()
+        if not normalized:
+            raise ValueError("OCI 승인 발신자 이메일이 필요합니다.")
+        try:
+            import oci
+        except ImportError as exc:
+            if self.client_factory is None:
+                raise RuntimeError("OCI Python SDK가 설치되지 않았습니다.") from exc
+            from types import SimpleNamespace
+            details = SimpleNamespace(compartment_id=settings.oci_compartment_id, email_address=normalized)
+        else:
+            details = oci.email.models.CreateSenderDetails(
+                compartment_id=settings.oci_compartment_id,
+                email_address=normalized,
+            )
+        response = self._client().create_sender(details)
+        item = response.data
+        return {
+            "id": str(_value(item, "id", "")),
+            "email": str(_value(item, "email_address", normalized)),
+            "status": str(_value(item, "lifecycle_state", "CREATING")),
+        }
+
+    def delete_sender(self, sender_id: str) -> None:
+        if not sender_id.strip():
+            raise ValueError("OCI 승인 발신자 ID가 필요합니다.")
+        self._client().delete_sender(sender_id.strip())
+
+    def reconcile_senders(
+        self,
+        mail_domain: str,
+        desired_emails: set[str],
+        protected_emails: set[str],
+    ) -> dict:
+        desired = {email.strip().lower() for email in desired_emails if email and email.strip()}
+        protected = {email.strip().lower() for email in protected_emails if email and email.strip()}
+        snapshot = self.snapshot(mail_domain)
+        existing = {
+            item["email"].strip().lower(): item
+            for item in snapshot.approved_senders
+            if item.get("email", "").strip()
+        }
+        created = 0
+        deleted = 0
+        for email in sorted(desired - set(existing)):
+            self.create_sender(email)
+            created += 1
+        for email, item in sorted(existing.items()):
+            if email not in protected and email not in desired and item.get("id"):
+                self.delete_sender(item["id"])
+                deleted += 1
+        return {"created": created, "deleted": deleted, "unchanged": len(desired & set(existing))}
+
 
 class OciEmailOperations:
     def __init__(self, gateway: OciEmailGateway | None = None) -> None:
         self.gateway = gateway or OciEmailGateway()
+
+    def reconcile_company(self, *, db, company_id: str, mail_domain: str) -> dict:
+        with db.connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT email,status FROM users WHERE company_id=%s",
+                (company_id,),
+            )
+            users = cursor.fetchall()
+            cursor.execute(
+                "SELECT from_address FROM mail_provider_configs WHERE company_id=%s AND provider_type IN ('oci_email_delivery','oci_smtp') AND active=TRUE",
+                (company_id,),
+            )
+            protected = {str(row.get("from_address", "")) for row in cursor.fetchall() if row.get("from_address")}
+        desired = build_desired_sender_emails(users, mail_domain, protected)
+        return self.gateway.reconcile_senders(mail_domain, desired, protected)
 
     def sync(self, *, cursor, company_id: str, actor_user_id: str, actor_user_name: str, mail_domain: str) -> dict:
         snapshot = self.gateway.snapshot(mail_domain)

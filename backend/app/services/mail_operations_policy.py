@@ -25,7 +25,7 @@ class MailDomainContract:
 
 @dataclass(frozen=True, slots=True)
 class ProviderSwitchPlan:
-    previous_provider: str
+    previous_provider: str | None
     new_message_provider: str
     pinned_queue_providers: dict[str, str]
     automatic_cross_provider_retry: bool = False
@@ -86,11 +86,11 @@ def build_mail_domain_contract(
 
 def plan_provider_switch(
     *,
-    current_provider: str,
+    current_provider: str | None,
     target_provider: str,
     queued_items: Sequence[Mapping[str, object]],
 ) -> ProviderSwitchPlan:
-    normalized_current = _normalize_provider(current_provider)
+    normalized_current = _normalize_provider(current_provider) if current_provider is not None else None
     normalized_target = _normalize_provider(target_provider)
     pinned: dict[str, str] = {}
     for item in queued_items:

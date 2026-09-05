@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as app from "./App";
 import { updateMailDraft } from "./api";
+import type { MailExternalDeliveryStatus } from "./api";
 import * as outgoingTranslation from "./mailOutgoingTranslation";
 import { projectMailDocument } from "./mailRichText";
 
@@ -16,7 +17,6 @@ vi.mock("./MailRichTextEditor", () => ({
 
 vi.mock("./api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api")>();
-  const emptyList = { mails: [], total: 0, limit: 50, offset: 0, hasMore: false };
   return {
     ...actual,
     getUserToken: () => localStorage.getItem("moaworks.userToken"),
@@ -24,7 +24,7 @@ vi.mock("./api", async (importOriginal) => {
     fetchUiContract: async () => ({}),
     fetchWorkspacePreferences: async () => ({ locale: "ko", timezone: "Asia/Seoul", startPage: "mail", version: 1 }),
     fetchInbox: async () => mountedLists.inbox,
-    fetchSentMail: async () => emptyList,
+    fetchSentMail: async () => mountedLists.sent,
     fetchDraftMail: async () => mountedLists.draft,
     fetchScheduledMail: async () => mountedLists.scheduled,
     fetchMailDetail: async (_token: string, mailId: string) => mountedDetailLoader ? mountedDetailLoader(mailId) : mountedDetail,
@@ -59,7 +59,8 @@ const mountedSourceMail = {
   ],
 };
 
-type MountedMailDetail = Omit<typeof mountedSourceMail, "scheduledAt" | "status"> & {
+type MountedMailDetail = Omit<typeof mountedSourceMail, "scheduledAt" | "status" | "externalDeliveries"> & {
+  externalDeliveries: MailExternalDeliveryStatus[];
   scheduledAt: string | null;
   status: string;
   sourceAction?: "reply" | "reply_all" | "forward" | null;
@@ -73,6 +74,7 @@ let mountedSendFailure = false;
 let mountedSendCalls = 0;
 let mountedDraftFailure = false;
 const mountedLists = {
+  sent: { mails: [], total: 0, limit: 50, offset: 0, hasMore: false } as { mails: Array<Record<string, unknown>>; total: number; limit: number; offset: number; hasMore: boolean },
   inbox: { mails: [{ mailId: "mail-source", accountId: "account-1", senderEmail: "source@example.test", senderDisplayName: "Source", subject: "CID 전달 원문", previewText: "본문 이미지", status: "sent", isRead: true, isStarred: false, sentAt: "2026-08-26T00:00:00Z", receivedAt: "2026-08-26T00:00:00Z", scheduledAt: null, retentionExpiresAt: null, attachmentCount: 2, category: "primary" }], total: 1, limit: 50, offset: 0, hasMore: false },
   draft: { mails: [], total: 0, limit: 50, offset: 0, hasMore: false } as { mails: Array<Record<string, unknown>>; total: number; limit: number; offset: number; hasMore: boolean },
   scheduled: { mails: [], total: 0, limit: 50, offset: 0, hasMore: false } as { mails: Array<Record<string, unknown>>; total: number; limit: number; offset: number; hasMore: boolean },
@@ -134,7 +136,28 @@ afterEach(() => {
   mountedBasicPreferencesLoader = null;
   mountedLists.inbox = { mails: [{ mailId: "mail-source", accountId: "account-1", senderEmail: "source@example.test", senderDisplayName: "Source", subject: "CID 전달 원문", previewText: "본문 이미지", status: "sent", isRead: true, isStarred: false, sentAt: "2026-08-26T00:00:00Z", receivedAt: "2026-08-26T00:00:00Z", scheduledAt: null, retentionExpiresAt: null, attachmentCount: 2, category: "primary" }], total: 1, limit: 50, offset: 0, hasMore: false };
   mountedLists.draft = { mails: [], total: 0, limit: 50, offset: 0, hasMore: false };
+  mountedLists.sent = { mails: [], total: 0, limit: 50, offset: 0, hasMore: false };
   mountedLists.scheduled = { mails: [], total: 0, limit: 50, offset: 0, hasMore: false };
+});
+
+it.each([
+  ['sent', '상대 SMTP 수락 (수신함 도착 미확인)'],
+  ['result_unknown', '결과 확인 필요 (중복 전달 위험, 관리자 확인 필요)'],
+  ['queued', '외부 전달 대기'],
+  ['blocked', '외부 발송 차단 (관리자 확인 필요)'],
+  ['failed', '전달 실패'],
+])('Stage3B mounted 사용자 상세 %s를 오류문구와 별도로 표시한다', async (status, expected) => {
+  mountedDetail = { ...mountedSourceMail, externalDeliveries: [{ recipientEmail: 'external@example.invalid', recipientKind: 'to', status, attemptCount: 1, nextAttemptAt: null, sentAt: null, lastError: '상태별 상세 안내' }] };
+  mountedLists.sent = mountedLists.inbox;
+  installMountedMailFetch();
+  localStorage.setItem('moaworks.userToken', 'fixture-token');
+  vi.resetModules();
+  const { default: MountedApp } = await import('./App');
+  render(<MountedApp />);
+  fireEvent.click(await screen.findByRole('button', { name: /^보낸편지함/ }));
+  fireEvent.click(await screen.findByRole('button', { name: /CID 전달 원문/ }));
+  expect(await screen.findByText(expected + ' · 상세: 상태별 상세 안내')).toBeTruthy();
+  expect(screen.queryByText('전달 완료')).toBeNull();
 });
 
 type ComposeContracts = typeof app & {

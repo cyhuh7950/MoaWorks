@@ -15,6 +15,11 @@ class RecordingCursor:
         self.statements.append((" ".join(query.split()), params))
 
     def fetchall(self) -> list[dict]:
+        if 'SELECT * FROM mail_provider_configs' in self.statements[-1][0]:
+            return [{'provider_type': 'oci_email_delivery'}]
+        if 'SELECT id, delivery_enabled' in self.statements[-1][0]:
+            row = self.fetchone()
+            return [row] if row else []
         return self.queued_rows
 
     def fetchone(self) -> dict | None:
@@ -111,17 +116,13 @@ class MailOperationsPersistenceTest(unittest.TestCase):
         self.assertEqual(plan.pinned_queue_providers["q-1"], "oci_email_delivery")
         self.assertIn("UPDATE mail_domain_settings", statements)
         self.assertIn("UPDATE mail_provider_configs", statements)
-        self.assertIn("UPDATE mail_accounts", statements)
-        self.assertIn("account.status <> 'deleted'", statements)
+        self.assertNotIn("UPDATE mail_accounts", statements)
         self.assertIn("INSERT INTO audit_logs", statements)
         self.assertNotIn("UPDATE mail_delivery_queue", statements)
 
-        account_update = next(
-            (params for query, params in cursor.statements if "UPDATE mail_accounts" in query),
-            None,
-        )
-        self.assertEqual(account_update[0], "provider-self")
-        self.assertEqual(account_update[2], "cmp-default")
+        domain_update = next(params for query, params in cursor.statements if "UPDATE mail_domain_settings" in query)
+        self.assertEqual(domain_update[0], 'oci_email_delivery')
+        self.assertEqual(domain_update[1], 'self_hosted')
 
     def test_provider_rollback_restores_previous_provider_without_rewriting_queue(self) -> None:
         cursor = RecordingCursor(

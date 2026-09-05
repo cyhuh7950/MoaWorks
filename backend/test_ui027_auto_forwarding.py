@@ -1,4 +1,5 @@
 from __future__ import annotations
+from smtp_phase_test_support import configure_smtp_mock, captured_message
 
 import unittest
 from datetime import UTC, datetime
@@ -241,8 +242,10 @@ class DuplicateDirectRecipientCursor:
             self.next_all = []
         elif "FROM MAIL_RECIPIENTS" in upper and "DELIVERY_SOURCE='DIRECT'" in upper:
             self.next_all = [{"recipient_email": email} for email in self.direct_emails]
-        elif upper.startswith("SELECT A.ID,A.EMAIL,A.PROVIDER_CONFIG_ID"):
-            self.next_one = {"id": "account-a", "email": "owner@example.com", "provider_config_id": "provider-a", "delivery_enabled": False, "last_test_status": "success"}
+        elif upper.startswith("SELECT A.ID,A.EMAIL"):
+            self.next_one = {"id": "account-a", "email": "owner@example.com"}
+        elif upper.startswith("SELECT * FROM MAIL_PROVIDER_CONFIGS"):
+            self.next_all = [{"id": "provider-a", "delivery_enabled": False, "last_test_status": "success"}]
 
     def fetchone(self):
         value, self.next_one = self.next_one, None
@@ -280,7 +283,7 @@ class Ui027FirstReviewRemediationTests(unittest.TestCase):
         client = Mock()
         client.__enter__ = Mock(return_value=client)
         client.__exit__ = Mock(return_value=False)
-        client.send_message.return_value = {}
+        configure_smtp_mock(client)
         envelope = {
             "delivery_kind": "auto_forward", "sender_email": "owner@example.com", "sender_display_name": "Owner",
             "reply_to_email": "origin@example.org", "recipient_email": "target@example.net", "subject": "subject",
@@ -289,16 +292,16 @@ class Ui027FirstReviewRemediationTests(unittest.TestCase):
         provider = {"relay_host": "relay", "relay_port": 25, "tls_mode": "plain", "from_address": "provider@example.net"}
         with patch("app.services.mail_delivery_service.smtplib.SMTP", return_value=client):
             SmtpRelayAdapter().send(envelope, provider)
-        message = client.send_message.call_args.args[0]
-        self.assertEqual(client.send_message.call_args.kwargs["from_addr"], "owner@example.com")
-        self.assertEqual(client.send_message.call_args.kwargs["to_addrs"], ["target@example.net"])
+        message = captured_message(client)
+        self.assertEqual(client.mail.call_args.args[0], "owner@example.com")
+        self.assertEqual([call.args[0] for call in client.rcpt.call_args_list], ["target@example.net"])
         self.assertEqual(message["Reply-To"], "origin@example.org")
 
-    def test_direct_smtp_keeps_existing_provider_from_and_implicit_envelope(self):
+    def test_direct_smtp_keeps_existing_provider_from_and_envelope_identity(self):
         client = Mock()
         client.__enter__ = Mock(return_value=client)
         client.__exit__ = Mock(return_value=False)
-        client.send_message.return_value = {}
+        configure_smtp_mock(client)
         envelope = {
             "delivery_kind": "direct", "sender_email": "sender@example.com", "sender_display_name": "Sender",
             "reply_to_email": None, "recipient_email": "target@example.net", "subject": "subject",
@@ -307,9 +310,10 @@ class Ui027FirstReviewRemediationTests(unittest.TestCase):
         provider = {"relay_host": "relay", "relay_port": 25, "tls_mode": "plain", "from_address": "provider@example.net"}
         with patch("app.services.mail_delivery_service.smtplib.SMTP", return_value=client):
             SmtpRelayAdapter().send(envelope, provider)
-        message = client.send_message.call_args.args[0]
+        message = captured_message(client)
         self.assertEqual(message["From"], "Sender <provider@example.net>")
-        self.assertEqual(client.send_message.call_args.kwargs, {})
+        self.assertEqual(client.mail.call_args.args[0], "provider@example.net")
+        self.assertEqual([call.args[0] for call in client.rcpt.call_args_list], ["target@example.net"])
 
 
 class Ui027SecondOperationsReviewRemediationTests(unittest.TestCase):

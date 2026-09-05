@@ -36,8 +36,6 @@ jobs:
       POSTGRES_DB: moaworks_ci
       POSTGRES_USER: moaworks_ci
       POSTGRES_PASSWORD: moaworks_ci_password
-      MOAWORKS_UI041_POSTGRES_INTEGRATION: '1'
-      MOAWORKS_DEF01_POSTGRES_INTEGRATION: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -49,7 +47,13 @@ jobs:
           cache-dependency-path: backend/requirements-test.txt
       - name: Install backend dependencies
         run: pip install -r requirements-test.txt
-      - name: Run PostgreSQL integration tests
-        run: python -m unittest test_ui041_postgres_contacts test_content_operations_patch_help_postgres -v
-      - name: Run full backend regression
-        run: python -m unittest discover -s . -p "test_*.py"
+      - name: Run PostgreSQL contact, help and sender-display integration tests
+        env:
+          MOAWORKS_UI041_POSTGRES_INTEGRATION: '1'
+          MOAWORKS_DEF01_POSTGRES_INTEGRATION: '1'
+        run: python -m unittest test_ui041_postgres_contacts test_content_operations_patch_help_postgres test_mail_sender_display_mode.SenderDisplayModeMigrationPostgresTests -v
+      - name: Run full pytest regression including outbound policy PostgreSQL tests
+        env:
+          # 공개 합성 CI 계정. full pytest의 skip과 위 PostgreSQL 3검사 실행 결과는 별도로 집계한다.
+          MOAWORKS_STAGE1_TEST_DSN: postgresql://moaworks_ci:moaworks_ci_password@127.0.0.1:5432/moaworks_ci
+        run: python -m pytest -q -ra
