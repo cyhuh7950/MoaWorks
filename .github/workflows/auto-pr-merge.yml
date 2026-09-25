@@ -215,3 +215,4 @@ jobs:
 
       - name: Remove completed request tag
         shell: bash
+        run: git push origin ":refs/tags/$GITHUB_REF_NAME"
