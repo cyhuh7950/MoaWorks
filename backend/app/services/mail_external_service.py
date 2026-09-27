@@ -29,6 +29,7 @@ class ExternalMailCollectionBusyError(ExternalMailError): pass
 class ExternalMailNotFoundError(FileNotFoundError): pass
 class ExternalMailForbiddenError(PermissionError): pass
 class ExternalLeaseLostError(ExternalMailError): pass
+class ExternalMailRetrievalError(ExternalMailError): pass
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,33 @@ class MailExternalEndpointValidator:
         return value, tuple(sorted(addresses))
 
 
+class _BoundedMessageRetrieval:
+    # MIME data can contain long lines. Control replies retain poplib's limit;
+    # RETR instead enforces the total message budget while reading the socket.
+    message_limit = 25 * 1024 * 1024
+
+    def retr(self, which):
+        self._putcmd(f"RETR {which}")
+        response = self._getresp()
+        lines = []
+        octets = 0
+        while True:
+            # Allow the terminator and a dot-stuffing byte at the budget edge.
+            line = self.file.readline(self.message_limit - octets + 4)
+            if not line:
+                raise poplib.error_proto("-ERR EOF")
+            if line in (b".\r\n", b".\n"):
+                return response, lines, octets
+            if line.startswith(b".."):
+                line = line[1:]
+            octets += len(line)
+            if octets > self.message_limit:
+                raise ExternalMailRetrievalError("MAIL_EXTERNAL_MESSAGE_TOO_LARGE")
+            if not line.endswith(b"\n"):
+                raise poplib.error_proto("-ERR truncated message line")
+            lines.append(line[:-2] if line.endswith(b"\r\n") else line[:-1])
+
+
 class MailExternalPop3Client:
     def __init__(self, factory=None, validator=None):
         self.factory = factory
@@ -108,12 +136,20 @@ class MailExternalPop3Client:
         target = (addresses or (host,))[0]
         if self.factory: return self.factory(host, port, tls_mode, tuple(addresses or (host,)), host)
         if tls_mode == "ssl":
-            class BoundPOP3SSL(poplib.POP3_SSL):
+            class BoundPOP3SSL(_BoundedMessageRetrieval, poplib.POP3_SSL):
                 def _create_socket(self, timeout):
                     raw = socket.create_connection((target, port), timeout)
                     return context.wrap_socket(raw, server_hostname=host)
             return BoundPOP3SSL(host, port, timeout=10, context=context)
-        client = poplib.POP3(target, port, timeout=10); client.host = host; client.stls(context=context); return client
+        class BoundPOP3(_BoundedMessageRetrieval, poplib.POP3):
+            pass
+        client = BoundPOP3(target, port, timeout=10); client.host = host
+        try:
+            client.stls(context=context)
+        except Exception:
+            client.close()
+            raise
+        return client
 
     def test(self, host: str, port: int, tls_mode: str, username: str, password: str) -> str:
         host, addresses = self.validator.validate_target(host, port, tls_mode)

@@ -1,12 +1,13 @@
 from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 import logging
+import poplib
 import time
 import uuid
 
 from app.schemas.directory import AuthUserSummary
 from app.services.mail_attachment_storage import MailAttachmentStorage
-from app.services.mail_external_service import ExternalCollectionSafety, ExternalLeaseLostError, MailExternalEndpointValidator, MailExternalPop3Client, RemoteDeleteState, parse_external_message
+from app.services.mail_external_service import ExternalCollectionSafety, ExternalLeaseLostError, ExternalMailRetrievalError, MailExternalEndpointValidator, MailExternalPop3Client, RemoteDeleteState, parse_external_message
 from app.services.mail_messenger_service import MailMessengerService
 from app.services.postgres_service import PostgresService
 from app.services.security_service import SecurityService
@@ -107,6 +108,42 @@ def _finalize(service, job, status, counts, code=None):
         if not cursor.fetchone(): connection.rollback(); raise ExternalLeaseLostError("MAIL_EXTERNAL_LEASE_LOST")
         cursor.execute("UPDATE mail_external_accounts SET last_collect_at=%s,next_collect_at=%s,updated_at=%s WHERE id=%s",(now,now+timedelta(minutes=10),now,job["account_id"]));connection.commit()
 
+def _open_collection_connection(account, safety):
+    host, addresses = MailExternalEndpointValidator().validate_target(account["host"], account["port"], account["tls_mode"])
+    client = MailExternalPop3Client()._connect(host, account["port"], account["tls_mode"], addresses)
+    try:
+        if getattr(client, "sock", None):
+            client.sock.settimeout(safety.command_seconds)
+        client.user(account["username"])
+        client.pass_(SecurityService().decrypt_secret(account["encrypted_password"]))
+        _, lines, _ = client.uidl()
+        numbers = {}
+        seen_numbers = set()
+        for entry in lines:
+            parts = entry.decode("ascii", "strict").split()
+            if (len(parts) != 2 or not parts[0].isdigit() or int(parts[0]) < 1
+                    or int(parts[0]) in seen_numbers or parts[1] in numbers):
+                raise poplib.error_proto("-ERR invalid UIDL listing")
+            seen_numbers.add(int(parts[0]))
+            numbers[parts[1]] = parts[0]
+        return client, numbers
+    except Exception:
+        client.close()
+        raise
+
+
+def _item_error_code(exc):
+    if isinstance(exc, ExternalMailRetrievalError):
+        return "MAIL_EXTERNAL_MESSAGE_TOO_LARGE"
+    if isinstance(exc, (poplib.error_proto, OSError, EOFError)):
+        return "MAIL_EXTERNAL_PROTOCOL_ERROR"
+    if isinstance(exc, ValueError) and str(exc) in {
+        "MAIL_EXTERNAL_MESSAGE_TOO_LARGE", "MAIL_EXTERNAL_ATTACHMENT_TOO_LARGE", "MAIL_EXTERNAL_ATTACHMENT_LIMIT",
+    }:
+        return str(exc)
+    return "MAIL_EXTERNAL_IMPORT_FAILED"
+
+
 def run_once(db=None) -> bool:
     service=db or PostgresService(); service.ensure_migrations_applied(); _enqueue_scheduled(service); job=_claim(service)
     if not job: return False
@@ -115,18 +152,23 @@ def run_once(db=None) -> bool:
         account=_context(service,job)
         if not account: raise RuntimeError("MAIL_EXTERNAL_ACCOUNT_UNAVAILABLE")
         actor=AuthUserSummary(userId=account["user_id"],companyId=account["company_id"],userName=account["owner_name"],userEmail=account["owner_email"],roleId=account["role_id"],roleName=account["role_name"],userType=account["user_type"],status=account["status"],permissions=list(account["permissions"] or []))
-        host,addresses=MailExternalEndpointValidator().validate_target(account["host"],account["port"],account["tls_mode"])
-        pop=MailExternalPop3Client(); client=pop._connect(host,account["port"],account["tls_mode"],addresses)
-        if getattr(client,"sock",None): client.sock.settimeout(safety.command_seconds)
-        client.user(account["username"]);client.pass_(SecurityService().decrypt_secret(account["encrypted_password"]));_, lines,_=client.uidl()
+        client, refreshed_numbers = _open_collection_connection(account, safety)
         messenger=MailMessengerService(); messenger.db=service; storage=MailAttachmentStorage()
-        for line in lines[:100]:
+        for uidl, number in list(refreshed_numbers.items())[:100]:
             safety.assert_deadline(time.monotonic()-started); safety.assert_lease(lambda:_heartbeat(service,job))
-            number,uidl=line.decode("utf-8","replace").split(" ",1);counts["seen"]+=1
+            counts["seen"]+=1
             action="import"
             try:
                 action=safety.uidl_action(_import_state(service,account["id"],uidl),account["delete_from_server"])
                 if action=="duplicate": counts["duplicate"]+=1;continue
+                if client is None:
+                    client, refreshed_numbers = _open_collection_connection(account, safety)
+                if refreshed_numbers is not None:
+                    number = refreshed_numbers.get(uidl)
+                    if number is None:
+                        counts["failed"] += 1
+                        logger.warning("external mail item failed job=%s code=MAIL_EXTERNAL_UIDL_DISAPPEARED", job["id"])
+                        continue
                 if action=="delete_only": client.dele(int(number));pending.append(uidl);counts["duplicate"]+=1;continue
                 list_response=client.list(int(number)); list_line=list_response[0] if isinstance(list_response,tuple) else list_response
                 size=int(list_line.decode("ascii","replace").rsplit(" ",1)[-1]); safety.assert_retr_size(size)
@@ -135,8 +177,19 @@ def run_once(db=None) -> bool:
                 counts["imported"]+=1
                 if account["delete_from_server"]: client.dele(int(number));pending.append(uidl)
             except ExternalLeaseLostError: raise
-            except Exception:
+            except Exception as exc:
                 counts["failed"]+=1
+                # POP error text can contain message fragments; log codes only.
+                logger.warning("external mail item failed job=%s code=%s type=%s", job["id"], _item_error_code(exc), type(exc).__name__)
+                if isinstance(exc, (poplib.error_proto, OSError, EOFError, ExternalMailRetrievalError)):
+                    if client is not None:
+                        try: client.close()
+                        except OSError: pass
+                    client = None
+                    if pending:
+                        _set_remote_states(service, account["id"], {value: ("failed", "MAIL_EXTERNAL_CONNECTION_LOST") for value in pending})
+                        counts["failed"] += len(pending)
+                        pending.clear()
                 if account["delete_from_server"] and action in {"import","delete_only"}: _set_remote_states(service,account["id"],{uidl:("failed","MAIL_EXTERNAL_DELETE_FAILED")})
         safety.assert_lease(lambda:_heartbeat(service,job))
         try: client.quit(); quit_ok=True
