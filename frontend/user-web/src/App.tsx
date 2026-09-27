@@ -1712,6 +1712,8 @@ export default function App() {
   const [mailDisplay, setMailDisplay] = useState<MailDisplay>({mode: "icons", pageSize: 50});
   const [globalUnread, setGlobalUnread] = useState<number | null>(null);
   const unreadRequestRef = useRef(0);
+  const sidebarCountRequestRef = useRef(0);
+  const [sidebarCounts, setSidebarCounts] = useState<Record<"inbox" | "sent" | "draft" | "scheduled" | "starred", number | null>>({ inbox: null, sent: null, draft: null, scheduled: null, starred: null });
   const unreadTokenRef = useRef(token);
   unreadTokenRef.current = token;
   const [mailListQuery, setMailListQuery] = useState<MailListQuery>(DEFAULT_MAIL_LIST_QUERY);
@@ -2133,8 +2135,10 @@ export default function App() {
 
   useEffect(() => {
     unreadRequestRef.current += 1;
+    sidebarCountRequestRef.current += 1;
     setGlobalUnread(null);
-    return () => { unreadRequestRef.current += 1; };
+    setSidebarCounts({ inbox: null, sent: null, draft: null, scheduled: null, starred: null });
+    return () => { unreadRequestRef.current += 1; sidebarCountRequestRef.current += 1; };
   }, [token]);
 
   function updateMailDisplay(patch: Partial<MailDisplay>) {
@@ -2151,6 +2155,26 @@ export default function App() {
       const result = await fetchInbox(targetToken, { ...DEFAULT_MAIL_LIST_QUERY, q: "", category: "all", read: "unread", starred: "all", attachment: "all", offset: 0, limit: 1 });
       if (requestId === unreadRequestRef.current && targetToken === unreadTokenRef.current) setGlobalUnread(result.total);
     } catch { if (requestId === unreadRequestRef.current && targetToken === unreadTokenRef.current) setGlobalUnread(null); }
+  }
+
+  async function refreshSidebarCounts(targetToken: string) {
+    if (targetToken !== unreadTokenRef.current) return;
+    const requestId = ++sidebarCountRequestRef.current;
+    const [settings, starred] = await Promise.allSettled([
+      fetchMailboxSettings(targetToken),
+      fetchInbox(targetToken, { ...DEFAULT_MAIL_LIST_QUERY, q: "", category: "all", read: "all", starred: "starred", attachment: "all", offset: 0, limit: 1 }),
+    ]);
+    if (requestId !== sidebarCountRequestRef.current || targetToken !== unreadTokenRef.current) return;
+    const count = (key: string) => {
+      if (settings.status !== "fulfilled") return null;
+      const value = settings.value.mailboxes.find((row) => row.mailboxKey === key)?.totalCount;
+      return typeof value === "number" && Number.isFinite(value) ? value : null;
+    };
+    setSidebarCounts({
+      inbox: count("system:inbox"), sent: count("system:sent"),
+      draft: count("system:draft"), scheduled: count("system:scheduled"),
+      starred: starred.status === "fulfilled" ? starred.value.total : null,
+    });
   }
 
   function updateMailListQuery(patch: Partial<MailListQuery>) {
@@ -2586,6 +2610,7 @@ export default function App() {
   ): Promise<boolean> {
     const requestId = ++mailWorkspaceRequestRef.current;
     void refreshUnreadCount(targetToken);
+    void refreshSidebarCounts(targetToken);
     setMailLoading(true);
     setMailError("");
     try {
@@ -3319,6 +3344,7 @@ export default function App() {
       );
       setSelectedMailDetail((current) => (current ? { ...current } : current));
       await selectMail(token, selectedMailId, activeMailbox, { markRead: false });
+      void refreshSidebarCounts(token);
       setMessage(response.isStarred ? "메일을 중요 표시했습니다." : "메일 중요 표시를 해제했습니다.");
     } catch (error) {
       setMailError(normalizeClientError(error, "중요 표시 변경 실패"));
@@ -5071,8 +5097,8 @@ export default function App() {
   const allPageSelected = visibleMailList.length > 0 && visibleMailList.every((item) => selectedMailIds.includes(mailSelectionKey(item, activeMailFolder)));
   const inboxBulkEnabled = activeMailFolder === "inbox" || activeMailFolder === "starred" || activeMailFolder === "unread";
   const localMailArchiveHint = activeMailFolder === "localArchive" ? "로컬 아카이브에서 확인" : "";
-  const starredMailCount = [...inboxMails, ...sentMails].filter((item) => item.isStarred).length;
-  const draftMailCount = draftMails.length;
+  const starredMailCount = sidebarCounts.starred ?? "—";
+  const draftMailCount = sidebarCounts.draft ?? "—";
   const unreadInboxCount = globalUnread ?? "—";
   const selectedMailSummary =
     visibleMailList.find((item) => item.mailId === selectedMailId) ??
@@ -5539,10 +5565,10 @@ export default function App() {
               </div>
               <div className="user-mail-shell-group" aria-label="기본 메일함">
                 <strong>메일함</strong>
-                <button type="button" aria-pressed={activeMailFolder === "inbox"} onClick={() => openMailFolder("inbox")}>받은편지함 <span title="받은편지함 전체 안 읽은 메일 수">{unreadInboxCount}</span></button>
-                <button type="button" aria-pressed={activeMailFolder === "sent"} onClick={() => openMailFolder("sent")}>보낸편지함 <span>{sentMails.length}</span></button>
-                <button type="button" aria-pressed={activeMailFolder === "draft"} onClick={() => openMailFolder("draft")}>임시보관함 <span>{draftMailCount}</span></button>
-                <button type="button" aria-pressed={activeMailFolder === "scheduled"} onClick={() => openMailFolder("scheduled")}>예약메일함 <span>{scheduledMails.length}</span></button>
+                <button type="button" aria-pressed={activeMailFolder === "inbox"} onClick={() => openMailFolder("inbox")}>받은편지함 <span title="받은편지함 전체 메일 수">{sidebarCounts.inbox ?? "—"}</span></button>
+                <button type="button" aria-pressed={activeMailFolder === "sent"} onClick={() => openMailFolder("sent")}>보낸편지함 <span>{sidebarCounts.sent ?? "—"}</span></button>
+                <button type="button" aria-pressed={activeMailFolder === "draft"} onClick={() => openMailFolder("draft")}>임시보관함 <span>{sidebarCounts.draft ?? "—"}</span></button>
+                <button type="button" aria-pressed={activeMailFolder === "scheduled"} onClick={() => openMailFolder("scheduled")}>예약메일함 <span>{sidebarCounts.scheduled ?? "—"}</span></button>
                 <button type="button" aria-label="스팸메일함" aria-pressed={activeMailFolder === "spam"} onClick={() => openMailFolder("spam")}>스팸함</button>
                 <button type="button" aria-pressed={activeMailFolder === "trash"} onClick={() => openMailFolder("trash")}>휴지통</button>
               </div>

@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 export async function installMailFixture(page) {
-    const mails = Array.from({ length: 102 }, (_, i) => ({ mailId: `mail-${i}`, accountId: 'a', senderEmail: 'sender@example.test', senderDisplayName: '테스트 발신자', subject: `합성 메일 ${i + 1}`, bodyText: '내부 스크롤 검증용 본문\n'.repeat(200), bodyHtml: '<h1>긴 메일 본문</h1>' + '<p>내부 스크롤 검증용 합성 본문입니다.</p>'.repeat(100), previewText: '합성 본문', status: 'sent', isRead: i < 40, isStarred: false, category: 'primary', attachmentCount: 0, sentAt: '2026-09-27T00:00:00Z', createdAt: '2026-09-27T00:00:00Z', recipients: [], attachments: [], externalDeliveries: [] }));
+    const mails = Array.from({ length: 102 }, (_, i) => ({ mailId: `mail-${i}`, accountId: 'a', senderEmail: 'sender@example.test', senderDisplayName: '테스트 발신자', subject: `합성 메일 ${i + 1}`, bodyText: '내부 스크롤 검증용 본문\n'.repeat(200), bodyHtml: '<h1>긴 메일 본문</h1>' + '<p>내부 스크롤 검증용 합성 본문입니다.</p>'.repeat(100), previewText: '합성 본문', status: 'sent', isRead: i < 40, isStarred: i < 67, category: 'primary', attachmentCount: 0, sentAt: '2026-09-27T00:00:00Z', createdAt: '2026-09-27T00:00:00Z', recipients: [], attachments: [], externalDeliveries: [] }));
+    const mailboxLists = { '/mail/sent': mails.slice(0, 76), '/mail/drafts': mails.slice(0, 55), '/mail/scheduled': mails.slice(0, 43) };
+    const mailboxRow = (key, name, type, total) => ({ mailboxKey: `system:${key}`, name, mailboxType: type, retentionDays: null, retentionEditable: key !== 'scheduled', unreadCount: key === 'inbox' ? 62 : null, totalCount: total, usedBytes: 0, version: 1 });
     const calls = [];
     await page.addInitScript(() => localStorage.setItem('moaworks.userToken', 'synthetic-fixture'));
     await page.route('**/api/**', async (route) => {
@@ -17,15 +19,22 @@ export async function installMailFixture(page) {
             return reply({ user: { userId: 'fixture-user', companyId: 'c', userName: 'Tester', userEmail: 'test@example.test', roleId: 'r', roleName: 'User', userType: 'employee', status: 'active', permissions: ['mail:send'], mustChangePassword: false } });
         if (p === '/workspace/preferences')
             return reply({ locale: 'ko', timezone: 'Asia/Seoul', startPage: 'mail', version: 1 });
+        if (p === '/mail/mailbox-settings')
+            return reply({ mailboxes: [mailboxRow('inbox', '받은편지함', 'inbox', 102), mailboxRow('sent', '보낸편지함', 'sent', 76), mailboxRow('draft', '임시보관함', 'draft', 55), mailboxRow('scheduled', '예약메일함', 'scheduled', 43)], tags: [], storage: { usedBytes: 1000, quotaBytes: 2000000000, usagePercent: 0 }, backupJobs: [] });
         if (p === '/mail/inbox') {
             let list = mails.filter(m => u.searchParams.get('read') === 'unread' ? !m.isRead : u.searchParams.get('read') === 'read' ? m.isRead : true);
+            if (u.searchParams.get('starred') === 'starred')
+                list = list.filter(m => m.isStarred);
             if (u.searchParams.get('q'))
                 list = list.filter(m => m.subject.includes(u.searchParams.get('q')));
             const limit = Number(u.searchParams.get('limit') || 50), offset = Number(u.searchParams.get('offset') || 0);
             return reply({ mails: list.slice(offset, offset + limit), total: list.length, limit, offset, hasMore: offset + limit < list.length });
         }
-        if (['/mail/sent', '/mail/drafts', '/mail/scheduled'].includes(p))
-            return reply({ mails: [], total: 0, limit: 50, offset: 0, hasMore: false });
+        if (p in mailboxLists) {
+            const list = mailboxLists[p];
+            const limit = Number(u.searchParams.get('limit') || 50), offset = Number(u.searchParams.get('offset') || 0);
+            return reply({ mails: list.slice(offset, offset + limit), total: list.length, limit, offset, hasMore: offset + limit < list.length });
+        }
         if (p === '/mail/folders')
             return reply({ folders: [{ folderId: 'f1', name: '업무' }] });
         if (p === '/mail/tags')
@@ -48,6 +57,10 @@ export async function installMailFixture(page) {
     });
     return { mails, calls };
 }
+async function assertSidebarCounts(page) {
+    for (const label of ['받은편지함 102', '안 읽은 메일 62', '중요 67', '보낸편지함 76', '임시보관함 55', '예약메일함 43'])
+        await page.getByRole('button', { name: label, exact: true }).waitFor();
+}
 export async function verifyMailBrowser(base = 'http://127.0.0.1:3520', out = '../../docs/work-progress/mail-toolbar-20260927/browser') {
     await mkdir(out, { recursive: true });
     const browser = await chromium.launch({ headless: true, channel: 'chrome' });
@@ -57,7 +70,11 @@ export async function verifyMailBrowser(base = 'http://127.0.0.1:3520', out = '.
             const page = await browser.newPage({ viewport: { width: 1920, height } });
             await installMailFixture(page);
             await page.goto(base);
-            await page.getByRole('button', { name: '받은편지함 62', exact: true }).waitFor();
+            await assertSidebarCounts(page);
+            await page.getByRole('button', { name: '중요 67', exact: true }).click();
+            await page.getByText('선택 0 / 전체 67', { exact: true }).waitFor();
+            await page.getByRole('button', { name: '받은편지함 102', exact: true }).click();
+            await page.getByText('선택 0 / 전체 102', { exact: true }).waitFor();
             for (const mode of ['icons', 'text']) {
                 await page.getByRole('button', { name: '도구모음 설정', exact: true }).click();
                 await page.getByLabel('도구모음 표시 방식').selectOption(mode);
@@ -95,15 +112,16 @@ export async function verifyMailBrowser(base = 'http://127.0.0.1:3520', out = '.
             await page.getByRole('button', { name: '5페이지', exact: true }).click();
             await page.getByText('합성 메일 101', { exact: true }).waitFor();
             assert.equal(await page.locator('.user-mail-row').count(), 2);
+            await assertSidebarCounts(page);
             await page.reload();
-            await page.getByRole('button', { name: '받은편지함 62', exact: true }).waitFor();
+            await assertSidebarCounts(page);
             assert.equal(await page.getByLabel('페이지당 메일 수').inputValue(), '25');
             await page.close();
         }
         const narrow = await browser.newPage({ viewport: { width: 1024, height: 768 } });
         await installMailFixture(narrow);
         await narrow.goto(base);
-        await narrow.getByRole('button', {name: '받은편지함 62', exact:true}).waitFor();
+        await assertSidebarCounts(narrow);
         for (const name of ['조회 필터·정렬','분류 변경','메일함 이동','태그 관리','도구모음 설정']) {
             await narrow.locator('.user-mail-toolbar').getByRole('button',{name,exact:true}).click();
             const dialog = narrow.getByRole('dialog',{name,exact:true});
