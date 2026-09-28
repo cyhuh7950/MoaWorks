@@ -1754,7 +1754,10 @@ export default function App() {
                       style={styles.homeStatCard}
                     >
                       <Text style={styles.homeStatLabel}>{item.label}</Text>
-                      <Text style={styles.homeStatValue}>{item.count}<Text style={styles.homeStatUnit}>건</Text></Text>
+                      <View style={styles.homeStatValueRow}>
+                        <Text style={styles.homeStatValue}>{item.count}</Text>
+                        <Text style={styles.homeStatUnit}>건</Text>
+                      </View>
                     </Pressable>
                   ))}
                 </View>
@@ -2203,10 +2206,15 @@ const styles = StyleSheet.create(withMobileTypography({
     fontSize: 11,
     fontWeight: "700",
   },
+  homeStatValueRow: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 2,
+    marginTop: 4,
+  },
   homeStatValue: {
-    marginTop: 8,
     color: "#0f172a",
-    fontSize: 24,
+    fontSize: 18,
     fontWeight: "800",
   },
   homeStatUnit: {

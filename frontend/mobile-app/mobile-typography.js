@@ -5,6 +5,7 @@ const typography = Object.freeze({
   body: { fontSize: 14, lineHeight: 20, fontWeight: "400" },
   meta: { fontSize: 12, lineHeight: 18, fontWeight: "400" },
   metric: { fontSize: 24, lineHeight: 32, fontWeight: "700" },
+  homeMetric: { fontSize: 18, lineHeight: 24, fontWeight: "700" },
 });
 const titleStyles = new Set(["shellTitle", "heroTitle", "surfaceTitle", "moduleTitle", "aiTitle", "messengerRoomTitle", "composeTitle", "employeeSearchModalTitle", "homeGreeting"]);
 const nameStyles = new Set(["listTitle", "homeRowTitle", "employeeSearchName", "directoryName", "userName", "mailSubject", "selectedScheduleTitle"]);
@@ -23,7 +24,8 @@ function withMobileTypography(styles) {
     if (!isText) return [name, style];
     let role = "body";
     if (titleStyles.has(roleName)) role = "title";
-    else if (/^(homeStatValue|homeSummaryValue|metricValue)$/.test(roleName)) role = "metric";
+    else if (roleName === "homeStatValue") role = "homeMetric";
+    else if (/^(homeSummaryValue|metricValue)$/.test(roleName)) role = "metric";
     else if (nameStyles.has(roleName) || /Title|Label|ButtonText|Close|Link|Action|Chip|Role|Kicker|Filter/.test(roleName)) role = "label";
     else if (/Meta|Date|Time|Count|Status|Note|Desc|Preview|Empty|Unit/.test(roleName) || (roleStyle.fontSize && roleStyle.fontSize <= 12)) role = "meta";
     if (/Input$|^input$|messageText|^listBody$|settingsValue/i.test(roleName)) role = "body";

@@ -4,6 +4,41 @@ const fs = require("node:fs");
 const path = require("node:path");
 const source = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
 
+test("홈 숫자 카드의 제목과 값 행은 최소 높이 안에 들어가고 단위는 독립 Text이다", () => {
+  const { parse } = require("@babel/parser");
+  const { withMobileTypography } = require("../mobile-typography.js");
+  const ast = parse(source, { sourceType: "module", plugins: ["typescript", "jsx"] });
+  const all = [];
+  const visit = (node) => {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) return node.forEach(visit);
+    if (node.type) all.push(node);
+    for (const value of Object.values(node)) if (value && typeof value === "object") visit(value);
+  };
+  visit(ast.program);
+  const styleCall = all.find((node) => node.type === "CallExpression" && node.callee.name === "withMobileTypography" && node.arguments[0]?.type === "ObjectExpression");
+  assert.ok(styleCall, "실제 홈 스타일을 찾을 수 있어야 한다");
+  const styles = Object.fromEntries(styleCall.arguments[0].properties
+    .filter((property) => ["homeStatCard", "homeStatLabel", "homeStatValue", "homeStatUnit", "homeStatValueRow"].includes(property.key?.name))
+    .map((property) => [property.key.name, Object.fromEntries(property.value.properties.map(({ key, value }) => [key.name, value.value]))]));
+  const resolved = withMobileTypography(styles);
+  const available = styles.homeStatCard.minHeight - 2 * (styles.homeStatCard.padding + styles.homeStatCard.borderWidth);
+  const valueHeight = Math.max(resolved.homeStatValue.lineHeight, resolved.homeStatUnit.lineHeight);
+  const gap = styles.homeStatValueRow?.marginTop ?? styles.homeStatValue.marginTop;
+  assert.ok(resolved.homeStatLabel.lineHeight + gap + valueHeight <= available,
+    "제목·간격·숫자 행이 카드 최소 내부 높이를 넘으면 안 된다");
+  assert.ok(resolved.homeStatValue.fontSize <= 18, "숫자 글꼴이 Android 카드 높이에 맞아야 한다");
+  const number = all.find((node) => node.type === "JSXElement" && node.openingElement.name.name === "Text" &&
+    node.openingElement.attributes.some((attribute) => attribute.name?.name === "style" && attribute.value?.expression?.property?.name === "homeStatValue"));
+  const unit = all.find((node) => node.type === "JSXElement" && node.openingElement.name.name === "Text" &&
+    node.openingElement.attributes.some((attribute) => attribute.name?.name === "style" && attribute.value?.expression?.property?.name === "homeStatUnit"));
+  const row = all.find((node) => node.type === "JSXElement" && node.openingElement.name.name === "View" &&
+    node.openingElement.attributes.some((attribute) => attribute.name?.name === "style" && attribute.value?.expression?.property?.name === "homeStatValueRow"));
+  assert.equal(styles.homeStatValueRow.flexDirection, "row");
+  assert.ok(number && unit && row?.children.includes(number) && row.children.includes(unit),
+    "숫자와 단위는 같은 행의 독립 Text여야 한다");
+});
+
 test("설정은 진입 화면을 기억하는 화면/Android 뒤로가기를 제공한다", () => {
   assert.match(source, /accessibilityLabel="설정 이전 화면으로"/);
   assert.match(source, /BackHandler\.addEventListener\("hardwareBackPress"/);
