@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "packageId": "com.moaworks.mobile",
   "appVersionName": "1.0",
-  "appVersionCode": 2,
+  "appVersionCode": 3,
   "platform": "android",
   "format": "aab",
   "buildType": "public-release",
@@ -18,8 +18,8 @@
   "minified": true,
   "artifact": {
     "fileName": "MoaWorks-Mobile-0.1.0-android-public-release.aab",
-    "size": 22133340,
-    "sha256": "cd0c9828e0091b1779578a460b6874c96faa96237a746d251f60d03e740c2ab3"
+    "size": 22133480,
+    "sha256": "8700574c84152174f031e210be482f72ecb7d1faed12cf57e340fdec8d11da4d"
   },
   "auditReachability": {
     "fileName": "MoaWorks-Mobile-0.1.0-android-public-release.audit-reachability.json",
@@ -50,5 +50,5 @@
     "requiredEntries": "verified"
   },
   "status": "success",
-  "generatedAt": "2026-09-28T01:10:42.048Z"
+  "generatedAt": "2026-09-28T02:39:07.409Z"
 }

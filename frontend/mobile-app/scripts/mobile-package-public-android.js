@@ -4,7 +4,8 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { findAndroidSdk, findJavaHome, sha256File } = require("./mobile-build-support");
 const { writeReachabilityReport } = require("./mobile-audit-reachability");
-const { verifyApk } = require("./mobile-verify-apk");
+const { findBuildTool, verifyApk } = require("./mobile-verify-apk");
+const { resolvePublicVersionCode } = require("./mobile-public-version-code");
 
 const projectRoot = path.resolve(__dirname, "..");
 const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, "package.json"), "utf8"));
@@ -117,6 +118,19 @@ const apkVerification = verifyApk(
 if (apkVerification.code === "APK_DEBUGGABLE") fail("APK_DEBUGGABLE");
 if (apkVerification.code === "APK_DEV_SERVER_CONSTANTS_PRESENT") fail("APK_DEV_SERVER_CONSTANTS_PRESENT");
 if (apkVerification.status !== "success") fail(apkVerification.code || "PUBLIC_VERIFICATION_APK_INVALID");
+const aapt = findBuildTool(androidSdk, "aapt");
+if (!aapt) fail("AAPT_MISSING");
+const badging = spawnSync(aapt, ["dump", "badging", sourceApk], { encoding: "utf8" });
+if (badging.status !== 0) fail("APK_BADGING_FAILED");
+let appVersionCode;
+try {
+  appVersionCode = resolvePublicVersionCode(
+    fs.readFileSync(path.join(projectRoot, "android", "app", "build.gradle"), "utf8"),
+    badging.stdout,
+  );
+} catch (error) {
+  fail(error.message === "VERSION_CODE_MISMATCH" ? "VERSION_CODE_MISMATCH" : "VERSION_CODE_UNREADABLE");
+}
 const executable = (name) => path.join(javaHome, "bin", process.platform === "win32" ? `${name}.exe` : name);
 const signature = spawnSync(executable("jarsigner"), ["-verify", artifactPath], { encoding: "utf8" });
 if (signature.status !== 0) fail("PUBLIC_AAB_SIGNATURE_INVALID");
@@ -136,7 +150,7 @@ const manifest = {
   version,
   packageId: "com.moaworks.mobile",
   appVersionName: "1.0",
-  appVersionCode: 2,
+  appVersionCode: appVersionCode,
   platform: "android",
   format: "aab",
   buildType: "public-release",
