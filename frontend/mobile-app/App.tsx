@@ -6,6 +6,8 @@ import { createDirectoryActionGate, directoryUsers as readDirectoryUsers, direct
 import { buildPersonalAiChatPayload, buildPersonalAiConfigPayload, createPersonalAiActionGate, isPersonalAiConfigReady, personalAiErrorMessage, readPersonalAiChatResponse, readPersonalAiConfig, readPersonalAiConnectionTest, readPersonalAiModelList, readPersonalAiProviders } from "./personal-ai-api";
 import { normalizeBusinessSearchText, searchLoadedBusinessSummaries, updateBusinessSearchWarnings } from "./business-search";
 
+const PRIVACY_POLICY_URL = "https://moaworks.sinsan.kr/privacy/";
+
 const { aiViewModel, approvalViewModel, buildHomeViewModel, calendarViewModel, directoryViewModel, navigationModel } = require("./mobile-ui-design.js");
 const { buildMailSendPayload, mailboxRequestPath, mailboxViewModel } = require("./mail-compose.js");
 const { formatMailSender, resolveMailSenderDisplayMode } = require("./mail-sender-display.js");
@@ -1130,6 +1132,11 @@ export default function App() {
   }
 
   function openDirectoryMail(email: string) { const url = mailtoUrl(email); const context = sessionControllerRef.current.capture(token); if (url) void Linking.openURL(url).catch(() => { if (sessionControllerRef.current.isCurrent(context)) setDirectoryError("메일 앱을 열 수 없습니다."); }); }
+  function openPrivacyPolicy() {
+    void Linking.openURL(PRIVACY_POLICY_URL).catch(() => {
+      Alert.alert("개인정보처리방침", "문서를 열 수 없습니다. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.");
+    });
+  }
 
   async function createSchedule() {
     if (!scheduleSubmissionGateRef.current.tryEnter()) return;
@@ -1562,6 +1569,9 @@ export default function App() {
                   <Text style={styles.loginButtonText}>업무 포털 로그인</Text>
                 </Pressable>
               </View>
+              <Pressable accessibilityRole="link" accessibilityLabel="개인정보처리방침 열기" onPress={openPrivacyPolicy}>
+                <Text style={styles.homeSectionLink}>개인정보처리방침</Text>
+              </Pressable>
           {message ? <Text style={styles.message}>{message}</Text> : null}
           </View>
         ) : null}
@@ -1700,6 +1710,9 @@ export default function App() {
                 <View style={styles.settingsCompactSection}><Text style={styles.sectionLabel}>현재 사용자</Text><Text style={styles.settingsValue}>{me.userName} · {me.roleName}</Text><Text style={styles.settingsValue}>{me.userEmail}</Text></View>
                 <View style={styles.settingsCompactSection}><View style={styles.moduleToolbar}><Text style={styles.sectionLabel}>알림 {notificationSummary?.unreadCount ?? 0}건</Text><Text accessibilityRole="button" accessibilityLabel="알림 새로고침" onPress={() => { void refreshNotifications(); }} style={styles.homeSectionLink}>새로고침</Text></View>{notifications.slice(0, 5).map((item) => <Pressable key={item.notificationId} accessibilityRole="button" accessibilityLabel={`${item.title} 알림 읽음 처리`} disabled={item.status !== "unread"} onPress={() => { void executeAckNotification(item.notificationId); }} style={styles.settingsNotificationRow}><Text style={styles.listTitle}>{item.title}</Text><Text style={styles.listBody}>{item.message}</Text></Pressable>)}{notificationError ? <Text accessibilityRole="alert" style={styles.error}>{notificationError}</Text> : null}</View>
                 <View style={styles.settingsCompactSection}><Text style={styles.sectionLabel}>도움말</Text><Text style={styles.settingsValue}>정책 확인 경로: {uiContract.helpText}</Text>{sessionMessages.map((item) => <Text key={item} style={styles.settingsValue}>{item}</Text>)}</View>
+                <Pressable accessibilityRole="link" accessibilityLabel="개인정보처리방침 열기" onPress={openPrivacyPolicy}>
+                  <Text style={styles.homeSectionLink}>개인정보처리방침</Text>
+                </Pressable>
                 <Button accessibilityLabel="로그아웃" title="로그아웃" onPress={() => clearSession("로그아웃되었습니다.")} />
               </View>
             ) : null}
@@ -1741,7 +1754,10 @@ export default function App() {
                       style={styles.homeStatCard}
                     >
                       <Text style={styles.homeStatLabel}>{item.label}</Text>
-                      <Text style={styles.homeStatValue}>{item.count}<Text style={styles.homeStatUnit}>건</Text></Text>
+                      <View style={styles.homeStatValueRow}>
+                        <Text style={styles.homeStatValue}>{item.count}</Text>
+                        <Text style={styles.homeStatUnit}>건</Text>
+                      </View>
                     </Pressable>
                   ))}
                 </View>
@@ -2190,10 +2206,15 @@ const styles = StyleSheet.create(withMobileTypography({
     fontSize: 11,
     fontWeight: "700",
   },
+  homeStatValueRow: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 2,
+    marginTop: 4,
+  },
   homeStatValue: {
-    marginTop: 8,
     color: "#0f172a",
-    fontSize: 24,
+    fontSize: 18,
     fontWeight: "800",
   },
   homeStatUnit: {

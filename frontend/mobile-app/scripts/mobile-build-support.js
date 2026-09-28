@@ -6,18 +6,19 @@ function npxCommand(platform = process.platform) {
   return platform === "win32" ? "npx.cmd" : "npx";
 }
 
-function firstValidHome(candidates, executableParts, exists) {
-  return candidates.find((candidate) => candidate && exists(path.join(candidate, ...executableParts))) || "";
+function firstValidHome(candidates, executableParts, exists, platform = process.platform) {
+  const pathForPlatform = platform === "win32" ? path.win32 : path;
+  return candidates.find((candidate) => candidate && exists(pathForPlatform.join(candidate, ...executableParts))) || "";
 }
 
 function findJavaHome(env = process.env, platform = process.platform, exists = fs.existsSync) {
   const candidates = [env.JAVA_HOME];
   if (platform === "win32") {
     candidates.push(
-      env.ProgramFiles && path.join(env.ProgramFiles, "Android", "Android Studio", "jbr"),
-      env["ProgramFiles(x86)"] && path.join(env["ProgramFiles(x86)"], "Android", "Android Studio", "jbr"),
+      env.ProgramFiles && path.win32.join(env.ProgramFiles, "Android", "Android Studio", "jbr"),
+      env["ProgramFiles(x86)"] && path.win32.join(env["ProgramFiles(x86)"], "Android", "Android Studio", "jbr"),
     );
-    return firstValidHome(candidates, ["bin", "java.exe"], exists);
+    return firstValidHome(candidates, ["bin", "java.exe"], exists, platform);
   }
   candidates.push("/usr/lib/jvm/default-java", "/mnt/c/Program Files/Android/Android Studio/jbr");
   return firstValidHome(candidates, ["bin", platform === "linux" ? "java" : "java"], exists)
@@ -37,8 +38,8 @@ function mountedWindowsSdkCandidates(exists = fs.existsSync, readDir = fs.readdi
 function findAndroidSdk(env = process.env, platform = process.platform, exists = fs.existsSync, readDir = fs.readdirSync) {
   const candidates = [env.ANDROID_SDK_ROOT, env.ANDROID_HOME];
   if (platform === "win32") {
-    candidates.push(env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, "Android", "Sdk"));
-    return firstValidHome(candidates, ["platform-tools", "adb.exe"], exists);
+    candidates.push(env.LOCALAPPDATA && path.win32.join(env.LOCALAPPDATA, "Android", "Sdk"));
+    return firstValidHome(candidates, ["platform-tools", "adb.exe"], exists, platform);
   }
   candidates.push("/usr/lib/android-sdk", ...mountedWindowsSdkCandidates(exists, readDir));
   return firstValidHome(candidates, ["platform-tools", "adb"], exists)

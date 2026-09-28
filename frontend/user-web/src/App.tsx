@@ -250,6 +250,8 @@ import {
   type ApprovalDelegationDraft,
 } from "./approvalDelegation";
 
+const PRIVACY_POLICY_URL = "https://moaworks.sinsan.kr/privacy/";
+
 const NOTIFICATION_POLICY = {
   retryMaxAttempts: 3,
   retryDelayMs: 400,
@@ -7246,7 +7248,8 @@ export default function App() {
                   lineHeight: 1.7,
                 }}
               >
-                정책 경로: `Help`, `정책 안내`, `설정 &gt; 보관 정책`
+                <a href={PRIVACY_POLICY_URL} target="_blank" rel="noopener noreferrer">MoaWorks Mobile 개인정보처리방침 열기</a>
+                <br />정책 경로: `Help`, `정책 안내`, `설정 &gt; 보관 정책`
               </div>
             </article>
 
