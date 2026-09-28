@@ -136,7 +136,7 @@ const manifest = {
   version,
   packageId: "com.moaworks.mobile",
   appVersionName: "1.0",
-  appVersionCode: 1,
+  appVersionCode: 2,
   platform: "android",
   format: "aab",
   buildType: "public-release",

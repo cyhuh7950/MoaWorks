@@ -1,0 +1,340 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-28T01:08:02.623Z",
+  "source": "npm-audit-omit-dev",
+  "policy": {
+    "approach": "conservative-explicit-allowlist",
+    "runtimePackages": [
+      "react",
+      "react-native"
+    ],
+    "buildOnlyPackages": [
+      "@react-native-community/cli",
+      "@react-native-community/cli-doctor",
+      "@react-native-community/cli-platform-android",
+      "@react-native-community/cli-platform-apple",
+      "@react-native-community/cli-platform-ios",
+      "@react-native/babel-plugin-codegen",
+      "@react-native/babel-preset",
+      "@react-native/codegen",
+      "@react-native/community-cli-plugin",
+      "@react-native/dev-middleware",
+      "@react-native/metro-babel-transformer",
+      "brace-expansion",
+      "chromium-edge-launcher",
+      "fast-xml-parser",
+      "glob",
+      "image-size",
+      "js-yaml",
+      "jscodeshift",
+      "metro",
+      "metro-config",
+      "metro-transform-worker",
+      "minimatch",
+      "node-dir",
+      "rimraf",
+      "temp"
+    ],
+    "unknownDefaultsTo": "unclassified"
+  },
+  "npmAuditMetadata": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 0,
+      "moderate": 7,
+      "high": 3,
+      "critical": 0,
+      "total": 10
+    },
+    "dependencies": {
+      "prod": 554,
+      "dev": 1,
+      "optional": 1,
+      "peer": 38,
+      "peerOptional": 0,
+      "total": 593
+    }
+  },
+  "summary": {
+    "runtime": 0,
+    "buildOnly": 10,
+    "unclassified": 0,
+    "total": 10
+  },
+  "packages": [
+    {
+      "package": "@react-native-community/cli",
+      "severity": "moderate",
+      "isDirect": false,
+      "reachability": "build-only",
+      "viaPackages": [
+        "@react-native-community/cli-doctor"
+      ],
+      "directAdvisories": [],
+      "effects": [],
+      "range": "12.0.0-alpha.0 - 15.1.0",
+      "nodes": [
+        "node_modules/@react-native-community/cli"
+      ],
+      "fixAvailable": true,
+      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
+    },
+    {
+      "package": "@react-native-community/cli-doctor",
+      "severity": "moderate",
+      "isDirect": false,
+      "reachability": "build-only",
+      "viaPackages": [
+        "@react-native-community/cli-platform-android",
+        "@react-native-community/cli-platform-apple",
+        "@react-native-community/cli-platform-ios"
+      ],
+      "directAdvisories": [],
+      "effects": [
+        "@react-native-community/cli"
+      ],
+      "range": "12.0.0-alpha.0 - 20.1.1",
+      "nodes": [
+        "node_modules/@react-native-community/cli-doctor"
+      ],
+      "fixAvailable": true,
+      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
+    },
+    {
+      "package": "@react-native-community/cli-platform-android",
+      "severity": "moderate",
+      "isDirect": false,
+      "reachability": "build-only",
+      "viaPackages": [
+        "fast-xml-parser"
+      ],
+      "directAdvisories": [],
+      "effects": [
+        "@react-native-community/cli-doctor",
+        "react-native"
+      ],
+      "range": "12.0.0-alpha.0 - 15.1.0",
+      "nodes": [
+        "node_modules/@react-native-community/cli-platform-android"
+      ],
+      "fixAvailable": {
+        "name": "react-native",
+        "version": "0.87.1",
+        "isSemVerMajor": true
+      },
+      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
+    },
+    {
+      "package": "@react-native-community/cli-platform-apple",
+      "severity": "moderate",
+      "isDirect": false,
+      "reachability": "build-only",
+      "viaPackages": [
+        "fast-xml-parser"
+      ],
+      "directAdvisories": [],
+      "effects": [
+        "@react-native-community/cli-doctor",
+        "@react-native-community/cli-platform-ios"
+      ],
+      "range": "<=20.1.1",
+      "nodes": [
+        "node_modules/@react-native-community/cli-platform-apple"
+      ],
+      "fixAvailable": {
+        "name": "react-native",
+        "version": "0.87.1",
+        "isSemVerMajor": true
+      },
+      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
+    },
+    {
+      "package": "@react-native-community/cli-platform-ios",
+      "severity": "moderate",
+      "isDirect": false,
+      "reachability": "build-only",
+      "viaPackages": [
+        "@react-native-community/cli-platform-apple"
+      ],
+      "directAdvisories": [],
+      "effects": [
+        "react-native"
+      ],
+      "range": "13.2.0 - 20.1.1",
+      "nodes": [
+        "node_modules/@react-native-community/cli-platform-ios"
+      ],
+      "fixAvailable": {
+        "name": "react-native",
+        "version": "0.87.1",
+        "isSemVerMajor": true
+      },
+      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
+    },
+    {
+      "package": "brace-expansion",
+      "severity": "high",
+      "isDirect": false,
+      "reachability": "build-only",
+      "viaPackages": [],
+      "directAdvisories": [
+        {
+          "source": 1123897,
+          "name": "brace-expansion",
+          "title": "brace-expansion: DoS via exponential-time expansion of consecutive non-expanding {} groups",
+          "url": "https://github.com/advisories/GHSA-3jxr-9vmj-r5cp",
+          "severity": "high"
+        },
+        {
+          "source": 1130588,
+          "name": "brace-expansion",
+          "title": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash",
+          "url": "https://github.com/advisories/GHSA-mh99-v99m-4gvg",
+          "severity": "high"
+        },
+        {
+          "source": 1130737,
+          "name": "brace-expansion",
+          "title": "brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation",
+          "url": "https://github.com/advisories/GHSA-rgw5-rvv9-x895",
+          "severity": "high"
+        }
+      ],
+      "effects": [],
+      "range": "<=1.1.17",
+      "nodes": [
+        "node_modules/brace-expansion"
+      ],
+      "fixAvailable": true,
+      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
+    },
+    {
+      "package": "fast-xml-parser",
+      "severity": "moderate",
+      "isDirect": false,
+      "reachability": "build-only",
+      "viaPackages": [],
+      "directAdvisories": [
+        {
+          "source": 1117911,
+          "name": "fast-xml-parser",
+          "title": "fast-xml-parser XMLBuilder: XML Comment and CDATA Injection via Unescaped Delimiters",
+          "url": "https://github.com/advisories/GHSA-gh4j-gqv2-49f6",
+          "severity": "moderate"
+        }
+      ],
+      "effects": [
+        "@react-native-community/cli-platform-android",
+        "@react-native-community/cli-platform-apple"
+      ],
+      "range": "<5.7.0",
+      "nodes": [
+        "node_modules/fast-xml-parser"
+      ],
+      "fixAvailable": {
+        "name": "react-native",
+        "version": "0.87.1",
+        "isSemVerMajor": true
+      },
+      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
+    },
+    {
+      "package": "image-size",
+      "severity": "high",
+      "isDirect": false,
+      "reachability": "build-only",
+      "viaPackages": [],
+      "directAdvisories": [
+        {
+          "source": 1239765,
+          "name": "image-size",
+          "title": "image-size: JXL and HEIF parsers allow denial of service through infinite loops",
+          "url": "https://github.com/advisories/GHSA-5p2g-fcmc-qvqq",
+          "severity": "high"
+        },
+        {
+          "source": 1239766,
+          "name": "image-size",
+          "title": "image-size: ICNS parser allows denial of service through an infinite loop",
+          "url": "https://github.com/advisories/GHSA-w3rx-r6r6-pgpr",
+          "severity": "high"
+        }
+      ],
+      "effects": [],
+      "range": "0.6.3 - 2.0.2",
+      "nodes": [
+        "node_modules/image-size"
+      ],
+      "fixAvailable": true,
+      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
+    },
+    {
+      "package": "js-yaml",
+      "severity": "high",
+      "isDirect": false,
+      "reachability": "build-only",
+      "viaPackages": [],
+      "directAdvisories": [
+        {
+          "source": 1138114,
+          "name": "js-yaml",
+          "title": "JS-YAML: Quadratic CPU consumption in !!omap resolution (3.x and 4.x) — CVE-2026-59870 fix not backported",
+          "url": "https://github.com/advisories/GHSA-5p4m-2wfm-xmqj",
+          "severity": "high"
+        },
+        {
+          "source": 1138115,
+          "name": "js-yaml",
+          "title": "JS-YAML: Quadratic CPU consumption in !!omap resolution (3.x and 4.x) — CVE-2026-59870 fix not backported",
+          "url": "https://github.com/advisories/GHSA-5p4m-2wfm-xmqj",
+          "severity": "high"
+        },
+        {
+          "source": 1193726,
+          "name": "js-yaml",
+          "title": "js-yaml: maxTotalMergeKeys does not limit CPU use for empty merge sources",
+          "url": "https://github.com/advisories/GHSA-2883-xcg3-v3hh",
+          "severity": "high"
+        },
+        {
+          "source": 1193727,
+          "name": "js-yaml",
+          "title": "js-yaml: maxTotalMergeKeys does not limit CPU use for empty merge sources",
+          "url": "https://github.com/advisories/GHSA-2883-xcg3-v3hh",
+          "severity": "high"
+        }
+      ],
+      "effects": [],
+      "range": "3.0.0 - 3.15.1 || 4.0.0 - 4.3.1",
+      "nodes": [
+        "node_modules/@react-native-community/cli-config/node_modules/js-yaml",
+        "node_modules/js-yaml"
+      ],
+      "fixAvailable": true,
+      "rationale": "Package is used by the React Native build, codegen, CLI, or file-processing toolchain"
+    },
+    {
+      "package": "react-native",
+      "severity": "moderate",
+      "isDirect": true,
+      "reachability": "build-only-carrier",
+      "viaPackages": [
+        "@react-native-community/cli",
+        "@react-native-community/cli-platform-android",
+        "@react-native-community/cli-platform-ios"
+      ],
+      "directAdvisories": [],
+      "effects": [],
+      "range": "0.73.0-nightly-20230506-1af868c52 - 0.76.0-rc.6 || >=0.88.0-nightly-20260709-24e4b2cae",
+      "nodes": [
+        "node_modules/react-native"
+      ],
+      "fixAvailable": {
+        "name": "react-native",
+        "version": "0.87.1",
+        "isSemVerMajor": true
+      },
+      "rationale": "Runtime package is listed only as a carrier for explicitly classified build-only packages"
+    }
+  ]
+}

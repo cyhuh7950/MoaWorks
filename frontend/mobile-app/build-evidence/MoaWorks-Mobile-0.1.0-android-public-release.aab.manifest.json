@@ -1,0 +1,54 @@
+{
+  "product": "MoaWorks Mobile",
+  "version": "0.1.0",
+  "packageId": "com.moaworks.mobile",
+  "appVersionName": "1.0",
+  "appVersionCode": 2,
+  "platform": "android",
+  "format": "aab",
+  "buildType": "public-release",
+  "androidVariant": "publicRelease",
+  "compileSdkVersion": 36,
+  "targetSdkVersion": 36,
+  "signing": "play-app-signing-upload-key",
+  "playInternalUploadEligible": true,
+  "publicReleaseEligible": false,
+  "debuggable": false,
+  "standaloneBundleEmbedded": true,
+  "minified": true,
+  "artifact": {
+    "fileName": "MoaWorks-Mobile-0.1.0-android-public-release.aab",
+    "size": 22133340,
+    "sha256": "cd0c9828e0091b1779578a460b6874c96faa96237a746d251f60d03e740c2ab3"
+  },
+  "auditReachability": {
+    "fileName": "MoaWorks-Mobile-0.1.0-android-public-release.audit-reachability.json",
+    "summary": {
+      "runtime": 0,
+      "buildOnly": 10,
+      "unclassified": 0,
+      "total": 10
+    }
+  },
+  "apkVerification": {
+    "status": "success",
+    "debuggable": false,
+    "embeddedBundle": true,
+    "devServerConstants": [],
+    "vendorEvidence": {
+      "status": "approved-vendor-dormant",
+      "approvedConstants": [
+        "10.0.2.2"
+      ],
+      "reason": "RN_RELEASE_AAR_DEV_BRANCH_ABSENT",
+      "releaseAarSha256": "028dada06880cc591ebd5b85df7943de9abc1e92232f085369f34b0c351a726e"
+    }
+  },
+  "verification": {
+    "jarSignature": "verified",
+    "certificate": "non-debug",
+    "requiredEntries": "verified"
+  },
+  "status": "success",
+  "generatedAt": "2026-09-28T01:10:42.048Z"
+}
