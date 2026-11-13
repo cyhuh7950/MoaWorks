@@ -200,7 +200,7 @@ test("auth me 실패 시 로그인 결과를 반영하지 않고 업무 상태�
       password: "not-recorded",
       fetchImpl: async (url) => {
         requests.push(url);
-        return url.endsWith("/auth/login")
+        return url.endsWith("/auth/user/login")
           ? response(200, { accessToken: "candidate-token", user: { userId: "candidate" } })
           : response(401, { detail: { userMessage: "hidden" } });
       },
@@ -209,7 +209,7 @@ test("auth me 실패 시 로그인 결과를 반영하지 않고 업무 상태�
   );
 
   assert.deepEqual(requests, [
-    "https://api.moaworks.sinsan.kr/api/v1/auth/login",
+    "https://api.moaworks.sinsan.kr/api/v1/auth/user/login",
     "https://api.moaworks.sinsan.kr/api/v1/auth/me",
   ]);
   assert.deepEqual(state, clearedState("세션이 만료되었습니다. 다시 로그인 후 업무를 계속하세요."));
@@ -298,7 +298,7 @@ test("연속 로그인 응답이 역전되어도 최신 로그인만 인증 상�
     apiBase: "https://api.moaworks.sinsan.kr/api/v1",
     identifier: "second",
     password: "not-recorded",
-    fetchImpl: async (url) => url.endsWith("/auth/login")
+    fetchImpl: async (url) => url.endsWith("/auth/user/login")
       ? response(200, { accessToken: "second-token", user: { userId: "second" } })
       : response(200, { user: { userId: "second" } }),
   });
@@ -329,7 +329,7 @@ test("새 로그인 성공 뒤 이전 auth login 401 또는 네트워크 실패�
       apiBase: "https://api.moaworks.sinsan.kr/api/v1",
       identifier: "current",
       password: "not-recorded",
-      fetchImpl: async (url) => url.endsWith("/auth/login")
+      fetchImpl: async (url) => url.endsWith("/auth/user/login")
         ? response(200, { accessToken: "current-token", user: { userId: "current" } })
         : response(200, { user: { userId: "current" } }),
     });

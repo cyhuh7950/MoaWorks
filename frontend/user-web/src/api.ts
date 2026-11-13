@@ -844,7 +844,7 @@ function authHeaders(token: string) {
 }
 
 export async function login(payload: { email: string; password: string }) {
-  return request<LoginResponse>("/auth/login", {
+  return request<LoginResponse>("/auth/user/login", {
     method: "POST",
     body: JSON.stringify(payload),
   });

@@ -4226,7 +4226,7 @@ export default function App() {
           newPassword: "",
           confirmPassword: "",
         });
-        setMessage("최초 로그인입니다. 비밀번호를 변경한 뒤 업무 화면으로 이동합니다.");
+        setMessage("새 비밀번호를 설정한 뒤 업무 화면으로 이동합니다.");
         return;
       }
       setMessage(`${response.user.userName}님, 업무 포털에 접속했습니다.`);
@@ -5462,8 +5462,8 @@ export default function App() {
         <section style={{ width: "min(560px, 100%)", background: "#fff", borderRadius: 32, padding: 30, border: "1px solid #dbe4ec", boxShadow: "0 18px 40px rgba(15, 23, 42, 0.08)", display: "grid", gap: 18 }}>
           <div>
             <div style={{ display: "inline-flex", padding: "8px 14px", borderRadius: 999, background: "#ecfeff", color: "#0f766e", fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>First Login Policy</div>
-            <h1 style={{ margin: "18px 0 10px", fontSize: 34, lineHeight: 1.15, letterSpacing: "-0.04em" }}>최초 로그인 비밀번호 변경</h1>
-            <p style={{ margin: 0, color: "#475569", lineHeight: 1.7 }}>초기 비밀번호는 아이디와 동일하게 설정되었습니다. 업무 화면에 진입하기 전에 새 비밀번호로 변경해야 합니다.</p>
+            <h1 style={{ margin: "18px 0 10px", fontSize: 34, lineHeight: 1.15, letterSpacing: "-0.04em" }}>비밀번호 설정</h1>
+            <p style={{ margin: 0, color: "#475569", lineHeight: 1.7 }}>처음 사용하거나 관리자가 비밀번호를 재설정한 경우, 아이디와 동일한 비밀번호로 로그인한 뒤 새 비밀번호를 설정하세요.</p>
           </div>
           <article style={{ padding: 18, borderRadius: 22, background: "#f8fafc", border: "1px solid #dbe4ec" }}>
             <strong>{me.userName}</strong>

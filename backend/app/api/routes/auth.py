@@ -38,6 +38,11 @@ def login(payload: LoginRequest) -> AuthLoginResponse:
     return AuthService(DirectoryStore(), TokenService()).login(payload)
 
 
+@router.post("/user/login", response_model=LoginResponse)
+def login_user_portal(payload: LoginRequest) -> LoginResponse:
+    return AuthService(DirectoryStore(), TokenService()).login_user_portal(payload)
+
+
 @router.post("/admin/mfa/verify", response_model=LoginResponse)
 def verify_admin_mfa(payload: AdminMfaVerifyRequest) -> LoginResponse:
     return AuthService(DirectoryStore(), TokenService()).verify_admin_mfa(payload)

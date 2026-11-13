@@ -35,6 +35,7 @@ from app.schemas.auth import (
     PasswordChangeResponse,
 )
 from app.schemas.directory import AuthUserSummary
+from app.core.permissions import USER_PORTAL_PERMISSIONS
 from app.services.admin_mfa_service import AdminMfaService
 from app.services.directory_store import DirectoryStore
 from app.services.token_service import TokenService
@@ -774,6 +775,14 @@ class AuthService:
         )
 
     def login(self, payload: LoginRequest) -> AuthLoginResponse:
+        return self._login(payload, user_portal=False)
+
+    def login_user_portal(self, payload: LoginRequest) -> LoginResponse:
+        response = self._login(payload, user_portal=True)
+        assert isinstance(response, LoginResponse)
+        return response
+
+    def _login(self, payload: LoginRequest, *, user_portal: bool) -> AuthLoginResponse:
         allowed_domain = self.store.get_login_domain()
         normalized_email = payload.email.strip().lower()
         if allowed_domain and not normalized_email.endswith(f"@{allowed_domain}"):
@@ -788,6 +797,15 @@ class AuthService:
         try:
             user = self.store.authenticate(payload.email, payload.password)
         except PermissionError as exc:
+            if user_portal:
+                raise HTTPException(
+                    status_code=status.HTTP_423_LOCKED,
+                    detail={
+                        "code": "AUTH_ACCOUNT_LOCKED",
+                        "userMessage": str(exc),
+                        "adminMessage": str(exc),
+                    },
+                ) from exc
             try:
                 user = self._authenticate_pending_admin(normalized_email, payload.password)
             except ValueError as pending_exc:
@@ -817,6 +835,20 @@ class AuthService:
                     "adminMessage": str(exc),
                 },
             ) from exc
+
+        if user_portal:
+            portal_user = user.model_copy(
+                update={"permissions": list(USER_PORTAL_PERMISSIONS)}
+            ) if user.userType == "admin" or "admin:*" in user.permissions else user
+            token = self.token_service.issue_access_token(
+                user, expires_in=3600, portal="user"
+            )
+            return LoginResponse(
+                accessToken=token,
+                tokenType="bearer",
+                expiresIn=3600,
+                user=portal_user,
+            )
 
         if (
             user.userType == "admin"

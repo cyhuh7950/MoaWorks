@@ -5,8 +5,6 @@ from app.services.outbound_provider_resolver import OutboundProviderResolver
 from datetime import UTC, date, datetime, timedelta
 from functools import wraps
 import json
-import secrets
-import string
 from typing import Any, Callable, TypeVar, cast
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -46,6 +44,7 @@ from app.schemas.directory import (
     UserView,
 )
 from app.schemas.observability import EventEnvelope, MonitoringCategory, SeverityLevel, Visibility
+from app.core.permissions import USER_PORTAL_PERMISSIONS
 from app.services.observability_service import ObservabilityService
 from app.schemas.setup import SetupInitializeRequest
 from app.services.postgres_service import PostgresService
@@ -229,21 +228,7 @@ class DirectoryStore:
                         user_role_id,
                         company_id,
                         "일반사용자",
-                        json.dumps(
-                            [
-                                "mail:read",
-                                "mail:send",
-                                "messenger:read",
-                                "messenger:write",
-                                "approval:read",
-                                "approval:create",
-                                "approval:submit",
-                                "approval:act",
-                                "approval:withdraw",
-                                "approval:rework",
-                                "profile:read",
-                            ]
-                        ),
+                        json.dumps(USER_PORTAL_PERMISSIONS),
                         "active",
                         now,
                     ),
@@ -2833,19 +2818,19 @@ class DirectoryStore:
 
     def reset_user_password(self, actor: AuthUserSummary, user_id: str, revoke_sessions: bool = True) -> dict:
         self.db.ensure_migrations_applied()
-        temporary_password = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT * FROM users WHERE id=%s AND company_id=%s FOR UPDATE", (user_id, actor.companyId))
                 target = cursor.fetchone()
                 if target is None:
                     raise ValueError("대상 사용자를 찾을 수 없습니다.")
+                reset_password = target["email"].split("@", 1)[0].strip().lower()
                 next_version = int(target.get("auth_session_version", 0)) + (1 if revoke_sessions else 0)
                 cursor.execute(
                     """UPDATE users SET password_hash=%s, must_change_password=TRUE,
                        auth_session_version=%s, updated_at=NOW()
                        WHERE id=%s AND company_id=%s""",
-                    (self.security.hash_password(temporary_password), next_version, user_id, actor.companyId),
+                    (self.security.hash_password(reset_password), next_version, user_id, actor.companyId),
                 )
                 self._insert_audit(
                     cursor=cursor, company_id=actor.companyId, actor_user_id=actor.userId,
@@ -2856,7 +2841,7 @@ class DirectoryStore:
                     reason="관리자 비밀번호 재설정; 기존 세션 폐기" if revoke_sessions else "관리자 비밀번호 재설정",
                 )
             connection.commit()
-        return {"userId": user_id, "temporaryPassword": temporary_password, "mustChangePassword": True, "sessionsRevoked": revoke_sessions}
+        return {"userId": user_id, "mustChangePassword": True, "sessionsRevoked": revoke_sessions}
 
     def _fetch_user_view_row(self, cursor, user_id: str) -> dict:
         row = self._fetch_user_access_row(cursor, "u.id = %s", (user_id,))

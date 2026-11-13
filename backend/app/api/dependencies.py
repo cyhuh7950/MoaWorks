@@ -1,6 +1,7 @@
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 
 from app.core.config import settings
+from app.core.permissions import USER_PORTAL_PERMISSIONS
 from app.schemas.directory import AuthUserSummary
 from app.services.directory_store import DirectoryStore
 from app.services.token_service import TokenService
@@ -55,7 +56,7 @@ def _validate_admin_mfa_claims(
         )
 
 
-def get_current_user(authorization: str | None = Header(default=None)) -> AuthUserSummary:
+def get_current_user(authorization: str | None = Header(default=None), request: Request = None) -> AuthUserSummary:
     raw_token = _resolve_token(authorization=authorization)
     if not raw_token:
         raise HTTPException(
@@ -98,6 +99,20 @@ def get_current_user(authorization: str | None = Header(default=None)) -> AuthUs
                     "adminMessage": "비밀번호 재설정으로 기존 세션이 폐기되었습니다.",
                 },
             )
+        if getattr(user, "mustChangePassword", False) and request is not None and request.url.path not in {
+            "/api/v1/auth/me", "/api/v1/auth/change-password", "/auth/me", "/auth/change-password"
+        }:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "AUTH_PASSWORD_CHANGE_REQUIRED",
+                    "userMessage": "새 비밀번호를 설정한 뒤 업무 화면을 이용하세요.",
+                },
+            )
+        if payload.get("portal") == "user":
+            if user.userType == "admin" or "admin:*" in user.permissions:
+                return user.model_copy(update={"permissions": list(USER_PORTAL_PERMISSIONS)})
+            return user
         _validate_admin_mfa_claims(payload, user, store)
         return user
     except PermissionError as exc:

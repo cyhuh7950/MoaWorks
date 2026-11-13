@@ -795,6 +795,14 @@ export async function login(payload: { email: string; password: string }) {
   });
 }
 
+export async function changePassword(token: string, payload: { currentPassword: string; newPassword: string }) {
+  return request<{ message: string; user: AuthUser }>("/auth/change-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function verifyAdminMfa(payload: { challengeId: string; code: string }) {
   return request<AuthenticatedLoginResponse>("/auth/admin/mfa/verify", {
     method: "POST",
@@ -982,7 +990,7 @@ export async function deleteUser(token: string, userId: string) {
 }
 
 export async function resetUserPassword(token: string, userId: string, revokeSessions = true) {
-  return request<{ userId: string; temporaryPassword: string; mustChangePassword: boolean; sessionsRevoked: boolean }>(`/admin/users/${userId}/password-reset`, {
+  return request<{ userId: string; mustChangePassword: boolean; sessionsRevoked: boolean }>(`/admin/users/${userId}/password-reset`, {
     method: "POST",
     headers: authHeaders(token),
     body: JSON.stringify({ revokeSessions }),

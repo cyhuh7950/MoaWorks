@@ -69,7 +69,7 @@ async function mountApp(t) {
   const credential = { email: "qa@fixture.invalid", password: randomUUID() };
   const accessToken = randomUUID();
   const state = {
-    posts: [], rooms: [], unknown: [], nextLogin: null,
+    posts: [], rooms: [], unknown: [], nextLogin: null, passwordChanges: [],
     directory: async () => response({ users: directory }),
     create: async () => response({ detail: { userMessage: "생성 시험 오류" } }, 500),
     mailList: async () => response({ mails: [] }),
@@ -79,7 +79,7 @@ async function mountApp(t) {
   global.fetch = async (url, init = {}) => {
     const route = new URL(url).pathname.replace("/api/v1", "");
     const method = init.method || "GET";
-    if (route === "/auth/login" && method === "POST") {
+    if (route === "/auth/user/login" && method === "POST") {
       const body = JSON.parse(init.body);
       if (state.nextLogin && body.email === state.nextLogin.credential.email && body.password === state.nextLogin.credential.password) {
         return response({ accessToken: state.nextLogin.accessToken });
@@ -91,6 +91,10 @@ async function mountApp(t) {
     const requestUser = requestToken === accessToken ? user : state.nextLogin?.accessToken === requestToken ? state.nextLogin.user : null;
     if (route !== "/ui-contract" && !requestUser) return response({}, 401);
     if (route === "/auth/me" && method === "GET") return response({ user: requestUser });
+    if (route === "/auth/change-password" && method === "POST") {
+      state.passwordChanges.push(JSON.parse(init.body));
+      return response({ user: { ...requestUser, mustChangePassword: false }, message: "비밀번호를 변경했습니다." });
+    }
     if (route === "/mail/preferences/basic" && method === "GET") return state.preference(requestToken);
     if (route === "/mail/inbox" && method === "GET") return state.mailList(requestToken);
     if (/^\/mail\/[^/]+$/.test(route) && method === "GET") return state.mailDetail(route.slice("/mail/".length), requestToken);
@@ -148,6 +152,27 @@ async function mountApp(t) {
   };
   return { state, find, press, input, waitFor, hardwareBack, propsByNode, credential, accessToken };
 }
+
+test("실제 App: 재설정 계정은 업무 화면 전에 새 비밀번호를 설정한다", async (t) => {
+  const app = await mountApp(t);
+  await app.press("헤더 로그아웃");
+  const credential = { email: "reset@fixture.invalid", password: "reset" };
+  app.state.nextLogin = {
+    credential,
+    accessToken: randomUUID(),
+    user: { userId: "reset", userName: "재설정 사용자", userEmail: credential.email, roleName: "user", permissions: [], mustChangePassword: true },
+  };
+  await app.input("아이디 또는 이메일", credential.email);
+  await app.input("비밀번호", credential.password);
+  await app.press("업무 포털 로그인");
+  assert.ok(app.find("새 비밀번호"));
+  assert.equal(app.find("메일 메뉴"), undefined);
+  await app.input("새 비밀번호", "new-password-123");
+  await app.input("새 비밀번호 확인", "new-password-123");
+  await app.press("비밀번호 변경 후 계속");
+  assert.deepEqual(app.state.passwordChanges, [{ currentPassword: "reset", newPassword: "new-password-123" }]);
+  await app.waitFor(() => Boolean(app.find("메일 메뉴")), "변경 후 업무 탭이 열려야 한다");
+});
 
 test("실제 App: 더보기/AI에서 설정 진입 후 화면 버튼과 Android 뒤로가기로 원위치 복귀", async (t) => {
   const app = await mountApp(t);

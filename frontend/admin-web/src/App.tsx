@@ -18,6 +18,7 @@ import {
   type ContentMessage,
   type HelpPolicyDocument,
   clearToken,
+  changePassword,
   createDepartment,
   createRole,
   createUser,
@@ -848,6 +849,9 @@ export default function App() {
   const [adminMfaQrUrl, setAdminMfaQrUrl] = useState("");
   const [adminMfaRecoveryCodes, setAdminMfaRecoveryCodes] = useState<string[]>([]);
   const [adminMfaPendingToken, setAdminMfaPendingToken] = useState("");
+  const [adminMfaPendingMustChangePassword, setAdminMfaPendingMustChangePassword] = useState(false);
+  const [pendingPasswordChangeToken, setPendingPasswordChangeToken] = useState("");
+  const [newPasswordForm, setNewPasswordForm] = useState({ password: "", confirm: "" });
   const [adminMfaRecoveryMode, setAdminMfaRecoveryMode] = useState(false);
   const [adminMfaRecoveryChallengeId, setAdminMfaRecoveryChallengeId] = useState("");
   const [adminMfaRecoveryCode, setAdminMfaRecoveryCode] = useState("");
@@ -1763,7 +1767,7 @@ export default function App() {
         setAdminMfaCode("");
         return;
       }
-      await completeAdminLogin(response.accessToken);
+      await completeAdminLogin(response.accessToken, response.user.mustChangePassword);
     } catch (error) {
       setErrors([error instanceof Error ? error.message : "로그인 실패"]);
     } finally {
@@ -1771,7 +1775,15 @@ export default function App() {
     }
   }
 
-  async function completeAdminLogin(accessToken: string) {
+  async function completeAdminLogin(accessToken: string, mustChangePassword = false) {
+    if (mustChangePassword) {
+      setPendingPasswordChangeToken(accessToken);
+      setAdminMfaLoginStep(null);
+      setAdminMfaRecoveryCodes([]);
+      setMessage("새 비밀번호를 설정한 뒤 관리자 콘솔로 이동합니다.");
+      return;
+    }
+    setPendingPasswordChangeToken("");
     storeToken(accessToken);
     setToken(accessToken);
     setAdminMfaLoginStep(null);
@@ -1798,6 +1810,32 @@ export default function App() {
     }
   }
 
+  async function handleRequiredPasswordChange(event: FormEvent) {
+    event.preventDefault();
+    if (!pendingPasswordChangeToken) return;
+    if (newPasswordForm.password !== newPasswordForm.confirm) {
+      setErrors(["새 비밀번호와 확인 비밀번호가 일치하지 않습니다."]);
+      return;
+    }
+    setLoading(true);
+    setErrors([]);
+    try {
+      await changePassword(pendingPasswordChangeToken, {
+        currentPassword: loginForm.password,
+        newPassword: newPasswordForm.password,
+      });
+      const accessToken = pendingPasswordChangeToken;
+      setNewPasswordForm({ password: "", confirm: "" });
+      setLoginForm((current) => ({ ...current, password: "" }));
+      await completeAdminLogin(accessToken);
+      setMessage("새 비밀번호를 설정했습니다.");
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "비밀번호 변경 실패"]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handleAdminMfaVerify(event: FormEvent) {
     event.preventDefault();
     if (!adminMfaLoginStep) return;
@@ -1808,7 +1846,7 @@ export default function App() {
         challengeId: adminMfaLoginStep.challengeId,
         code: adminMfaCode,
       });
-      await completeAdminLogin(response.accessToken);
+      await completeAdminLogin(response.accessToken, response.user.mustChangePassword);
     } catch (error) {
       setErrors([error instanceof Error ? error.message : "인증 앱 코드 확인 실패"]);
     } finally {
@@ -1873,6 +1911,7 @@ export default function App() {
         code: adminMfaCode,
       });
       setAdminMfaPendingToken(response.accessToken);
+      setAdminMfaPendingMustChangePassword(response.user.mustChangePassword);
       setAdminMfaRecoveryCodes(response.recoveryCodes);
     } catch (error) {
       setErrors([error instanceof Error ? error.message : "인증 앱 등록 실패"]);
@@ -1955,6 +1994,9 @@ export default function App() {
     setAdminMfaQrUrl("");
     setAdminMfaRecoveryCodes([]);
     setAdminMfaPendingToken("");
+    setAdminMfaPendingMustChangePassword(false);
+    setPendingPasswordChangeToken("");
+    setNewPasswordForm({ password: "", confirm: "" });
     setAdminMfaRecoveryMode(false);
     setAdminMfaRecoveryChallengeId("");
     setAdminMfaRecoveryCode("");
@@ -2165,13 +2207,12 @@ export default function App() {
 
   async function handleUserPasswordReset() {
     if (!token || !userForm.userId) return;
-    if (!window.confirm("임시 비밀번호를 발급하고 기존 세션을 종료하시겠습니까?")) return;
+    if (!window.confirm("비밀번호를 사용자 아이디와 동일하게 재설정하고 기존 세션을 종료하시겠습니까? 아이디를 아는 사람은 새 비밀번호 설정 전 로그인할 수 있습니다. 사용자는 첫 로그인에서 새 비밀번호를 설정해야 합니다.")) return;
     setLoading(true);
     setErrors([]);
     try {
-      const result = await resetUserPassword(token, userForm.userId, true);
-      window.alert(`임시 비밀번호(한 번만 표시): ${result.temporaryPassword}\n별도 보안 채널로 전달하세요.`);
-      setMessage("비밀번호를 재설정했습니다. 사용자는 첫 로그인 후 변경해야 합니다.");
+      await resetUserPassword(token, userForm.userId, true);
+      setMessage("비밀번호를 사용자 아이디와 동일하게 재설정했습니다. 사용자는 첫 로그인에서 새 비밀번호를 설정해야 합니다.");
       await refreshDirectory();
     } catch (error) {
       setErrors([error instanceof Error ? error.message : "비밀번호 재설정 실패"]);
@@ -3812,7 +3853,22 @@ export default function App() {
                 <ul>{visibleWarnings.map((item) => <li key={item}>{item}</li>)}</ul>
               </div>
             )}
-            {adminMfaLoginStep ? (
+            {pendingPasswordChangeToken ? (
+              <form className="compact-form" onSubmit={handleRequiredPasswordChange}>
+                <h3>새 비밀번호 설정</h3>
+                <p className="muted">비밀번호를 변경한 뒤 관리자 콘솔로 이동합니다.</p>
+                <label>
+                  새 비밀번호
+                  <input type="password" value={newPasswordForm.password} onChange={(event) => setNewPasswordForm((current) => ({ ...current, password: event.target.value }))} minLength={8} maxLength={128} required autoComplete="new-password" />
+                </label>
+                <label>
+                  새 비밀번호 확인
+                  <input type="password" value={newPasswordForm.confirm} onChange={(event) => setNewPasswordForm((current) => ({ ...current, confirm: event.target.value }))} minLength={8} maxLength={128} required autoComplete="new-password" />
+                </label>
+                <button type="submit" disabled={loading}>비밀번호 변경 후 계속</button>
+                <button type="button" className="secondary" disabled={loading} onClick={resetAdminMfaLogin}>로그인 화면으로 돌아가기</button>
+              </form>
+            ) : adminMfaLoginStep ? (
               adminMfaLoginStep.nextAction === "mfa_enrollment_required" ? (
                 adminMfaRecoveryCodes.length > 0 ? (
                   <div className="compact-form">
@@ -3823,7 +3879,7 @@ export default function App() {
                     <button
                       type="button"
                       disabled={loading || !adminMfaPendingToken}
-                      onClick={() => void completeAdminLogin(adminMfaPendingToken)}
+                      onClick={() => void completeAdminLogin(adminMfaPendingToken, adminMfaPendingMustChangePassword)}
                     >
                       복구 코드를 저장했습니다
                     </button>
