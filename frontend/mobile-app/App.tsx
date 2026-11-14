@@ -23,6 +23,7 @@ type AuthUser = {
   roleName: string;
   userEmail: string;
   permissions: string[];
+  mustChangePassword: boolean;
 };
 
 type Approval = {
@@ -262,6 +263,9 @@ export default function App() {
   const [timezone, setTimezone] = useState("Asia/Seoul");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordChangeToken, setPasswordChangeToken] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
   const [token, setToken] = useState("");
   const [message, setMessage] = useState("");
   const [documents, setDocuments] = useState<Approval[]>([]);
@@ -372,7 +376,8 @@ export default function App() {
     onLoginCommitted({ token: nextToken, user: nextUser }) {
       resetMobileOverlays();
       setMailSenderDisplayMode("name");
-      setToken(nextToken);
+      setToken(nextUser.mustChangePassword ? "" : nextToken);
+      setPasswordChangeToken(nextUser.mustChangePassword ? nextToken : "");
       setMe(nextUser);
       scheduleSubmissionGateRef.current.reset();
       setScheduleSaving(false);
@@ -404,6 +409,9 @@ export default function App() {
       resetMobileOverlays();
       setMailSenderDisplayMode("name");
       setToken(nextState.token);
+      setPasswordChangeToken("");
+      setNewPassword("");
+      setConfirmNewPassword("");
       setMe(nextState.user);
       setPassword(nextState.password);
       setDocuments(nextState.documents);
@@ -730,6 +738,10 @@ export default function App() {
       if (!loginResult.committed) return;
       const context = loginResult.context;
       loginContext = context;
+      if (loginResult.me.user.mustChangePassword) {
+        setMessage("새 비밀번호를 설정한 뒤 업무 화면으로 이동합니다.");
+        return;
+      }
       setToken(loginResult.login.accessToken);
       setMe(loginResult.me.user);
       setMessage("로그인 성공");
@@ -750,6 +762,37 @@ export default function App() {
       if (errorContext && !sessionControllerRef.current.isCurrent(errorContext)) return;
       if (isSessionInvalidatedError(error)) return;
       setMessage(error instanceof Error ? error.message : "로그인 실패");
+    }
+  }
+
+  async function doRequiredPasswordChange() {
+    if (!passwordChangeToken) return;
+    const context = sessionControllerRef.current.capture(passwordChangeToken);
+    if (newPassword !== confirmNewPassword) {
+      setMessage("새 비밀번호와 확인 비밀번호가 일치하지 않습니다.");
+      return;
+    }
+    try {
+      const result = await requestJson({
+        apiBase,
+        path: "/auth/change-password",
+        init: {
+          method: "POST",
+          headers: { Authorization: `Bearer ${passwordChangeToken}` },
+          body: JSON.stringify({ currentPassword: password, newPassword }),
+        },
+      });
+      if (!sessionControllerRef.current.isCurrent(context)) return;
+      setMe(result.user);
+      setToken(passwordChangeToken);
+      setPasswordChangeToken("");
+      setPassword("");
+      setNewPassword("");
+      setConfirmNewPassword("");
+      setMessage("비밀번호 설정이 완료되었습니다.");
+    } catch (error) {
+      if (!sessionControllerRef.current.isCurrent(context)) return;
+      setMessage(error instanceof Error ? error.message : "비밀번호 변경 실패");
     }
   }
 
@@ -1576,7 +1619,19 @@ export default function App() {
           </View>
         ) : null}
 
-        {me ? (
+        {me?.mustChangePassword ? (
+          <View style={styles.surfaceCard}>
+            <Text style={styles.surfaceTitle}>새 비밀번호 설정</Text>
+            <Text style={styles.surfaceHint}>업무 화면을 열기 전에 새 비밀번호를 설정하세요.</Text>
+            <TextInput style={styles.compactInput} value={newPassword} onChangeText={setNewPassword} secureTextEntry autoComplete="new-password" accessibilityLabel="새 비밀번호" placeholder="새 비밀번호 (8자 이상)" />
+            <TextInput style={styles.compactInput} value={confirmNewPassword} onChangeText={setConfirmNewPassword} secureTextEntry autoComplete="new-password" accessibilityLabel="새 비밀번호 확인" placeholder="새 비밀번호 확인" />
+            <Pressable accessibilityRole="button" accessibilityLabel="비밀번호 변경 후 계속" disabled={newPassword.length < 8 || newPassword !== confirmNewPassword} onPress={() => { void doRequiredPasswordChange(); }} style={styles.loginButton}><Text style={styles.loginButtonText}>비밀번호 변경 후 계속</Text></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="로그인 화면으로 돌아가기" onPress={() => clearSession("로그아웃되었습니다.")}><Text style={styles.homeSectionLink}>로그인 화면으로 돌아가기</Text></Pressable>
+            {message ? <Text style={styles.message}>{message}</Text> : null}
+          </View>
+        ) : null}
+
+        {me && !me.mustChangePassword ? (
           <>
             {(activeTab === "more" && moreMenuOpen) || activeTabError ? (
               <View style={styles.surfaceCard}>
@@ -2050,7 +2105,7 @@ export default function App() {
           </View>
         </View>
       </Modal>
-      {me ? (
+      {me && !me.mustChangePassword ? (
         <View style={styles.mobileBottomNav}>
           {mobileNavigation.bottom.map((item: { id: string; label: string; icon: IconName }) => (
             <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.label} 메뉴`} accessibilityHint="선택한 업무 탭으로 이동합니다." onPress={() => handleTabPress(item.id as MobileTab)} style={[styles.mobileBottomNavItem, activeTab === item.id ? styles.mobileBottomNavItemActive : null]}>

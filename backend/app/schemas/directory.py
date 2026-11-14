@@ -477,7 +477,6 @@ class UserPasswordResetRequest(BaseModel):
 
 class UserPasswordResetResponse(BaseModel):
     userId: str
-    temporaryPassword: str
     mustChangePassword: bool = True
     sessionsRevoked: bool
 

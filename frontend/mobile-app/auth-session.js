@@ -127,7 +127,7 @@ function createAuthSessionController({ onLoginCommitted = () => {}, onSessionCle
     try {
       loginBody = await requestJson({
         apiBase,
-        path: "/auth/login",
+        path: "/auth/user/login",
         init: {
           method: "POST",
           body: JSON.stringify({ email: normalizeLoginIdentifier(identifier), password }),

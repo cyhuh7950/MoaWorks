@@ -22,6 +22,7 @@ class TokenService:
         mfa_profile_version: int | None = None,
         mfa_policy_epoch: int | None = None,
         mfa_verified_at: datetime | None = None,
+        portal: str | None = None,
     ) -> str:
         issued_at = datetime.now(UTC)
         payload = {
@@ -29,6 +30,10 @@ class TokenService:
             "sessionVersion": getattr(user, "authSessionVersion", 0),
             "exp": (issued_at + timedelta(seconds=expires_in)).isoformat(),
         }
+        if portal is not None:
+            if portal != "user":
+                raise ValueError("지원하지 않는 포털 세션입니다.")
+            payload["portal"] = portal
         mfa_values = (mfa_profile_version, mfa_policy_epoch, mfa_verified_at)
         if any(value is not None for value in mfa_values):
             if any(value is None for value in mfa_values):
