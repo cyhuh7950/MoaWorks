@@ -1075,6 +1075,15 @@ export async function updateMailOperationsDomain(token: string, payload: {
   });
 }
 
+export type ManagedMailDomain = { domain: string; status: "pending" | "active"; isPrimary: boolean };
+export type ManagedMailAddress = { address: string; userId: string; isPrimary: boolean; active: boolean; sendRequested: boolean; sendEnabled: boolean; domainStatus: string };
+export async function fetchManagedMailDomains(token: string) { return request<ManagedMailDomain[]>("/admin/mail-operations/identities/domains", { headers: authHeaders(token) }); }
+export async function addManagedMailDomain(token: string, domain: string) { return request<ManagedMailDomain>("/admin/mail-operations/identities/domains", { method: "POST", headers: authHeaders(token), body: JSON.stringify({ domain }) }); }
+export async function setManagedMailDomainStatus(token: string, domain: string, status: "pending" | "active") { return request<ManagedMailDomain>(`/admin/mail-operations/identities/domains/${encodeURIComponent(domain)}/status`, { method: "PUT", headers: authHeaders(token), body: JSON.stringify({ status }) }); }
+export async function fetchManagedMailAddresses(token: string, userId: string) { return request<ManagedMailAddress[]>(`/admin/mail-operations/identities/users/${encodeURIComponent(userId)}/addresses`, { headers: authHeaders(token) }); }
+export async function addManagedMailAddress(token: string, userId: string, address: string) { return request<ManagedMailAddress>(`/admin/mail-operations/identities/users/${encodeURIComponent(userId)}/addresses`, { method: "POST", headers: authHeaders(token), body: JSON.stringify({ address }) }); }
+export async function setManagedMailAddressStatus(token: string, userId: string, address: string, active: boolean, sendRequested: boolean, sendEnabled: boolean) { return request<ManagedMailAddress>(`/admin/mail-operations/identities/users/${encodeURIComponent(userId)}/addresses/${encodeURIComponent(address)}/status`, { method: "PUT", headers: authHeaders(token), body: JSON.stringify({ active, sendRequested, sendEnabled }) }); }
+
 export async function updateMailOperationsProvider(token: string, providerKey: string, payload: Record<string, unknown>) {
   return request<MailOperationsProvider>(`/admin/mail-operations/providers/${encodeURIComponent(providerKey)}`, {
     method: "PUT", headers: authHeaders(token), body: JSON.stringify(payload),

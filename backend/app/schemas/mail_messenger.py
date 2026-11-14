@@ -5,7 +5,7 @@ from typing import Literal
 import re
 import unicodedata
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 
 SenderDisplayMode = Literal["name", "id", "name_email"]
@@ -198,6 +198,7 @@ class MailAttachmentView(MailAttachmentDispositionContract):
 
 
 class MailSendRequest(BaseModel):
+    fromAddress: EmailStr | None = None
     to: list[str] = Field(default_factory=list)
     cc: list[str] = Field(default_factory=list)
     bcc: list[str] = Field(default_factory=list)

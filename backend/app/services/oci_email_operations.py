@@ -135,6 +135,8 @@ class OciEmailGateway:
         mail_domain: str,
         desired_emails: set[str],
         protected_emails: set[str],
+        *,
+        delete_stale: bool = True,
     ) -> dict:
         desired = {email.strip().lower() for email in desired_emails if email and email.strip()}
         protected = {email.strip().lower() for email in protected_emails if email and email.strip()}
@@ -150,7 +152,7 @@ class OciEmailGateway:
             self.create_sender(email)
             created += 1
         for email, item in sorted(existing.items()):
-            if email not in protected and email not in desired and item.get("id"):
+            if delete_stale and email not in protected and email not in desired and item.get("id"):
                 self.delete_sender(item["id"])
                 deleted += 1
         return {"created": created, "deleted": deleted, "unchanged": len(desired & set(existing))}
@@ -172,8 +174,37 @@ class OciEmailOperations:
                 (company_id,),
             )
             protected = {str(row.get("from_address", "")) for row in cursor.fetchall() if row.get("from_address")}
+            cursor.execute(
+                """SELECT a.address FROM mail_addresses a JOIN users u ON u.id=a.user_id AND u.company_id=a.company_id
+                   WHERE a.company_id=%s AND a.active=TRUE AND a.send_requested=TRUE AND a.is_primary=FALSE
+                     AND u.status='active' AND split_part(a.address,'@',2)=%s""",
+                (company_id, mail_domain.lower()),
+            )
+            primary_domain_aliases = {row["address"] for row in cursor.fetchall()}
+            cursor.execute(
+                """SELECT d.domain,a.address FROM mail_managed_domains d
+                   LEFT JOIN mail_addresses a ON a.company_id=d.company_id AND split_part(a.address,'@',2)=d.domain
+                     AND a.active=TRUE AND a.send_requested=TRUE AND a.is_primary=FALSE
+                   LEFT JOIN users u ON u.id=a.user_id AND u.company_id=a.company_id
+                   WHERE d.company_id=%s AND d.status='active' AND d.is_primary=FALSE
+                     AND (a.address IS NULL OR u.status='active')""",
+                (company_id,),
+            )
+            additional_rows = cursor.fetchall()
         desired = build_desired_sender_emails(users, mail_domain, protected)
-        return self.gateway.reconcile_senders(mail_domain, desired, protected)
+        desired.update(primary_domain_aliases)
+        result = self.gateway.reconcile_senders(mail_domain, desired, protected)
+        by_domain: dict[str, set[str]] = {}
+        for row in additional_rows:
+            by_domain.setdefault(row["domain"], set())
+            if row.get("address"):
+                by_domain[row["domain"]].add(row["address"])
+        for domain, addresses in by_domain.items():
+            # The registered root may be shared with other products: never delete its senders.
+            extra = self.gateway.reconcile_senders(domain, addresses, set(), delete_stale=False)
+            for key in ("created", "deleted", "unchanged"):
+                result[key] += extra[key]
+        return result
 
     def sync(self, *, cursor, company_id: str, actor_user_id: str, actor_user_name: str, mail_domain: str) -> dict:
         snapshot = self.gateway.snapshot(mail_domain)

@@ -104,9 +104,9 @@ class MailInboundOperations:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """SELECT u.id AS user_id,u.company_id
-                    FROM users u JOIN mail_domain_settings d ON d.company_id=u.company_id
-                    WHERE u.status='active' AND LOWER(u.email)=%s
-                      AND LOWER(split_part(u.email,'@',2))=LOWER(d.mail_domain)
+                    FROM mail_addresses a JOIN users u ON u.id=a.user_id AND u.company_id=a.company_id
+                    JOIN mail_managed_domains d ON d.company_id=a.company_id AND d.domain=split_part(a.address,'@',2)
+                    WHERE u.status='active' AND a.active=TRUE AND d.status='active' AND a.address=%s
                     """ + (' AND u.company_id=%s' if recipient_company_id else '') + ' LIMIT 1',
                     (recipient_email, recipient_company_id) if recipient_company_id else (recipient_email,),
                 )

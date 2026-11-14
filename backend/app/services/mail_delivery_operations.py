@@ -216,7 +216,13 @@ class MailDeliveryOperations:
                 q.status,q.worker_id,q.claim_token,q.claimed_at,q.send_started_at,
                 q.delivery_kind,q.sender_email_override,q.sender_display_name_override,q.reply_to_email_override,
                 m.raw_storage_key,m.raw_sha256,m.raw_size,
-                r.recipient_email,m.sender_user_id,m.sender_email,m.sender_display_name,m.reply_to_email,m.message_encoding,m.subject,m.body_text,m.body_html,
+                r.recipient_email,m.sender_user_id,m.sender_email,m.sender_identity_selected,
+                EXISTS(SELECT 1 FROM mail_addresses a
+                    JOIN mail_managed_domains d ON d.company_id=a.company_id AND d.domain=split_part(a.address,'@',2)
+                    JOIN users u ON u.id=a.user_id AND u.company_id=a.company_id
+                    WHERE a.company_id=m.company_id AND a.user_id=m.sender_user_id AND a.address=LOWER(m.sender_email)
+                      AND a.active=TRUE AND a.send_enabled=TRUE AND d.status='active' AND u.status='active') AS sender_identity_active,
+                m.sender_display_name,m.reply_to_email,m.message_encoding,m.subject,m.body_text,m.body_html,
                 EXISTS(SELECT 1 FROM mail_oci_suppressions s WHERE s.company_id=q.company_id
                     AND LOWER(s.recipient_email)=LOWER(r.recipient_email) AND s.active=TRUE) AS recipient_suppressed
                 FROM mail_delivery_queue q JOIN mail_messages m ON m.id=q.mail_id

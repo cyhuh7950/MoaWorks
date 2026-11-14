@@ -35,6 +35,12 @@ import {
   fetchAdminMessengerRooms,
   fetchMailDeliveryStatus,
   fetchMailOperations,
+  fetchManagedMailDomains,
+  addManagedMailDomain,
+  setManagedMailDomainStatus,
+  fetchManagedMailAddresses,
+  addManagedMailAddress,
+  setManagedMailAddressStatus,
   fetchMailSubmissionCredentials,
   issueMailSubmissionCredential,
   revokeMailSubmissionCredential,
@@ -81,6 +87,8 @@ import {
   type MailDeliveryStatusResponse,
   type MailOperationsProvider,
   type MailOperationsOverview,
+  type ManagedMailDomain,
+  type ManagedMailAddress,
   type OciSenderSyncStatus,
   type MailSubmissionCredential,
   type MailSubmissionCredentialIssue,
@@ -769,6 +777,46 @@ function formatMailProviderDkimStatus(provider: MailOperationsProvider): string 
     return provider.dkimDomain && provider.dkimSelector ? `${provider.dkimSelector} OCI 관리` : "미설정";
   }
   return provider.dkimPrivateKeyConfigured ? `${provider.dkimSelector ?? "-"} 설정` : "미설정";
+}
+
+export function MailIdentityPanel({ token, users }: { token: string | null; users: DirectoryOverview["users"] }) {
+  const [domains, setDomains] = useState<ManagedMailDomain[]>([]);
+  const [addresses, setAddresses] = useState<ManagedMailAddress[]>([]);
+  const [domainInput, setDomainInput] = useState("");
+  const [addressInput, setAddressInput] = useState("");
+  const [userId, setUserId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const refresh = async (selectedUser = userId) => {
+    if (!token) return;
+    setDomains(await fetchManagedMailDomains(token));
+    if (selectedUser) setAddresses(await fetchManagedMailAddresses(token, selectedUser));
+    else setAddresses([]);
+  };
+  useEffect(() => { void refresh().catch((cause) => setError(cause instanceof Error ? cause.message : "주소 조회 실패")); }, [token, userId]);
+  const perform = async (action: () => Promise<unknown>) => {
+    setBusy(true); setError("");
+    try { await action(); await refresh(); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "주소 변경 실패"); }
+    finally { setBusy(false); }
+  };
+  return <section className="ops-list-panel"><div className="ops-list-head"><strong>추가 메일 도메인·주소</strong></div>
+    <p className="muted">추가 도메인 MX 확인 → 주소 수신 활성화 → 발신 준비 요청 → 이 창을 닫고 메일 운영 화면의 「OCI 승인 발신자 동기화」 실행 → 발신 활성화 순서입니다. 자체발신의 다른 도메인은 DKIM 지원 전까지 발신할 수 없습니다.</p>
+    {error ? <p role="alert">{error}</p> : null}
+    <form className="compact-form" onSubmit={(event) => { event.preventDefault(); if (token) void perform(() => addManagedMailDomain(token, domainInput.trim()).then(() => setDomainInput(""))); }}><label>추가 도메인<input value={domainInput} onChange={(event) => setDomainInput(event.target.value)} placeholder="sinsan.kr" required /></label><button type="submit" disabled={busy || !token}>도메인 등록</button></form>
+    <div className="stack-list">{domains.map((domain) => <div key={domain.domain}><strong>{domain.domain}</strong> · {domain.status}{domain.isPrimary ? " · 기본" : <button type="button" disabled={busy || !token} onClick={() => token && void perform(() => setManagedMailDomainStatus(token, domain.domain, domain.status === "active" ? "pending" : "active"))}>{domain.status === "active" ? "수신 중지" : "MX 확인 후 수신 활성화"}</button>}</div>)}</div>
+    <label>주소 소유 사용자<select value={userId} onChange={(event) => setUserId(event.target.value)}><option value="">사용자 선택</option>{users.filter((user) => user.status === "active").map((user) => <option key={user.userId} value={user.userId}>{user.userName} ({user.userEmail})</option>)}</select></label>
+    {userId ? <><form className="compact-form" onSubmit={(event) => { event.preventDefault(); if (token) void perform(() => addManagedMailAddress(token, userId, addressInput.trim()).then(() => setAddressInput(""))); }}><label>추가 주소<input type="email" value={addressInput} onChange={(event) => setAddressInput(event.target.value)} placeholder="user@sinsan.kr" required /></label><button type="submit" disabled={busy || !token}>주소 연결</button></form>
+      <div className="stack-list">{addresses.map((address) => <div key={address.address}>
+        <strong>{address.address}</strong> · {address.isPrimary ? "기본" : address.active ? "수신 활성" : "대기"} · {address.sendEnabled ? "발신 활성" : address.sendRequested ? "발신 준비 중" : "수신 전용"}
+        {!address.isPrimary ? <>
+          <button type="button" disabled={busy || !token} onClick={() => token && void perform(() => setManagedMailAddressStatus(token, userId, address.address, !address.active, false, false))}>{address.active ? "수신 중지" : "수신 활성화"}</button>
+          {address.active && !address.sendRequested ? <button type="button" disabled={busy || !token} onClick={() => token && void perform(() => setManagedMailAddressStatus(token, userId, address.address, true, true, false))}>발신 준비 요청</button> : null}
+          {address.active && address.sendRequested ? <button type="button" disabled={busy || !token} onClick={() => token && void perform(() => setManagedMailAddressStatus(token, userId, address.address, true, true, !address.sendEnabled))}>{address.sendEnabled ? "발신 중지" : "OCI ACTIVE 확인 후 발신 활성화"}</button> : null}
+          {address.active && address.sendRequested && !address.sendEnabled ? <button type="button" disabled={busy || !token} onClick={() => token && void perform(() => setManagedMailAddressStatus(token, userId, address.address, true, false, false))}>발신 준비 취소</button> : null}
+        </> : null}
+      </div>)}</div></> : null}
+  </section>;
 }
 
 function SmtpCredentialPanel({ token, users }: { token: string | null; users: DirectoryOverview["users"] }) {
@@ -4371,6 +4419,7 @@ export default function App() {
                   {operationsDialog === "mailTest" ? <form className="compact-form" onSubmit={(event) => void handleMailDeliveryTest(event)}><p>현재 회사의 활성 Provider에 TCP/EHLO/TLS/AUTH 연결만 검증합니다. 메일 DATA는 전송하지 않으며 발송 잠금을 자동 해제하지 않습니다.</p><button type="submit" disabled={loading}>활성 Provider 연결 검증</button></form> : null}
                   {operationsDialog === "provider" ? (
                     <div className="stack-list">
+                      <MailIdentityPanel token={token} users={overview?.users ?? []} />
                       <form className="compact-form" onSubmit={(event) => void handleMailDomainOperationsSave(event)}>
                         <strong>도메인·관리자 접근 정책</strong>
                         <label>등록 도메인<input value={mailDomainOperationsForm.registeredDomain} onChange={(event) => setMailDomainOperationsForm((current) => ({ ...current, registeredDomain: event.target.value }))} required /></label>

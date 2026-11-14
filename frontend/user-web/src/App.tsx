@@ -77,6 +77,7 @@ import {
   fetchMailTags,
   fetchMailTrash,
   fetchMailDetail,
+  fetchMailSendIdentities,
   fetchMailInlinePreview,
   fetchRecentMailRecipients,
   fetchRecentMailRecipientSettings,
@@ -159,6 +160,7 @@ import {
   type LoginResponse,
   type MailDeliveryStatusResponse,
   type MailDetail,
+  type MailSendIdentity,
   type MailListQuery,
   type MailSignature,
   type MailSignaturePreferences,
@@ -468,6 +470,7 @@ type PasswordChangeForm = {
 };
 
 type MailComposeForm = {
+  fromAddress: string;
   to: string;
   cc: string;
   bcc: string;
@@ -574,6 +577,7 @@ export function createMailComposeForm(values: Partial<Omit<MailComposeForm, "bod
   const bodyDocument = values.bodyHtml ? parseMailHtmlDocument(values.bodyHtml, values.bodyText ?? "") : createMailDocument(values.bodyText ?? "");
   const projection = projectMailDocument(bodyDocument);
   return {
+    fromAddress: values.fromAddress ?? "",
     to: values.to ?? "",
     cc: values.cc ?? "",
     bcc: values.bcc ?? "",
@@ -655,10 +659,10 @@ function withMailSubjectPrefix(subject: string, mode: MailComposeContext) {
 
 function buildMailReplyRecipients(
   detail: MailDetail,
-  actorEmail: string,
+  actorEmail: string | string[],
   mode: "reply" | "reply_all",
 ): { to: string[]; cc: string[] } {
-  const ownEmail = actorEmail.trim().toLowerCase();
+  const ownEmails = new Set((Array.isArray(actorEmail) ? actorEmail : [actorEmail]).map((email) => email.trim().toLowerCase()));
   const visibleRecipients = detail.recipients.filter((item) => item.recipientKind !== "bcc");
   const originalTo = visibleRecipients
     .filter((item) => item.recipientKind === "to")
@@ -670,10 +674,10 @@ function buildMailReplyRecipients(
   const toCandidates = mode === "reply" ? [senderEmail] : [senderEmail, ...originalTo];
   const to = mode === "reply"
     ? [...new Set(toCandidates.filter(Boolean))]
-    : [...new Set(toCandidates.filter((email) => email && email !== ownEmail))];
+    : [...new Set(toCandidates.filter((email) => email && !ownEmails.has(email)))];
   const toSet = new Set(to);
   const cc = mode === "reply_all"
-    ? [...new Set(originalCc.filter((email) => email && email !== ownEmail && !toSet.has(email)))]
+    ? [...new Set(originalCc.filter((email) => email && !ownEmails.has(email) && !toSet.has(email)))]
     : [];
   return { to, cc };
 }
@@ -1735,6 +1739,7 @@ export default function App() {
   const [mailDetailError, setMailDetailError] = useState("");
   const [mailDeliveryStatus, setMailDeliveryStatus] = useState<MailDeliveryStatusResponse | null>(null);
   const [mailComposeForm, setMailComposeForm] = useState<MailComposeForm>(createEmptyMailComposeForm);
+  const [mailSendIdentities, setMailSendIdentities] = useState<MailSendIdentity[]>([]);
   const [mailComposeFiles, setMailComposeFiles] = useState<MailComposeFile[]>([]);
   const [mailComposeInlineImages, setMailComposeInlineImages] = useState<MailComposeInlineImage[]>([]);
   const mailComposeInlineImagesRef = useRef<MailComposeInlineImage[]>([]);
@@ -2083,7 +2088,7 @@ export default function App() {
     setSelectedForwardAttachmentIds([]);
     setRecipientPickerTarget(null);
     setComposeWindow("normal");
-    setMailComposeForm(createEmptyMailComposeForm());
+    setMailComposeForm(createMailComposeForm({ fromAddress: mailSendIdentities.find((item) => item.isPrimary)?.address ?? mailSendIdentities[0]?.address ?? "" }));
     setMailError("");
     setQuickComposeMode("mail");
   }
@@ -2091,7 +2096,7 @@ export default function App() {
   function openAddressBookMailCompose(email: string) {
     setActivePortalMenu("mail");
     openNewMailCompose();
-    setMailComposeForm({ ...createEmptyMailComposeForm(), to: email });
+    setMailComposeForm(createMailComposeForm({ to: email, fromAddress: mailSendIdentities.find((item) => item.isPrimary)?.address ?? mailSendIdentities[0]?.address ?? "" }));
   }
 
   async function refreshMailSignaturesForCompose() {
@@ -2392,6 +2397,7 @@ export default function App() {
     setEditingDraftMailId("");
     setMailComposePersistedAttachments(selectedMailDetail.attachments);
     setMailComposeForm(createMailComposeForm({
+      fromAddress: selectedMailDetail.senderEmail,
       to: values("to"), cc: values("cc"), bcc: values("bcc"), subject: selectedMailDetail.subject,
       bodyText: selectedMailDetail.bodyText, bodyHtml: selectedMailDetail.bodyHtml,
       scheduledAt: selectedMailDetail.scheduledAt ? new Date(selectedMailDetail.scheduledAt).toISOString().slice(0, 16) : "",
@@ -2411,7 +2417,7 @@ export default function App() {
     setEditingScheduledMailId("");
     setEditingDraftMailId(selectedMailDetail.mailId);
     setMailComposePersistedAttachments(selectedMailDetail.attachments);
-    setMailComposeForm(createMailComposeForm({ to: values("to"), cc: values("cc"), bcc: values("bcc"), subject: selectedMailDetail.subject, bodyText: selectedMailDetail.bodyText, bodyHtml: selectedMailDetail.bodyHtml, scheduledAt: "" }));
+    setMailComposeForm(createMailComposeForm({ fromAddress: selectedMailDetail.senderEmail, to: values("to"), cc: values("cc"), bcc: values("bcc"), subject: selectedMailDetail.subject, bodyText: selectedMailDetail.bodyText, bodyHtml: selectedMailDetail.bodyHtml, scheduledAt: "" }));
     void hydrateComposeInlineImages(selectedMailDetail.attachments.filter((attachment) => selectedMailDetail.bodyHtml?.includes(`cid:${attachment.contentId ?? ""}`)));
     setMailComposeContext(selectedMailDetail.sourceAction ?? "new");
     setMailComposeSourceMailId(selectedMailDetail.sourceMailId ?? "");
@@ -3720,6 +3726,7 @@ export default function App() {
         ...buildComposeInlineAttachments(mailComposeForm.bodyDocument, mailComposeInlineImages),
       ];
       const payload = {
+        fromAddress: mailComposeForm.fromAddress || undefined,
         to, cc, bcc, subject,
         bodyHtml: mailComposeForm.bodyHtml,
         bodyText: mailComposeForm.bodyText,
@@ -3779,8 +3786,9 @@ export default function App() {
     void refreshMailSignaturesForCompose();
     const replyRecipients = mode === "forward"
       ? { to: [], cc: [] }
-      : buildMailReplyRecipients(selectedMailDetail, me?.userEmail || "", mode);
+      : buildMailReplyRecipients(selectedMailDetail, [me?.userEmail || "", ...mailSendIdentities.map((identity) => identity.address)], mode);
     setMailComposeForm(createMailComposeForm({
+      fromAddress: selectedMailDetail.recipients.find((item) => ["to", "cc"].includes(item.recipientKind) && mailSendIdentities.some((identity) => identity.address.toLowerCase() === item.recipientEmail.toLowerCase()))?.recipientEmail ?? mailSendIdentities.find((item) => item.isPrimary)?.address ?? mailSendIdentities[0]?.address ?? me?.userEmail ?? "",
       to: replyRecipients.to.join(", "),
       cc: replyRecipients.cc.join(", "),
       bcc: "",
@@ -4110,8 +4118,16 @@ export default function App() {
   useEffect(() => {
     if (!token || !me || me.mustChangePassword) {
       stopNotificationStream();
+      setMailSendIdentities([]);
       return;
     }
+    void fetchMailSendIdentities(token).then((identities) => {
+      setMailSendIdentities(identities);
+      setMailComposeForm((current) => {
+        if (current.fromAddress && (identities.some((item) => item.address.toLowerCase() === current.fromAddress.toLowerCase()) || current.fromAddress.toLowerCase() !== me.userEmail.toLowerCase())) return current;
+        return { ...current, fromAddress: identities.find((item) => item.isPrimary)?.address ?? identities[0]?.address ?? me.userEmail };
+      });
+    }).catch((error) => setMailError(normalizeClientError(error, "발신 주소를 조회하지 못했습니다.")));
     void reload().catch((error) => setApprovalError(error instanceof Error ? error.message : "조회 실패"));
     const display = readMailDisplay(me.userId);
     setMailDisplay(display);
@@ -5834,6 +5850,10 @@ export default function App() {
                   </div>
                   <div className="user-mail-compose-body">
                   <div className="user-mail-compose-recipients">
+                    <label><span>보낸 사람</span><select aria-label="mail-compose-from" value={mailComposeForm.fromAddress} onChange={(event) => setMailComposeForm((current) => ({ ...current, fromAddress: event.target.value }))}>
+                      {mailComposeForm.fromAddress && !mailSendIdentities.some((identity) => identity.address.toLowerCase() === mailComposeForm.fromAddress.toLowerCase()) ? <option value={mailComposeForm.fromAddress} disabled>{mailComposeForm.fromAddress} · 현재 발신 불가</option> : null}
+                      {mailSendIdentities.map((identity) => <option key={identity.address} value={identity.address}>{identity.address}</option>)}
+                    </select></label>
                     <label>
                       <span>받는 사람</span>
                       <div><input ref={mailComposeToRef} aria-label="mail-compose-to" disabled={recipientInputLocked} value={mailComposeForm.to} onChange={(event) => setMailComposeForm((current) => ({ ...current, to: event.target.value }))} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void confirmRecipientInput("to"); } }} placeholder={recipientInputMode === "name_only" ? "이름 또는 계정" : `admin@${uiContract.company.domain}`} /><button type="button" title="주소록에서 받는 사람 선택" onClick={() => void openRecipientPicker("to")}>선택</button></div>
