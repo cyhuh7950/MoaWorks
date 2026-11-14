@@ -24,8 +24,9 @@ class RecipientClassification:
     external: list[tuple[str, str]]
 
 class MailDeliveryPolicy:
-    def classify(self, company_domain: str, active_users: dict[str, str], recipients: list[tuple[str, str]]) -> RecipientClassification:
-        domain = company_domain.strip().lower()
+    def classify(self, company_domain: str | set[str], active_users: dict[str, str], recipients: list[tuple[str, str]]) -> RecipientClassification:
+        domains = ({company_domain.strip().lower()} if isinstance(company_domain, str)
+                   else {item.strip().lower() for item in company_domain})
         users = {email.lower(): user_id for email, user_id in active_users.items()}
         internal, external = [], []
         for kind, raw_email in recipients:
@@ -33,7 +34,7 @@ class MailDeliveryPolicy:
             user_id = users.get(email)
             if user_id:
                 internal.append((kind, email, user_id))
-            elif email.rsplit("@", 1)[-1] == domain:
+            elif email.rsplit("@", 1)[-1] in domains:
                 raise ValueError("등록되지 않은 사내 주소로는 메일을 보낼 수 없습니다.")
             else:
                 external.append((kind, email))
@@ -91,10 +92,16 @@ class MailDeliveryWorker:
     def deliver_claimed(self, job, provider: dict, *, before_data=None) -> DeliveryResult:
         if not provider.get("delivery_enabled") or provider.get("last_test_status") != "success":
             return DeliveryResult("blocked", error_message="외부 발송 잠금 또는 연결 검증이 필요합니다.")
+        if _job_value(job, "sender_identity_selected", False) and not _job_value(job, "sender_identity_active", False):
+            return DeliveryResult("blocked", error_message="선택한 발신 주소가 비활성 또는 미승인 상태입니다.")
+        if _job_value(job, "sender_identity_selected", False) and provider.get("provider_type") in {"self_hosted", "self_hosted_smtp", "smtp"}:
+            sender_domain = str(_job_value(job, "sender_email", "")).rsplit("@", 1)[-1].lower()
+            if (provider.get("dkim_domain") or "").lower() != sender_domain or not provider.get("dkim_private_key"):
+                return DeliveryResult("blocked", error_message="선택한 발신 도메인의 DKIM 서명 설정이 필요합니다.")
         if provider.get("provider_type") == "oci_email_delivery" and _job_value(job, "recipient_suppressed", False):
             return DeliveryResult("blocked", error_message="OCI suppression 목록에 등록된 수신자입니다.")
         attempt = int(_job_value(job, "attempt_count", 0)) + 1
-        envelope = {key: _job_value(job, key) for key in ("mail_id","message_id","queue_id","delivery_kind","sender_email","sender_display_name","reply_to_email","message_encoding","recipient_email","subject","body_text","body_html","attachments")}
+        envelope = {key: _job_value(job, key) for key in ("mail_id","message_id","queue_id","delivery_kind","sender_email","sender_identity_selected","sender_display_name","reply_to_email","message_encoding","recipient_email","subject","body_text","body_html","attachments")}
         if _job_value(job, 'delivery_kind') == 'submission':
             envelope.update({key: _job_value(job, key) for key in ('raw_storage_key', 'raw_sha256', 'raw_size')})
         if _job_value(job, "delivery_kind") == "auto_forward" or _job_value(job, "delivery_kind") == "out_of_office":
@@ -160,7 +167,8 @@ class MailDeliveryWorker:
 class SmtpRelayAdapter:
     def build_message(self, envelope: dict, provider: dict) -> EmailMessage:
         display_name = (envelope.get("sender_display_name") or "").strip()
-        sender_email = envelope["sender_email"] if envelope.get("delivery_kind") in {"auto_forward", "out_of_office"} else (provider.get("from_address") or envelope["sender_email"])
+        sender_email = (envelope["sender_email"] if envelope.get("sender_identity_selected") or envelope.get("delivery_kind") in {"auto_forward", "out_of_office"}
+                        else (provider.get("from_address") or envelope["sender_email"]))
         attachments: list[OutboundAttachment] = []
         for attachment in envelope.get("attachments") or []:
             path = Path(str(attachment.get("path") or ""))
@@ -226,7 +234,7 @@ class SmtpRelayAdapter:
                     client.starttls(context=ssl.create_default_context()); client.ehlo()
                 if provider.get("username"):
                     client.login(provider["username"], provider["password"])
-                sender = (envelope['sender_email'] if envelope.get('delivery_kind') in {'auto_forward','out_of_office'}
+                sender = (envelope['sender_email'] if envelope.get('sender_identity_selected') or envelope.get('delivery_kind') in {'auto_forward','out_of_office'}
                           else provider.get('from_address') or envelope['sender_email'])
                 send_smtp_data(client,message,sender,envelope['recipient_email'],before_data=before_data)
                 return "relay accepted"

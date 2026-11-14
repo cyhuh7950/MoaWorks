@@ -78,6 +78,7 @@ from app.services.mail_messenger_service import (
     MailPreferenceConflictError,
     MailSignatureConflictError,
 )
+from app.services.mail_identity_service import MailIdentityService
 from app.services.mailbox_backup_service import MailboxBackupService
 from app.services.mailbox_scope import MailboxScope
 from app.services.mailbox_settings_service import (
@@ -999,6 +1000,11 @@ def download_attachment(
         _handle_error(exc)
         raise
 
+
+
+@router.get("/identities/addresses")
+def my_mail_addresses(user: AuthUserSummary = Depends(permission_required("mail:send"))):
+    return MailIdentityService().list_my_addresses(user)
 
 
 @router.get("/{mail_id}", response_model=MailDetailResponse)

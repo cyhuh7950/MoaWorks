@@ -2,4 +2,4 @@ hosts = ${POSTGRES_HOST}:${POSTGRES_PORT}
 user = ${POSTGRES_USER}
 password = ${POSTGRES_PASSWORD}
 dbname = ${POSTGRES_DB}
-query = SELECT 1 FROM mail_domain_settings WHERE LOWER(mail_domain) = LOWER('%s') LIMIT 1
+query = SELECT 1 FROM mail_managed_domains WHERE domain = LOWER('%s') AND status='active' LIMIT 1

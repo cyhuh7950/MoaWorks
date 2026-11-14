@@ -13,6 +13,7 @@ from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 from app.core.config import settings
 from app.services.mail_delivery_service import MailDeliveryPolicy, MailDeliveryService
+from app.services.mail_identity_service import MailIdentityService
 from app.services.mail_html_sanitizer import extract_cid_references, sanitize_mail_html
 
 from app.schemas.directory import AuthUserSummary
@@ -211,7 +212,14 @@ class MailMessengerService:
         with self.db.connect() as connection:
             try:
                 with connection.cursor() as cursor:
-                    self._fetch_owned_scheduled_mail(cursor, actor, mail_id)
+                    existing_mail = self._fetch_owned_scheduled_mail(cursor, actor, mail_id)
+                    requested_sender = str(payload.fromAddress or existing_mail.get("sender_email") or actor.userEmail).strip().lower()
+                    if requested_sender == actor.userEmail.lower():
+                        sender_email, selected_identity = requested_sender, False
+                    else:
+                        sender_email, selected_identity = MailIdentityService.resolve_sender(
+                            cursor, actor.companyId, actor.userId, requested_sender,
+                        )
                     cursor.execute(
                         """
                         SELECT id, file_name, content_type, size_bytes, storage_key,
@@ -266,7 +274,10 @@ class MailMessengerService:
                             "DELETE FROM mail_attachments WHERE message_id = %s AND id = ANY(%s)",
                             (mail_id, removed_attachment_ids),
                         )
-                    cursor.execute("SELECT LOWER(email) AS email, id FROM users WHERE company_id = %s AND status = 'active'", (actor.companyId,))
+                    cursor.execute("""SELECT a.address AS email,a.user_id AS id FROM mail_addresses a
+                        JOIN users u ON u.id=a.user_id AND u.company_id=a.company_id
+                        JOIN mail_managed_domains d ON d.company_id=a.company_id AND d.domain=split_part(a.address,'@',2)
+                        WHERE a.company_id=%s AND a.active=TRUE AND u.status='active' AND d.status='active'""", (actor.companyId,))
                     active_users = {row["email"]: row["id"] for row in cursor.fetchall()}
                     cursor.execute("DELETE FROM mail_recipients WHERE message_id = %s", (mail_id,))
                     for kind, email in [("to", item) for item in payload.to] + [("cc", item) for item in payload.cc] + [("bcc", item) for item in payload.bcc]:
@@ -295,13 +306,16 @@ class MailMessengerService:
                         )
                     cursor.execute(
                         """UPDATE mail_messages SET subject=%s,body_text=%s,body_html=%s,scheduled_at=%s,
-                        attachment_count=%s,updated_at=%s WHERE id=%s RETURNING *""",
+                        attachment_count=%s,sender_email=%s,sender_identity_selected=%s,updated_at=%s
+                        WHERE id=%s RETURNING *""",
                         (
                             payload.subject.strip(),
                             payload.bodyText,
                             body_html,
                             payload.scheduledAt,
                             len(all_attachments),
+                            sender_email,
+                            selected_identity,
                             now,
                             mail_id,
                         ),
@@ -395,7 +409,14 @@ class MailMessengerService:
         with self.db.connect() as connection:
             try:
                 with connection.cursor() as cursor:
-                    self._fetch_owned_draft_mail(cursor, actor, mail_id)
+                    existing_mail = self._fetch_owned_draft_mail(cursor, actor, mail_id)
+                    if payload.fromAddress and str(payload.fromAddress).strip().lower() != actor.userEmail.lower():
+                        sender_email, selected_identity = MailIdentityService.resolve_sender(
+                            cursor, actor.companyId, actor.userId, str(payload.fromAddress),
+                        )
+                    else:
+                        sender_email = str(payload.fromAddress or existing_mail.get("sender_email") or actor.userEmail).strip().lower()
+                        selected_identity = bool(existing_mail.get("sender_identity_selected")) if not payload.fromAddress else False
                     cursor.execute(
                         """
                         SELECT id, file_name, content_type, size_bytes, storage_key,
@@ -450,10 +471,13 @@ class MailMessengerService:
                         )
                     cursor.execute(
                         """UPDATE mail_messages SET subject=%s,body_text=%s,body_html=%s,attachment_count=%s,
+                        sender_email=%s,sender_identity_selected=%s,
                         source_message_id=COALESCE(%s, source_message_id),
                         source_action=CASE WHEN %s = 'new' AND source_message_id IS NOT NULL THEN source_action ELSE %s END,
                         updated_at=%s WHERE id=%s RETURNING *""",
-                        (payload.subject.strip(), payload.bodyText, body_html, len(all_attachments), payload.sourceMailId, payload.composeAction, None if payload.composeAction == "new" else payload.composeAction, now, mail_id),
+                        (payload.subject.strip(), payload.bodyText, body_html, len(all_attachments),
+                         sender_email, selected_identity, payload.sourceMailId, payload.composeAction,
+                         None if payload.composeAction == "new" else payload.composeAction, now, mail_id),
                     )
                     cursor.fetchone()
                     self._write_mail_event_audit(cursor, company_id=actor.companyId, actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id, event="mail.draft.updated", status_before="draft", status_after="draft", now=now, reason="draft mail user update")
@@ -1467,7 +1491,8 @@ class MailMessengerService:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT id, company_id, sender_user_id, sender_email, subject, body_text, attachment_count, is_auto_generated
+                    SELECT id, company_id, sender_user_id, sender_email, sender_identity_selected,
+                           subject, body_text, attachment_count, is_auto_generated
                     FROM mail_messages
                     WHERE status = 'scheduled'
                       AND scheduled_at <= %s
@@ -1511,6 +1536,8 @@ class MailMessengerService:
         return dispatched
 
     def _dispatch_scheduled_mail_row(self, cursor, row: dict, now: datetime) -> None:
+        if row.get("sender_identity_selected"):
+            MailIdentityService.resolve_sender(cursor, row["company_id"], row["sender_user_id"], row["sender_email"])
         cursor.execute(
             "UPDATE mail_messages SET status = 'sent', sent_at = %s, updated_at = %s WHERE id = %s",
             (now, now, row["id"]),
@@ -2880,6 +2907,13 @@ class MailMessengerService:
         with self._attachment_transaction() as (connection, sidecar_snapshots):
             with connection.cursor() as cursor:
                 account = self._fetch_mail_account(cursor, actor.userId)
+                requested_sender = str(payload.fromAddress or account["email"]).strip().lower()
+                if requested_sender == account["email"].lower():
+                    sender_email, selected_identity = requested_sender, False
+                else:
+                    sender_email, selected_identity = MailIdentityService.resolve_sender(
+                        cursor, actor.companyId, actor.userId, requested_sender,
+                    )
                 if payload.sourceMailId:
                     if payload.copiedAttachmentIds:
                         source_attachments = self._fetch_source_attachments(cursor, actor, payload.sourceMailId, payload.copiedAttachmentIds, include_inline=True)
@@ -2902,14 +2936,19 @@ class MailMessengerService:
 
                 recipient_pairs = [("to", item) for item in payload.to] + [("cc", item) for item in payload.cc] + [("bcc", item) for item in payload.bcc]
                 if status_value != "draft":
-                    cursor.execute("SELECT domain FROM companies WHERE id = %s", (actor.companyId,))
-                    company = cursor.fetchone()
-                    cursor.execute("SELECT LOWER(email) AS email, id FROM users WHERE company_id = %s AND status = 'active'", (actor.companyId,))
+                    cursor.execute("SELECT domain FROM mail_managed_domains WHERE company_id=%s", (actor.companyId,))
+                    company_domains = {row["domain"] for row in cursor.fetchall()}
+                    cursor.execute("""SELECT a.address AS email,a.user_id AS id FROM mail_addresses a
+                        JOIN users u ON u.id=a.user_id AND u.company_id=a.company_id
+                        JOIN mail_managed_domains d ON d.company_id=a.company_id AND d.domain=split_part(a.address,'@',2)
+                        WHERE a.company_id=%s AND a.active=TRUE AND u.status='active' AND d.status='active'""", (actor.companyId,))
                     active_users = {row["email"]: row["id"] for row in cursor.fetchall()}
-                    classification = MailDeliveryPolicy().classify(company["domain"], active_users, recipient_pairs)
+                    classification = MailDeliveryPolicy().classify(company_domains, active_users, recipient_pairs)
                     internal_by_email = {email: user_id for _, email, user_id in classification.internal}
                     external_emails = {email for _, email in classification.external}
                     provider = OutboundProviderResolver.resolve(cursor, actor.companyId) if external_emails else None
+                    if selected_identity and external_emails:
+                        MailIdentityService(db=self.db)._assert_outbound_policy_local(cursor, actor.companyId, sender_email)
 
                 preferences = self._ensure_basic_preferences(cursor, actor)
                 signature = self._fetch_enabled_signature(cursor, actor)
@@ -2919,14 +2958,15 @@ class MailMessengerService:
                         id, company_id, sender_user_id, sender_account_id, sender_email,
                         subject, body_text, body_html, status, sent_at, scheduled_at, created_at,
                         updated_at, retention_expires_at, attachment_count, source_message_id, source_action,
-                        sender_display_name, reply_to_email, message_encoding, sender_copy_saved, read_receipt_requested
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                    (mail_id, actor.companyId, actor.userId, account["id"], account["email"],
+                        sender_display_name, reply_to_email, message_encoding, sender_copy_saved, read_receipt_requested,
+                        sender_identity_selected
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (mail_id, actor.companyId, actor.userId, account["id"], sender_email,
                      payload.subject.strip(), final_body_text, final_body_html, status_value, sent_at, scheduled_at,
                      now, now, now + timedelta(days=30), len(resolved_attachments), payload.sourceMailId,
                      None if payload.composeAction == "new" else payload.composeAction,
                      (preferences["sender_display_name"] or "").strip() or actor.userName, preferences["reply_to_email"], preferences["message_encoding"],
-                     preferences["save_sent_copy"], preferences["read_receipt_enabled"]),
+                     preferences["save_sent_copy"], preferences["read_receipt_enabled"], selected_identity),
                 )
                 for kind, email in recipient_pairs:
                     recipient_user_id = internal_by_email.get(email) if status_value != "draft" else self._resolve_user_id_by_email(cursor, actor.companyId, email)
@@ -2937,7 +2977,7 @@ class MailMessengerService:
                             cursor,
                             actor,
                             recipient_user_id,
-                            account["email"],
+                            sender_email,
                             mail_id,
                         )
                     cursor.execute(
@@ -2963,21 +3003,21 @@ class MailMessengerService:
                             self._apply_auto_classification(
                                 cursor, company_id=actor.companyId, recipient_user_id=recipient_user_id,
                                 actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id,
-                                recipient_id=recipient_id, sender_email=account["email"], recipient_email=email,
+                                recipient_id=recipient_id, sender_email=sender_email, recipient_email=email,
                                 subject=payload.subject.strip(), body=final_body_text,
                                 has_attachment=bool(resolved_attachments), now=now,
                             )
                             self._apply_auto_forwarding(
                                 cursor, company_id=actor.companyId, recipient_user_id=recipient_user_id,
                                 actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id,
-                                recipient_id=recipient_id, sender_email=account["email"], recipient_email=email,
+                                recipient_id=recipient_id, sender_email=sender_email, recipient_email=email,
                                 delivery_source="direct", subject=payload.subject.strip(), body=final_body_text,
                                 has_attachment=bool(resolved_attachments), now=now,
                             )
                             self._apply_out_of_office(
                                 cursor, company_id=actor.companyId, recipient_user_id=recipient_user_id,
                                 actor_user_id=actor.userId, actor_user_name=actor.userName, mail_id=mail_id,
-                                recipient_id=recipient_id, sender_email=account["email"], delivery_source="direct",
+                                recipient_id=recipient_id, sender_email=sender_email, delivery_source="direct",
                                 is_auto_generated=False, is_spam=False, now=now,
                             )
                     if status_value == "sent" and email in external_emails:
@@ -3462,7 +3502,11 @@ class MailMessengerService:
         ]
 
     def _resolve_user_id_by_email(self, cursor, company_id: str, email: str) -> str | None:
-        cursor.execute("SELECT id FROM users WHERE company_id = %s AND LOWER(email) = %s", (company_id, email.lower()))
+        cursor.execute("""SELECT a.user_id AS id FROM mail_addresses a
+            JOIN users u ON u.id=a.user_id AND u.company_id=a.company_id
+            JOIN mail_managed_domains d ON d.company_id=a.company_id AND d.domain=split_part(a.address,'@',2)
+            WHERE a.company_id=%s AND a.address=%s AND a.active=TRUE
+              AND u.status='active' AND d.status='active'""", (company_id, email.lower()))
         row = cursor.fetchone()
         return row["id"] if row else None
 

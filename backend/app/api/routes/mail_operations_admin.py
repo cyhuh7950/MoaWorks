@@ -9,6 +9,11 @@ from app.schemas.mail_operations import (
     MailOperationsProviderUpdateRequest,
 )
 from app.services.mail_admin_operations import MailAdminOperations
+from app.services.mail_identity_service import MailIdentityService
+from app.schemas.mail_identity import (
+    MailAddressCreateRequest, MailAddressStatusRequest,
+    MailDomainCreateRequest, MailDomainStatusRequest,
+)
 from app.services.mail_submission_credential_service import MailSubmissionCredentialService
 from app.schemas.mail_submission import MailSubmissionCredentialIssueResponse, MailSubmissionCredentialView
 
@@ -24,6 +29,10 @@ def _submission_service() -> MailSubmissionCredentialService:
     return MailSubmissionCredentialService()
 
 
+def _identity_service() -> MailIdentityService:
+    return MailIdentityService()
+
+
 def _raise_operation_error(exc: Exception):
     if isinstance(exc, PermissionError):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={"code": "MAIL_OPERATIONS_FORBIDDEN", "userMessage": str(exc)}) from exc
@@ -36,6 +45,52 @@ def _raise_operation_error(exc: Exception):
 def get_mail_operations(actor: AuthUserSummary = Depends(require_admin)):
     try:
         return _service().get_overview(actor)
+    except Exception as exc:
+        _raise_operation_error(exc)
+
+
+@router.get("/identities/domains")
+def list_mail_domains(actor: AuthUserSummary = Depends(require_admin)):
+    return _identity_service().list_domains(actor)
+
+
+@router.post("/identities/domains")
+def add_mail_domain(payload: MailDomainCreateRequest, actor: AuthUserSummary = Depends(require_admin)):
+    try:
+        return _identity_service().add_domain(actor, payload.domain)
+    except Exception as exc:
+        _raise_operation_error(exc)
+
+
+@router.put("/identities/domains/{domain}/status")
+def set_mail_domain_status(domain: str, payload: MailDomainStatusRequest, actor: AuthUserSummary = Depends(require_admin)):
+    try:
+        return _identity_service().set_domain_status(actor, domain, payload.status)
+    except Exception as exc:
+        _raise_operation_error(exc)
+
+
+@router.get("/identities/users/{user_id}/addresses")
+def list_user_mail_addresses(user_id: str, actor: AuthUserSummary = Depends(require_admin)):
+    return _identity_service().list_addresses(actor, user_id)
+
+
+@router.post("/identities/users/{user_id}/addresses")
+def add_user_mail_address(user_id: str, payload: MailAddressCreateRequest, actor: AuthUserSummary = Depends(require_admin)):
+    try:
+        return _identity_service().add_address(actor, user_id, str(payload.address))
+    except Exception as exc:
+        _raise_operation_error(exc)
+
+
+@router.put("/identities/users/{user_id}/addresses/{address}/status")
+def set_user_mail_address_status(user_id: str, address: str, payload: MailAddressStatusRequest,
+                                 actor: AuthUserSummary = Depends(require_admin)):
+    try:
+        return _identity_service().set_address_status(
+            actor, user_id, address, active=payload.active,
+            send_requested=payload.sendRequested or payload.sendEnabled, send_enabled=payload.sendEnabled,
+        )
     except Exception as exc:
         _raise_operation_error(exc)
 

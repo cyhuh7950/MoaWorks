@@ -18,6 +18,7 @@ class FairCursor(ScheduledCursor):
                            scheduled_at=scheduled_at.isoformat(), sender_deleted_at=None,
                            subject='original', body_text='original body', attachment_count=0,
                            is_auto_generated=False)
+            message['sender_identity_selected'] = False
         self.original = self.snapshot()
         self.audit_rows = []
         self.recovered = set()

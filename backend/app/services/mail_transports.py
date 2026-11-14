@@ -385,7 +385,7 @@ class MailProviderRoutingAdapter:
         automatic = delivery_kind in {"auto_forward", "out_of_office", "submission"}
         sender_email = str(
             envelope.get("sender_email")
-            if automatic
+            if automatic or envelope.get("sender_identity_selected")
             else provider.get("from_address") or envelope.get("sender_email") or ""
         ).strip().lower()
         recipient_email = str(envelope.get("recipient_email") or "").strip().lower()

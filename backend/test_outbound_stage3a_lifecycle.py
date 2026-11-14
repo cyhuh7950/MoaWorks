@@ -15,6 +15,7 @@ class Db:
         self.sql = sqlite3.connect(':memory:', check_same_thread=False)
         self.sql.row_factory = sqlite3.Row
         self.sql.create_function('clock_timestamp', 0, lambda: datetime.now(UTC).isoformat())
+        self.sql.create_function('split_part', 3, lambda value, separator, index: value.split(separator)[index - 1])
         self.commits = 0
         self.statements = []
         self.sql.executescript('''
@@ -22,7 +23,10 @@ class Db:
           status,attempt_count,next_attempt_at,lease_expires_at,worker_id,last_error,accepted_at,sent_at,created_at,updated_at,
           delivery_kind,sender_email_override,sender_display_name_override,reply_to_email_override,claim_token,claimed_at,send_started_at);
         CREATE TABLE mail_messages(id PRIMARY KEY,raw_storage_key,raw_sha256,raw_size,sender_user_id,sender_email,
-          sender_display_name,reply_to_email,message_encoding,subject,body_text,body_html);
+          sender_display_name,reply_to_email,message_encoding,subject,body_text,body_html,company_id,sender_identity_selected);
+        CREATE TABLE mail_managed_domains(company_id,domain,status);
+        CREATE TABLE mail_addresses(company_id,user_id,address,active,send_enabled);
+        CREATE TABLE users(id,company_id,status);
         CREATE TABLE mail_recipients(id PRIMARY KEY,recipient_email);
         CREATE TABLE mail_oci_suppressions(company_id,recipient_email,active);
         CREATE TABLE mail_attachments(message_id,file_name,content_type,size_bytes,storage_key,content_disposition,content_id,created_at);
@@ -38,8 +42,8 @@ class Db:
 
     def add(self, identifier, status='queued', token=None, expired=False):
         now = datetime.now(UTC)
-        self.sql.execute('INSERT INTO mail_messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-            (identifier,None,None,None,'user','sender@example.test','','','utf-8','original','body',None))
+        self.sql.execute('INSERT INTO mail_messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (identifier,None,None,None,'user','sender@example.test','','','utf-8','original','body',None,'a',False))
         self.sql.execute('INSERT INTO mail_recipients VALUES (?,?)', (identifier,'recipient@example.test'))
         self.sql.execute('INSERT INTO mail_delivery_queue VALUES ('+','.join('?' for _ in range(22))+')',
             (identifier,'a','pin',identifier,identifier,status,0,None,
@@ -256,7 +260,6 @@ def test_auto_forward_unknown_preserves_original_even_keep_original_false():
     db=Db(); db.add('q','processing','token'); op=operations(db)
     for column in ('deleted_at','delivery_source','message_id','recipient_user_id'):
         db.sql.execute('ALTER TABLE mail_recipients ADD COLUMN '+column)
-    db.sql.execute('ALTER TABLE mail_messages ADD COLUMN company_id')
     db.sql.execute("UPDATE mail_messages SET company_id='a'")
     db.sql.execute("UPDATE mail_recipients SET delivery_source='direct',message_id='q',recipient_user_id='user'")
     db.sql.execute('CREATE TABLE mail_auto_forward_policies(company_id,user_id,keep_original)')

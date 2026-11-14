@@ -30,6 +30,10 @@ vi.mock("./api", async (importOriginal) => {
     fetchMailDetail: async (_token: string, mailId: string) => mountedDetailLoader ? mountedDetailLoader(mailId) : mountedDetail,
     markMailRead: async () => ({ mailId: "mail-read", status: "read", isRead: true }),
     fetchMailDeliveryStatus: async () => ({ provider: { enabled: true, lastTestStatus: "success" } }),
+    fetchMailSendIdentities: async () => [
+      { address: "tester@example.test", userId: "user-1", isPrimary: true, active: true, sendEnabled: true, domainStatus: "active" },
+      { address: "alias@sinsan.kr", userId: "user-1", isPrimary: false, active: true, sendEnabled: true, domainStatus: "active" },
+    ],
     fetchMailBasicPreferences: async () => mountedBasicPreferencesLoader ? mountedBasicPreferencesLoader() : mountedBasicPreferences,
     fetchMailAttachmentPreview: async () => mountedPreviewLoader ? mountedPreviewLoader() : Promise.reject(new Error("preview unavailable")),
     fetchTranslationStatus: async () => ({ available: true, enabled: true, provider: "fixture" }),
@@ -138,6 +142,37 @@ afterEach(() => {
   mountedLists.draft = { mails: [], total: 0, limit: 50, offset: 0, hasMore: false };
   mountedLists.sent = { mails: [], total: 0, limit: 50, offset: 0, hasMore: false };
   mountedLists.scheduled = { mails: [], total: 0, limit: 50, offset: 0, hasMore: false };
+});
+
+it("발신 주소 선택이 실제 메일 발송 payload에 보존된다", async () => {
+  const requests = installMountedMailFetch();
+  localStorage.setItem("moaworks.userToken", "test-token");
+  vi.resetModules();
+  const { default: MountedApp } = await import("./App");
+  render(<MountedApp />);
+  fireEvent.click(await screen.findByRole("button", { name: "메일 작성" }));
+  const sender = await screen.findByLabelText("mail-compose-from") as HTMLSelectElement;
+  expect(sender.value).toBe("tester@example.test");
+  fireEvent.change(sender, { target: { value: "alias@sinsan.kr" } });
+  fireEvent.change(screen.getByLabelText("mail-compose-to"), { target: { value: "remote@example.net" } });
+  fireEvent.change(screen.getByLabelText("mail-compose-subject"), { target: { value: "별칭 발신" } });
+  fireEvent.click(screen.getByRole("button", { name: "본문 입력" }));
+  fireEvent.click(screen.getByRole("button", { name: "즉시 발송" }));
+  await waitFor(() => expect(requests.some((request) => request.url.includes("/mail/send"))).toBe(true));
+  const send = requests.find((request) => request.url.includes("/mail/send"));
+  expect(JSON.parse(String(send?.init?.body)).fromAddress).toBe("alias@sinsan.kr");
+});
+
+it("별칭으로 받은 메일의 답장 기본 발신자는 그 별칭이다", async () => {
+  mountedDetail = { ...mountedSourceMail, recipients: [{ ...mountedSourceMail.recipients[0], recipientEmail: "alias@sinsan.kr" }] };
+  installMountedMailFetch();
+  localStorage.setItem("moaworks.userToken", "test-token");
+  vi.resetModules();
+  const { default: MountedApp } = await import("./App");
+  render(<MountedApp />);
+  fireEvent.click(await screen.findByRole("button", { name: /CID 전달 원문/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "답장" }));
+  expect((screen.getByLabelText("mail-compose-from") as HTMLSelectElement).value).toBe("alias@sinsan.kr");
 });
 
 it.each([

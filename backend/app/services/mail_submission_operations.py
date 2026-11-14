@@ -13,6 +13,7 @@ from uuid import uuid4
 from app.core.config import settings
 from app.services.mail_inbound_operations import MailInboundStorage, MailInboundOperations
 from app.services.mail_inbound_service import parse_inbound_message
+from app.services.mail_identity_service import MailIdentityService
 from app.services.outbound_provider_resolver import OutboundProviderResolver
 from app.services.postgres_service import PostgresService
 
@@ -182,15 +183,16 @@ class MailSubmissionOperations:
         self.db.ensure_migrations_applied()
         with self.db.connect() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("""SELECT u.id AS user_id,u.company_id,a.id AS account_id
+                cursor.execute("""SELECT u.id AS user_id,u.company_id,a.id AS account_id,ma.is_primary
                     FROM mail_submission_credentials c
                     JOIN users u ON u.id=c.user_id AND u.company_id=c.company_id
                     JOIN mail_accounts a ON a.user_id=u.id
-                    JOIN mail_domain_settings d ON d.company_id=u.company_id
+                    JOIN mail_addresses ma ON ma.user_id=u.id AND ma.company_id=u.company_id
+                    JOIN mail_managed_domains d ON d.company_id=u.company_id AND d.domain=split_part(ma.address,'@',2)
                     WHERE c.active=TRUE AND c.revoked_at IS NULL AND u.status='active' AND a.status='active'
-                      AND LOWER(c.username)=%s AND LOWER(u.email)=%s AND LOWER(a.email)=%s
-                      AND LOWER(split_part(a.email,'@',2))=LOWER(d.mail_domain)
-                    FOR SHARE OF c,u,a,d""", (sender, sender, sender))
+                      AND LOWER(c.username)=LOWER(u.email) AND LOWER(a.email)=LOWER(u.email)
+                      AND ma.address=%s AND ma.active=TRUE AND ma.send_enabled=TRUE AND d.status='active'
+                    FOR SHARE OF c,u,a,ma,d""", (sender,))
                 actor = cursor.fetchone()
                 if actor is None:
                     raise ValueError('활성 SMTP 발신 계정을 찾을 수 없습니다.')
@@ -211,11 +213,12 @@ class MailSubmissionOperations:
                 if duplicate:
                     return {'status': 'accepted', 'duplicate': True, 'disposition': duplicate['disposition']}
                 cursor.execute("""SELECT u.id AS user_id,u.company_id FROM users u
-                    JOIN mail_accounts a ON a.user_id=u.id
-                    WHERE u.company_id=%s AND LOWER(u.email)=%s AND LOWER(a.email)=%s
-                      AND u.status='active' AND a.status='active'""", (company, recipient, recipient))
+                    JOIN mail_addresses ma ON ma.user_id=u.id AND ma.company_id=u.company_id
+                    JOIN mail_managed_domains d ON d.company_id=u.company_id AND d.domain=split_part(ma.address,'@',2)
+                    WHERE u.company_id=%s AND ma.address=%s AND ma.active=TRUE AND d.status='active'
+                      AND u.status='active'""", (company, recipient))
                 local = cursor.fetchone()
-                cursor.execute('SELECT company_id FROM mail_domain_settings WHERE company_id=%s AND LOWER(mail_domain)=%s', (company, recipient.rsplit('@', 1)[1]))
+                cursor.execute("SELECT company_id FROM mail_managed_domains WHERE company_id=%s AND domain=%s", (company, recipient.rsplit('@', 1)[1]))
                 local_domain = cursor.fetchone()
                 if local_domain and local is None:
                     raise ValueError('활성 동일 회사 내부 수신 계정을 찾을 수 없습니다.')
@@ -230,6 +233,8 @@ class MailSubmissionOperations:
                         raise SubmissionUnavailable('회사 발송 정책이 잠겨 있습니다.')
                     if provider['provider_type'] not in ('oci_email_delivery', 'self_hosted', 'self_hosted_smtp'):
                         raise SubmissionUnavailable('SMTP 원문 발송 Provider를 사용할 수 없습니다.')
+                    if not actor['is_primary']:
+                        MailIdentityService(db=self.db)._assert_outbound_policy_local(cursor, company, sender)
                 mail_id = source.get('mail_message_id')
                 if mail_id is None and source.get('stored_at') is not None:
                     raise ValueError('삭제된 SMTP queue에 수신자를 추가할 수 없습니다.')
@@ -239,10 +244,10 @@ class MailSubmissionOperations:
                     cursor.execute("""INSERT INTO mail_messages
                         (id,company_id,sender_user_id,sender_account_id,sender_email,subject,body_text,body_html,
                          status,sent_at,created_at,updated_at,retention_expires_at,attachment_count,sender_display_name,
-                         raw_storage_key,raw_sha256,raw_size)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'sent',%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                         raw_storage_key,raw_sha256,raw_size,sender_identity_selected)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'sent',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                         (mail_id,company,actor['user_id'],actor['account_id'],sender,parsed.subject,parsed.body_text,
-                         parsed.body_html,now,now,now,now+timedelta(days=30),len(attachments),parsed.sender_display_name,key,digest,len(clean)))
+                         parsed.body_html,now,now,now,now+timedelta(days=30),len(attachments),parsed.sender_display_name,key,digest,len(clean),not actor['is_primary']))
                     for index, part in enumerate(attachments):
                         content = part['content']
                         key = self.storage.store_attachment(digest,index,content)

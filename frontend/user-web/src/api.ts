@@ -661,6 +661,7 @@ export type MailStatusResponse = {
 };
 
 export type MailComposePayload = {
+  fromAddress?: string;
   to: string[];
   cc?: string[];
   bcc?: string[];
@@ -675,6 +676,12 @@ export type MailComposePayload = {
   retainedAttachmentIds?: string[];
   confirmed?: boolean;
 };
+
+export type MailSendIdentity = { address: string; userId: string; isPrimary: boolean; active: boolean; sendEnabled: boolean; domainStatus: string };
+
+export async function fetchMailSendIdentities(token: string): Promise<MailSendIdentity[]> {
+  return request<MailSendIdentity[]>("/mail/identities/addresses", { headers: authHeaders(token) });
+}
 
 export type MailDraftUpdatePayload = MailComposePayload & {
   retainedAttachmentIds: string[];

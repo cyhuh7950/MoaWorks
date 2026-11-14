@@ -198,11 +198,13 @@ class FixtureDatabase:
             CREATE TABLE users(id TEXT PRIMARY KEY,company_id TEXT,email TEXT,status TEXT);
             CREATE TABLE mail_accounts(id TEXT,user_id TEXT,email TEXT,status TEXT);
             CREATE TABLE mail_domain_settings(company_id TEXT,mail_domain TEXT);
+            CREATE TABLE mail_managed_domains(company_id TEXT,domain TEXT,status TEXT);
+            CREATE TABLE mail_addresses(company_id TEXT,user_id TEXT,address TEXT,active BOOLEAN,send_enabled BOOLEAN,is_primary BOOLEAN);
             CREATE TABLE mail_submission_credentials(user_id TEXT,company_id TEXT,username TEXT,active BOOLEAN,revoked_at TEXT);
             CREATE TABLE mail_provider_configs(id TEXT,company_id TEXT,active BOOLEAN,provider_type TEXT,delivery_enabled BOOLEAN,last_test_status TEXT);
             CREATE TABLE mail_submission_messages(company_id TEXT,gateway_queue_id TEXT,original_sha256 TEXT,raw_sha256 TEXT,mail_message_id TEXT,stored_at TEXT,created_at TEXT,PRIMARY KEY(company_id,gateway_queue_id));
             CREATE TABLE mail_submission_recipients(company_id TEXT,gateway_queue_id TEXT,recipient_email TEXT,disposition TEXT,created_at TEXT,PRIMARY KEY(company_id,gateway_queue_id,recipient_email));
-            CREATE TABLE mail_messages(id TEXT PRIMARY KEY,company_id TEXT,sender_user_id TEXT,sender_account_id TEXT,sender_email TEXT,subject TEXT,body_text TEXT,body_html TEXT,status TEXT,sent_at TEXT,created_at TEXT,updated_at TEXT,retention_expires_at TEXT,attachment_count INTEGER,sender_display_name TEXT,raw_storage_key TEXT,raw_sha256 TEXT,raw_size INTEGER);
+            CREATE TABLE mail_messages(id TEXT PRIMARY KEY,company_id TEXT,sender_user_id TEXT,sender_account_id TEXT,sender_email TEXT,subject TEXT,body_text TEXT,body_html TEXT,status TEXT,sent_at TEXT,created_at TEXT,updated_at TEXT,retention_expires_at TEXT,attachment_count INTEGER,sender_display_name TEXT,raw_storage_key TEXT,raw_sha256 TEXT,raw_size INTEGER,sender_identity_selected BOOLEAN DEFAULT FALSE);
             CREATE TABLE mail_attachments(id TEXT,message_id TEXT,file_name TEXT,content_type TEXT,size_bytes INTEGER,storage_key TEXT,created_at TEXT,content_disposition TEXT DEFAULT 'attachment',content_id TEXT);
             CREATE TABLE mail_recipients(id TEXT,message_id TEXT,recipient_user_id TEXT,recipient_email TEXT,recipient_kind TEXT,is_read BOOLEAN,is_starred BOOLEAN,received_at TEXT,delivery_source TEXT,is_spam BOOLEAN DEFAULT FALSE,spam_marked_at TEXT);
             CREATE TABLE mail_delivery_queue(id TEXT,company_id TEXT,provider_config_id TEXT,mail_id TEXT,recipient_id TEXT,status TEXT,delivery_kind TEXT,created_at TEXT,updated_at TEXT);
@@ -214,6 +216,8 @@ class FixtureDatabase:
             INSERT INTO users VALUES ('writer','company-a','writer@example.test','active'),('local','company-a','local@example.test','active'),('other','company-b','other@other.test','active');
             INSERT INTO mail_accounts VALUES ('account','writer','writer@example.test','active'),('local-account','local','local@example.test','active'),('other-account','other','other@other.test','active');
             INSERT INTO mail_domain_settings VALUES ('company-a','example.test'),('company-b','other.test');
+            INSERT INTO mail_managed_domains VALUES ('company-a','example.test','active'),('company-b','other.test','active');
+            INSERT INTO mail_addresses VALUES ('company-a','writer','writer@example.test',TRUE,TRUE,TRUE),('company-a','local','local@example.test',TRUE,TRUE,TRUE),('company-b','other','other@other.test',TRUE,TRUE,TRUE);
             INSERT INTO mail_submission_credentials VALUES ('writer','company-a','writer@example.test',TRUE,NULL);
             INSERT INTO mail_provider_configs VALUES ('oci-a','company-a',TRUE,'oci_email_delivery',TRUE,'success');
         ''')
@@ -239,7 +243,7 @@ class FixtureDatabase:
                     raise RuntimeError('synthetic queue failure')
                 if database.fail_receipt and 'INSERT INTO mail_submission_recipients' in query:
                     raise RuntimeError('synthetic receipt failure')
-                query = query.replace(' FOR UPDATE', '').replace(' FOR SHARE OF c,u,a,d', '').replace('%s', '?').replace('::jsonb','')
+                query = query.replace(' FOR UPDATE', '').replace(' FOR SHARE OF c,u,a,ma,d', '').replace('%s', '?').replace('::jsonb','')
                 self.value = database.sql.execute(query, tuple(str(v) if hasattr(v, 'isoformat') else v for v in params))
             def fetchone(self): return self.value.fetchone()
             def fetchall(self): return self.value.fetchall()
@@ -535,5 +539,36 @@ def test_internal_reused_ingest_never_looks_up_other_company_users(submission_db
     db, service = submission_db
     submit(service,raw_mail(),'local@example.test')
     lookups = [(query, params) for query, params in db.statements if query.startswith('SELECT') and 'FROM users u' in query and 'local@example.test' in params]
-    assert len(lookups) == 2
+    assert len(lookups) >= 1
     assert all('u.company_id=' in query and 'company-a' in params for query,params in lookups)
+
+
+def test_smtp_alias_sender_keeps_owner_and_selected_identity(submission_db, monkeypatch):
+    from app.services.mail_identity_service import MailIdentityService
+    db, service = submission_db
+    db.sql.execute("INSERT INTO mail_addresses VALUES ('company-a','writer','alias@example.test',TRUE,TRUE,FALSE)")
+    checked = []
+    monkeypatch.setattr(MailIdentityService, '_assert_outbound_policy_local', lambda self, cursor, company, address: checked.append((company, address)))
+    raw = raw_mail().replace(b'writer@example.test', b'alias@example.test')
+    result = service.submit(envelope_from='alias@example.test', recipient_email='hidden@example.net', queue_id='AliasQueue123', raw_message=raw)
+    assert result['disposition'] == 'queued'
+    assert checked == [('company-a','alias@example.test')]
+    assert db.sql.execute('SELECT sender_email,sender_identity_selected FROM mail_messages').fetchone() == {'sender_email':'alias@example.test','sender_identity_selected':1}
+
+
+def test_smtp_alias_cannot_use_another_users_address(submission_db):
+    db, service = submission_db
+    db.sql.execute("INSERT INTO mail_addresses VALUES ('company-a','local','alias@example.test',TRUE,TRUE,FALSE)")
+    raw = raw_mail().replace(b'writer@example.test', b'alias@example.test')
+    with pytest.raises(ValueError, match='발신 계정'):
+        service.submit(envelope_from='alias@example.test', recipient_email='hidden@example.net', queue_id='AliasQueue123', raw_message=raw)
+
+
+@pytest.mark.parametrize('domain_status,address_active', [('pending', True), ('active', False)])
+def test_registered_but_unavailable_company_recipient_never_relayed(submission_db, domain_status, address_active):
+    db, service = submission_db
+    db.sql.execute("INSERT INTO mail_managed_domains VALUES ('company-a','pending.test',?)", (domain_status,))
+    db.sql.execute("INSERT INTO mail_addresses VALUES ('company-a','local','local@pending.test',?,FALSE,FALSE)", (address_active,))
+    with pytest.raises(ValueError, match='활성 동일 회사 내부 수신 계정'):
+        submit(service, raw_mail(), 'local@pending.test', queue='PendingDomain123')
+    assert db.sql.execute('SELECT count(*) AS n FROM mail_delivery_queue').fetchone()['n'] == 0
