@@ -9,6 +9,8 @@ const BUILD_ONLY_PACKAGES = new Set([
   "@react-native/dev-middleware",
   "@react-native/metro-babel-transformer",
   "@react-native-community/cli",
+  "@react-native-community/cli-config",
+  "deepmerge",
   "@react-native-community/cli-doctor",
   "@react-native-community/cli-platform-android",
   "@react-native-community/cli-platform-apple",

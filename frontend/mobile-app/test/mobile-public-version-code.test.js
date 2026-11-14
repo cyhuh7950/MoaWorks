@@ -21,7 +21,7 @@ test("public manifest versionCode rejects source/artifact disagreement and unrea
 
 test("current public source version is accepted without a hardcoded manifest number", () => {
   const source = fs.readFileSync(path.resolve(__dirname, "../android/app/build.gradle"), "utf8");
-  assert.equal(resolvePublicVersionCode(source, badging(4)), 4);
+  assert.equal(resolvePublicVersionCode(source, badging(5)), 5);
   const packager = fs.readFileSync(path.resolve(__dirname, "../scripts/mobile-package-public-android.js"), "utf8");
   assert.match(packager, /appVersionCode:\s*appVersionCode/);
   assert.doesNotMatch(packager, /appVersionCode:\s*\d+/);

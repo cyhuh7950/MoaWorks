@@ -45,3 +45,18 @@ test("current Metro and CLI parser advisories are build-only while unknown packa
   assert.equal(classified.find((item) => item.package === "future-unknown").reachability, "unclassified");
   assert.deepEqual(summarizeAudit(classified), { runtime: 0, buildOnly: 5, unclassified: 1, total: 6 });
 });
+
+test("CLI config and deepmerge stay build-only while an unknown package remains blocked", () => {
+  const { classifyAudit, summarizeAudit } = require("../scripts/mobile-audit-reachability.js");
+  const audit = { vulnerabilities: {
+    "@react-native-community/cli-config": { severity: "low", isDirect: false, via: ["deepmerge"], effects: ["@react-native-community/cli"] },
+    deepmerge: { severity: "low", isDirect: false, via: [{ source: 1, title: "prototype poisoning" }], effects: ["@react-native-community/cli-config"] },
+    "future-unknown": { severity: "high", isDirect: false, via: [], effects: [] },
+  } };
+  const classified = classifyAudit(audit);
+  for (const packageName of ["@react-native-community/cli-config", "deepmerge"]) {
+    assert.equal(classified.find((item) => item.package === packageName).reachability, "build-only");
+  }
+  assert.equal(classified.find((item) => item.package === "future-unknown").reachability, "unclassified");
+  assert.deepEqual(summarizeAudit(classified), { runtime: 0, buildOnly: 2, unclassified: 1, total: 3 });
+});
