@@ -125,16 +125,18 @@ class MailIdentityService:
 
     def list_addresses(self, actor, user_id: str | None = None):
         self.db.ensure_migrations_applied()
+        user_filter = " AND a.user_id=%s" if user_id is not None else ""
+        params = (actor.companyId, user_id) if user_id is not None else (actor.companyId,)
         with self.db.connect() as connection, connection.cursor() as cursor:
             cursor.execute(
-                """SELECT a.address,a.user_id,a.is_primary,a.active,a.send_requested,a.send_enabled,
+                f"""SELECT a.address,a.user_id,a.is_primary,a.active,a.send_requested,a.send_enabled,
                           COALESCE(d.status,'pending') AS domain_status
                    FROM mail_addresses a JOIN users u ON u.id=a.user_id AND u.company_id=a.company_id
                    LEFT JOIN mail_managed_domains d ON d.company_id=a.company_id
                        AND d.domain=split_part(a.address,'@',2)
-                   WHERE a.company_id=%s AND (%s IS NULL OR a.user_id=%s)
+                   WHERE a.company_id=%s{user_filter}
                    ORDER BY a.user_id,a.is_primary DESC,a.address""",
-                (actor.companyId, user_id, user_id),
+                params,
             )
             return [self._address_view(row) for row in cursor.fetchall()]
 

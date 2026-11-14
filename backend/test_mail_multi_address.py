@@ -39,6 +39,41 @@ def test_selected_address_requires_current_user_ownership():
     assert "a.user_id=%s" in cursor.query and "a.active=TRUE" in cursor.query
 
 
+@pytest.mark.parametrize("user_id, expected_params", [
+    (None, ("company-a",)),
+    ("user-a", ("company-a", "user-a")),
+])
+def test_list_addresses_uses_typed_user_filter_only_when_requested(user_id, expected_params):
+    class Database:
+        def ensure_migrations_applied(self):
+            pass
+
+        def connect(self):
+            return self
+
+        def cursor(self):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def execute(self, query, params):
+            self.query, self.params = query, params
+
+        def fetchall(self):
+            return []
+
+    db = Database()
+    actor = SimpleNamespace(companyId="company-a", userId="user-a")
+    assert MailIdentityService(db=db, oci_gateway=object()).list_addresses(actor, user_id) == []
+    assert db.params == expected_params
+    assert ("a.user_id=%s" in db.query) is (user_id is not None)
+    assert "%s IS NULL" not in db.query
+
+
 @pytest.mark.parametrize("invalid", ["a@@sinsan.kr", "@sinsan.kr", "a@", "a b@sinsan.kr"])
 def test_malformed_address_is_rejected_before_domain_lookup(invalid):
     with pytest.raises(ValueError, match="올바른 메일 주소"):
