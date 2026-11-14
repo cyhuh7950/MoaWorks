@@ -18,8 +18,8 @@
   "minified": true,
   "artifact": {
     "fileName": "MoaWorks-Mobile-0.1.0-android-public-release.aab",
-    "size": 22134489,
-    "sha256": "87b750274108b1e1c00dbcfa767b7de908d9185dbca9036b3a6b53cfd0a42451"
+    "size": 22049202,
+    "sha256": "ffc3948cfe3ab6c129ede48ba292c18c2e454862acb10b66af058a947d49e48b"
   },
   "auditReachability": {
     "fileName": "MoaWorks-Mobile-0.1.0-android-public-release.audit-reachability.json",
@@ -50,5 +50,5 @@
     "requiredEntries": "verified"
   },
   "status": "success",
-  "generatedAt": "2026-11-14T01:06:15.728Z"
+  "generatedAt": "2026-11-14T01:28:58.950Z"
 }
